@@ -108,9 +108,7 @@ class YouComSearchConfig(BaseSearchConfig):
 
         api_base = api_base.rstrip("/")
 
-        if not api_base.endswith("/v1/search") and not api_base.endswith(
-            "/v1/agents/search"
-        ):
+        if not api_base.endswith("/v1/search") and not api_base.endswith("/v1/agents/search"):
             api_base = f"{api_base}/v1/search"
 
         return api_base
@@ -150,10 +148,7 @@ class YouComSearchConfig(BaseSearchConfig):
         result_data = dict(request_data)
 
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         return result_data

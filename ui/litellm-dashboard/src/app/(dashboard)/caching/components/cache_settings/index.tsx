@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { Form } from "antd";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import RedisTypeSelector from "./RedisTypeSelector";
-import CacheFieldRenderer from "./CacheFieldRenderer";
-import { gatherFormValues, groupFieldsByCategory } from "./cacheSettingsUtils";
+import CacheFieldSection from "./CacheFieldSection";
+import { EmbeddingModelOption } from "./CacheFormField";
+import { REDIS_TYPES, REDIS_TYPE_DESCRIPTIONS, RedisType } from "./cacheSettingsFields";
+import { buildCachePayload, buildInitialValues, CacheFormValues } from "./cacheSettingsUtils";
 
 interface CacheSettingsProps {
   accessToken: string | null;
@@ -12,66 +16,83 @@ interface CacheSettingsProps {
   userID: string | null;
 }
 
-const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, userID }) => {
-  const [cacheSettings, setCacheSettings] = useState<{ [key: string]: any }>({});
-  const [fields, setFields] = useState<any[]>([]);
-  const [redisTypeDescriptions, setRedisTypeDescriptions] = useState<{ [key: string]: string }>({});
-  const [redisType, setRedisType] = useState<string>("node");
+const toRedisType = (value: unknown): RedisType =>
+  REDIS_TYPES.includes(value as RedisType) ? (value as RedisType) : "node";
+
+const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
+  const [form] = Form.useForm<CacheFormValues>();
+  const [redisType, setRedisType] = useState<RedisType>("node");
+  const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
   const loadCacheSettings = useCallback(async () => {
+    if (!accessToken) {
+      return;
+    }
     try {
-      const data = await getCacheSettingsCall(accessToken!);
-      console.log("cache settings from API", data);
-
-      if (data.fields) {
-        setFields(data.fields);
-      }
-
-      // Set current values
-      if (data.current_values) {
-        setCacheSettings(data.current_values);
-        if (data.current_values.redis_type) {
-          setRedisType(data.current_values.redis_type);
-        }
-      }
-
-      // Store Redis type descriptions
-      if (data.redis_type_descriptions) {
-        setRedisTypeDescriptions(data.redis_type_descriptions);
-      }
+      const data = (await getCacheSettingsCall(accessToken)) as { current_values?: Record<string, unknown> };
+      const currentValues = data.current_values ?? {};
+      form.setFieldsValue(buildInitialValues(currentValues));
+      setRedisType(toRedisType(currentValues.redis_type));
     } catch (error) {
       console.error("Failed to load cache settings:", error);
       NotificationsManager.fromBackend("Failed to load cache settings");
     }
-  }, [accessToken]);
+  }, [accessToken, form]);
+
+  useEffect(() => {
+    loadCacheSettings();
+  }, [loadCacheSettings]);
 
   useEffect(() => {
     if (!accessToken) {
       return;
     }
-    loadCacheSettings();
-  }, [accessToken, loadCacheSettings]);
+    fetchAvailableModels(accessToken)
+      .then((models: ModelGroup[]) =>
+        setEmbeddingModels(
+          models
+            .filter((model) => model.mode === "embedding")
+            .map((model) => ({ value: model.model_group, label: model.model_group })),
+        ),
+      )
+      .catch((error) => console.error("Error fetching embedding models:", error));
+  }, [accessToken]);
+
+  const validate = async (): Promise<CacheFormValues | null> => {
+    try {
+      return await form.validateFields();
+    } catch {
+      return null;
+    }
+  };
 
   const handleTestConnection = async () => {
     if (!accessToken) {
       return;
     }
+    const values = await validate();
+    if (values === null) {
+      return;
+    }
 
     setIsTesting(true);
     try {
-      const testSettings = gatherFormValues(fields, redisType);
-      const result = await testCacheConnectionCall(accessToken, testSettings);
-
+      const result = await testCacheConnectionCall(
+        accessToken,
+        buildCachePayload(redisType, values, { forTesting: true }),
+      );
       if (result.status === "success") {
         NotificationsManager.success("Cache connection test successful!");
       } else {
         NotificationsManager.fromBackend(`Connection test failed: ${result.message || result.error}`);
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Test connection error:", error);
-      NotificationsManager.fromBackend(`Connection test failed: ${error.message || "Unknown error"}`);
+      NotificationsManager.fromBackend(
+        `Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     } finally {
       setIsTesting(false);
     }
@@ -81,16 +102,15 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
     if (!accessToken) {
       return;
     }
+    const values = await validate();
+    if (values === null) {
+      return;
+    }
 
     setIsSaving(true);
     try {
-      const settingsToSave = gatherFormValues(fields, redisType);
-      if (redisType === "semantic") {
-        settingsToSave.type = "redis-semantic";
-      }
-      await updateCacheSettingsCall(accessToken, settingsToSave);
+      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false }));
       NotificationsManager.success("Cache settings updated successfully");
-      // Reload settings to reflect saved values
       await loadCacheSettings();
     } catch (error) {
       console.error("Failed to save cache settings:", error);
@@ -104,127 +124,95 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
     return null;
   }
 
-  const { basicFields, sslFields, cacheManagementFields, gcpFields, clusterFields, sentinelFields, semanticFields } =
-    groupFieldsByCategory(fields, redisType);
-
   return (
     <div className="w-full space-y-8 py-2">
-      <div className="space-y-6">
+      <Form form={form} layout="vertical" requiredMark={false} className="space-y-6">
         <div className="max-w-3xl">
           <h3 className="text-sm font-medium text-gray-900">Cache Settings</h3>
           <p className="text-xs text-gray-500 mt-1">Configure Redis cache for LiteLLM</p>
         </div>
 
-        {/* Redis Type Selector */}
         <RedisTypeSelector
           redisType={redisType}
-          redisTypeDescriptions={redisTypeDescriptions}
-          onTypeChange={setRedisType}
+          redisTypeDescriptions={REDIS_TYPE_DESCRIPTIONS}
+          onTypeChange={(type) => setRedisType(toRedisType(type))}
         />
 
-        {/* Basic Fields */}
-        <div className="space-y-6 pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-medium text-gray-900">Connection Settings</h4>
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-            {basicFields.map((field: any) => {
-              if (!field) return null;
-              const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-              return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-            })}
-          </div>
+        <div className="pt-4 border-t border-gray-200">
+          <CacheFieldSection
+            title="Connection Settings"
+            section="connection"
+            redisType={redisType}
+            embeddingModels={embeddingModels}
+          />
         </div>
 
-        {/* Redis Type-Specific Fields */}
-        {redisType === "cluster" && clusterFields.length > 0 && (
-          <div className="space-y-6 pt-4 border-t border-gray-200">
-            <h4 className="text-sm font-medium text-gray-900">Cluster Configuration</h4>
-            <div className="grid grid-cols-1 gap-6">
-              {clusterFields.map((field: any) => {
-                const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-                return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-              })}
-            </div>
+        {redisType === "cluster" && (
+          <div className="pt-4 border-t border-gray-200">
+            <CacheFieldSection
+              title="Cluster Configuration"
+              section="cluster"
+              redisType={redisType}
+              embeddingModels={embeddingModels}
+              gridCols="grid-cols-1 gap-6"
+            />
           </div>
         )}
 
-        {redisType === "sentinel" && sentinelFields.length > 0 && (
-          <div className="space-y-6 pt-4 border-t border-gray-200">
-            <h4 className="text-sm font-medium text-gray-900">Sentinel Configuration</h4>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              {sentinelFields.map((field: any) => {
-                const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-                return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-              })}
-            </div>
+        {redisType === "sentinel" && (
+          <div className="pt-4 border-t border-gray-200">
+            <CacheFieldSection
+              title="Sentinel Configuration"
+              section="sentinel"
+              redisType={redisType}
+              embeddingModels={embeddingModels}
+            />
           </div>
         )}
 
-        {redisType === "semantic" && semanticFields.length > 0 && (
-          <div className="space-y-6 pt-4 border-t border-gray-200">
-            <h4 className="text-sm font-medium text-gray-900">Semantic Configuration</h4>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              {semanticFields.map((field: any) => {
-                const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-                return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-              })}
-            </div>
+        {redisType === "semantic" && (
+          <div className="pt-4 border-t border-gray-200">
+            <CacheFieldSection
+              title="Semantic Configuration"
+              section="semantic"
+              redisType={redisType}
+              embeddingModels={embeddingModels}
+            />
           </div>
         )}
 
-        {/* Advanced Settings Accordion */}
         <Accordion className="mt-4">
           <AccordionHeader>
             <span className="text-sm font-medium text-gray-900">Advanced Settings</span>
           </AccordionHeader>
           <AccordionBody>
             <div className="space-y-6">
-              {/* SSL Settings */}
-              {sslFields.length > 0 && (
-                <div className="space-y-4">
-                  <h5 className="text-sm font-medium text-gray-700">SSL Settings</h5>
-                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                    {sslFields.map((field: any) => {
-                      if (!field) return null;
-                      const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-                      return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Cache Management */}
-              {cacheManagementFields.length > 0 && (
-                <div className="space-y-4 pt-4 border-t border-gray-200">
-                  <h5 className="text-sm font-medium text-gray-700">Cache Management</h5>
-                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                    {cacheManagementFields.map((field: any) => {
-                      if (!field) return null;
-                      const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-                      return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* GCP Authentication */}
-              {gcpFields.length > 0 && (
-                <div className="space-y-4 pt-4 border-t border-gray-200">
-                  <h5 className="text-sm font-medium text-gray-700">GCP Authentication</h5>
-                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                    {gcpFields.map((field: any) => {
-                      if (!field) return null;
-                      const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-                      return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
-                    })}
-                  </div>
-                </div>
-              )}
+              <CacheFieldSection
+                title="SSL Settings"
+                section="ssl"
+                redisType={redisType}
+                embeddingModels={embeddingModels}
+                headingLevel="h5"
+              />
+              <CacheFieldSection
+                title="Cache Management"
+                section="cacheManagement"
+                redisType={redisType}
+                embeddingModels={embeddingModels}
+                headingLevel="h5"
+              />
+              <CacheFieldSection
+                title="GCP Authentication"
+                section="gcp"
+                redisType={redisType}
+                embeddingModels={embeddingModels}
+                headingLevel="h5"
+              />
             </div>
           </AccordionBody>
         </Accordion>
-      </div>
+      </Form>
 
-      {/* Actions */}
       <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
         <Button variant="secondary" size="sm" onClick={handleTestConnection} disabled={isTesting} className="text-sm">
           {isTesting ? "Testing..." : "Test Connection"}

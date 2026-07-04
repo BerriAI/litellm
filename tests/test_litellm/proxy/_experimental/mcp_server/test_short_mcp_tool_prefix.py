@@ -21,6 +21,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
+    strip_known_server_prefix,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -141,6 +142,57 @@ class TestIterKnownServerPrefixes:
         prefixes = list(iter_known_server_prefixes(server))
         assert "github_onprem" in prefixes
         assert compute_short_server_prefix(server.server_id) in prefixes
+
+
+# ---------------------------------------------------------------------------
+# strip_known_server_prefix — inverse of add_server_prefix_to_name (LIT-3419)
+# ---------------------------------------------------------------------------
+
+
+class TestStripKnownServerPrefix:
+    """Removes a server's exact known prefix, even when the prefix itself
+    contains the separator (hyphenated alias or UUID server_id fallback) where
+    a first-separator split would cut inside the prefix and mangle the name."""
+
+    def test_clean_prefix_round_trips(self):
+        server = _make_server(alias="deepwiki", server_name="deepwiki")
+        live = add_server_prefix_to_name(
+            "read_wiki_contents", get_server_prefix(server)
+        )
+        assert strip_known_server_prefix(live, server) == "read_wiki_contents"
+
+    def test_hyphenated_alias_does_not_mangle(self):
+        server = _make_server(alias="deep-wiki", server_name="deep-wiki")
+        assert get_server_prefix(server) == "deep-wiki"
+        # the first-separator split would yield "wiki-read_wiki_contents"
+        assert (
+            strip_known_server_prefix("deep-wiki-read_wiki_contents", server)
+            == "read_wiki_contents"
+        )
+
+    def test_uuid_fallback_prefix_does_not_mangle(self):
+        server = MCPServer(
+            server_id="117c814c-1a2b-3c4d-9e8f",
+            name="deepwiki",
+            alias=None,
+            server_name=None,
+            transport="http",
+        )
+        live = add_server_prefix_to_name(
+            "read_wiki_contents", get_server_prefix(server)
+        )
+        assert live.startswith("117c814c-1a2b-3c4d-9e8f-")
+        assert strip_known_server_prefix(live, server) == "read_wiki_contents"
+
+    def test_unprefixed_name_returned_unchanged(self):
+        server = _make_server(alias="deep-wiki", server_name="deep-wiki")
+        assert (
+            strip_known_server_prefix("read_wiki_contents", server)
+            == "read_wiki_contents"
+        )
+
+    def test_none_server_falls_back_to_first_separator_split(self):
+        assert strip_known_server_prefix("svc-tool", None) == "tool"
 
 
 # ---------------------------------------------------------------------------

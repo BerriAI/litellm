@@ -15,6 +15,7 @@ const SUPPORTED_OCR_PARAMS: &[&str] = &[
     "extract_footer",
     "table_format",
     "confidence_scores_granularity",
+    "include_blocks",
     "id",
 ];
 
@@ -132,6 +133,24 @@ impl OcrProviderConfig for MistralOcrConfig {
             object: "ocr".to_string(),
         })
     }
+
+    fn complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _optional_params: &Map<String, Value>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<String> {
+        Ok(complete_url(api_base))
+    }
+
+    fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<String> {
+        resolve_api_key(api_key, env_lookup)
+    }
 }
 
 pub fn supported_ocr_params() -> &'static [&'static str] {
@@ -175,6 +194,7 @@ mod tests {
                 "extract_footer",
                 "table_format",
                 "confidence_scores_granularity",
+                "include_blocks",
                 "id",
             ]
         );

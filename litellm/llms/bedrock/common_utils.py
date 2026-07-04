@@ -4,9 +4,11 @@ from __future__ import annotations
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import contextlib
 import functools
 import json
 import os
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -431,11 +433,7 @@ def init_bedrock_client(
         config = boto3.session.Config()  # type: ignore
 
     ### CHECK STS ###
-    if (
-        aws_web_identity_token is not None
-        and aws_role_name is not None
-        and aws_session_name is not None
-    ):
+    if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -474,9 +472,7 @@ def init_bedrock_client(
             verify=ssl_verify,
         )
 
-        sts_response = sts_client.assume_role(
-            RoleArn=aws_role_name, RoleSessionName=aws_session_name
-        )
+        sts_response = sts_client.assume_role(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
 
         client = boto3.client(
             service_name="bedrock-runtime",
@@ -523,9 +519,7 @@ def init_bedrock_client(
             verify=ssl_verify,
         )
     if extra_headers:
-        client.meta.events.register(
-            "before-sign.bedrock-runtime.*", add_custom_header(extra_headers)
-        )
+        client.meta.events.register("before-sign.bedrock-runtime.*", add_custom_header(extra_headers))
 
     return client
 
@@ -568,9 +562,7 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
     """
 
     if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
-        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
-            response_tool_name
-        ]
+        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[response_tool_name]
     return response_tool_name
 
 
@@ -599,6 +591,15 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     if "arn" in model.lower():
         return model.split("/")[-1]
     return model
+
+
+def is_bedrock_application_inference_profile_arn(model: str) -> bool:
+    """
+    An application inference profile ARN ends in an opaque id with no provider
+    substring, so the invoke path cannot resolve a provider from it. Such ARNs
+    must use the converse route, which needs no provider.
+    """
+    return ":application-inference-profile/" in model
 
 
 def strip_bedrock_routing_prefix(model: str) -> str:
@@ -678,48 +679,78 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif (
-        alt_potential_region in _get_all_bedrock_regions()
-        and len(model.split("/", 1)) > 1
-    ):
+    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
 
 
+def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
+    return any(
+        (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
+        for candidate in (model, get_bedrock_base_model(model))
+    )
+
+
 def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
-    Check if the model is a Claude 4.5 model on Bedrock.
-    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    Check if the model supports Bedrock prompt caching with an extended '1h' TTL
+    (in addition to the default 5m TTL).
+
+    Backed by the ``cache_creation_input_token_cost_above_1hr`` field in
+    ``model_prices_and_context_window.json`` instead of a hardcoded list of
+    model-name patterns, so newly released models pick up support as soon as
+    their pricing entry ships, with no code change required here.
     """
-    model_lower = model.lower()
-    claude_4_5_patterns = [
-        "sonnet-4.5",
-        "sonnet_4.5",
-        "sonnet-4-5",
-        "sonnet_4_5",
-        "haiku-4.5",
-        "haiku_4.5",
-        "haiku-4-5",
-        "haiku_4_5",
-        "opus-4.5",
-        "opus_4.5",
-        "opus-4-5",
-        "opus_4_5",
-        "sonnet-4.6",
-        "sonnet_4.6",
-        "sonnet-4-6",
-        "sonnet_4_6",
-        "opus-4.6",
-        "opus_4.6",
-        "opus-4-6",
-        "opus_4_6",
-        "opus-4.7",
-        "opus_4.7",
-        "opus-4-7",
-        "opus_4_7",
-    ]
-    return any(pattern in model_lower for pattern in claude_4_5_patterns)
+    return any(
+        (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
+        for candidate in (model, get_bedrock_base_model(model))
+    )
+
+
+_BEDROCK_MODEL_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
+
+
+def bedrock_converse_supports_strict_tools(model: str) -> bool:
+    """
+    Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
+
+    Non-Anthropic Bedrock families (Nova, Llama, GPT-OSS) reject the field
+    outright. Anthropic models forward it unless their entry in
+    ``model_prices_and_context_window.json`` sets
+    ``bedrock_converse_supports_strict_tools: false`` — Bedrock routes those
+    (Opus 4.7/4.8, see #31582) through a stricter validator that rejects the
+    ``strict`` key on ``toolSpec`` even though Anthropic's native API accepts
+    it as a top-level tool field.
+    """
+    base = get_bedrock_base_model(model)
+    if not base.startswith("anthropic"):
+        return False
+    flag = _get_bedrock_converse_strict_tools_flag(base)
+    return flag if flag is not None else True
+
+
+def _get_bedrock_converse_strict_tools_flag(base_model: str) -> Optional[bool]:
+    candidates = dict.fromkeys((base_model, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base_model)))
+    for candidate in candidates:
+        with contextlib.suppress(Exception):
+            model_info = get_cached_model_info()(
+                model=candidate,
+                custom_llm_provider="bedrock",
+            )
+
+            flag = model_info.get("bedrock_converse_supports_strict_tools")
+            if isinstance(flag, bool):
+                return flag
+
+            model_cost_key = model_info.get("key")
+            if isinstance(model_cost_key, str):
+                local_flag = (
+                    _get_local_model_cost_map().get(model_cost_key, {}).get("bedrock_converse_supports_strict_tools")
+                )
+                if isinstance(local_flag, bool):
+                    return local_flag
+    return None
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
@@ -745,10 +776,7 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
     if ceiling is None:
         return
 
-    if (
-        _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort]
-        > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]
-    ):
+    if _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort] > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]:
         output_config["effort"] = ceiling
 
 
@@ -812,9 +840,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> dict:
         return headers
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         return []
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
@@ -904,24 +930,25 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "mantle/": "mantle",
         }
 
-        # Check explicit routes first
+        # Check explicit routes first. Match each prefix only as a leading path
+        # segment so the `bedrock_mantle/` provider prefix is never mistaken for
+        # the `mantle/` invoke route (which would mangle
+        # `bedrock_mantle/openai.gpt-5.5` into `bedrock_openai.gpt-5.5`).
         for prefix, route_type in route_mappings.items():
-            if prefix in model:
+            if BedrockModelInfo._model_has_route_prefix(model, prefix):
                 return route_type
 
         # Check for nova spec prefixes (nova/ and nova-2/)
         _model_after_bedrock = model.replace("bedrock/", "", 1)
-        if _model_after_bedrock.startswith(
-            "nova-2/"
-        ) or _model_after_bedrock.startswith("nova/"):
+        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
+            return "converse"
+
+        if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if (
-            base_model in litellm.bedrock_converse_models
-            or alt_model in litellm.bedrock_converse_models
-        ):
+        if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
             return "converse"
         return "invoke"
 
@@ -930,14 +957,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit converse route.
         """
-        return "converse/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse/")
 
     @staticmethod
     def _explicit_claude_platform_route(model: str) -> bool:
         """
         Check if the model is an explicit Claude Platform on AWS route.
         """
-        return "claude_platform/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "claude_platform/")
 
     @staticmethod
     def get_claude_platform_model(model: str) -> str:
@@ -947,9 +974,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(
-        passed_params: dict, optional_params: dict
-    ) -> dict:
+    def map_claude_platform_auth_params(passed_params: dict, optional_params: dict) -> dict:
         """
         Map Claude Platform route auth params that are not OpenAI request params.
         """
@@ -967,42 +992,58 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit invoke route.
         """
-        return "invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "invoke/")
 
     @staticmethod
     def _explicit_agent_route(model: str) -> bool:
         """
         Check if the model is an explicit agent route.
         """
-        return "agent/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agent/")
 
     @staticmethod
     def _explicit_agentcore_route(model: str) -> bool:
         """
         Check if the model is an explicit agentcore route.
         """
-        return "agentcore/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agentcore/")
+
+    @staticmethod
+    def _model_has_route_prefix(model: str, prefix: str) -> bool:
+        """Whether a route prefix (e.g. ``mantle/``) appears as a leading path segment.
+
+        A route token is only valid at the start of the model id or immediately
+        after a ``/``. A plain substring check matches the ``bedrock_mantle/``
+        provider prefix against the ``mantle/`` route, so the body model gets
+        mangled to ``bedrock_openai.gpt-5.5``; anchoring to a segment boundary
+        keeps the bare model id intact.
+
+        ``f"/{prefix}" in model`` matches the token as a segment at any path
+        depth, not just the second segment; that is intentional and acceptable
+        for these short, unambiguous route tokens.
+        """
+        return model.startswith(prefix) or f"/{prefix}" in model
 
     @staticmethod
     def _explicit_mantle_route(model: str) -> bool:
         """
         Check if the model is an explicit mantle route (bedrock-mantle endpoint).
         """
-        return "mantle/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "mantle/")
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
         """
-        return "converse_like/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse_like/")
 
     @staticmethod
     def _explicit_async_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit async invoke route.
         """
-        return "async_invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "async_invoke/")
 
     @staticmethod
     def _explicit_openai_route(model: str) -> bool:
@@ -1010,7 +1051,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit openai route.
         Used for Bedrock imported models that use OpenAI Chat Completions format.
         """
-        return "openai/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "openai/")
 
     @staticmethod
     def get_bedrock_provider_config_for_messages_api(
@@ -1069,9 +1110,7 @@ def get_bedrock_chat_config(model: str):
         The appropriate Bedrock config class instance
     """
     bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-        model=model
-    )
+    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model=model)
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
@@ -1104,10 +1143,7 @@ def get_bedrock_chat_config(model: str):
     if bedrock_invoke_provider == "amazon":
         return litellm.AmazonTitanConfig()
     elif bedrock_invoke_provider == "anthropic":
-        if (
-            base_model
-            in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
-        ):
+        if base_model in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names():
             return litellm.AmazonAnthropicConfig()
         else:
             return litellm.AmazonAnthropicClaudeConfig()
@@ -1193,9 +1229,7 @@ def build_bedrock_stream_error(
     if exception_type is not None and response_stream_shape is not None:
         member = response_stream_shape.members.get(exception_type)
         if member is not None:
-            modeled_status = (
-                (member.metadata or {}).get("error", {}).get("httpStatusCode")
-            )
+            modeled_status = (member.metadata or {}).get("error", {}).get("httpStatusCode")
             if modeled_status is not None:
                 status_code = int(modeled_status)
 
@@ -1265,9 +1299,7 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
     if isinstance(anthropic_beta_header, str):
         anthropic_beta_header = anthropic_beta_header.strip()
-        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith(
-            "]"
-        ):
+        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
                 parsed = json.loads(anthropic_beta_header)
                 if isinstance(parsed, list):
@@ -1329,9 +1361,7 @@ class CommonBatchFilesUtils:
 
         return s3_parts[0], s3_parts[1]  # bucket, key
 
-    def extract_model_from_s3_file_path(
-        self, s3_uri: str, optional_params: dict
-    ) -> str:
+    def extract_model_from_s3_file_path(self, s3_uri: str, optional_params: dict) -> str:
         """
         Extract model ID from S3 file path.
 
@@ -1340,9 +1370,7 @@ class CommonBatchFilesUtils:
         """
         # Check if model is provided in optional_params first
         if "model" in optional_params and optional_params["model"]:
-            return self.get_bedrock_model_id_from_litellm_model(
-                optional_params["model"]
-            )
+            return self.get_bedrock_model_id_from_litellm_model(optional_params["model"])
 
         # Extract model from S3 URI path
         # Expected format: s3://bucket/litellm-bedrock-files-{model}-{uuid}.jsonl
@@ -1395,9 +1423,7 @@ class CommonBatchFilesUtils:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         # Get AWS credentials using existing methods
-        aws_region_name = self._base_aws._get_aws_region_name(
-            optional_params=optional_params, model=""
-        )
+        aws_region_name = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
         credentials = self._base_aws.get_credentials(
             aws_access_key_id=optional_params.get("aws_access_key_id"),
             aws_secret_access_key=optional_params.get("aws_secret_access_key"),
@@ -1428,19 +1454,13 @@ class CommonBatchFilesUtils:
 
         # Create AWS request and sign it
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        request = AWSRequest(
-            method=method_upper, url=endpoint_url, data=request_data, headers=headers
-        )
+        request = AWSRequest(method=method_upper, url=endpoint_url, data=request_data, headers=headers)
         sigv4.add_auth(request)
         prepped = request.prepare()
 
         return (
             dict(prepped.headers),
-            (
-                request_data.encode("utf-8")
-                if isinstance(request_data, str)
-                else request_data
-            ),
+            (request_data.encode("utf-8") if isinstance(request_data, str) else request_data),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:
@@ -1489,14 +1509,10 @@ class CommonBatchFilesUtils:
 
         # Get bucket name
         bucket_name = (
-            litellm_params.get("s3_bucket_name")
-            or optional_params.get("s3_bucket_name")
-            or os.getenv(bucket_env_var)
+            litellm_params.get("s3_bucket_name") or optional_params.get("s3_bucket_name") or os.getenv(bucket_env_var)
         )
         if not bucket_name:
-            raise ValueError(
-                f"S3 bucket name is required. Set 's3_bucket_name' parameter or {bucket_env_var} env var"
-            )
+            raise ValueError(f"S3 bucket name is required. Set 's3_bucket_name' parameter or {bucket_env_var} env var")
 
         # Generate unique object key
         timestamp = int(time.time())
@@ -1511,6 +1527,4 @@ class CommonBatchFilesUtils:
         """
         Get Bedrock-specific error class.
         """
-        return BedrockError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)

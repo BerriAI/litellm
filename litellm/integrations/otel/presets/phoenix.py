@@ -19,9 +19,7 @@ class _PhoenixSettings(BaseSettings):
 
     project_name: str = Field(
         default="default",
-        validation_alias=AliasChoices(
-            "PHOENIX_PROJECT_NAME", "PHOENIX_COLLECTOR_PROJECT_NAME"
-        ),
+        validation_alias=AliasChoices("PHOENIX_PROJECT_NAME", "PHOENIX_COLLECTOR_PROJECT_NAME"),
     )
 
 

@@ -27,6 +27,17 @@ describe("PrettyMessagesView", () => {
     expect(screen.getByText("Hi there!")).toBeInTheDocument();
   });
 
+  it("renders input when request is a bare messages array (cold storage payload)", () => {
+    const request = [{ role: "user", content: "Write me a poem" }];
+    const response = {
+      choices: [{ message: { role: "assistant", content: "A quiet moment." } }],
+    };
+
+    render(<PrettyMessagesView request={request} response={response} />);
+    expect(screen.getByText("Write me a poem")).toBeInTheDocument();
+    expect(screen.getByText("A quiet moment.")).toBeInTheDocument();
+  });
+
   it("should render the realtime pretty view for realtime API responses", () => {
     const request = {};
     const response = {

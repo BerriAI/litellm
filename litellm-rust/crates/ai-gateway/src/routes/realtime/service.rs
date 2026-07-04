@@ -26,6 +26,7 @@ pub async fn run<In, Out>(
     pool: &RealtimePool,
     model: &str,
     idle_timeout: Option<Duration>,
+    observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
 ) -> CoreResult<()>
@@ -56,6 +57,7 @@ where
                 provider_model,
                 handoff,
                 idle_timeout,
+                observe,
                 client_in,
                 client_out,
             )
@@ -69,6 +71,7 @@ where
         params.api_key.as_deref(),
         params.api_base.as_deref(),
         idle_timeout,
+        observe,
         client_in,
         client_out,
     )

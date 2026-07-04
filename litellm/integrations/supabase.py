@@ -31,13 +31,9 @@ class Supabase:
             self.supabase_url, self.supabase_key
         )
 
-    def input_log_event(
-        self, model, messages, end_user, litellm_call_id, print_verbose
-    ):
+    def input_log_event(self, model, messages, end_user, litellm_call_id, print_verbose):
         try:
-            print_verbose(
-                f"Supabase Logging - Enters input logging function for model {model}"
-            )
+            print_verbose(f"Supabase Logging - Enters input logging function for model {model}")
             supabase_data_obj = {
                 "model": model,
                 "messages": messages,
@@ -45,11 +41,7 @@ class Supabase:
                 "status": "initiated",
                 "litellm_call_id": litellm_call_id,
             }
-            data, count = (
-                self.supabase_client.table(self.supabase_table_name)
-                .insert(supabase_data_obj)
-                .execute()
-            )
+            data, count = self.supabase_client.table(self.supabase_table_name).insert(supabase_data_obj).execute()
             print_verbose(f"data: {data}")
         except Exception:
             print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
@@ -67,9 +59,7 @@ class Supabase:
         print_verbose,
     ):
         try:
-            print_verbose(
-                f"Supabase Logging - Enters logging function for model {model}, response_obj: {response_obj}"
-            )
+            print_verbose(f"Supabase Logging - Enters logging function for model {model}, response_obj: {response_obj}")
 
             total_cost = litellm.completion_cost(completion_response=response_obj)
 
@@ -85,9 +75,7 @@ class Supabase:
                     "litellm_call_id": litellm_call_id,
                     "status": "success",
                 }
-                print_verbose(
-                    f"Supabase Logging - final data object: {supabase_data_obj}"
-                )
+                print_verbose(f"Supabase Logging - final data object: {supabase_data_obj}")
                 data, count = (
                     self.supabase_client.table(self.supabase_table_name)
                     .upsert(supabase_data_obj, on_conflict="litellm_call_id")
@@ -106,9 +94,7 @@ class Supabase:
                     "litellm_call_id": litellm_call_id,
                     "status": "failure",
                 }
-                print_verbose(
-                    f"Supabase Logging - final data object: {supabase_data_obj}"
-                )
+                print_verbose(f"Supabase Logging - final data object: {supabase_data_obj}")
                 data, count = (
                     self.supabase_client.table(self.supabase_table_name)
                     .upsert(supabase_data_obj, on_conflict="litellm_call_id")

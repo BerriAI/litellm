@@ -27,9 +27,7 @@ class ScalewayAudioTranscriptionException(BaseLLMException):
 
 
 class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return [
             "language",
             "prompt",
@@ -60,9 +58,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = (
-            "https://api.scaleway.ai/v1" if api_base is None else api_base.rstrip("/")
-        )
+        api_base = "https://api.scaleway.ai/v1" if api_base is None else api_base.rstrip("/")
         return f"{api_base}/audio/transcriptions"
 
     def get_error_class(
@@ -90,8 +86,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if not api_key:
             raise ScalewayAudioTranscriptionException(
                 message=(
-                    "Scaleway API key not found. Pass `api_key=...` or set the "
-                    "SCW_SECRET_KEY environment variable."
+                    "Scaleway API key not found. Pass `api_key=...` or set the SCW_SECRET_KEY environment variable."
                 ),
                 status_code=401,
                 headers={},

@@ -11,6 +11,11 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -628,14 +633,20 @@ class TestTranslateThinkingToReasoning:
 
     def test_budget_medium_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 7500}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            }
         )
         assert result == {"effort": "medium"}
         assert result is not None and "summary" not in result
 
     def test_budget_low_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 3000}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            }
         )
         assert result == {"effort": "low"}
         assert result is not None and "summary" not in result
@@ -648,14 +659,28 @@ class TestTranslateThinkingToReasoning:
         assert result is not None and "summary" not in result
 
     def test_budget_at_exact_thresholds(self):
+        result_high = _ADAPTER.translate_thinking_to_reasoning(
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            }
+        )
+        assert result_high is not None
+        assert result_high["effort"] == "high"
         result_medium = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 5000}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            }
         )
         assert result_medium is not None
         assert result_medium["effort"] == "medium"
         assert "summary" not in result_medium
         result_low = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 2000}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            }
         )
         assert result_low is not None
         assert result_low["effort"] == "low"
@@ -670,7 +695,7 @@ class TestTranslateThinkingToReasoning:
         assert result is None
 
     def test_missing_budget_defaults_to_minimal(self):
-        """Missing budget_tokens defaults to 0, which is < 2000 -> minimal."""
+        """Missing budget_tokens defaults to 0, below the low threshold -> minimal."""
         result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
@@ -698,7 +723,10 @@ class TestTranslateThinkingToReasoning:
             litellm.reasoning_auto_summary = False
             os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
             result = _ADAPTER.translate_thinking_to_reasoning(
-                {"type": "enabled", "budget_tokens": 5000}
+                {
+                    "type": "enabled",
+                    "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+                }
             )
             assert result == {"effort": "medium", "summary": "detailed"}
         finally:

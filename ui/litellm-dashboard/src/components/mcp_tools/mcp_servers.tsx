@@ -380,7 +380,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }, [refetch]);
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
   }
 
@@ -458,13 +457,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </div>
         <div className="flex items-center gap-2">
           {isAdminRole(userRole) && (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
               + Add New MCP Server
             </Button>
           )}
           {!isAdminRole(userRole) && (
             <Button
-              className="flex-shrink-0"
+              className="shrink-0"
               onClick={() => {
                 setPrefillData(null);
                 setModalVisible(true);
@@ -497,8 +496,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>All Servers</Tab>
             <Tab>Toolsets</Tab>
             <Tab>Connect</Tab>
-            <Tab>Semantic Filter</Tab>
-            <Tab>Network Settings</Tab>
+            {isAdminRole(userRole) && <Tab>Semantic Filter</Tab>}
+            {isAdminRole(userRole) && <Tab>Network Settings</Tab>}
             {isAdminRole(userRole) && (
               <Tab>
                 <span className="flex items-center gap-2">
@@ -652,12 +651,16 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPConnect />
           </TabPanel>
-          <TabPanel>
-            <MCPSemanticFilterSettings accessToken={accessToken} />
-          </TabPanel>
-          <TabPanel>
-            <MCPNetworkSettings accessToken={accessToken} />
-          </TabPanel>
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPSemanticFilterSettings accessToken={accessToken} />
+            </TabPanel>
+          )}
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPNetworkSettings accessToken={accessToken} />
+            </TabPanel>
+          )}
           {isAdminRole(userRole) && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />

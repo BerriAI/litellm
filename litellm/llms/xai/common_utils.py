@@ -59,12 +59,7 @@ class XAIModelInfo(BaseLLMModelInfo):
         the provider-specific litellm.xai_key takes precedence over fallbacks.
         """
         if legacy_generic_before_env:
-            return (
-                api_key
-                or litellm.xai_key
-                or litellm.api_key
-                or get_secret_str("XAI_API_KEY")
-            )
+            return api_key or litellm.xai_key or litellm.api_key or get_secret_str("XAI_API_KEY")
 
         return api_key or litellm.xai_key or get_secret_str("XAI_API_KEY")
 
@@ -72,9 +67,7 @@ class XAIModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> Optional[str]:
         return model.replace("xai/", "")
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         api_base = self.get_api_base(api_base)
         api_key = self.get_api_key(api_key)
         if api_base is None or api_key is None:

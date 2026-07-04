@@ -136,9 +136,7 @@ class AdaptiveRouterUpdateQueue:
                         "update": {
                             "alpha": {"increment": payload["delta_alpha"]},
                             "beta": {"increment": payload["delta_beta"]},
-                            "total_samples": {
-                                "increment": int(payload["samples_added"])
-                            },
+                            "total_samples": {"increment": int(payload["samples_added"])},
                         },
                     },
                 )
@@ -174,9 +172,7 @@ class AdaptiveRouterUpdateQueue:
                 # writes to fields that are part of the @@id. asdict(state)
                 # always carries them, so build a separate update dict.
                 update_payload = {
-                    k: v
-                    for k, v in payload.items()
-                    if k not in ("session_id", "router_name", "model_name")
+                    k: v for k, v in payload.items() if k not in ("session_id", "router_name", "model_name")
                 }
                 await AdaptiveRouterSessionRepository(prisma_client).table.upsert(
                     where={

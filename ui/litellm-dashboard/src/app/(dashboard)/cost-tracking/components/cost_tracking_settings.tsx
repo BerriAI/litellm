@@ -175,7 +175,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       </div>
 
       {/* Main Content Card with Accordions */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full space-y-4">
+      <div className="bg-white rounded-lg shadow-sm w-full max-w-full space-y-4">
         {/* Accordion 1: Provider Discounts - Only for proxy admins */}
         {isProxyAdmin && (
           <Accordion>

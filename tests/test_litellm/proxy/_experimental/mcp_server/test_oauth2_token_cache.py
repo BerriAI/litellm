@@ -173,3 +173,27 @@ async def test_non_dict_response_raises_value_error():
         pytest.raises(ValueError, match="non-object JSON"),
     ):
         await resolve_mcp_auth(server)
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_uses_client_secret_basic_when_configured():
+    """LIT-4091: a client_credentials server with token_endpoint_auth_method=client_secret_basic
+    authenticates via HTTP Basic and keeps the secret out of the form body."""
+    import base64
+
+    server = _server(server_id="srv-basic", token_endpoint_auth_method="client_secret_basic")
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _token_response("m2m-basic")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        result = await resolve_mcp_auth(server)
+
+    assert result == "m2m-basic"
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Basic " + base64.b64encode(b"cid:csec").decode()
+    assert "client_secret" not in kwargs["data"]
+    assert "client_id" not in kwargs["data"]
+    assert kwargs["data"]["grant_type"] == "client_credentials"

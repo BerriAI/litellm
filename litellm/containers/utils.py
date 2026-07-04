@@ -66,11 +66,7 @@ class ContainerRequestUtils:
         supported_params = container_provider_config.get_supported_openai_params()
 
         # Filter out unsupported parameters
-        filtered_params = {
-            k: v
-            for k, v in container_create_optional_params.items()
-            if k in supported_params
-        }
+        filtered_params = {k: v for k, v in container_create_optional_params.items() if k in supported_params}
 
         return container_provider_config.map_openai_params(
             container_create_optional_params=filtered_params,  # type: ignore

@@ -35,9 +35,7 @@ class AnthropicResponsesStreamWrapper:
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: Dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
-        self._pending_tool_ids: Dict[str, str] = (
-            {}
-        )  # item_id -> call_id / name accumulator
+        self._pending_tool_ids: Dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
@@ -83,17 +81,11 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- content_block_start for a new output message item ----
         if event_type == "response.output_item.added":
-            item = getattr(event, "item", None) or (
-                event.get("item") if isinstance(event, dict) else None
-            )
+            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
             if item is None:
                 return
-            item_type = getattr(item, "type", None) or (
-                item.get("type") if isinstance(item, dict) else None
-            )
-            item_id = getattr(item, "id", None) or (
-                item.get("id") if isinstance(item, dict) else None
-            )
+            item_type = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
+            item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
             if item_type == "message":
                 block_idx = self._next_block_index()
@@ -108,15 +100,9 @@ class AnthropicResponsesStreamWrapper:
                 )
             elif item_type == "function_call":
                 call_id = (
-                    getattr(item, "call_id", None)
-                    or (item.get("call_id") if isinstance(item, dict) else None)
-                    or ""
+                    getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
-                name = (
-                    getattr(item, "name", None)
-                    or (item.get("name") if isinstance(item, dict) else None)
-                    or ""
-                )
+                name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None) or ""
                 block_idx = self._next_block_index()
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
@@ -148,17 +134,9 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- text delta ----
         if event_type == "response.output_text.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
-            delta = getattr(event, "delta", "") or (
-                event.get("delta", "") if isinstance(event, dict) else ""
-            )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, -1)
-                if item_id
-                else self._current_block_index
-            )
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 # Some providers (e.g. LMStudio) skip response.output_item.added,
                 # so no text block is open yet; synthesize content_block_start
@@ -184,12 +162,8 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- reasoning summary text delta ----
         if event_type == "response.reasoning_summary_text.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
-            delta = getattr(event, "delta", "") or (
-                event.get("delta", "") if isinstance(event, dict) else ""
-            )
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
@@ -206,12 +180,8 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- function call arguments delta ----
         if event_type == "response.function_call_arguments.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
-            delta = getattr(event, "delta", "") or (
-                event.get("delta", "") if isinstance(event, dict) else ""
-            )
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
@@ -228,14 +198,9 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- output item done -> content_block_stop ----
         if event_type == "response.output_item.done":
-            item = getattr(event, "item", None) or (
-                event.get("item") if isinstance(event, dict) else None
-            )
+            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
             item_id = (
-                getattr(item, "id", None)
-                or (item.get("id") if isinstance(item, dict) else None)
-                if item
-                else None
+                getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None) if item else None
             )
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
@@ -276,12 +241,8 @@ class AnthropicResponsesStreamWrapper:
                     cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
                     cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
                     # Prefer direct cache fields if present
-                    cache_creation_tokens = int(
-                        getattr(usage, "cache_creation_input_tokens", 0) or 0
-                    )
-                    cache_read_tokens = int(
-                        getattr(usage, "cache_read_input_tokens", 0) or 0
-                    )
+                    cache_creation_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+                    cache_read_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
@@ -337,9 +298,7 @@ class AnthropicResponsesStreamWrapper:
         except StopAsyncIteration:
             pass
         except Exception as e:
-            verbose_logger.error(
-                f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}"
-            )
+            verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
 
         # Drain any remaining queued chunks
         if self._chunk_queue:

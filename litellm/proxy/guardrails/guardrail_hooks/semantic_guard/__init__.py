@@ -43,15 +43,13 @@ def initialize_guardrail(
 
     if llm_router is None:
         raise ValueError(
-            "SemanticGuard requires llm_router for embeddings. "
-            "Configure a model_list with an embedding model."
+            "SemanticGuard requires llm_router for embeddings. Configure a model_list with an embedding model."
         )
 
     semantic_guardrail = SemanticGuardrail(
         guardrail_name=guardrail_name,
         llm_router=llm_router,
-        embedding_model=getattr(litellm_params, "embedding_model", None)
-        or DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL,
+        embedding_model=getattr(litellm_params, "embedding_model", None) or DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL,
         similarity_threshold=getattr(litellm_params, "similarity_threshold", None)
         or DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD,
         route_templates=getattr(litellm_params, "route_templates", None),

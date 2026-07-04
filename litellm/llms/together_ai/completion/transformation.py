@@ -29,15 +29,9 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         """
         initial_prompt: AllPromptValues = _transform_prompt(messages)
         ## TOGETHER AI SPECIFIC VALIDATION ##
-        if isinstance(initial_prompt, list) and is_tokens_or_list_of_tokens(
-            value=initial_prompt
-        ):
+        if isinstance(initial_prompt, list) and is_tokens_or_list_of_tokens(value=initial_prompt):
             raise ValueError("TogetherAI does not support integers as input")
-        if (
-            isinstance(initial_prompt, list)
-            and len(initial_prompt) == 1
-            and isinstance(initial_prompt[0], str)
-        ):
+        if isinstance(initial_prompt, list) and len(initial_prompt) == 1 and isinstance(initial_prompt[0], str):
             together_prompt = initial_prompt[0]
         elif isinstance(initial_prompt, list):
             raise ValueError("TogetherAI does not support multiple prompts.")

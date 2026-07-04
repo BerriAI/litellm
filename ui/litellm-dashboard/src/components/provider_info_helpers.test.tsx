@@ -217,12 +217,6 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderModels", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    afterEach(() => {
-      consoleSpy.mockClear();
-    });
-
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
       const result = getProviderModels(undefined as any, modelMap);
@@ -308,17 +302,17 @@ describe("provider_info_helpers", () => {
       expect(result).not.toContain("anthropic-native");
     });
 
-    it("should include bedrock variants (converse, mantle) when called with 'Bedrock' provider key", () => {
+    it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {
       const modelMap = {
         "bedrock-base": { litellm_provider: "bedrock" },
         "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
-        "bedrock-mantle-model": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.4": { litellm_provider: "bedrock_mantle" },
         "openai-model": { litellm_provider: "openai" },
       };
       const result = getProviderModels("Bedrock" as Providers, modelMap);
       expect(result).toContain("bedrock-base");
       expect(result).toContain("bedrock-converse-model");
-      expect(result).toContain("bedrock-mantle-model");
+      expect(result).not.toContain("bedrock_mantle/openai.gpt-5.4");
       expect(result).not.toContain("openai-model");
     });
 
@@ -404,13 +398,6 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["valid-model"]);
     });
 
-    it("should log provider key and mapped provider when called", () => {
-      const modelMap = { "gpt-3.5-turbo": { litellm_provider: "openai" } };
-      getProviderModels(Providers.OpenAI, modelMap);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider key: ${Providers.OpenAI}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider mapped to: ${provider_map[Providers.OpenAI]}`);
-    });
-
     it("should return empty array for provider with no matching models", () => {
       const modelMap = {
         "gpt-3.5-turbo": { litellm_provider: "openai" },
@@ -434,5 +421,29 @@ describe("provider_info_helpers", () => {
       expect(anthropicResult).toEqual(["claude-3-opus"]);
       expect(groqResult).toContain("groq-model");
     });
+  });
+});
+
+describe("getProviderLogoAndName under a custom server_root_path", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
+  });
+
+  // Regression: under SERVER_ROOT_PATH=/litellm the logo must be requested at
+  // /litellm/ui/assets/logos/... A bare /ui/... path is served off the root and
+  // 404s behind the reverse proxy.
+  it("prefixes the server root path onto the resolved logo", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/litellm" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/litellm/ui/assets/logos/openai_small.svg");
+  });
+
+  it("leaves the logo at /ui/... when mounted at the root", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/ui/assets/logos/openai_small.svg");
   });
 });

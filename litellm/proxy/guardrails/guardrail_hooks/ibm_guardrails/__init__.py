@@ -26,9 +26,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     verify_ssl = getattr(litellm_params, "verify_ssl", True)
 
     # Get optional params
-    optional_params = getattr(
-        litellm_params, "optional_params", IBMDetectorOptionalParams()
-    )
+    optional_params = getattr(litellm_params, "optional_params", IBMDetectorOptionalParams())
     detector_params = getattr(optional_params, "detector_params", {})
     extra_headers = getattr(optional_params, "extra_headers", {})
     score_threshold = getattr(optional_params, "score_threshold", None)

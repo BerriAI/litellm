@@ -103,8 +103,7 @@ class AzureADCredential:
                 self._initialized = True
             except ImportError:
                 raise ImportError(
-                    "azure-identity is required for AzureADCredential. "
-                    "Install it with: pip install azure-identity"
+                    "azure-identity is required for AzureADCredential. Install it with: pip install azure-identity"
                 )
 
         result = self._credential.get_token(scope)

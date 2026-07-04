@@ -38,9 +38,7 @@ _LITELLM_INTERNAL_KWARGS = {
 
 
 def _get_config(provider: str) -> BaseSandboxConfig:
-    config = ProviderConfigManager.get_provider_sandbox_config(
-        SandboxProviders(provider)
-    )
+    config = ProviderConfigManager.get_provider_sandbox_config(SandboxProviders(provider))
     if config is None:
         raise ValueError(f"Code execution is not supported for provider: {provider}")
     return config
@@ -140,15 +138,9 @@ async def acode_interpreter_tool(
         **forwarded,
     )
     try:
-        return await config.arun_code(
-            container=container, code=code, api_key=api_key, **forwarded
-        )
+        return await config.arun_code(container=container, code=code, api_key=api_key, **forwarded)
     finally:
         try:
-            await config.adelete_sandbox(
-                container=container, api_key=api_key, api_base=api_base, **forwarded
-            )
+            await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
         except Exception as e:
-            litellm._logging.verbose_logger.debug(
-                f"sandbox: failed to delete ephemeral container: {e}"
-            )
+            litellm._logging.verbose_logger.debug(f"sandbox: failed to delete ephemeral container: {e}")

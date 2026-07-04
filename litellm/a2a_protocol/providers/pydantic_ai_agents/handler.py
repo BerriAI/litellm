@@ -91,9 +91,7 @@ class PydanticAIHandler:
         """
         if api_base is None:
             raise ValueError("api_base is required for Pydantic AI agents")
-        verbose_logger.info(
-            f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}"
-        )
+        verbose_logger.info(f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}")
 
         # Get raw task response first (not the transformed A2A format)
         raw_response = await PydanticAITransformation.send_and_get_raw_response(

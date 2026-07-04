@@ -49,7 +49,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
         <TremorButton
           onClick={onSend}
           disabled={isDisabled}
-          className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
+          className="shrink-0 ml-2 w-8! h-8! min-w-8! p-0! rounded-full! bg-blue-600! hover:bg-blue-700! disabled:bg-gray-300! border-none! text-white! disabled:text-gray-500! flex! items-center! justify-center!"
         >
           <ArrowUpOutlined style={{ fontSize: "14px" }} />
         </TremorButton>

@@ -168,15 +168,9 @@ class SonioxAudioTranscriptionHandler:
 
         # Pull handler-only kwargs out of params so they aren't sent
         # to Soniox.
-        poll_interval = float(
-            params.pop("soniox_polling_interval", SONIOX_DEFAULT_POLL_INTERVAL)
-        )
+        poll_interval = float(params.pop("soniox_polling_interval", SONIOX_DEFAULT_POLL_INTERVAL))
         try:
-            max_attempts = int(
-                params.pop(
-                    "soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
-                )
-            )
+            max_attempts = int(params.pop("soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS))
         except (ValueError, OverflowError):
             max_attempts = SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
         cleanup_raw = params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
@@ -195,9 +189,7 @@ class SonioxAudioTranscriptionHandler:
         #   SONIOX_MAX_POLL_ATTEMPTS * SONIOX_MAX_POLL_INTERVAL.
         if not math.isfinite(poll_interval):
             poll_interval = SONIOX_DEFAULT_POLL_INTERVAL
-        clamped_poll_interval = max(
-            SONIOX_MIN_POLL_INTERVAL, min(poll_interval, SONIOX_MAX_POLL_INTERVAL)
-        )
+        clamped_poll_interval = max(SONIOX_MIN_POLL_INTERVAL, min(poll_interval, SONIOX_MAX_POLL_INTERVAL))
         clamped_max_attempts = max(1, min(max_attempts, SONIOX_MAX_POLL_ATTEMPTS))
 
         handler_opts: Dict[str, Any] = {
@@ -273,9 +265,7 @@ class SonioxAudioTranscriptionHandler:
                 additional_args={
                     "api_base": f"{api_base}/v1/transcriptions",
                     "atranscription": True,
-                    "complete_input_dict": SonioxAudioTranscriptionHandler._redact_body_for_logging(
-                        body
-                    ),
+                    "complete_input_dict": SonioxAudioTranscriptionHandler._redact_body_for_logging(body),
                 },
             )
         except Exception:
@@ -295,11 +285,7 @@ class SonioxAudioTranscriptionHandler:
             logging_obj.post_call(
                 input=get_audio_file_name(audio_file) if audio_file else None,
                 api_key=api_key,
-                additional_args={
-                    "complete_input_dict": SonioxAudioTranscriptionHandler._redact_body_for_logging(
-                        body
-                    )
-                },
+                additional_args={"complete_input_dict": SonioxAudioTranscriptionHandler._redact_body_for_logging(body)},
                 original_response=original_response,
             )
         except Exception:
@@ -316,11 +302,7 @@ class SonioxAudioTranscriptionHandler:
         if response.status_code >= 400:
             try:
                 payload = response.json()
-                message = (
-                    payload.get("error_message")
-                    or payload.get("error")
-                    or response.text
-                )
+                message = payload.get("error_message") or payload.get("error") or response.text
             except Exception:
                 message = response.text
             raise provider_config.get_error_class(
@@ -403,9 +385,7 @@ class SonioxAudioTranscriptionHandler:
                 json=body,
                 timeout=timeout,
             )
-            self._raise_for_response(
-                create_resp, provider_config, "create transcription"
-            )
+            self._raise_for_response(create_resp, provider_config, "create transcription")
             transcription_id = create_resp.json()["id"]
 
             transcription_meta = self._sync_poll_until_completed(
@@ -424,9 +404,7 @@ class SonioxAudioTranscriptionHandler:
                 headers=auth_headers,
                 timeout=timeout,
             )
-            self._raise_for_response(
-                transcript_resp, provider_config, "fetch transcript"
-            )
+            self._raise_for_response(transcript_resp, provider_config, "fetch transcript")
             transcript = transcript_resp.json()
 
             payload = {"transcription": transcription_meta, "transcript": transcript}
@@ -444,9 +422,7 @@ class SonioxAudioTranscriptionHandler:
                     "model": model,
                     "custom_llm_provider": "soniox",
                     "audio_transcription_duration": (
-                        float(audio_duration_ms) / 1000.0
-                        if audio_duration_ms is not None
-                        else None
+                        float(audio_duration_ms) / 1000.0 if audio_duration_ms is not None else None
                     ),
                 }
             )
@@ -641,9 +617,7 @@ class SonioxAudioTranscriptionHandler:
                 json=body,
                 timeout=timeout,
             )
-            self._raise_for_response(
-                create_resp, provider_config, "create transcription"
-            )
+            self._raise_for_response(create_resp, provider_config, "create transcription")
             transcription_id = create_resp.json()["id"]
 
             transcription_meta = await self._async_poll_until_completed(
@@ -662,9 +636,7 @@ class SonioxAudioTranscriptionHandler:
                 headers=auth_headers,
                 timeout=timeout,
             )
-            self._raise_for_response(
-                transcript_resp, provider_config, "fetch transcript"
-            )
+            self._raise_for_response(transcript_resp, provider_config, "fetch transcript")
             transcript = transcript_resp.json()
 
             payload = {"transcription": transcription_meta, "transcript": transcript}
@@ -682,9 +654,7 @@ class SonioxAudioTranscriptionHandler:
                     "model": model,
                     "custom_llm_provider": "soniox",
                     "audio_transcription_duration": (
-                        float(audio_duration_ms) / 1000.0
-                        if audio_duration_ms is not None
-                        else None
+                        float(audio_duration_ms) / 1000.0 if audio_duration_ms is not None else None
                     ),
                 }
             )

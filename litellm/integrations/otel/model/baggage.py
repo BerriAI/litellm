@@ -24,9 +24,7 @@ from litellm.integrations.otel.model.semconv import GenAI, LiteLLM
 # team_metadata_keys). The single definition of what may be promoted and under
 # which key. Only the ``TEAM_METADATA`` extractor consults team_metadata_keys
 # (to filter the team's metadata to an allowlist); the rest ignore it.
-_PROMOTABLE: Final[
-    dict[str, Callable[[RequestIdentity, str | None, tuple[str, ...]], str | None]]
-] = {
+_PROMOTABLE: Final[dict[str, Callable[[RequestIdentity, str | None, tuple[str, ...]], str | None]]] = {
     LiteLLM.TEAM_ID: lambda identity, model, team_metadata_keys: identity.team_id,
     LiteLLM.TEAM_ALIAS: lambda identity, model, team_metadata_keys: identity.team_alias,
     LiteLLM.TEAM_METADATA: lambda identity, model, team_metadata_keys: _filtered_team_metadata_json(

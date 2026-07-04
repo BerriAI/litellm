@@ -42,9 +42,7 @@ class MCPAuth(str, enum.Enum):
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[
-    MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025
-]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
 MCPAuthType = Optional[
     Literal[
         MCPAuth.none,
@@ -73,6 +71,10 @@ class MCPPublicServer(BaseModel):
     spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     mcp_info: Optional[Dict[str, Any]] = None
+
+
+# OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
+MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"]
 
 
 class MCPCredentials(TypedDict, total=False):
@@ -132,6 +134,12 @@ class MCPCredentials(TypedDict, total=False):
     """
     Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
     Default: urn:ietf:params:oauth:token-type:access_token
+    """
+
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]
+    """
+    How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
+    sends HTTP Basic; defaults to "client_secret_post" when unset.
     """
 
 
@@ -214,7 +222,5 @@ class MCPPostCallResponseObject(BaseModel):
     Pydantic object used for MCP post_call_hook response
     """
 
-    mcp_tool_call_response: List[
-        Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]
-    ]
+    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
     hidden_params: HiddenParams

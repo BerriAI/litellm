@@ -1407,6 +1407,138 @@ class TestToolTransformation:
             == "string"
         )
 
+    def test_bedrock_anthropic_drops_derived_web_search_options(self):
+        """
+        Regression for LIT-3858: a Responses web_search tool becomes a derived
+        web_search_options param. Bedrock Anthropic models do not support it, so on the
+        chat-completion bridge it must be dropped (so litellm doesn't raise
+        UnsupportedParamsError) without the caller setting drop_params.
+        """
+        responses_api_request = {
+            "tools": [{"type": "web_search", "external_web_access": False}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="bedrock",
+        )
+
+        assert "web_search_options" not in result
+
+    def test_bedrock_converse_provider_drops_derived_web_search_options(self):
+        """
+        Regression for the ``bedrock_converse`` alias: routing a Bedrock Converse model resolves
+        to custom_llm_provider='bedrock_converse' with model='bedrock/converse/...'. The derived
+        web_search_options must still be dropped on this route, not just the bare 'bedrock' one.
+        """
+        responses_api_request = {
+            "tools": [{"type": "web_search", "external_web_access": False}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="bedrock_converse",
+        )
+
+        assert "web_search_options" not in result
+
+    def test_bedrock_nova_keeps_derived_web_search_options(self):
+        """Nova models map web_search_options to a nova_grounding systemTool, so keep it."""
+        responses_api_request = {
+            "tools": [{"type": "web_search", "search_context_size": "high"}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="amazon.nova-pro-v1:0",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="bedrock",
+        )
+
+        assert result.get("web_search_options") is not None
+
+    def test_supported_provider_keeps_derived_web_search_options(self):
+        """A provider whose config lists web_search_options (e.g. OpenAI) keeps it untouched."""
+        responses_api_request = {
+            "tools": [{"type": "web_search", "search_context_size": "high"}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-4o",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="openai",
+        )
+
+        assert result.get("web_search_options") is not None
+
+    def test_unsupported_non_bedrock_provider_drops_derived_web_search_options(self):
+        """
+        The drop is provider-agnostic, not hardcoded to Bedrock: any provider whose config
+        does not list web_search_options (e.g. Cohere) drops the derived param. This fails if
+        the drop is ever re-scoped to a single provider.
+        """
+        responses_api_request = {
+            "tools": [{"type": "web_search", "search_context_size": "high"}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="command-r",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="cohere",
+        )
+
+        assert "web_search_options" not in result
+
+    def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
+        """
+        End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array
+        is transformed for a Bedrock Anthropic model, then fed through the Bedrock tool layer.
+        The derived web_search_options is dropped, and toolConfig contains only the function
+        tool, never the web_search/image_generation/namespace built-ins as junk toolSpecs.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _bedrock_tools_pt,
+        )
+
+        model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+        responses_api_request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "noop",
+                    "description": "x",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                {"type": "web_search", "external_web_access": False},
+                {"type": "image_generation", "output_format": "png"},
+                {"type": "namespace", "name": "grp", "description": "g", "tools": []},
+            ],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="bedrock",
+        )
+
+        assert "web_search_options" not in result
+
+        bedrock_tool_blocks = _bedrock_tools_pt(tools=result["tools"], model=model)
+        names = [
+            block["toolSpec"]["name"]
+            for block in bedrock_tool_blocks
+            if "toolSpec" in block
+        ]
+        assert names == ["noop"]
+        assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
+
 
 class TestUsageTransformation:
     """Test cases for usage transformation from Chat Completion to Responses API format"""

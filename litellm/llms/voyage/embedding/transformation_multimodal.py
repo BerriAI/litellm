@@ -27,9 +27,7 @@ class VoyageMultimodalEmbeddingError(BaseLLMException):
     ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://api.voyageai.com/v1/multimodalembeddings"
-        )
+        self.request = httpx.Request(method="POST", url="https://api.voyageai.com/v1/multimodalembeddings")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             status_code=status_code,
@@ -124,10 +122,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             content = item.get("content") or []
             return {
                 **item,
-                "content": [
-                    self._normalize_content_item(content_item)
-                    for content_item in content
-                ],
+                "content": [self._normalize_content_item(content_item) for content_item in content],
             }
         return item
 
@@ -159,9 +154,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise VoyageMultimodalEmbeddingError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VoyageMultimodalEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
         model_response.model = raw_response_json.get("model")
         model_response.data = raw_response_json.get("data")
@@ -178,6 +171,4 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return VoyageMultimodalEmbeddingError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+        return VoyageMultimodalEmbeddingError(message=error_message, status_code=status_code, headers=headers)

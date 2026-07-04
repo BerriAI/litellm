@@ -16,9 +16,7 @@ def _get_modality_token_details(usage_metadata: dict, *details_keys: str) -> lis
     return []
 
 
-def _sum_modality_token_details(
-    usage_metadata: dict, *details_keys: str
-) -> ImageUsageInputTokensDetails:
+def _sum_modality_token_details(usage_metadata: dict, *details_keys: str) -> ImageUsageInputTokensDetails:
     tokens_details = ImageUsageInputTokensDetails(
         image_tokens=0,
         text_tokens=0,
@@ -40,22 +38,16 @@ def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
     """
     Transform Gemini usageMetadata to ImageUsage format.
     """
-    input_tokens_details = _sum_modality_token_details(
-        usage_metadata, "promptTokensDetails", "prompt_tokens_details"
-    )
+    input_tokens_details = _sum_modality_token_details(usage_metadata, "promptTokensDetails", "prompt_tokens_details")
     output_tokens = usage_metadata.get("candidatesTokenCount", 0)
     output_tokens_details = _sum_modality_token_details(
         usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"
     )
 
-    if not _get_modality_token_details(
-        usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"
-    ):
+    if not _get_modality_token_details(usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"):
         output_tokens_details.image_tokens = output_tokens
     else:
-        known_output_tokens = (
-            output_tokens_details.text_tokens + output_tokens_details.image_tokens
-        )
+        known_output_tokens = output_tokens_details.text_tokens + output_tokens_details.image_tokens
         if output_tokens > known_output_tokens:
             output_tokens_details.text_tokens += output_tokens - known_output_tokens
 

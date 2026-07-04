@@ -29,9 +29,7 @@ def set_global_bitbucket_config(config: dict) -> None:
     litellm.global_bitbucket_config = config  # type: ignore
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a BitBucket repository.
     """
@@ -39,9 +37,7 @@ def prompt_initializer(
     prompt_id = getattr(litellm_params, "prompt_id", None)
 
     if not bitbucket_config:
-        raise ValueError(
-            "bitbucket_config is required for BitBucket prompt integration"
-        )
+        raise ValueError("bitbucket_config is required for BitBucket prompt integration")
 
     try:
         bitbucket_prompt_manager = BitBucketPromptManager(

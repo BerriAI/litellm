@@ -102,9 +102,7 @@ class IdentityStore:
         if self._prisma is None:
             raise NoDatabaseConnectionError()
 
-        cached = await self._cache.async_get_cache(
-            key=hashed_token, model_type=UserAPIKeyAuth
-        )
+        cached = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         if cached is not None:
             return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
 
@@ -163,33 +161,17 @@ class IdentityStore:
         """
         teams: list[TeamIdentity] = []
         if key.team_id is not None:
-            role = (
-                team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
-            )
+            role = team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
             teams.append(TeamIdentity(id=key.team_id, name=key.team_alias, role=role))
         organization = (
-            OrganizationIdentity(id=key.org_id, name=key.organization_alias)
-            if key.org_id is not None
-            else None
+            OrganizationIdentity(id=key.org_id, name=key.organization_alias) if key.org_id is not None else None
         )
-        user = (
-            UserIdentity(id=key.user_id, email=key.user_email)
-            if key.user_id is not None
-            else None
-        )
-        project = (
-            ProjectIdentity(id=key.project_id, name=key.project_alias)
-            if key.project_id is not None
-            else None
-        )
-        end_user = (
-            EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
-        )
+        user = UserIdentity(id=key.user_id, email=key.user_email) if key.user_id is not None else None
+        project = ProjectIdentity(id=key.project_id, name=key.project_alias) if key.project_id is not None else None
+        end_user = EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
         mapped = map_role(key.user_role)
         return Principal(
-            principal_type=(
-                PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT
-            ),
+            principal_type=(PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT),
             subject=key.user_id or key.key_alias or subject_fallback or "",
             issuer=issuer,
             user=user,

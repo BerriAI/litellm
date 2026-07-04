@@ -25,6 +25,8 @@ union (see `result.py`), not `expression.Result`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -59,6 +61,19 @@ class AuthSpecKind(str, Enum):
     aws_sigv4 = "aws_sigv4"  # AWS SigV4 per-request signing (e.g. Bedrock AgentCore)
 
 
+@dataclass(frozen=True, slots=True)
+class Unauthorized:
+    """A 401 plus the optional challenge a client needs to recover.
+
+    ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
+    challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
+    """
+
+    detail: str
+    www_authenticate: str | None = None
+    body: Mapping[str, str] | None = None
+
+
 @tagged_union(frozen=True)
 class CredError:
     """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx.Auth`.
@@ -76,28 +91,21 @@ class CredError:
         "not_implemented",
     ] = tag()
 
-    unauthorized: str = (
-        case()
-    )  # no usable credential for this (subject, server) -> 401 challenge
-    misconfigured: str = (
-        case()
-    )  # the declared mode is missing required config -> 5xx (operator)
-    upstream_unavailable: str = (
-        case()
-    )  # the IdP / token endpoint could not be reached -> 503
-    unsupported_mode: str = (
-        case()
-    )  # a raw mode string did not parse into AuthSpecKind (boundary)
-    precondition_required: str = (
-        case()
-    )  # a required per-user value (e.g. an env var) has not been provided -> 412
-    not_implemented: str = (
-        case()
-    )  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
+    unauthorized: Unauthorized = case()  # no usable credential for this (subject, server) -> 401 challenge
+    misconfigured: str = case()  # the declared mode is missing required config -> 5xx (operator)
+    upstream_unavailable: str = case()  # the IdP / token endpoint could not be reached -> 503
+    unsupported_mode: str = case()  # a raw mode string did not parse into AuthSpecKind (boundary)
+    precondition_required: str = case()  # a required per-user value (e.g. an env var) has not been provided -> 412
+    not_implemented: str = case()  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
 
     @staticmethod
-    def of_unauthorized(detail: str) -> CredError:
-        return CredError(unauthorized=detail)
+    def of_unauthorized(
+        detail: str,
+        *,
+        www_authenticate: str | None = None,
+        body: Mapping[str, str] | None = None,
+    ) -> CredError:
+        return CredError(unauthorized=Unauthorized(detail=detail, www_authenticate=www_authenticate, body=body))
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:
@@ -125,7 +133,7 @@ class CredError:
         # only while that stays true (a `case _` would defeat reportMatchNotExhaustive).
         match self.tag:
             case "unauthorized":
-                return f"unauthorized: {self.unauthorized}"
+                return f"unauthorized: {self.unauthorized.detail}"
             case "misconfigured":
                 return f"misconfigured: {self.misconfigured}"
             case "upstream_unavailable":
@@ -175,17 +183,23 @@ class ClientCredentialsConfig(BaseModel):
 
 class TokenExchangeConfig(BaseModel):
     """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
-    audience (`server.resource`, RFC 8707). The gateway authenticates to the exchange endpoint
-    as an OAuth client (`client_id`/`client_secret`); the inbound token is sent only to that
-    endpoint, never to the upstream.
+    audience. The gateway authenticates to the exchange endpoint as an OAuth client
+    (`client_id`/`client_secret`); the inbound token is sent only to that endpoint, never to the
+    upstream.
+
+    `audience` is the RFC 8693 target; it is optional and sent only when the operator configured
+    one, since both `audience` and `resource` are optional in the spec and the authorization server
+    applies its own default when neither is sent (fabricating one risks `invalid_target`).
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     token_exchange_endpoint: str | None = None
+    audience: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
+    token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
     scopes: tuple[str, ...] = ()
 
 
@@ -268,9 +282,7 @@ class Ambient(BaseModel):
     source: Literal["ambient"] = "ambient"
 
 
-AwsCredentialSource = Annotated[
-    StaticKeys | AssumeRole | Ambient, Field(discriminator="source")
-]
+AwsCredentialSource = Annotated[StaticKeys | AssumeRole | Ambient, Field(discriminator="source")]
 
 
 class AwsSigV4Config(BaseModel):

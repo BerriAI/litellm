@@ -182,9 +182,7 @@ HarmBlockThreshold = Literal[
 ]
 HarmBlockMethod = Literal["HARM_BLOCK_METHOD_UNSPECIFIED", "SEVERITY", "PROBABILITY"]
 
-HarmProbability = Literal[
-    "HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
-]
+HarmProbability = Literal["HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"]
 
 HarmSeverity = Literal[
     "HARM_SEVERITY_UNSPECIFIED",
@@ -210,9 +208,7 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal[
-    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
-]
+GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -307,9 +303,7 @@ class UsageMetadata(TypedDict, total=False):
     cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[
-        PromptTokensDetails
-    ]  # Alternative key name used in some responses
+    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):

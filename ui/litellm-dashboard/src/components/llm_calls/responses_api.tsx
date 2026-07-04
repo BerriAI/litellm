@@ -164,8 +164,6 @@ export async function makeOpenAIResponsesRequest(
     let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
 
     for await (const event of response) {
-      console.log("Response event:", event);
-
       // Use a type-safe approach to handle events
       if (typeof event === "object" && event !== null) {
         // Handle MCP events first
@@ -174,8 +172,6 @@ export async function makeOpenAIResponsesRequest(
           (event.type === "response.output_item.done" &&
             (event.item?.type === "mcp_list_tools" || event.item?.type === "mcp_call"))
         ) {
-          console.log("MCP event received:", event);
-
           if (onMCPEvent) {
             const mcpEvent: MCPEvent = {
               type: event.type,
@@ -196,7 +192,6 @@ export async function makeOpenAIResponsesRequest(
         // Check for MCP tool usage
         if (event.type === "response.output_item.done" && event.item?.type === "mcp_call" && event.item?.name) {
           mcpToolUsed = event.item.name;
-          console.log("MCP tool used:", mcpToolUsed);
         }
 
         // Handle code interpreter events
@@ -212,7 +207,6 @@ export async function makeOpenAIResponsesRequest(
         // 2) only handle actual text deltas
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
           const delta = event.delta;
-          console.log("Text delta", delta);
           if (delta.length > 0) {
             updateTextUI("assistant", delta, selectedModel);
 
@@ -220,7 +214,6 @@ export async function makeOpenAIResponsesRequest(
             if (!firstTokenReceived) {
               firstTokenReceived = true;
               const timeToFirstToken = Date.now() - startTime;
-              console.log("First token received! Time:", timeToFirstToken, "ms");
 
               if (onTimingData) {
                 onTimingData(timeToFirstToken);
@@ -241,18 +234,13 @@ export async function makeOpenAIResponsesRequest(
         if (event.type === "response.completed" && "response" in event) {
           const response_obj = event.response;
           const usage = response_obj.usage;
-          console.log("Usage data:", usage);
-          console.log("Response completed event:", response_obj);
 
           // Extract response_id for session management
           if (response_obj.id && onResponseId) {
-            console.log("Response ID for session management:", response_obj.id);
             onResponseId(response_obj.id);
           }
 
           if (usage && onUsageData) {
-            console.log("Usage data:", usage);
-
             // Extract usage data safely
             const usageData: TokenUsage = {
               completionTokens: usage.output_tokens,
@@ -274,7 +262,6 @@ export async function makeOpenAIResponsesRequest(
     return response;
   } catch (error) {
     if (signal?.aborted) {
-      console.log("Responses API request was cancelled");
     } else {
       NotificationManager.fromBackend(
         `Error occurred while generating model response. Please try again. Error: ${error}`,

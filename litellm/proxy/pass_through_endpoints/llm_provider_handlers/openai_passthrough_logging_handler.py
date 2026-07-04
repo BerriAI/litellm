@@ -59,9 +59,7 @@ def _hostname_matches(hostname: str, suffixes: tuple) -> bool:
     Uses suffix matching (not a bare substring test) so look-alikes such as
     `cognitiveservices.azure.com.attacker.example` are not accepted.
     """
-    return any(
-        hostname == suffix or hostname.endswith("." + suffix) for suffix in suffixes
-    )
+    return any(hostname == suffix or hostname.endswith("." + suffix) for suffix in suffixes)
 
 
 def _is_openai_compatible_host(hostname: Optional[str]) -> bool:
@@ -74,9 +72,7 @@ def _is_openai_compatible_host(hostname: Optional[str]) -> bool:
     """
     if not hostname:
         return False
-    return _hostname_matches(hostname, _OPENAI_HOSTNAMES) or _hostname_matches(
-        hostname, _AZURE_OPENAI_HOSTNAMES
-    )
+    return _hostname_matches(hostname, _OPENAI_HOSTNAMES) or _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES)
 
 
 def _is_openai_compatible_url(url_route: Optional[str]) -> bool:
@@ -119,10 +115,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return (
-            _is_openai_compatible_host(parsed_url.hostname)
-            and "/v1/chat/completions" in parsed_url.path
-        )
+        return _is_openai_compatible_host(parsed_url.hostname) and "/v1/chat/completions" in parsed_url.path
 
     @staticmethod
     def is_openai_image_generation_route(url_route: str) -> bool:
@@ -130,10 +123,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return (
-            _is_openai_compatible_host(parsed_url.hostname)
-            and "/v1/images/generations" in parsed_url.path
-        )
+        return _is_openai_compatible_host(parsed_url.hostname) and "/v1/images/generations" in parsed_url.path
 
     @staticmethod
     def is_openai_image_editing_route(url_route: str) -> bool:
@@ -141,10 +131,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return (
-            _is_openai_compatible_host(parsed_url.hostname)
-            and "/v1/images/edits" in parsed_url.path
-        )
+        return _is_openai_compatible_host(parsed_url.hostname) and "/v1/images/edits" in parsed_url.path
 
     @staticmethod
     def is_openai_responses_route(url_route: str) -> bool:
@@ -197,9 +184,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             return cost
         except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Error calculating image generation cost: {str(e)}"
-            )
+            verbose_proxy_logger.warning(f"Error calculating image generation cost: {str(e)}")
             return 0.0
 
     @staticmethod
@@ -233,9 +218,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             return cost
         except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Error calculating image editing cost: {str(e)}"
-            )
+            verbose_proxy_logger.warning(f"Error calculating image editing cost: {str(e)}")
             return 0.0
 
     @staticmethod
@@ -291,25 +274,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Handle OpenAI passthrough logging with cost tracking for chat completions, image generation, image editing, and responses API.
         """
         # Check if this is a supported endpoint for cost tracking
-        is_chat_completions = (
-            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
-        )
-        is_image_generation = (
-            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
-        )
-        is_image_editing = (
-            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
-        )
-        is_responses = OpenAIPassthroughLoggingHandler.is_openai_responses_route(
-            url_route
-        )
+        is_chat_completions = OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+        is_image_generation = OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
+        is_image_editing = OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+        is_responses = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
 
-        if not (
-            is_chat_completions
-            or is_image_generation
-            or is_image_editing
-            or is_responses
-        ):
+        if not (is_chat_completions or is_image_generation or is_image_editing or is_responses):
             # For unsupported endpoints, return None to let the system fall back to generic behavior
             return {
                 "result": None,
@@ -319,9 +289,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         # Extract model from request or response
         model = request_body.get("model", response_body.get("model", ""))
         if not model:
-            verbose_proxy_logger.warning(
-                "No model found in request or response for OpenAI passthrough cost tracking"
-            )
+            verbose_proxy_logger.warning("No model found in request or response for OpenAI passthrough cost tracking")
             base_handler = OpenAIPassthroughLoggingHandler()
             return base_handler.passthrough_chat_handler(
                 httpx_response=httpx_response,
@@ -365,8 +333,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     api_key="",
                     request_data=request_body,
                     encoding=litellm.encoding,
-                    json_mode=request_body.get("response_format", {}).get("type")
-                    == "json_object",
+                    json_mode=request_body.get("response_format", {}).get("type") == "json_object",
                     litellm_params=existing_litellm_params,
                 )
 
@@ -378,18 +345,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
             elif is_image_generation:
                 # Handle image generation cost calculation
-                response_cost = (
-                    OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
-                        model=model,
-                        response_body=response_body,
-                        request_body=request_body,
-                    )
+                response_cost = OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
+                    model=model,
+                    response_body=response_body,
+                    request_body=request_body,
                 )
                 # Mark call type for downstream image-aware logic/metrics
                 try:
-                    logging_obj.call_type = (
-                        PassthroughCallTypes.passthrough_image_generation.value
-                    )
+                    logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 except Exception:
                     pass
                 # Create a simple response object for logging
@@ -403,18 +366,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 litellm_model_response._hidden_params["response_cost"] = response_cost
             elif is_image_editing:
                 # Handle image editing cost calculation
-                response_cost = (
-                    OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
-                        model=model,
-                        response_body=response_body,
-                        request_body=request_body,
-                    )
+                response_cost = OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
+                    model=model,
+                    response_body=response_body,
+                    request_body=request_body,
                 )
                 # Mark call type for downstream image-aware logic/metrics
                 try:
-                    logging_obj.call_type = (
-                        PassthroughCallTypes.passthrough_image_generation.value
-                    )
+                    logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 except Exception:
                     pass
                 # Create a simple response object for logging
@@ -447,17 +406,17 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             kwargs["custom_llm_provider"] = custom_llm_provider
 
             # Extract user information for tracking
-            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
-                kwargs.get("passthrough_logging_payload")
+            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = kwargs.get(
+                "passthrough_logging_payload"
             )
             if passthrough_logging_payload:
                 user = handler_instance._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
-                    kwargs["litellm_params"].setdefault(
-                        "proxy_server_request", {}
-                    ).setdefault("body", {})["user"] = user
+                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = (
+                        user
+                    )
 
             # Create standard logging object
             if litellm_model_response is not None:
@@ -478,7 +437,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             endpoint_type = (
                 "chat_completions"
                 if is_chat_completions
-                else "image_generation" if is_image_generation else "image_editing"
+                else "image_generation"
+                if is_image_generation
+                else "image_editing"
             )
             verbose_proxy_logger.debug(
                 f"OpenAI passthrough cost tracking - Endpoint: {endpoint_type}, Model: {model}, Cost: ${response_cost:.6f}"
@@ -490,9 +451,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             }
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error in OpenAI passthrough cost tracking: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error in OpenAI passthrough cost tracking: {str(e)}")
             # Fall back to base handler without cost tracking
             base_handler = OpenAIPassthroughLoggingHandler()
             return base_handler.passthrough_chat_handler(
@@ -539,17 +498,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     )
 
                     # Convert string chunk to dict
-                    stripped_json_chunk = (
-                        BaseModelResponseIterator._string_to_dict_parser(
-                            str_line=chunk_str
-                        )
-                    )
+                    stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=chunk_str)
 
                     if stripped_json_chunk:
                         # Parse the chunk using OpenAI's chunk parser
-                        transformed_chunk = openai_iterator.chunk_parser(
-                            chunk=stripped_json_chunk
-                        )
+                        transformed_chunk = openai_iterator.chunk_parser(chunk=stripped_json_chunk)
                         if transformed_chunk is not None:
                             all_openai_chunks.append(transformed_chunk)
 
@@ -558,22 +511,16 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     continue
 
             if not all_openai_chunks:
-                verbose_proxy_logger.warning(
-                    "No valid chunks found in streaming response"
-                )
+                verbose_proxy_logger.warning("No valid chunks found in streaming response")
                 return None
 
             # Build complete response from chunks
-            complete_streaming_response = litellm.stream_chunk_builder(
-                chunks=all_openai_chunks
-            )
+            complete_streaming_response = litellm.stream_chunk_builder(chunks=all_openai_chunks)
 
             return complete_streaming_response
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error building complete streaming response: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error building complete streaming response: {str(e)}")
             return None
 
     @staticmethod
@@ -604,17 +551,13 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             if complete_response is None:
-                verbose_proxy_logger.warning(
-                    "Failed to build complete response from OpenAI streaming chunks"
-                )
+                verbose_proxy_logger.warning("Failed to build complete response from OpenAI streaming chunks")
                 return {
                     "result": None,
                     "kwargs": {},
                 }
 
-            custom_llm_provider = litellm_logging_obj.model_call_details.get(
-                "custom_llm_provider", "openai"
-            )
+            custom_llm_provider = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
             # Calculate cost using LiteLLM's cost calculator
             response_cost = litellm.completion_cost(
                 completion_response=complete_response,
@@ -623,9 +566,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             # Preserve existing litellm_params to maintain metadata tags
-            existing_litellm_params = (
-                litellm_logging_obj.model_call_details.get("litellm_params", {}) or {}
-            )
+            existing_litellm_params = litellm_logging_obj.model_call_details.get("litellm_params", {}) or {}
 
             # Prepare kwargs for logging
             kwargs = {
@@ -637,18 +578,16 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Extract user information for tracking
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
-                litellm_logging_obj.model_call_details.get(
-                    "passthrough_logging_payload"
-                )
+                litellm_logging_obj.model_call_details.get("passthrough_logging_payload")
             )
             if passthrough_logging_payload:
                 user = handler_instance._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
-                    kwargs["litellm_params"].setdefault(
-                        "proxy_server_request", {}
-                    ).setdefault("body", {})["user"] = user
+                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = (
+                        user
+                    )
 
             # Create standard logging object
             get_standard_logging_object_payload(
@@ -662,9 +601,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Update logging object with cost information
             litellm_logging_obj.model_call_details["model"] = model
-            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
-                custom_llm_provider
-            )
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             litellm_logging_obj.model_call_details["response_cost"] = response_cost
 
             verbose_proxy_logger.debug(
@@ -677,9 +614,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             }
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error in OpenAI streaming passthrough cost tracking: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error in OpenAI streaming passthrough cost tracking: {str(e)}")
             return {
                 "result": None,
                 "kwargs": {},

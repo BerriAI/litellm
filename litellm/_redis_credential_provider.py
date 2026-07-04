@@ -100,9 +100,7 @@ class GCPIAMCredentialProvider(CredentialProvider):
         return (token,)
 
     async def get_credentials_async(self) -> Tuple[str]:
-        token = await asyncio.to_thread(
-            _get_cached_gcp_iam_token, self._gcp_service_account
-        )
+        token = await asyncio.to_thread(_get_cached_gcp_iam_token, self._gcp_service_account)
         return (token,)
 
 
@@ -128,9 +126,7 @@ class AzureADCredentialProvider(CredentialProvider):
         return (token,)
 
     async def get_credentials_async(self) -> Union[Tuple[str], Tuple[str, str]]:
-        token_obj = await asyncio.to_thread(
-            self._credential.get_token, AZURE_REDIS_SCOPE
-        )
+        token_obj = await asyncio.to_thread(self._credential.get_token, AZURE_REDIS_SCOPE)
         if self._username:
             return (self._username, token_obj.token)
         return (token_obj.token,)

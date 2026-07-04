@@ -66,9 +66,7 @@ class ChatCompletionContentPartImageParam(TypedDict, total=False):
     """The type of the content part."""
 
 
-ChatCompletionContentPartParam = Union[
-    ChatCompletionContentPartTextParam, ChatCompletionContentPartImageParam
-]
+ChatCompletionContentPartParam = Union[ChatCompletionContentPartTextParam, ChatCompletionContentPartImageParam]
 
 
 class ChatCompletionUserMessageParam(TypedDict, total=False):

@@ -33,9 +33,7 @@ class XecGuardConfigModel(GuardrailConfigModel):
     )
     xecguard_model: Optional[str] = Field(
         default=None,
-        description=(
-            "XecGuard scanning model identifier. " "Defaults to 'xecguard_v2'."
-        ),
+        description=("XecGuard scanning model identifier. Defaults to 'xecguard_v2'."),
     )
     policy_names: Optional[List[str]] = Field(
         default=None,

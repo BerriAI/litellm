@@ -46,7 +46,7 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Install backend dependencies
-        run: uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
 
       - name: Generate Prisma client
         env:

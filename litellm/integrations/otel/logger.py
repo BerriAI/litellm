@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
-from opentelemetry.context import attach, get_current
+from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 
@@ -17,6 +17,7 @@ from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
     request_root_span,
+    resolve_mcp_span_context,
     resolve_parent_context,
     resolve_request_span_context,
     set_request_baggage,
@@ -32,9 +33,11 @@ from litellm.integrations.otel.model.metadata import (
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
     SpanError,
+    is_mcp_list_tools,
     is_mcp_tool_call,
 )
 from litellm.integrations.otel.plumbing.metrics import (
@@ -109,19 +112,13 @@ class OpenTelemetryV2(CustomLogger):
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
-            tracer_provider
-            if tracer_provider is not None
-            else build_tracer_provider(self.config)
+            tracer_provider if tracer_provider is not None else build_tracer_provider(self.config)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
         self._metric_filter_error_logged = False
-        self._emitter = SpanEmitter(
-            self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names)
-        )
-        self._tenant_tracers = TenantTracerCache(
-            self.config, callback_name, LITELLM_TRACER_NAME
-        )
+        self._emitter = SpanEmitter(self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names))
+        self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
@@ -145,9 +142,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _register_in_callback_list(self, callbacks: list) -> None:
         already_otel = any(
-            cb.__class__.__module__.startswith(_OTEL_MODULES)
-            for cb in callbacks
-            if hasattr(cb, "__class__")
+            cb.__class__.__module__.startswith(_OTEL_MODULES) for cb in callbacks if hasattr(cb, "__class__")
         )
         if not already_otel:
             callbacks.append(self)
@@ -214,13 +209,9 @@ class OpenTelemetryV2(CustomLogger):
                 call.provisional_span_name,
                 parent_context=parent_context,
                 start_time_ns=start_time_ns,
-                tracer=self._tenant_tracers.tracer_for(
-                    self.tracer, call.dynamic_params
-                ),
+                tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
             )
-        self._open_llm_calls[call_id] = _LLMCallSpan(
-            span=span, start_time_ns=start_time_ns
-        )
+        self._open_llm_calls[call_id] = _LLMCallSpan(span=span, start_time_ns=start_time_ns)
         # Evict the oldest open call if the map is over budget. A call that opens
         # but never closes (a stream that only fires stream events) would linger
         # otherwise; the evicted span is simply dropped (never exported).
@@ -229,6 +220,8 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
         self._close_llm_call(kwargs, start_time, end_time)
         self._record_metrics(kwargs, response_obj, start_time, end_time)
@@ -254,7 +247,23 @@ class OpenTelemetryV2(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
             return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
+
+    def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
+        """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
+        processor stamps team/key/metadata onto the span. Identity is read from the
+        parsed payload, never the client's ``params._meta`` carrier, so it can't be
+        spoofed."""
+        bag = promoted_baggage(
+            identity,
+            model,
+            promoted_keys=tuple(self.config.baggage_promoted_keys),
+            metadata_keys=tuple(self.config.baggage_metadata_keys),
+            team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
+        )
+        return set_request_baggage(bag, context=context) if bag else context
 
     def _emit_mcp_tool_call(
         self,
@@ -266,15 +275,15 @@ class OpenTelemetryV2(CustomLogger):
 
         MCP tool calls reach the success/failure callbacks like any other request
         (with ``call_type`` ``call_mcp_tool``), but they are not LLM calls and have
-        no ``pre_call`` carrier — so they get their own CLIENT span here, parented
-        to the request's server span. Returns whether it handled the event, so the
-        caller skips the LLM-call path. The whole span is emitted at once (there is
-        no boundary to open it at), deduped on the call id by the emitter.
+        no ``pre_call`` carrier — so they get their own CLIENT span here. Per the MCP
+        semconv it parents to the trace context the client propagated in
+        ``params._meta`` (or starts a new root) and links the transport span, rather
+        than nesting under the HTTP/session span. Returns whether it handled the
+        event, so the caller skips the LLM-call path. The whole span is emitted at
+        once (there is no boundary to open it at), deduped on the call id.
         """
         raw_payload = kwargs.get("standard_logging_object")
-        if not raw_payload or not is_mcp_tool_call(
-            cast(Mapping[str, object], raw_payload)
-        ):
+        if not raw_payload or not is_mcp_tool_call(cast(Mapping[str, object], raw_payload)):
             return False
         payload = cast("StandardLoggingPayload", raw_payload)
         data = MCPToolCallSpanData.from_standard_logging_payload(
@@ -285,12 +294,51 @@ class OpenTelemetryV2(CustomLogger):
         # as a phantom LLM span.
         if data.identity.call_id:
             self._open_llm_calls.pop(data.identity.call_id, None)
+        parent_context, links = resolve_mcp_span_context()
+        parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
         self._emitter.emit(
             SpanRole.MCP_TOOL_CALL,
             data,
-            parent_context=resolve_request_span_context(),
+            parent_context=parent_context,
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
+            links=links,
+        )
+        return True
+
+    def _emit_mcp_list_tools(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        """Emit an MCP ``tools/list`` span when the closed request was a discovery call.
+
+        Like a tool call, listing reaches the success/failure callbacks (here with
+        ``call_type`` ``list_mcp_tools``) with no ``pre_call`` carrier, so it gets its
+        own CLIENT span. Per the MCP semconv it parents to the ``params._meta`` trace
+        context (or starts a new root) and links the transport span, rather than
+        nesting under the HTTP/session span. Returns whether it handled the event so
+        the caller skips the LLM-call path.
+        """
+        raw_payload = kwargs.get("standard_logging_object")
+        if not raw_payload or not is_mcp_list_tools(cast(Mapping[str, object], raw_payload)):
+            return False
+        payload = cast("StandardLoggingPayload", raw_payload)
+        data = MCPListToolsSpanData.from_standard_logging_payload(
+            payload, capture_content=self.config.capture_span_content
+        )
+        if data.identity.call_id:
+            self._open_llm_calls.pop(data.identity.call_id, None)
+        parent_context, links = resolve_mcp_span_context()
+        parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
+        self._emitter.emit(
+            SpanRole.MCP_LIST_TOOLS,
+            data,
+            parent_context=parent_context,
+            start_time_ns=to_ns(start_time),
+            end_time_ns=to_ns(end_time),
+            links=links,
         )
         return True
 
@@ -320,33 +368,20 @@ class OpenTelemetryV2(CustomLogger):
                 # it (named provisionally) so it isn't leaked as an open span.
                 carrier.span.end(end_time=to_ns(end_time))
             return None
-        data = LLMCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
-        )
+        data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=self.config.capture_span_content)
         end_time_ns = to_ns(end_time)
         if carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
             # status, and end it. Its parent (the server span) was captured at
             # creation from real ambient context.
-            self._emitter.finish_span(
-                SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns
-            )
+            self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
             return carrier.span
         # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
         # The worker copied the request task's context, which carries the anchored
         # root span — parent to it (ambient fallback on the SDK path). Seed identity
         # Baggage so the span — and the SDK path, which has none — is labeled
         # consistently.
-        parent_ctx = resolve_request_span_context()
-        bag = promoted_baggage(
-            data.identity,
-            data.request_model,
-            promoted_keys=tuple(self.config.baggage_promoted_keys),
-            metadata_keys=tuple(self.config.baggage_metadata_keys),
-            team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
-        )
-        if bag:
-            parent_ctx = set_request_baggage(bag, context=parent_ctx)
+        parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
         return self._emitter.emit(
             SpanRole.LLM_CALL,
             data,
@@ -419,12 +454,7 @@ class OpenTelemetryV2(CustomLogger):
         # zero-duration root with no context, so skip it. Real background work
         # (budget/reset jobs, spend flush) passes start/end times and still emits
         # as a root; anything with a parent emits regardless.
-        if (
-            error_override is None
-            and start_time is None
-            and end_time is None
-            and parent_otel_span is None
-        ):
+        if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
             return None
         if error_override is not None and data.error is None:
             data = ServiceSpanData(
@@ -570,9 +600,7 @@ def select_global_otel_v2_logger(
     """
     if registered is not None:
         return registered
-    existing = next(
-        (cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None
-    )
+    existing = next((cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None)
     return existing if existing is not None else OpenTelemetryV2()
 
 

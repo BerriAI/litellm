@@ -28,9 +28,7 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
-BedrockVideoTypes = Literal[
-    "mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"
-]
+BedrockVideoTypes = Literal["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
 
 
 class VideoBlock(TypedDict):
@@ -38,9 +36,7 @@ class VideoBlock(TypedDict):
     source: SourceBlock
 
 
-BedrockDocumentTypes = Literal[
-    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
-]
+BedrockDocumentTypes = Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
 
 
 class DocumentBlock(TypedDict):
@@ -237,13 +233,9 @@ class ConverseResponseBlock(TypedDict, total=False):
     additionalModelResponseFields: dict
     metrics: ConverseMetricsBlock
     output: Required[ConverseResponseOutputBlock]
-    stopReason: Required[
-        str
-    ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    stopReason: Required[str]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
     usage: Required[ConverseTokenUsageBlock]
-    serviceTier: (
-        ServiceTierBlock  # Optional - only present when serviceTier was sent in request
-    )
+    serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
 class ToolJsonSchemaBlock(TypedDict, total=False):
@@ -333,7 +325,7 @@ class ToolConfigBlock(TypedDict, total=False):
 class GuardrailConfigBlock(TypedDict, total=False):
     guardrailIdentifier: str
     guardrailVersion: str
-    trace: Literal["enabled", "disabled"]
+    trace: Literal["enabled", "disabled", "enabled_full"]
 
 
 class InferenceConfig(TypedDict, total=False):
@@ -401,9 +393,7 @@ class OutputConfigBlock(TypedDict, total=False):
     textFormat: OutputFormat
 
 
-class CommonRequestObject(
-    TypedDict, total=False
-):  # common request object across sync + async flows
+class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
     inferenceConfig: InferenceConfig
@@ -487,9 +477,7 @@ class ServerSentEvent:
         return f"ServerSentEvent(event={self.event}, data={self.data}, id={self.id}, retry={self.retry})"
 
 
-COHERE_EMBEDDING_INPUT_TYPES = Literal[
-    "search_document", "search_query", "classification", "clustering", "image"
-]
+COHERE_EMBEDDING_INPUT_TYPES = Literal["search_document", "search_query", "classification", "clustering", "image"]
 
 
 class CohereEmbeddingRequest(TypedDict, total=False):
@@ -636,9 +624,7 @@ NOVA_DETAIL_LEVELS = Literal["STANDARD_IMAGE", "DOCUMENT_IMAGE"]
 
 NOVA_EMBEDDING_MODES = Literal["AUDIO_VIDEO_COMBINED", "AUDIO_VIDEO_SEPARATE"]
 
-NOVA_EMBEDDING_TYPES = Literal[
-    "TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"
-]
+NOVA_EMBEDDING_TYPES = Literal["TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"]
 
 
 class NovaSourceS3Location(TypedDict):
@@ -757,9 +743,7 @@ class AmazonStability3TextToImageRequest(TypedDict, total=False):
     """
 
     prompt: str
-    aspect_ratio: Literal[
-        "16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"
-    ]
+    aspect_ratio: Literal["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
     mode: Literal["image-to-image", "text-to-image"]
     output_format: Literal["JPEG", "PNG"]
     seed: int
@@ -822,9 +806,7 @@ class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
     conditionImage: str
 
 
-class AmazonNovaCanvasTextToImageRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Text to Image API
 
@@ -847,9 +829,7 @@ class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
     negativeText: str
 
 
-class AmazonNovaCanvasColorGuidedRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasColorGuidedRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Color Guided Generation API
 
@@ -882,9 +862,7 @@ class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
     negativeText: str
 
 
-class AmazonNovaCanvasInpaintingRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasInpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Inpainting API
 
@@ -1024,9 +1002,7 @@ class BedrockCreateBatchRequest(TypedDict, total=False):
     tags: Optional[List[dict]]
 
 
-BedrockBatchJobStatus = Literal[
-    "Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"
-]
+BedrockBatchJobStatus = Literal["Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"]
 
 
 class BedrockCreateBatchResponse(TypedDict):

@@ -28,9 +28,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
 
     IMAGE_GENERATION_ENDPOINT: str = "bria/text-to-image/3.2"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Bria 3.2.
         """

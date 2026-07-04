@@ -20,9 +20,7 @@ class CredentialsRepository:
     @property
     def prisma_client(self) -> Any:
         if self._prisma_client is None:
-            raise RuntimeError(
-                "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-            )
+            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
@@ -47,15 +45,11 @@ class CredentialsRepository:
         return await self.table.create(data=data)
 
     async def find_by_name(self, credential_name: str) -> Optional[CredentialItem]:
-        record = await self.table.find_unique(
-            where={"credential_name": credential_name}
-        )
+        record = await self.table.find_unique(where={"credential_name": credential_name})
         return self._to_model(record)
 
     async def update_by_name(self, credential_name: str, data: Dict[str, Any]) -> Any:
-        return await self.table.update(
-            where={"credential_name": credential_name}, data=data
-        )
+        return await self.table.update(where={"credential_name": credential_name}, data=data)
 
     async def delete_by_name(self, credential_name: str) -> Any:
         return await self.table.delete(where={"credential_name": credential_name})

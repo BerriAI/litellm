@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Iterator, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -10,9 +10,7 @@ from litellm.utils import token_counter
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, Usage, List[str]]:
@@ -36,18 +34,14 @@ async def calculate_batch_cost_and_usage(
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
     )
-    batch_models = _get_batch_models_from_file_content(
-        file_content_dictionary, model_name
-    )
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
 
     return batch_cost, batch_usage, batch_models
 
 
 async def _handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
     litellm_params: Optional[dict] = None,
 ) -> Tuple[float, Usage, List[str]]:
@@ -76,9 +70,7 @@ async def _handle_completed_batch(
         model_name=model_name,
     )
 
-    batch_models = _get_batch_models_from_file_content(
-        file_content_dictionary, model_name
-    )
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
 
     return batch_cost, batch_usage, batch_models
 
@@ -104,9 +96,7 @@ def _get_batch_models_from_file_content(
 
 def _batch_cost_calculator(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
 ) -> float:
@@ -118,9 +108,7 @@ def _batch_cost_calculator(
         and model_name
         and getattr(litellm, "disable_vertex_batch_output_transformation", False)
     ):
-        batch_cost, _ = calculate_vertex_ai_batch_cost_and_usage(
-            file_content_dictionary, model_name
-        )
+        batch_cost, _ = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
         verbose_logger.debug("vertex_ai_total_cost=%s", batch_cost)
         return batch_cost
 
@@ -181,9 +169,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             )
             total_cost += p_cost + c_cost
         except Exception as e:
-            verbose_logger.debug(
-                "vertex_ai batch cost calculation error for line: %s", str(e)
-            )
+            verbose_logger.debug("vertex_ai batch cost calculation error for line: %s", str(e))
 
         prompt_tokens += _prompt
         completion_tokens += _completion
@@ -206,9 +192,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
 
 async def _get_batch_output_file_content_as_dictionary(
     batch: Batch,
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     litellm_params: Optional[dict] = None,
 ) -> List[dict]:
     """
@@ -235,12 +219,8 @@ async def _get_batch_output_file_content_as_dictionary(
     is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
     if is_base64_unified_file_id:
         try:
-            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(
-                ";"
-            )[0]
-            verbose_logger.debug(
-                f"Extracted LLM output file ID from unified file ID: {file_id}"
-            )
+            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+            verbose_logger.debug(f"Extracted LLM output file ID from unified file ID: {file_id}")
         except (IndexError, AttributeError) as e:
             verbose_logger.error(
                 f"Failed to extract LLM output file ID from unified file ID: {batch.output_file_id}, error: {e}"
@@ -314,11 +294,73 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
         raise e
 
 
+def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
+    """
+    Yield non-empty JSONL lines (unparsed) one at a time, so a caller can parse
+    each row in its own try/except and a single malformed line cannot abort the
+    whole pass. Peak memory stays bounded for large batch files.
+    """
+    start, length, newline = 0, len(file_content), ord("\n")
+    while start < length:
+        idx = file_content.find(newline, start)
+        if idx == -1:
+            chunk, start = file_content[start:], length
+        else:
+            chunk, start = file_content[start:idx], idx + 1
+        line = chunk.strip()
+        if line:
+            yield line
+
+
+def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+    """
+    Yield parsed batch input JSONL entries one at a time without materializing the
+    whole file as a list, so peak memory stays bounded. Raises on a malformed line;
+    callers that must survive bad rows should iterate ``_iter_batch_input_lines``
+    and parse per-row instead.
+    """
+    for line in _iter_batch_input_lines(file_content):
+        yield json.loads(line)
+
+
+# A batch request's input tokens scale roughly with its serialized size, so this
+# is a conservative per-row fallback when the token counter cannot measure a row.
+_BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 4
+
+
+def _estimate_batch_entry_tokens(raw_line: bytes) -> int:
+    """Conservative token estimate for a batch row the token counter cannot measure
+    (or that cannot be parsed). Keeps the batch token total non-zero so a crafted
+    row cannot evade the TPM limit, without hard-rejecting a legitimate batch."""
+    return max(1, len(raw_line) // _BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN)
+
+
+def _count_entry_tokens(
+    entry: dict,
+    model_name: Optional[str] = None,
+) -> int:
+    """Token-count a single batch input entry's body (chat / text / embedding)."""
+    body = entry.get("body", {}) or {}
+    model = body.get("model", model_name or "")
+
+    messages = body.get("messages")
+    if messages:
+        return token_counter(model=model, messages=messages)
+
+    prompt = body.get("prompt")
+    if prompt:
+        return _count_prompt_or_input_tokens(model=model, value=prompt)
+
+    input_data = body.get("input")
+    if input_data:
+        return _count_prompt_or_input_tokens(model=model, value=input_data)
+
+    return 0
+
+
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
@@ -329,9 +371,7 @@ def _get_batch_job_cost_from_file_content(
     try:
         total_cost: float = 0.0
         # parse the file content as json
-        verbose_logger.debug(
-            "file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4)
-        )
+        verbose_logger.debug("file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4))
         for _item in file_content_dictionary:
             if _batch_response_was_successful(_item):
                 _response_body = _get_response_from_batch_job_output_file(_item)
@@ -360,9 +400,7 @@ def _get_batch_job_cost_from_file_content(
 
 def _get_batch_job_total_usage_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
 ) -> Usage:
     """
@@ -373,9 +411,7 @@ def _get_batch_job_total_usage_from_file_content(
         and model_name
         and getattr(litellm, "disable_vertex_batch_output_transformation", False)
     ):
-        _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(
-            file_content_dictionary, model_name
-        )
+        _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
         return batch_usage
 
     # For other providers, use the existing logic
@@ -391,70 +427,6 @@ def _get_batch_job_total_usage_from_file_content(
             completion_tokens += usage.completion_tokens
     return Usage(
         total_tokens=total_tokens,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-    )
-
-
-def _get_models_from_batch_input_file_content(
-    file_content_dictionary: List[dict],
-) -> List[str]:
-    """Extract the distinct ``body.model`` values from a batch *input* file.
-
-    Used by the proxy's batch pre-call hook to enforce that the caller is
-    authorized for every model named inside the JSONL — not just the one
-    on the outer request — so the proxy's per-key model allowlist isn't
-    bypassed by smuggling expensive models into the batch file.
-    """
-    models: List[str] = []
-    seen: set = set()
-    for _item in file_content_dictionary:
-        body = _item.get("body") or {}
-        model = body.get("model")
-        if model and model not in seen:
-            seen.add(model)
-            models.append(model)
-    return models
-
-
-def _get_batch_job_input_file_usage(
-    file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    model_name: Optional[str] = None,
-) -> Usage:
-    """
-    Count the number of tokens in the input file
-
-    Used for batch rate limiting to count the number of tokens in the input file
-    """
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-
-    for _item in file_content_dictionary:
-        body = _item.get("body", {})
-        model = body.get("model", model_name or "")
-
-        # Chat completion payloads.
-        messages = body.get("messages")
-        if messages:
-            prompt_tokens += token_counter(model=model, messages=messages)
-            continue
-
-        # Text completion payloads (`prompt`).
-        prompt = body.get("prompt")
-        if prompt:
-            prompt_tokens += _count_prompt_or_input_tokens(model=model, value=prompt)
-            continue
-
-        # Embedding payloads (`input`).
-        input_data = body.get("input")
-        if input_data:
-            prompt_tokens += _count_prompt_or_input_tokens(
-                model=model, value=input_data
-            )
-
-    return Usage(
-        total_tokens=prompt_tokens + completion_tokens,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
@@ -488,11 +460,7 @@ def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
                 # Nested pre-tokenized prompt: every int contributes a
                 # token. Mixed string/int items still count.
                 total += sum(1 if isinstance(t, int) else 0 for t in chunk)
-                total += sum(
-                    token_counter(model=model, text=t)
-                    for t in chunk
-                    if isinstance(t, str)
-                )
+                total += sum(token_counter(model=model, text=t) for t in chunk if isinstance(t, str))
         return total
     return 0
 

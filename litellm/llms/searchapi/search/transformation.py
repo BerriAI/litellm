@@ -83,9 +83,7 @@ class SearchAPIConfig(BaseSearchConfig):
         )
 
         if not api_key:
-            raise ValueError(
-                "SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable."
-            )
+            raise ValueError("SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable.")
 
         headers["Content-Type"] = "application/json"
 
@@ -103,9 +101,7 @@ class SearchAPIConfig(BaseSearchConfig):
 
         SearchAPI.io uses GET requests and includes api_key in query params.
         """
-        api_base = (
-            api_base or get_secret_str("SEARCHAPI_API_BASE") or self.SEARCHAPI_API_BASE
-        )
+        api_base = api_base or get_secret_str("SEARCHAPI_API_BASE") or self.SEARCHAPI_API_BASE
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searchapi_params" in data:
@@ -155,9 +151,7 @@ class SearchAPIConfig(BaseSearchConfig):
             default_api_base=self.SEARCHAPI_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable."
-            )
+            raise ValueError("SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable.")
 
         request_data: SearchAPIRequest = {
             "engine": "google",
@@ -178,9 +172,7 @@ class SearchAPIConfig(BaseSearchConfig):
             # Convert to multiple "site:domain" clauses
             domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                result_data["q"] = self._append_domain_filters(
-                    str(result_data["q"]), domains
-                )
+                result_data["q"] = self._append_domain_filters(str(result_data["q"]), domains)
 
         if "country" in optional_params:
             # Map to gl parameter
@@ -188,10 +180,7 @@ class SearchAPIConfig(BaseSearchConfig):
 
         # Pass through all other SearchAPI.io-specific parameters
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for URL building (GET request)

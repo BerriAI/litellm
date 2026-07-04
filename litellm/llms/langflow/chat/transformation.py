@@ -50,9 +50,7 @@ class LangFlowConfig(BaseConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         from litellm.secret_managers.main import get_secret_str
 
-        api_base = (
-            api_base or get_secret_str("LANGFLOW_API_BASE") or "http://localhost:7860"
-        )
+        api_base = api_base or get_secret_str("LANGFLOW_API_BASE") or "http://localhost:7860"
         api_key = api_key or get_secret_str("LANGFLOW_API_KEY")
         return api_base, api_key
 
@@ -78,10 +76,7 @@ class LangFlowConfig(BaseConfig):
         if optional_params.get("flow_id") is not None:
             raise LangFlowError(
                 status_code=400,
-                message=(
-                    "flow_id cannot be set via request parameters; "
-                    "use model langflow/{flow_id}"
-                ),
+                message=("flow_id cannot be set via request parameters; use model langflow/{flow_id}"),
             )
 
         flow_id = (model.split("/", 1)[1] if "/" in model else model).strip()
@@ -264,9 +259,7 @@ class LangFlowConfig(BaseConfig):
             from litellm.utils import token_counter
 
             prompt_tokens = token_counter(model=model, messages=messages)
-            completion_tokens = token_counter(
-                model=model, text=content, count_response_tokens=True
-            )
+            completion_tokens = token_counter(model=model, text=content, count_response_tokens=True)
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

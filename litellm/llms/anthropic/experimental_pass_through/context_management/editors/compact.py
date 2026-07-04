@@ -266,8 +266,7 @@ async def _check_summary_model_access(
             team_membership = None
         member_allowed_models = (
             team_membership.litellm_budget_table.allowed_models
-            if team_membership is not None
-            and team_membership.litellm_budget_table is not None
+            if team_membership is not None and team_membership.litellm_budget_table is not None
             else None
         )
         if member_allowed_models:
@@ -328,22 +327,15 @@ async def _check_summary_model_budget(
             return False
         except Exception as e:
             verbose_logger.warning(
-                "compact_20260112: unexpected error during key model-budget "
-                "check for summary_model=%s; denying: %s",
+                "compact_20260112: unexpected error during key model-budget check for summary_model=%s; denying: %s",
                 summary_model,
                 e,
             )
             return False
 
-    end_user_model_max_budget = getattr(
-        user_api_key_auth, "end_user_model_max_budget", None
-    )
+    end_user_model_max_budget = getattr(user_api_key_auth, "end_user_model_max_budget", None)
     end_user_id = getattr(user_api_key_auth, "end_user_id", None)
-    if (
-        isinstance(end_user_model_max_budget, dict)
-        and end_user_model_max_budget
-        and end_user_id is not None
-    ):
+    if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
             await model_max_budget_limiter.is_end_user_within_model_budget(
                 end_user_id=end_user_id,
@@ -422,11 +414,7 @@ async def _check_summary_model_rate_limit(
             requested_model=summary_model,
             descriptors=descriptors,
         )
-        descriptors.extend(
-            limiter.create_organization_rate_limit_descriptor(
-                user_api_key_auth, summary_model
-            )
-        )
+        descriptors.extend(limiter.create_organization_rate_limit_descriptor(user_api_key_auth, summary_model))
         if not descriptors:
             return True
         response = await limiter.should_rate_limit(
@@ -436,8 +424,7 @@ async def _check_summary_model_rate_limit(
         )
     except Exception as e:
         verbose_logger.warning(
-            "compact_20260112: unexpected error during rate-limit check for "
-            "summary_model=%s; allowing: %s",
+            "compact_20260112: unexpected error during rate-limit check for summary_model=%s; allowing: %s",
             summary_model,
             e,
         )
@@ -507,11 +494,7 @@ def _strip_compaction_blocks(
         if not isinstance(content, list):
             cleaned.append(msg)
             continue
-        filtered = [
-            block
-            for block in content
-            if not (isinstance(block, dict) and block.get("type") == "compaction")
-        ]
+        filtered = [block for block in content if not (isinstance(block, dict) and block.get("type") == "compaction")]
         if not filtered:
             # The compaction block was the only content; drop the whole turn.
             continue
@@ -573,9 +556,7 @@ def _resolve_trigger_tokens(edit_spec: Dict[str, Any]) -> Tuple[int, List[str]]:
     return value, warnings
 
 
-def _build_summary_prompt(
-    edit_spec: Dict[str, Any], tools: Optional[List[Dict[str, Any]]]
-) -> str:
+def _build_summary_prompt(edit_spec: Dict[str, Any], tools: Optional[List[Dict[str, Any]]]) -> str:
     custom = edit_spec.get("instructions")
     if isinstance(custom, str) and custom.strip():
         return custom
@@ -628,9 +609,7 @@ def _count_effective_tokens(
     messages_without_compaction = _strip_compaction_blocks(effective_messages)
     adapter = LiteLLMAnthropicMessagesAdapter()
     try:
-        openai_shape = adapter.translate_anthropic_messages_to_openai(
-            messages=cast(Any, messages_without_compaction)
-        )
+        openai_shape = adapter.translate_anthropic_messages_to_openai(messages=cast(Any, messages_without_compaction))
     except Exception as e:
         verbose_logger.debug(
             "compact_20260112: anthropic→openai translation failed during token "
@@ -647,9 +626,7 @@ def _count_effective_tokens(
     openai_tools: Optional[List[Dict[str, Any]]] = None
     if tools:
         try:
-            translated_tools, _ = adapter.translate_anthropic_tools_to_openai(
-                tools=cast(Any, tools)
-            )
+            translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=cast(Any, tools))
             openai_tools = cast(List[Dict[str, Any]], translated_tools)
         except Exception as e:
             verbose_logger.debug(
@@ -713,11 +690,7 @@ def _select_last_user_question(
             continue
         content = msg.get("content")
         if isinstance(content, list):
-            filtered = [
-                blk
-                for blk in content
-                if not (isinstance(blk, dict) and blk.get("type") == "tool_result")
-            ]
+            filtered = [blk for blk in content if not (isinstance(blk, dict) and blk.get("type") == "tool_result")]
             if not filtered:
                 # Purely tool_result — skip and look for an earlier turn.
                 continue
@@ -755,11 +728,7 @@ def _system_to_openai_message(
     if isinstance(system, str):
         return {"role": "system", "content": system} if system else None
     if isinstance(system, list):
-        parts = [
-            block.get("text", "")
-            for block in system
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
+        parts = [block.get("text", "") for block in system if isinstance(block, dict) and block.get("type") == "text"]
         joined = "\n\n".join(part for part in parts if part)
         return {"role": "system", "content": joined} if joined else None
     return None
@@ -783,10 +752,8 @@ def _build_summary_messages(
 
     stripped = _strip_compaction_blocks(effective_messages)
     try:
-        openai_messages = (
-            LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
-                messages=cast(Any, stripped)
-            )
+        openai_messages = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+            messages=cast(Any, stripped)
         )
     except Exception as e:
         verbose_logger.warning(
@@ -902,9 +869,7 @@ def _extract_response_text(response: Any) -> Optional[str]:
         # Some providers return a list of content parts.
         if isinstance(content, list):
             text_parts = [
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
+                part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
             ]
             return "".join(text_parts) or None
     except (AttributeError, IndexError, KeyError):
@@ -936,9 +901,7 @@ def apply_client_compaction_block_history(
     tail is forwarded unchanged (with compaction blocks stripped) so recent
     turns the summary does not cover are preserved.
     """
-    effective_messages, prior_compaction_block = _slice_around_compaction_block(
-        messages
-    )
+    effective_messages, prior_compaction_block = _slice_around_compaction_block(messages)
     if prior_compaction_block is None:
         return None
 
@@ -1006,12 +969,8 @@ async def apply_compact_20260112(
     # opt-in gate below so that even when summarization is disabled we still
     # strip Anthropic-only ``compaction`` blocks from messages going to
     # non-Anthropic backends (which would reject them).
-    effective_messages, prior_compaction_block = _slice_around_compaction_block(
-        messages
-    )
-    prior_summary_text = (
-        prior_compaction_block.get("content") if prior_compaction_block else None
-    )
+    effective_messages, prior_compaction_block = _slice_around_compaction_block(messages)
+    prior_summary_text = prior_compaction_block.get("content") if prior_compaction_block else None
     augmented_system: Union[str, List[Dict[str, Any]], None] = system
     if isinstance(prior_summary_text, str) and prior_summary_text:
         augmented_system = _augment_system_with_summary(system, prior_summary_text)
@@ -1053,14 +1012,10 @@ async def apply_compact_20260112(
             system=augmented_system,
         )
     except Exception as e:
-        verbose_logger.warning(
-            "compact_20260112: token_counter failed; assuming under threshold: %s", e
-        )
+        verbose_logger.warning("compact_20260112: token_counter failed; assuming under threshold: %s", e)
         current_tokens = 0
 
-    verbose_logger.debug(
-        "compact_20260112: current_tokens=%s trigger=%s", current_tokens, trigger_tokens
-    )
+    verbose_logger.debug("compact_20260112: current_tokens=%s trigger=%s", current_tokens, trigger_tokens)
 
     if current_tokens <= trigger_tokens:
         # Slice-only path: the prior compaction summary already lives in
@@ -1086,8 +1041,7 @@ async def apply_compact_20260112(
         llm_router=llm_router,
     ):
         verbose_logger.warning(
-            "compact_20260112: caller not authorized for summary_model=%s; "
-            "skipping summary call",
+            "compact_20260112: caller not authorized for summary_model=%s; skipping summary call",
             summary_model,
         )
         applied["error"] = "summary_model_access_denied"
@@ -1102,8 +1056,7 @@ async def apply_compact_20260112(
         summary_model=summary_model,
     ):
         verbose_logger.warning(
-            "compact_20260112: caller over model budget for summary_model=%s; "
-            "skipping summary call",
+            "compact_20260112: caller over model budget for summary_model=%s; skipping summary call",
             summary_model,
         )
         applied["error"] = "summary_model_budget_exceeded"
@@ -1118,8 +1071,7 @@ async def apply_compact_20260112(
         summary_model=summary_model,
     ):
         verbose_logger.warning(
-            "compact_20260112: caller over rate limit for summary_model=%s; "
-            "skipping summary call",
+            "compact_20260112: caller over rate limit for summary_model=%s; skipping summary call",
             summary_model,
         )
         applied["error"] = "summary_model_rate_limit_exceeded"
@@ -1130,9 +1082,7 @@ async def apply_compact_20260112(
         )
 
     prompt = _build_summary_prompt(edit_spec, tools)
-    summary_messages = _build_summary_messages(
-        effective_messages, prompt, system=augmented_system
-    )
+    summary_messages = _build_summary_messages(effective_messages, prompt, system=augmented_system)
     propagated_metadata = _propagate_metadata(litellm_metadata)
     allowed_model_region = getattr(user_api_key_auth, "allowed_model_region", None)
 

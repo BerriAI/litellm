@@ -49,11 +49,29 @@ def test_preserves_top_level_url_for_runtime_invocation():
     assert merged["url"] == "http://internal:9999/"
 
 
-def test_overrides_protocol_version():
+def test_unsupported_protocol_version_defaults_to_1_0():
+    # The fixture card pins "0.9", which LiteLLM does not serve; it falls back to
+    # the default rather than advertising a version the proxy can't honor.
     merged = merge_agent_card(
         _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
     )
     assert merged["protocolVersion"] == LITELLM_A2A_PROTOCOL_VERSION
+
+
+def test_serves_pinned_protocol_version():
+    for version in ("0.3", "1.0"):
+        card = _full_upstream_card()
+        card["protocolVersion"] = version
+        merged = merge_agent_card(card, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+        assert merged["protocolVersion"] == version
+        assert merged["supportedInterfaces"][0]["protocolVersion"] == version
+
+
+def test_absent_protocol_version_defaults_to_1_0():
+    card = _full_upstream_card()
+    card.pop("protocolVersion", None)
+    merged = merge_agent_card(card, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+    assert merged["protocolVersion"] == "1.0"
 
 
 def test_overrides_name_and_description_when_provided():

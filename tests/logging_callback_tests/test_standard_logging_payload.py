@@ -335,6 +335,74 @@ def test_get_model_cost_information():
     )
 
 
+def test_get_model_cost_information_custom_pricing_uses_base_model():
+    result = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model="bedrock/invoke/global.anthropic.claude-opus-4-6-v1",
+        custom_pricing=True,
+        custom_llm_provider="bedrock",
+        init_response_obj={"model": "invoke_test_claude"},
+    )
+    assert result["model_map_value"] is not None
+    assert result["model_map_key"] != "invoke_test_claude"
+
+
+def test_standard_logging_payload_uses_deployment_when_no_base_model():
+    """metadata["deployment"] is used for cost-map lookup when base_model is not set."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="invoke_test_claude",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-deploy-fallback",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "invoke_test_claude",
+        "messages": [{"role": "user", "content": "hi"}],
+        "custom_llm_provider": "bedrock",
+        "litellm_params": {
+            "metadata": {
+                "deployment": "bedrock/invoke/global.anthropic.claude-opus-4-6-v1",
+            },
+        },
+    }
+    mock_response = {
+        "id": "chatcmpl-deploy-test",
+        "object": "chat.completion",
+        "model": "invoke_test_claude",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["model_map_information"]["model_map_value"] is not None
+    assert payload["model_map_information"]["model_map_key"] != "invoke_test_claude"
+
+
 def test_get_hidden_params():
     """Test get_hidden_params with different inputs"""
     # Test with None

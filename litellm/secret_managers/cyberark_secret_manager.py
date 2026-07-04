@@ -143,9 +143,7 @@ class CyberArkSecretManager(BaseSecretManager):
         except httpx.HTTPStatusError as e:
             # Variable might already exist, which is fine
             if e.response.status_code in [409, 422]:
-                verbose_logger.debug(
-                    f"Variable {secret_name} already exists or policy conflict (expected)"
-                )
+                verbose_logger.debug(f"Variable {secret_name} already exists or policy conflict (expected)")
             else:
                 verbose_logger.warning(
                     f"Could not ensure variable exists: {e.response.status_code} - {e.response.text}"
@@ -165,9 +163,7 @@ class CyberArkSecretManager(BaseSecretManager):
         """
         # URL-encode the secret name to handle slashes and special characters
         encoded_name = quote(secret_name, safe="")
-        return (
-            f"{self.conjur_addr}/secrets/{self.conjur_account}/variable/{encoded_name}"
-        )
+        return f"{self.conjur_addr}/secrets/{self.conjur_account}/variable/{encoded_name}"
 
     async def async_read_secret(
         self,
@@ -207,13 +203,9 @@ class CyberArkSecretManager(BaseSecretManager):
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                verbose_logger.debug(
-                    f"Secret {secret_name} not found in CyberArk Conjur"
-                )
+                verbose_logger.debug(f"Secret {secret_name} not found in CyberArk Conjur")
             else:
-                verbose_logger.exception(
-                    f"Error reading secret from CyberArk Conjur: {e}"
-                )
+                verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
             return None
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
@@ -254,13 +246,9 @@ class CyberArkSecretManager(BaseSecretManager):
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                verbose_logger.debug(
-                    f"Secret {secret_name} not found in CyberArk Conjur"
-                )
+                verbose_logger.debug(f"Secret {secret_name} not found in CyberArk Conjur")
             else:
-                verbose_logger.exception(
-                    f"Error reading secret from CyberArk Conjur: {e}"
-                )
+                verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
             return None
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
@@ -300,9 +288,7 @@ class CyberArkSecretManager(BaseSecretManager):
 
             # Now set the secret value
             url = self.get_url(secret_name)
-            response = await async_client.post(
-                url=url, headers=self._get_request_headers(), content=secret_value
-            )
+            response = await async_client.post(url=url, headers=self._get_request_headers(), content=secret_value)
             response.raise_for_status()
 
             # Update cache
@@ -337,8 +323,7 @@ class CyberArkSecretManager(BaseSecretManager):
             dict: Response indicating operation not supported
         """
         verbose_logger.warning(
-            "CyberArk Conjur does not support direct secret deletion. "
-            "Secrets must be removed through policy updates."
+            "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         )
 
         # Clear from cache

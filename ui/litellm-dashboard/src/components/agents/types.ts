@@ -1,7 +1,7 @@
-export interface AgentKeyInfo {
-  key_alias?: string;
-  token_prefix?: string;
-  has_key: boolean;
+export interface AgentAttachedKey {
+  token: string;
+  key_alias?: string | null;
+  key_name?: string | null;
 }
 
 export interface AgentObjectPermission {
@@ -23,6 +23,7 @@ export interface Agent {
     [key: string]: any;
   };
   object_permission?: AgentObjectPermission;
+  keys?: AgentAttachedKey[] | null;
   spend?: number;
   tpm_limit?: number | null;
   rpm_limit?: number | null;

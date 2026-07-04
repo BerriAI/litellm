@@ -28,9 +28,7 @@ from litellm.secret_managers.main import get_secret_str
 BEDROCK_MANTLE_DEFAULT_REGION = "us-east-1"
 
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
-MANTLE_HOST_RE = re.compile(
-    r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws", re.IGNORECASE
-)
+MANTLE_HOST_RE = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws", re.IGNORECASE)
 
 
 class BedrockMantleAuthMixin:
@@ -38,11 +36,7 @@ class BedrockMantleAuthMixin:
 
     @staticmethod
     def _resolve_bearer_token(api_key: str | None) -> str | None:
-        return (
-            api_key
-            or get_secret_str("BEDROCK_MANTLE_API_KEY")
-            or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-        )
+        return api_key or get_secret_str("BEDROCK_MANTLE_API_KEY") or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
     @staticmethod
     def _resolve_region(params: dict) -> str:

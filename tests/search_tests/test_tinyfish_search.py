@@ -161,10 +161,60 @@ class TestTinyfishSearch:
             query_params = parse_qs(parsed_url.query)
             assert query_params["language"] == ["en"]
 
+    @pytest.mark.asyncio
+    async def test_fetch_param_round_trip(self):
+        # End-to-end check: caller passes `fetch=...` (JSON-encoded tf-fetch
+        # config); param reaches TinyFish on the request side and the nested
+        # `fetch` object on each result surfaces back to the SearchResult on the
+        # response side. No LiteLLM-side support code is required.
+        os.environ["TINYFISH_API_KEY"] = "sk-tinyfish-test"
+
+        fetched_response = {
+            "results": [
+                {
+                    "title": "TinyFish",
+                    "url": "https://tinyfish.ai",
+                    "snippet": "Web automation.",
+                    "fetch": {
+                        "url": "https://tinyfish.ai",
+                        "title": "TinyFish",
+                        "text": "Page body text.",
+                        "cached": False,
+                    },
+                }
+            ]
+        }
+        mock_response = _make_mock_response(fetched_response)
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_get.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="tinyfish",
+                search_provider="tinyfish",
+                fetch="{}",
+            )
+
+            call_args = mock_get.call_args
+            parsed_url = urlparse(call_args.kwargs["url"])
+            query_params = parse_qs(parsed_url.query)
+            assert query_params["fetch"] == ["{}"]
+
+            first = response.results[0]
+            fetch_field = getattr(first, "fetch", None)
+            assert isinstance(fetch_field, dict)
+            assert fetch_field["text"] == "Page body text."
+
     def test_max_results_truncates_response(self):
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 
         config = TinyfishSearchConfig()
+        # max_results is threaded through self by transform_search_request;
+        # simulate that for this direct response-side test.
+        config._caller_max_results = 3
         many_results = {
             "results": [
                 {
@@ -175,10 +225,7 @@ class TestTinyfishSearch:
                 for i in range(10)
             ]
         }
-        mock_response = _make_mock_response(
-            many_results,
-            request_url="https://api.search.tinyfish.ai?query=test&max_results=3",
-        )
+        mock_response = _make_mock_response(many_results)
 
         result = config.transform_search_response(
             raw_response=mock_response,

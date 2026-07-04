@@ -96,7 +96,19 @@ class OpenAITextCompletion(BaseLLM):
                         organization=organization,
                     )
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
+                    return self.acompletion(
+                        api_base=api_base,
+                        data=data,
+                        headers=headers,
+                        model_response=model_response,
+                        api_key=api_key,
+                        logging_obj=logging_obj,
+                        model=model,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                        organization=organization,
+                        client=client,
+                    )  # type: ignore
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
@@ -147,9 +159,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
 
     async def acompletion(
         self,
@@ -178,9 +188,7 @@ class OpenAITextCompletion(BaseLLM):
             else:
                 openai_aclient = client
 
-            raw_response = await openai_aclient.completions.with_raw_response.create(
-                **data
-            )
+            raw_response = await openai_aclient.completions.with_raw_response.create(**data)
             response = raw_response.parse()
             response_json = response.model_dump()
 
@@ -204,9 +212,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
 
     def streaming(
         self,
@@ -244,9 +250,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -265,9 +269,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
 
     async def async_streaming(
         self,
@@ -315,6 +317,4 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)

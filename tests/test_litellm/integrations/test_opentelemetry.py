@@ -4690,6 +4690,109 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "success"))
         self.assertFalse(otel._emit_once(kwargs, "success"))
 
+    def test_emit_once_accepts_list_valued_scope_part(self):
+        """Regression for LIT-3428 / LIT-3764: a list-valued ``guardrail_mode``
+        (the shape Presidio expands to with ``output_parse_pii: true``) must
+        not raise ``TypeError: unhashable type: 'list'`` when building the
+        dedupe key. Pre-fix, this call crashed inside ``dict.get``."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
+            "Same list scope must dedupe to False on the second call",
+        )
+
+    def test_emit_once_distinct_list_scopes_dont_collide(self):
+        """Two different list-valued scopes on the same handler/kwargs must
+        each emit exactly once. Catches a regression where every list collapses
+        to the same key (e.g. ``str(list)`` collisions on near-identical input)."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
+            "Distinct list scopes must produce distinct dedupe keys",
+        )
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        )
+
+    def test_emit_once_accepts_dict_and_set_scope_parts(self):
+        """``guardrail_mode`` can also arrive as a ``GuardrailMode`` TypedDict
+        (i.e. a plain dict at runtime). Sets are not produced today but flow
+        through the same normalization. Both must hash without raising."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+        )
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"a", "b"}))
+
+    def test_emit_once_handles_self_referential_scope_without_recursion_error(self):
+        """``_freeze_for_dedupe`` caps recursion at ``_FREEZE_MAX_DEPTH`` and
+        falls back to ``repr`` past the cap, so a self-referential container
+        in scope must not crash ``_emit_once``. ``guardrail_mode`` cannot
+        construct such input today, but the cap is the bound that justifies
+        recursion on the logging hot path."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        cyclic: list = []
+        cyclic.append(cyclic)
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+
+    def test_create_guardrail_span_does_not_raise_on_list_mode(self):
+        """End-to-end regression for LIT-3428: ``_create_guardrail_span``
+        must produce exactly one span (not raise ``TypeError``) when the
+        guardrail entry's ``guardrail_mode`` is a list."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+                "guardrail_information": [
+                    {
+                        "guardrail_name": "presidio-pii",
+                        "guardrail_mode": ["pre_call", "post_call"],
+                        "guardrail_response": "ok",
+                        "start_time": 1.0,
+                        "end_time": 2.0,
+                    }
+                ],
+            },
+        }
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            "List-valued guardrail_mode must emit exactly one guardrail span "
+            "across repeated lifecycle entrypoints",
+        )
+
     def test_handle_success_emits_single_litellm_request_span_on_double_call(self):
         """Sync + async callback paths firing for the same kwargs must
         result in exactly one litellm_request span."""

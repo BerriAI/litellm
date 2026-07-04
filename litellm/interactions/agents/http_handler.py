@@ -62,9 +62,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             api_base=litellm_params.get("api_base"),
             litellm_params=dict(litellm_params),
         )
-        data = agents_api_config.transform_create_request(
-            name=name, litellm_params=dict(litellm_params)
-        )
+        data = agents_api_config.transform_create_request(name=name, litellm_params=dict(litellm_params))
         if extra_body:
             data.update(extra_body)
 
@@ -78,9 +76,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             },
         )
         try:
-            response = sync_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout or request_timeout
-            )
+            response = sync_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout or request_timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
@@ -88,9 +84,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        return agents_api_config.transform_create_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_create_response(raw_response=response, name=name)
 
     async def async_create_agent(
         self,
@@ -111,9 +105,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             api_base=litellm_params.get("api_base"),
             litellm_params=dict(litellm_params),
         )
-        data = agents_api_config.transform_create_request(
-            name=name, litellm_params=dict(litellm_params)
-        )
+        data = agents_api_config.transform_create_request(name=name, litellm_params=dict(litellm_params))
         if extra_body:
             data.update(extra_body)
 
@@ -137,9 +129,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        return agents_api_config.transform_create_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_create_response(raw_response=response, name=name)
 
     # ------------------------------------------------------------------ #
     # LIST                                                                 #
@@ -208,9 +198,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = await async_httpx_client.get(
-                url=url, headers=headers, params=params
-            )
+            response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
@@ -262,9 +250,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
         logging_obj.post_call(original_response=response.text, additional_args={})
-        return agents_api_config.transform_get_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_get_response(raw_response=response, name=name)
 
     async def async_get_agent(
         self,
@@ -291,16 +277,12 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = await async_httpx_client.get(
-                url=url, headers=headers, params=params
-            )
+            response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
         logging_obj.post_call(original_response=response.text, additional_args={})
-        return agents_api_config.transform_get_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_get_response(raw_response=response, name=name)
 
     # ------------------------------------------------------------------ #
     # DELETE                                                               #
@@ -342,16 +324,12 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = sync_httpx_client.delete(
-                url=url, headers=headers, timeout=timeout or request_timeout
-            )
+            response = sync_httpx_client.delete(url=url, headers=headers, timeout=timeout or request_timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
         logging_obj.post_call(original_response=response.text, additional_args={})
-        return agents_api_config.transform_delete_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_delete_response(raw_response=response, name=name)
 
     async def async_delete_agent(
         self,
@@ -378,16 +356,12 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = await async_httpx_client.delete(
-                url=url, headers=headers, timeout=timeout or request_timeout
-            )
+            response = await async_httpx_client.delete(url=url, headers=headers, timeout=timeout or request_timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
         logging_obj.post_call(original_response=response.text, additional_args={})
-        return agents_api_config.transform_delete_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_delete_response(raw_response=response, name=name)
 
     # ------------------------------------------------------------------ #
     # LIST VERSIONS                                                        #
@@ -434,9 +408,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
         logging_obj.post_call(original_response=response.text, additional_args={})
-        return agents_api_config.transform_list_versions_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_list_versions_response(raw_response=response, name=name)
 
     async def async_list_agent_versions(
         self,
@@ -463,16 +435,12 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = await async_httpx_client.get(
-                url=url, headers=headers, params=params
-            )
+            response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
         logging_obj.post_call(original_response=response.text, additional_args={})
-        return agents_api_config.transform_list_versions_response(
-            raw_response=response, name=name
-        )
+        return agents_api_config.transform_list_versions_response(raw_response=response, name=name)
 
 
 agents_http_handler = AgentsHTTPHandler()

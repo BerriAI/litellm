@@ -3,6 +3,9 @@ codecov:
   notify:
     wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
 
+ignore:
+  - "litellm-rust/**"
+
 # Uploads are flagged per workflow/shard (GHA) or "circleci". carryforward makes
 # a re-upload of a flag replace its prior session instead of accumulating a
 # conflicting one, and lets a commit reuse a flag from its parent when that flag

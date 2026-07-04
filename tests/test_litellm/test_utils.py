@@ -45,6 +45,22 @@ def local_model_cost_map(monkeypatch):
         litellm.get_model_info.cache_clear()
 
 
+def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
+    """supports_adaptive_thinking must flow through get_model_info like every other
+    capability flag: both from an explicit cost-map entry and from a
+    fallback-generalization rule for an unmapped model. Regression: the field shipped
+    in the JSON but was never declared on ModelInfo nor copied during construction, so
+    get_model_info (and _supports_factory) silently dropped it for any provider-prefixed
+    or unmapped name."""
+    explicit = litellm.get_model_info(model="claude-opus-4-8")
+    assert explicit["supports_adaptive_thinking"] is True
+
+    generalized = litellm.get_model_info(
+        model="claude-opus-4-9", custom_llm_provider="anthropic"
+    )
+    assert generalized["supports_adaptive_thinking"] is True
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -599,7 +615,6 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
-        "output_cost_per_image_token_batches",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -614,7 +629,6 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_video_per_second_above_8s_interval",
         "input_cost_per_video_per_second_above_15s_interval",
         "input_cost_per_video_per_second_above_128k_tokens",
-        "input_cost_per_token_batch_requests",
         "input_cost_per_token_batches",
         "output_cost_per_token_batches",
         "input_cost_per_token_cache_hit",
@@ -692,7 +706,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
-                "tool_use_system_prompt_tokens": {"type": "number"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -701,13 +714,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
                 },
                 "cache_read_input_audio_token_cost": {"type": "number"},
-                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
-                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -748,7 +758,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
-                "input_cost_per_token_batch_requests": {"type": "number"},
                 "input_cost_per_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
@@ -764,18 +773,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
-                "max_audio_length_hours": {"type": "number"},
-                "max_audio_per_prompt": {"type": "number"},
-                "max_document_chunks_per_query": {"type": "number"},
-                "max_images_per_prompt": {"type": "number"},
                 "max_input_tokens": {"type": "number"},
                 "max_output_tokens": {"type": "number"},
-                "max_pdf_size_mb": {"type": "number"},
-                "max_query_tokens": {"type": "number"},
                 "max_tokens": {"type": "number"},
-                "max_tokens_per_document_chunk": {"type": "number"},
-                "max_video_length": {"type": "number"},
-                "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
                 "provider_specific_entry": {"type": "object"},
                 "mode": {
@@ -804,7 +804,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
-                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
@@ -814,15 +813,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_token_above_512k_tokens": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
-                    "type": "number"
-                },
-                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
-                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
-                    "type": "number"
-                },
-                "output_cost_per_image_premium_image": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
                 "output_cost_per_video_per_second": {"type": "number"},
@@ -836,13 +826,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
+                "gemini_native_audio": {"type": "boolean"},
+                "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
-                "supports_code_execution": {"type": "boolean"},
-                "supports_file_search": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
+                "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
@@ -862,14 +853,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
-                "supports_service_tier": {"type": "boolean"},
-                "supports_preset": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
                 },
+                "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
@@ -929,12 +919,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "enum": ["text", "image", "audio", "code", "video"],
                     },
                 },
-                "supported_resolutions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                    },
-                },
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
@@ -979,6 +963,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     actual_json.pop(
         "sample_spec", None
     )  # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop(
+        "fallback_generalizations", None
+    )  # reserved meta key, not a model entry
 
     # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
@@ -1179,9 +1166,7 @@ def test_check_provider_match_none_value_matches_any_provider():
         is True
     )
     # When custom_llm_provider is also None nothing constrains the match.
-    assert (
-        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
-    )
+    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
 
 
 def test_get_provider_rerank_config():
@@ -1360,6 +1345,48 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
             },
         }
     }
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected",
+    [
+        ("vertex_ai", True),
+        ("vertex_ai_beta", True),
+        ("gdc", True),
+        ("openai", False),
+        ("bedrock", False),
+        ("not_a_real_provider", False),
+    ],
+)
+def test_provider_supports_vertex_params(custom_llm_provider, expected):
+    from litellm.utils import _provider_supports_vertex_params
+
+    assert _provider_supports_vertex_params(custom_llm_provider) is expected
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, should_keep",
+    [
+        ("gemini-2.5-pro", "vertex_ai", True),
+        ("gemini-2.5-pro", "vertex_ai_beta", True),
+        ("gdc/gemini-2.5-flash", "gdc", True),
+        ("gpt-4o", "openai", False),
+    ],
+)
+def test_vertex_params_not_stripped_for_vertex_family(
+    model, custom_llm_provider, should_keep
+):
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project="my-project",
+        vertex_location="us-central1",
+    )
+    assert ("vertex_project" in optional_params) is should_keep
+    assert ("vertex_location" in optional_params) is should_keep
+    if should_keep:
+        assert optional_params["vertex_project"] == "my-project"
+        assert optional_params["vertex_location"] == "us-central1"
 
 
 from litellm.utils import supports_function_calling
@@ -1546,8 +1573,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1562,8 +1588,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1925,8 +1950,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1979,8 +2003,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2194,8 +2217,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2248,8 +2270,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2463,8 +2484,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2517,8 +2537,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -4557,4 +4576,96 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
+
+
+
+class TestGetOptionalParamsTencent:
+    """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
+
+    def test_tencent_supports_thinking_param(self):
+        """Verify get_optional_params for tencent accepts the 'thinking' param."""
+        from unittest.mock import patch
+
+        from litellm.utils import get_optional_params
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = get_optional_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+                thinking={"type": "enabled"},
+            )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_tencent_supports_reasoning_effort(self):
+        """Verify get_optional_params for tencent converts reasoning_effort to thinking."""
+        from unittest.mock import patch
+
+        from litellm.utils import get_optional_params
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = get_optional_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+                reasoning_effort="medium",
+            )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_tencent_supported_params_includes_thinking_and_reasoning_effort(self):
+        """Verify get_supported_openai_params for tencent includes custom params."""
+        from unittest.mock import patch
+
+        from litellm.litellm_core_utils.get_supported_openai_params import (
+            get_supported_openai_params,
+        )
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            params = get_supported_openai_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+            )
+        assert "thinking" in params
+        assert "reasoning_effort" in params
+
+    def test_tencent_messages_config_routing(self):
+        """Verify ProviderConfigManager routes tencent to TencentAnthropicMessagesConfig."""
+        import litellm
+        from litellm.llms.tencent.messages.transformation import (
+            TencentAnthropicMessagesConfig,
+        )
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="deepseek-v4-pro",
+            provider=litellm.LlmProviders.TENCENT,
+        )
+        assert isinstance(config, TencentAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "tencent"
+
+
+class TestValidateEnvironmentTencent:
+    """Tests that validate_environment resolves TENCENT_API_KEY for the tencent provider."""
+
+    def test_reports_key_present(self):
+        with patch.dict(os.environ, {"TENCENT_API_KEY": "sk-tencent"}):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is True
+        assert result["missing_keys"] == []
+
+    def test_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is False
+        assert "TENCENT_API_KEY" in result["missing_keys"]
+
 

@@ -37,15 +37,11 @@ def load_compatible_callbacks() -> Dict:
         Dict: Dictionary of compatible callbacks configuration
     """
     try:
-        json_path = os.path.join(
-            os.path.dirname(__file__), "generic_api_compatible_callbacks.json"
-        )
+        json_path = os.path.join(os.path.dirname(__file__), "generic_api_compatible_callbacks.json")
         with open(json_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        verbose_logger.warning(
-            f"Error loading generic_api_compatible_callbacks.json: {str(e)}"
-        )
+        verbose_logger.warning(f"Error loading generic_api_compatible_callbacks.json: {str(e)}")
         return {}
 
 
@@ -127,9 +123,7 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         if callback_name:
             if is_callback_compatible(callback_name):
-                verbose_logger.debug(
-                    f"Loading configuration for callback: {callback_name}"
-                )
+                verbose_logger.debug(f"Loading configuration for callback: {callback_name}")
                 callback_config = get_callback_config(callback_name)
 
                 # Use config from JSON if not explicitly provided
@@ -156,9 +150,7 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         # Init httpx client
         #########################################################
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         endpoint = endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
         if endpoint is None:
             raise ValueError(
@@ -180,9 +172,7 @@ class GenericAPILogger(CustomBatchLogger):
             "ndjson",
             "single",
         ]:
-            raise ValueError(
-                f"Invalid log_format: {log_format}. Must be one of: 'json_array', 'ndjson', 'single'"
-            )
+            raise ValueError(f"Invalid log_format: {log_format}. Must be one of: 'json_array', 'ndjson', 'single'")
         self.log_format: LOG_FORMAT_TYPES = log_format or "json_array"
 
         verbose_logger.debug(
@@ -223,9 +213,7 @@ class GenericAPILogger(CustomBatchLogger):
                         key, value = item.split("=", 1)
                         headers_dict[key.strip()] = value.strip()
             except Exception as e:
-                verbose_logger.warning(
-                    f"Error parsing headers from environment variables: {str(e)}"
-                )
+                verbose_logger.warning(f"Error parsing headers from environment variables: {str(e)}")
 
         # 2. Update with litellm generic headers if available
         if litellm.generic_logger_headers:
@@ -273,8 +261,7 @@ class GenericAPILogger(CustomBatchLogger):
                     raise
 
                 verbose_logger.warning(
-                    "Generic API Logger - retrying request to %s after error: %s "
-                    "(attempt %s/%s)",
+                    "Generic API Logger - retrying request to %s after error: %s (attempt %s/%s)",
                     self.endpoint,
                     str(e),
                     attempt + 1,
@@ -300,9 +287,7 @@ class GenericAPILogger(CustomBatchLogger):
             return
 
         try:
-            verbose_logger.debug(
-                "Generic API Logger - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("Generic API Logger - Enters logging function for model %s", kwargs)
             standard_logging_payload = kwargs.get("standard_logging_object", None)
 
             # Backwards compatibility with old logging payload
@@ -322,9 +307,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Generic API Logger Error - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"Generic API Logger Error - {str(e)}\n{traceback.format_exc()}")
             pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -338,9 +321,7 @@ class GenericAPILogger(CustomBatchLogger):
             return
 
         try:
-            verbose_logger.debug(
-                "Generic API Logger - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("Generic API Logger - Enters logging function for model %s", kwargs)
             standard_logging_payload = kwargs.get("standard_logging_object", None)
 
             if litellm.generic_api_use_v1 is True:
@@ -358,9 +339,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Generic API Logger Error - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"Generic API Logger Error - {str(e)}\n{traceback.format_exc()}")
 
     async def async_send_batch(self):
         """
@@ -392,9 +371,7 @@ class GenericAPILogger(CustomBatchLogger):
                 # Log results
                 for idx, result in enumerate(responses):
                     if isinstance(result, Exception):
-                        verbose_logger.exception(
-                            f"Generic API Logger - Error sending log {idx}: {result}"
-                        )
+                        verbose_logger.exception(f"Generic API Logger - Error sending log {idx}: {result}")
                     else:
                         # result is a Response object
                         verbose_logger.debug(
@@ -418,30 +395,22 @@ class GenericAPILogger(CustomBatchLogger):
                 )
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Generic API Logger Error sending batch - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"Generic API Logger Error sending batch - {str(e)}\n{traceback.format_exc()}")
         finally:
             self.log_queue.clear()
 
-    def _get_v1_logging_payload(
-        self, kwargs, response_obj, start_time, end_time
-    ) -> dict:
+    def _get_v1_logging_payload(self, kwargs, response_obj, start_time, end_time) -> dict:
         """
         Maintained for backwards compatibility with old logging payload
 
         Returns a dict of the payload to send to the Generic API Endpoint
         """
-        verbose_logger.debug(
-            f"GenericAPILogger Logging - Enters logging function for model {kwargs}"
-        )
+        verbose_logger.debug(f"GenericAPILogger Logging - Enters logging function for model {kwargs}")
 
         # construct payload to send custom logger
         # follows the same params as langfuse.py
         litellm_params = kwargs.get("litellm_params", {})
-        metadata = (
-            litellm_params.get("metadata", {}) or {}
-        )  # if litellm_params['metadata'] == None
+        metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
         messages = kwargs.get("messages")
         cost = kwargs.get("response_cost", 0.0)
         optional_params = kwargs.get("optional_params", {})

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { CheckCircleFilled } from "@ant-design/icons";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 const LogoWithFallback: React.FC<{ src: string; name: string }> = ({ src, name }) => {
   const [hasError, setHasError] = useState(false);
@@ -29,7 +30,7 @@ const LogoWithFallback: React.FC<{ src: string; name: string }> = ({ src, name }
 
   return (
     <img
-      src={src}
+      src={resolveLogoSrc(src)}
       alt=""
       style={{ width: 28, height: 28, borderRadius: 6, objectFit: "contain", flexShrink: 0 }}
       onError={() => setHasError(true)}

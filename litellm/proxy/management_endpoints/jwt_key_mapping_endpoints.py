@@ -43,9 +43,7 @@ async def create_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403, detail="Only proxy admins can create JWT key mappings"
-        )
+        raise HTTPException(status_code=403, detail="Only proxy admins can create JWT key mappings")
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -62,9 +60,7 @@ async def create_jwt_key_mapping(
         if data.description is not None:
             create_data["description"] = data.description
 
-        new_mapping = await JWTKeyMappingRepository(prisma_client).table.create(
-            data=create_data
-        )
+        new_mapping = await JWTKeyMappingRepository(prisma_client).table.create(data=create_data)
 
         # Invalidate cache
         cache_key = f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}"
@@ -100,9 +96,7 @@ async def update_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403, detail="Only proxy admins can update JWT key mappings"
-        )
+        raise HTTPException(status_code=403, detail="Only proxy admins can update JWT key mappings")
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -114,9 +108,7 @@ async def update_jwt_key_mapping(
 
     try:
         # Get old mapping for cache invalidation
-        old_mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(
-            where={"id": data.id}
-        )
+        old_mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(where={"id": data.id})
 
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
@@ -158,18 +150,14 @@ async def delete_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403, detail="Only proxy admins can delete JWT key mappings"
-        )
+        raise HTTPException(status_code=403, detail="Only proxy admins can delete JWT key mappings")
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
         # Get old mapping for cache invalidation
-        old_mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(
-            where={"id": data.id}
-        )
+        old_mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(where={"id": data.id})
 
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
@@ -198,9 +186,7 @@ async def list_jwt_key_mappings(
 
     # Admin Viewer follows the read-parity rule.
     if not _user_has_admin_view(user_api_key_dict):
-        raise HTTPException(
-            status_code=403, detail="Only proxy admins can list JWT key mappings"
-        )
+        raise HTTPException(status_code=403, detail="Only proxy admins can list JWT key mappings")
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -238,23 +224,17 @@ async def info_jwt_key_mapping(
 
     # Admin Viewer follows the read-parity rule.
     if not _user_has_admin_view(user_api_key_dict):
-        raise HTTPException(
-            status_code=403, detail="Only proxy admins can get JWT key mapping info"
-        )
+        raise HTTPException(status_code=403, detail="Only proxy admins can get JWT key mapping info")
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(
-            where={"id": id}
-        )
+        mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(where={"id": id})
         if mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
         return _to_response(mapping)
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(
-            status_code=500, detail="Failed to get JWT key mapping info."
-        )
+        raise HTTPException(status_code=500, detail="Failed to get JWT key mapping info.")

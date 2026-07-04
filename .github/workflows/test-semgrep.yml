@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:

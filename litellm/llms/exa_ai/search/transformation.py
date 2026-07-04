@@ -40,9 +40,7 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     startPublishedDate: str  # Optional - published date filter (ISO 8601 format)
     endPublishedDate: str  # Optional - published date filter (ISO 8601 format)
     includeText: List[str]  # Optional - strings that must be present in webpage text
-    excludeText: List[
-        str
-    ]  # Optional - strings that must not be present in webpage text
+    excludeText: List[str]  # Optional - strings that must not be present in webpage text
     context: Union[bool, dict]  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
@@ -73,9 +71,7 @@ class ExaAISearchConfig(BaseSearchConfig):
             default_api_base=self.EXA_AI_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "EXA_API_KEY is not set. Set `EXA_API_KEY` environment variable."
-            )
+            raise ValueError("EXA_API_KEY is not set. Set `EXA_API_KEY` environment variable.")
         headers["x-api-key"] = api_key
         headers["Content-Type"] = "application/json"
         return headers
@@ -146,10 +142,7 @@ class ExaAISearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # By default, request text content if not explicitly specified

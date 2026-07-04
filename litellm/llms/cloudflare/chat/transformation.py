@@ -48,9 +48,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
     @staticmethod
     def _resolve_api_base(api_base: Optional[str]) -> str:
         if not api_base:
-            account_id = normalize_nonempty_secret_str(
-                get_secret_str("CLOUDFLARE_ACCOUNT_ID")
-            )
+            account_id = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
             if account_id is None:
                 raise ValueError(
                     "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID in the environment or pass api_base explicitly"

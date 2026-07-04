@@ -47,9 +47,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
                 if not isinstance(message, dict):
                     continue
                 content = message.get("content")
-                if isinstance(content, list) and any(
-                    isinstance(block, dict) and "type" in block for block in content
-                ):
+                if isinstance(content, list) and any(isinstance(block, dict) and "type" in block for block in content):
                     return "invokeModel"
             return "converse"
 
@@ -97,9 +95,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         else:
             return self._transform_to_invoke_model_format(request_data)
 
-    def _transform_to_converse_format(
-        self, request_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _transform_to_converse_format(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform to Converse input format, including system and tools."""
         messages = request_data.get("messages", [])
         system = request_data.get("system")
@@ -141,16 +137,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             return [{"text": system}]
         if isinstance(system, list):
             # Already in blocks format (e.g. [{"type": "text", "text": "..."}])
-            return [
-                {"text": block.get("text", "")}
-                for block in system
-                if isinstance(block, dict)
-            ]
+            return [{"text": block.get("text", "")} for block in system if isinstance(block, dict)]
         return []
 
-    def _transform_tools(
-        self, tools: Optional[List[Dict[str, Any]]]
-    ) -> Optional[Dict[str, Any]]:
+    def _transform_tools(self, tools: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
         """Transform Anthropic tools to Bedrock toolConfig format."""
         if not tools:
             return None
@@ -165,9 +155,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             name = name[:64]
 
             description = tool.get("description") or name
-            input_schema = tool.get(
-                "input_schema", {"type": "object", "properties": {}}
-            )
+            input_schema = tool.get("input_schema", {"type": "object", "properties": {}})
 
             bedrock_tools.append(
                 {
@@ -181,9 +169,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"tools": bedrock_tools}
 
-    def _transform_to_invoke_model_format(
-        self, request_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _transform_to_invoke_model_format(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform to InvokeModel input format."""
         import base64
         import json
@@ -196,9 +182,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             # Bedrock validates the body against the model's InvokeModel schema;
             # Anthropic Messages bodies require these fields.
             body_data.setdefault("anthropic_version", "bedrock-2023-05-31")
-            body_data.setdefault(
-                "max_tokens", DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
-            )
+            body_data.setdefault("max_tokens", DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS)
 
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
         encoded_body = base64.b64encode(json.dumps(body_data).encode()).decode()
@@ -240,9 +224,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return endpoint
 
-    def transform_bedrock_response_to_anthropic(
-        self, bedrock_response: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def transform_bedrock_response_to_anthropic(self, bedrock_response: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform Bedrock CountTokens response to Anthropic format.
 
