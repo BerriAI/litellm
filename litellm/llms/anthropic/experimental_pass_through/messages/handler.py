@@ -368,9 +368,12 @@ def _get_mock_response_content(
     if isinstance(mock_response, str):
         return mock_response
     if isinstance(mock_response, litellm.ModelResponse):
+        if not mock_response.choices:
+            return ""
         first_choice = mock_response.choices[0]
         if isinstance(first_choice, litellm.Choices):
-            return first_choice.message.content
+            return first_choice.message.content or ""
+        return ""
     return None
 
 
