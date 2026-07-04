@@ -119,6 +119,18 @@ describe("SpendLogsTable", () => {
     });
   });
 
+  describe("Spend Logs Settings button visibility", () => {
+    it("should show the settings gear button for admin users", () => {
+      renderWithProviders(<SpendLogsTable {...defaultProps} userRole="proxy_admin" />);
+      expect(screen.getByTitle("Spend Logs Settings")).toBeInTheDocument();
+    });
+
+    it("should not show the settings gear button for non-admin users", () => {
+      renderWithProviders(<SpendLogsTable {...defaultProps} userRole="internal_user" />);
+      expect(screen.queryByTitle("Spend Logs Settings")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Quick Select time range", () => {
     // uiSpendLogsCall fires from the real useLogFilterLogic query, so restore it here.
     beforeEach(async () => {

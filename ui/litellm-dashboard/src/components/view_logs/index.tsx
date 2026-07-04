@@ -1,7 +1,9 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import { internalUserRoles } from "../../utils/roles";
+import { SettingOutlined } from "@ant-design/icons";
+import { Button } from "antd";
+import { internalUserRoles, isAdminRole } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -15,6 +17,7 @@ import { getLogFilterOptions } from "./filter_options";
 import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
+import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
 import { DataTable } from "./table";
 import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
 
@@ -45,6 +48,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
 
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
@@ -246,6 +250,13 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold">Request Logs</h1>
+              {userRole && isAdminRole(userRole) && (
+                <Button
+                  icon={<SettingOutlined />}
+                  onClick={() => setIsSpendLogsSettingsModalVisible(true)}
+                  title="Spend Logs Settings"
+                />
+              )}
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -261,6 +272,11 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   options={getLogFilterOptions(accessToken)}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                />
+                <SpendLogsSettingsModal
+                  isVisible={isSpendLogsSettingsModalVisible}
+                  onCancel={() => setIsSpendLogsSettingsModalVisible(false)}
+                  onSuccess={() => setIsSpendLogsSettingsModalVisible(false)}
                 />
                 <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
                   <LogsTableToolbar
