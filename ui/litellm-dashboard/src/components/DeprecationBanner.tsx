@@ -4,6 +4,7 @@ import React from "react";
 import { Alert } from "antd";
 
 const DEPRECATION_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/32090";
+const DEPRECATION_TARGET_DATE = "September 1, 2026";
 
 interface DeprecationBannerProps {
   featureName: string;
