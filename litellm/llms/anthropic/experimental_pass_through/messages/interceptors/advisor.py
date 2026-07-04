@@ -17,7 +17,9 @@ How it works:
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
+import litellm
 import litellm.constants as _c
+from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -76,16 +78,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             raise ValueError("advisor tool definition must include a 'model' field specifying the advisor model")
         _raw_max_uses = advisor_tool.get("max_uses")
         max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
-        # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
-        # If not set in the tool definition, litellm resolves from env vars.
-        # The advisor tool is caller-controlled; only honor a client-supplied
-        # api_base/api_key when the proxy has enabled clientside credentials,
-        # otherwise let litellm resolve from server config.
-        advisor_api_key: Optional[str] = None
-        advisor_api_base: Optional[str] = None
-        if _allow_client_side_advisor_credentials():
-            advisor_api_key = advisor_tool.get("api_key")
-            advisor_api_base = advisor_tool.get("api_base")
+        advisor_api_key, advisor_api_base = _resolve_advisor_credentials(advisor_tool)
 
         # Build the synthetic tool definition the provider will receive.
         synthetic_advisor_tool = _make_synthetic_advisor_tool()
@@ -184,6 +177,40 @@ def _allow_client_side_advisor_credentials() -> bool:
     except (ImportError, ModuleNotFoundError):
         return True
     return general_settings.get("allow_client_side_credentials") is True
+
+
+def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[Optional[str], Optional[str]]:
+    """Resolve the (api_key, api_base) override for the advisor sub-call.
+
+    A caller-supplied ``api_base`` is only honored alongside a caller-supplied
+    ``api_key``: without one, ``AnthropicModelInfo.get_auth_header()`` falls
+    back to the proxy's own Anthropic credentials, which would then be sent to
+    the caller-chosen ``api_base``. A caller-supplied ``api_base`` is also
+    required to be https and SSRF-validated so it can't target a
+    private/internal/cloud-metadata address, mirroring
+    ``proxy.auth.auth_utils.check_complete_credentials``. https is required
+    because ``validate_url`` only rewrites the connection to a DNS-pinned IP
+    for http; for https with TLS verification on, it returns the URL
+    unchanged and relies on certificate validation to block DNS rebinding.
+    """
+    if not _allow_client_side_advisor_credentials():
+        return None, None
+    api_key: Optional[str] = advisor_tool.get("api_key")
+    api_base: Optional[str] = advisor_tool.get("api_base")
+    if api_base is None:
+        return api_key, None
+    if not api_key:
+        raise ValueError(
+            "advisor tool definition sets 'api_base' without 'api_key'. A "
+            "caller-supplied api_base is only honored alongside a "
+            "caller-supplied api_key, so the proxy's own credentials are "
+            "never sent to a caller-chosen destination."
+        )
+    if not api_base.startswith("https://"):
+        raise ValueError(f"advisor tool definition sets 'api_base'={api_base!r}, which must use the https scheme.")
+    if getattr(litellm, "user_url_validation", True):
+        validate_url(api_base)
+    return api_key, api_base
 
 
 def _make_synthetic_advisor_tool() -> Dict:
