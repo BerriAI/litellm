@@ -1,6 +1,6 @@
 import { Button } from "@tremor/react";
 import type { TableProps } from "antd";
-import { Table, Tag } from "antd";
+import { Table, Tag, Tooltip } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
 import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
@@ -27,17 +27,23 @@ const isDestination = (record: AlertingObject): boolean => record.credentialName
 
 const SCOPE_BADGES_LIMIT = 4;
 
-// Renders the union of identities that route to this destination, with each team/org
-// labeled by its alias. Global supersedes everything. Pulls from record.resolvedScope
-// (computed at the page level from BOTH directions: destination-side access AND
-// identity-side metadata.logging_exporters).
+// Renders the explicit access grants for a destination.
+//
+// The Scope column shows only what is statically configured in credential_info.access.
+// It does NOT reflect runtime enablement behavior (auto_enable) — that is the
+// Mode column's job. This keeps the two concepts cleanly separated:
+//   - access.global=true  → "Global access"  (visible/assignable by all)
+//   - access.teams=[...]  → per-team badges
+//   - access.orgs=[...]   → per-org badges
+//   - empty/absent access → "—" in all cases, including auto_enable=true
 const ScopeCell: React.FC<{ record: AlertingObject }> = ({ record }) => {
   const scope = record.resolvedScope;
+
   if (!scope || (!scope.global && scope.teams.length === 0 && scope.orgs.length === 0)) {
     return <span className="text-gray-400">—</span>;
   }
   if (scope.global) {
-    return <Tag color="blue">Global</Tag>;
+    return <Tag color="blue">Global access</Tag>;
   }
   const items = [
     ...scope.teams.map((label) => ({ kind: "team" as const, label })),
@@ -97,9 +103,27 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700">Mode</span>,
       key: "mode",
       render: (_: unknown, record: CallbackRow) => {
-        // Destination rows fan out on every span, so the success/failure split
-        // does not apply -- only config callbacks carry a mode.
-        if (isDestination(record)) return <span className="text-gray-400">—</span>;
+        // Destination rows show their enablement behaviour: auto_enable=true
+        // means the destination exports automatically (scoped by access grants);
+        // false means it only exports when explicitly named in logging_exporters.
+        if (isDestination(record)) {
+          if (record.autoEnable === true) {
+            const access = record.access;
+            const hasExplicitGrants =
+              access?.global === true ||
+              (Array.isArray(access?.teams) && access.teams.length > 0) ||
+              (Array.isArray(access?.orgs) && access.orgs.length > 0);
+            const tooltipTitle = hasExplicitGrants
+              ? "Exports automatically for all identities within the access scope without requiring explicit assignment."
+              : "No explicit access grants. Treated as proxy-wide automatic export for backward compatibility. Add access.global=true or access.teams/orgs to scope this destination.";
+            return (
+              <Tooltip title={tooltipTitle}>
+                <Tag color="orange" style={{ cursor: "help" }}>Auto-enabled</Tag>
+              </Tooltip>
+            );
+          }
+          return <span className="text-gray-400 text-xs">Manual assignment</span>;
+        }
         // Backend sends `type` (success | failure); legacy in-memory rows
         // from add-callback flow set `mode`. Read both so newly-added rows
         // and server-fetched rows both render correctly.
