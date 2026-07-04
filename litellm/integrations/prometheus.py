@@ -2072,7 +2072,7 @@ class PrometheusLogger(CustomLogger):
             return litellm.get_llm_provider(model=model)[1] or None
         except litellm.exceptions.BadRequestError:
             return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - metrics labeling must never break request/failure handling
             verbose_logger.debug(
                 "prometheus: unexpected error inferring api_provider from model=%s: %s",
                 model,
