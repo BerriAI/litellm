@@ -172,11 +172,15 @@ async def test_has_user_token_false_for_a_non_per_user_mode():
 class _FakeExchanger:
     def __init__(self, result: Result[OAuthToken, CredError]) -> None:
         self._result = result
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
+        self.invalidations: list[tuple[str, str, str]] = []
 
-    async def exchange(self, subject_token, server, config):
-        self.calls.append((subject_token, server.server_id))
+    async def exchange(self, subject_token, server, config, *, tenant_id=""):
+        self.calls.append((subject_token, tenant_id, server.server_id))
         return self._result
+
+    async def invalidate(self, subject_token, server, config, *, tenant_id=""):
+        self.invalidations.append((subject_token, tenant_id, server.server_id))
 
 
 _OBO = TokenExchangeConfig(
@@ -189,12 +193,29 @@ _OBO = TokenExchangeConfig(
 @pytest.mark.asyncio
 async def test_token_exchange_emits_the_exchanged_bearer():
     exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
-    subject = Subject(tenant_id="", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
+    subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
     result = await UpstreamCredentialProvider(token_exchanger=exchanger).resolve_credentials(subject, _spec(_OBO))
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer exchanged-at"
-    # The arm hands the unwrapped caller token to the exchanger, never the upstream.
-    assert exchanger.calls == [("caller-jwt", "s")]
+    # The arm hands the unwrapped caller token AND the tenant to the exchanger, never the upstream.
+    assert exchanger.calls == [("caller-jwt", "acme", "s")]
+
+
+@pytest.mark.asyncio
+async def test_invalidate_credentials_drops_the_exchanged_token_for_the_subject_and_tenant():
+    exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
+    provider = UpstreamCredentialProvider(token_exchanger=exchanger)
+    subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
+    await provider.invalidate_credentials(subject, _spec(_OBO))
+    assert exchanger.invalidations == [("caller-jwt", "acme", "s")]
+
+
+@pytest.mark.asyncio
+async def test_invalidate_credentials_is_a_noop_without_a_caller_token():
+    exchanger = _FakeExchanger(Ok(OAuthToken(access_token="never")))
+    provider = UpstreamCredentialProvider(token_exchanger=exchanger)
+    await provider.invalidate_credentials(Subject(tenant_id="acme", subject_id="alice"), _spec(_OBO))
+    assert exchanger.invalidations == []
 
 
 @pytest.mark.asyncio

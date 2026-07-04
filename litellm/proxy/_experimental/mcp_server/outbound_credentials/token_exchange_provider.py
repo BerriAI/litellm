@@ -9,6 +9,8 @@ call), so it needs no lazy wrapper.
 
 from __future__ import annotations
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
@@ -21,7 +23,32 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     Rfc8693TokenExchanger,
+    SubjectTokenRejected,
+    TokenExchangeClientError,
 )
+
+# RFC 6749 5.2 error codes that mean the gateway's own request/credentials are wrong (not the
+# caller's subject token), so they surface as a 500 the caller can't fix by re-authenticating.
+_GATEWAY_FAULT_OAUTH_ERRORS = frozenset(
+    {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
+)
+
+
+def _oauth_error_code(response: httpx.Response) -> str | None:
+    """Read the RFC 6749 5.2 ``error`` code from a token-endpoint error body, or None if absent.
+
+    The ``error_description`` is deliberately not read: it can carry IdP internals and must never
+    reach the caller. Only the standard machine code drives classification.
+    """
+    try:
+        body: object = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(body, dict):
+        code = body.get("error")
+        if isinstance(code, str):
+            return code
+    return None
 
 
 async def _post_exchange_endpoint(
@@ -34,13 +61,29 @@ async def _post_exchange_endpoint(
 
     # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
     # object and the exchanger validates each field, so the untyped boundary is contained here.
-    # A failed exchange is a miss, not a 500 (matches v1), so any error becomes None.
+    # A 4xx is the IdP rejecting the subject (non-retryable -> 401 via SubjectTokenRejected); any
+    # other failure is a miss (-> None -> upstream_unavailable -> 503), matching v1's fail-closed.
     headers = {"Accept": "application/json", **client_auth_headers}
     try:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
         response = await client.post(url, headers=headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
         parsed: object = response.json()  # pyright: ignore
+    except httpx.HTTPStatusError as status_err:
+        status_code = status_err.response.status_code
+        if 400 <= status_code < 500:
+            oauth_error = _oauth_error_code(status_err.response)
+            if oauth_error in _GATEWAY_FAULT_OAUTH_ERRORS:
+                verbose_logger.warning(
+                    "MCP token exchange rejected as %s (HTTP %d); check the gateway client credentials, "
+                    "audience, and scope for this server",
+                    oauth_error,
+                    status_code,
+                )
+                raise TokenExchangeClientError(oauth_error) from status_err
+            raise SubjectTokenRejected(f"IdP rejected the subject token (HTTP {status_code})") from status_err
+        verbose_logger.warning("MCP token exchange request failed: %s", status_err)
+        return None
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning("MCP token exchange request failed: %s", exc)
         return None

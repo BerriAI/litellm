@@ -21,6 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     InProcessRefreshCoordinator,
@@ -70,26 +71,51 @@ _NON_ACCESS_ISSUED_TOKEN_TYPES = frozenset(
 ExchangeHttpPost = Callable[[str, "dict[str, str]", "dict[str, str]"], Awaitable["dict[str, object] | None"]]
 
 
+class SubjectTokenRejected(Exception):
+    """The IdP refused to exchange the subject token (an RFC 8693 4xx, e.g. ``invalid_grant``).
+
+    Distinct from a transport / IdP-availability failure, which the post adapter maps to ``None`` ->
+    ``upstream_unavailable`` -> 503 (retryable). A rejected subject is the caller's problem, not the
+    gateway's, so the arm surfaces it as a non-retryable 401 (the OBO challenge) instead.
+    """
+
+
+class TokenExchangeClientError(Exception):
+    """The IdP rejected the exchange for a reason that is the gateway's fault, not the caller's.
+
+    RFC 6749 5.2 codes such as ``invalid_client`` (the gateway's own STS credentials are wrong),
+    ``unauthorized_client`` / ``unsupported_grant_type`` (the gateway is not permitted to exchange),
+    ``invalid_target`` / ``invalid_scope`` (the gateway's audience/scope config for this server is
+    wrong). The caller cannot fix these by re-authenticating, so the arm surfaces them as a 500
+    (``misconfigured``), not the 401 OBO challenge. The IdP ``error_description`` is never carried.
+    """
+
+
 class TokenExchanger(Protocol):
     """Exchanges a caller token for an upstream-bound one, per the server's token_exchange config."""
 
     async def exchange(
-        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
     ) -> Result[OAuthToken, CredError]: ...
 
+    async def invalidate(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> None: ...
 
-def _cache_key(subject_token: str, config: TokenExchangeConfig) -> str:
-    """Bind the cache entry to the caller token AND the exchange config that minted it.
 
-    A rotated caller token, endpoint, audience, scope, client_id, secret, auth method, or
-    subject_token_type all change the key, so a config change forces a fresh exchange instead of
-    serving a token minted for the old config until TTL. Everything is hashed, so no secret is held
-    in the key.
+def _cache_key(subject_token: str, tenant_id: str, config: TokenExchangeConfig) -> str:
+    """Bind the cache entry to the caller token, the tenant, AND the exchange config that minted it.
+
+    A rotated caller token, a different tenant, endpoint, audience, scope, client_id, secret, auth
+    method, or subject_token_type all change the key, so two tenants behind the same opaque token
+    never share an entry and a config change forces a fresh exchange instead of serving a token
+    minted for the old config until TTL. Everything is hashed, so no secret is held in the key.
     """
     secret = config.client_secret.get_secret_value() if config.client_secret else ""
     material = "\x00".join(
         (
             subject_token,
+            tenant_id,
             config.token_exchange_endpoint or "",
             config.audience or "",
             config.subject_token_type,
@@ -105,11 +131,11 @@ def _cache_key(subject_token: str, config: TokenExchangeConfig) -> str:
 def _parse_expires_in(raw: object) -> int | None:
     if isinstance(raw, bool):
         return None
-    if isinstance(raw, int):
-        return raw
+    if isinstance(raw, (int, float)):
+        return int(raw)
     if isinstance(raw, str):
         try:
-            return int(raw)
+            return int(float(raw))
         except ValueError:
             return None
     return None
@@ -160,22 +186,25 @@ class Rfc8693TokenExchanger:
         self._expiry_buffer_seconds = expiry_buffer_seconds
 
     async def exchange(
-        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
     ) -> Result[OAuthToken, CredError]:
         endpoint = config.token_exchange_endpoint
         client_id = config.client_id
         client_secret = config.client_secret
-        if not endpoint or not client_id or client_secret is None:
+        if not endpoint:
+            # No endpoint configured and none discoverable: fail closed (412) rather than guess an IdP
+            # or fall back to a weaker source. The caller's token is never sent anywhere.
             return Error(
-                CredError.of_misconfigured(
-                    "token_exchange requires token_exchange_endpoint, client_id and client_secret"
-                )
+                CredError.of_precondition_required("token exchange endpoint is not configured for this server")
             )
+        if not client_id or client_secret is None:
+            return Error(CredError.of_misconfigured("token_exchange requires client_id and client_secret"))
 
-        cache_key = _cache_key(subject_token, config)
+        cache_key = _cache_key(subject_token, tenant_id, config)
         server_id = server.server_id
         cached = await self._cache.get(cache_key, server_id)
         if cached is not None:
+            verbose_logger.debug("MCP token exchange cache hit for server %s", server_id)
             return Ok(cached)
 
         client_auth = build_token_endpoint_client_auth(
@@ -197,6 +226,9 @@ class Rfc8693TokenExchanger:
             fresh = await self._cache.get(cache_key, server_id)
             if fresh is not None:
                 return fresh
+            verbose_logger.debug(
+                "Exchanging token for MCP server %s at %s (audience=%s)", server_id, endpoint, config.audience
+            )
             body = await self._http_post(endpoint, form, client_auth.headers)
             if body is None:
                 return None
@@ -204,15 +236,37 @@ class Rfc8693TokenExchanger:
             if token is None:
                 return None
             await self._cache.set(cache_key, server_id, token, self._ttl_seconds(token))
+            verbose_logger.info("Token exchange succeeded for MCP server %s", server_id)
             return token
 
         async def reread() -> OAuthToken | None:
             return await self._cache.get(cache_key, server_id)
 
-        token = await self._coordinator.run(cache_key, server_id, refresh=run_exchange, reread=reread)
+        try:
+            token = await self._coordinator.run(cache_key, server_id, refresh=run_exchange, reread=reread)
+        except SubjectTokenRejected as rejected:
+            # The IdP rejected the subject token (4xx). This is non-retryable: the caller must
+            # re-authenticate with the IdP, so it surfaces as a 401 (the OBO challenge), not a 503.
+            return Error(CredError.of_unauthorized(str(rejected) or "subject token rejected by the IdP"))
+        except TokenExchangeClientError:
+            # RFC 6749 5.2 gateway-fault code (invalid_client / invalid_target / ...): the caller can't
+            # fix it by re-authenticating, so surface a 500 rather than the OBO 401 challenge. The
+            # specific code is logged at the edge; the user-facing summary stays generic.
+            return Error(
+                CredError.of_misconfigured(
+                    "token exchange configuration error: the gateway's credentials, audience, or scope "
+                    "for this server were not accepted by the IdP"
+                )
+            )
         if token is None:
             return Error(CredError.of_upstream_unavailable("token exchange did not return a usable access token"))
         return Ok(token)
+
+    async def invalidate(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> None:
+        """Drop the cached exchanged token so the next call re-exchanges (e.g. after an upstream 401)."""
+        await self._cache.delete(_cache_key(subject_token, tenant_id, config), server.server_id)
 
     def _token_from_body(self, body: dict[str, object]) -> OAuthToken | None:
         access_token = body.get("access_token")
@@ -222,6 +276,9 @@ class Rfc8693TokenExchanger:
         # must fail closed rather than be minted as a bogus Bearer; an absent type defaults to Bearer.
         token_type = body.get("token_type")
         if isinstance(token_type, str) and token_type.strip().lower() != "bearer":
+            verbose_logger.warning(
+                "MCP token exchange returned unusable token_type %r; refusing to forward it as Bearer", token_type
+            )
             return None
         # issued_token_type says what representation was minted; reject a clearly-non-access type
         # (refresh/id/saml) even if token_type claimed Bearer. access_token / jwt / absent / unknown pass.
@@ -235,5 +292,7 @@ class Rfc8693TokenExchanger:
     def _ttl_seconds(self, token: OAuthToken) -> float:
         if token.expires_at is None:
             return self._default_ttl_seconds
-        lifetime = token.expires_at - self._clock()
-        return max(lifetime - self._expiry_buffer_seconds, self._min_ttl_seconds)
+        lifetime = max(0.0, token.expires_at - self._clock())
+        # Floor at min_ttl, but never cache past the token's own expiry: a token whose remaining
+        # lifetime is below the buffer (or even below min_ttl) must not be served stale upstream.
+        return min(max(lifetime - self._expiry_buffer_seconds, self._min_ttl_seconds), lifetime)
