@@ -63,9 +63,14 @@ class _NullTokenExchanger:
     """Fail-closed default: with no exchanger wired, token_exchange cannot produce a credential."""
 
     async def exchange(
-        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
     ) -> Result[OAuthToken, CredError]:
         return Error(CredError.of_misconfigured("token exchange collaborator not wired"))
+
+    async def invalidate(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> None:
+        return None
 
 
 class UpstreamCredentialProvider:
@@ -146,11 +151,25 @@ class UpstreamCredentialProvider:
                     www_authenticate='Bearer error="invalid_request"',
                 )
             )
-        match await self._token_exchanger.exchange(inbound.get_secret_value(), server, config):
+        match await self._token_exchanger.exchange(
+            inbound.get_secret_value(), server, config, tenant_id=subject.tenant_id
+        ):
             case Ok(token):
                 return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
             case Error(err):
                 return Error(err)
+
+    async def invalidate_credentials(self, subject: Subject, server: ServerSpec) -> None:
+        """Drop any cached credential the resolver owns for this `(subject, server)`.
+
+        Used after an upstream rejects the injected credential, so the next resolve re-mints rather
+        than serving the same rejected token until TTL. Only `token_exchange` holds a re-mintable
+        cached credential here; other modes are a no-op.
+        """
+        if isinstance(server.config, TokenExchangeConfig) and subject.inbound_token is not None:
+            await self._token_exchanger.invalidate(
+                subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
+            )
 
     async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:
         """The user's authorization_code token, or None when absent or the store is unreachable.
