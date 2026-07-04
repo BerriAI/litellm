@@ -1216,7 +1216,48 @@ class MCPServerManager:
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
+        await self._persist_discovered_obo_token_url(
+            server_id=mcp_server.server_id,
+            auth_type=auth_type,
+            existing_token_url=mcp_server.token_url,
+            discovered_token_url=new_server.token_url,
+        )
         return new_server
+
+    async def _persist_discovered_obo_token_url(
+        self,
+        *,
+        server_id: str,
+        auth_type: Optional[MCPAuthType],
+        existing_token_url: Optional[str],
+        discovered_token_url: Optional[str],
+    ) -> None:
+        """Write a freshly discovered OBO token endpoint back onto the DB row.
+
+        ``build_mcp_server_from_table`` resolves ``token_url`` via RFC 9728 -> RFC 8414 for an
+        ``oauth2_token_exchange`` server that has none configured, but that resolved value otherwise
+        lives only on the returned in-memory object; the row keeps ``token_url=None`` so every rebuild
+        re-runs discovery, and a transient upstream outage during a rebuild leaves the server with no
+        endpoint until discovery next succeeds. Persisting it makes ``_obo_needs_endpoint_discovery``
+        return False on the next build. Fires at most once per server (skipped once the row has a
+        value), and is best-effort: a write failure just means discovery runs again next time.
+        """
+        if auth_type != MCPAuth.oauth2_token_exchange:
+            return
+        if existing_token_url or not discovered_token_url:
+            return
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            return
+        try:
+            await MCPServerRepository(prisma_client).table.update(
+                where={"server_id": server_id},
+                data={"token_url": discovered_token_url},
+            )
+            verbose_logger.debug("Persisted discovered OBO token_url for MCP server %s", server_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
+            verbose_logger.warning("Failed to persist discovered OBO token_url for MCP server %s: %s", server_id, exc)
 
     async def _maybe_register_openapi_tools(self, server: MCPServer, *, initialize_mapping: bool = True):
         """Register OpenAPI tools if the server has a spec_path configured."""
