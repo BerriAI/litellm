@@ -134,6 +134,79 @@ def test_is_message_stop_chunk():
     assert _is_message_stop_chunk("message_stop") is False
 
 
+def test_is_message_stop_chunk_ignores_substring_in_payload():
+    """
+    Regression: a `content_block_delta` frame whose payload happens to contain
+    the literal string `message_stop` (e.g. inside a tool's partial_json) must
+    not be treated as a terminal stop event.
+    """
+    delta_frame_with_substring = (
+        b'event: content_block_delta\n'
+        b'data: {"type": "content_block_delta", "delta": '
+        b'{"type": "input_json_delta", "partial_json": "\\"message_stop\\""}}\n\n'
+    )
+    assert _is_message_stop_chunk(delta_frame_with_substring) is False
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_emits_error_when_bytes_stream_only_mentions_message_stop_in_payload():
+    """
+    Regression for the bytes-branch substring false positive: a stream whose
+    payload text contains `message_stop` (but never emits the actual
+    `event: message_stop` frame) must still be flagged as incomplete.
+    """
+    async def _byte_stream():
+        yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        yield (
+            b'event: content_block_delta\n'
+            b'data: {"type": "content_block_delta", "delta": '
+            b'{"type": "input_json_delta", "partial_json": "\\"message_stop\\""}}\n\n'
+        )
+
+    iterator = _make_iterator("test_bytes_substring_does_not_mark_complete")
+    chunks = await _collect(iterator, _byte_stream())
+
+    assert len(chunks) == 3
+    assert chunks[-1].decode().startswith("event: error\n")
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_does_not_double_error_on_provider_error_dict():
+    """
+    Regression: when the provider itself terminates the stream with an
+    `error` event (without a `message_stop`), the wrapper must forward that
+    error and not append a second synthetic incomplete-stream error.
+    """
+    provider_error = {"type": "error", "error": {"type": "overloaded_error", "message": "boom"}}
+
+    async def _error_terminated_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1"}}
+        yield provider_error
+
+    iterator = _make_iterator("test_provider_error_terminal_dict")
+    chunks = await _collect(iterator, _error_terminated_stream())
+
+    assert len(chunks) == 2
+    error_frames = [c for c in chunks if c.startswith(b"event: error\n")]
+    assert len(error_frames) == 1
+    payload = json.loads(error_frames[0].decode().split("data: ", 1)[1])
+    assert payload == provider_error
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_does_not_double_error_on_provider_error_bytes():
+    async def _byte_stream():
+        yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        yield b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error"}}\n\n'
+
+    iterator = _make_iterator("test_provider_error_terminal_bytes")
+    chunks = await _collect(iterator, _byte_stream())
+
+    assert len(chunks) == 2
+    error_frames = [c for c in chunks if c.startswith(b"event: error\n")]
+    assert len(error_frames) == 1
+
+
 def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():
     event = _incomplete_stream_error_sse_event().decode()
     lines = event.split("\n")

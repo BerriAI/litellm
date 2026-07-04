@@ -22,8 +22,20 @@ def _is_message_stop_chunk(chunk: object) -> bool:
     if isinstance(chunk, dict):
         return chunk.get("type") == "message_stop"
     if isinstance(chunk, (bytes, bytearray)):
-        return b"message_stop" in chunk
+        return any(line == b"event: message_stop" for line in chunk.splitlines())
     return False
+
+
+def _is_provider_error_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") == "error"
+    if isinstance(chunk, (bytes, bytearray)):
+        return any(line == b"event: error" for line in chunk.splitlines())
+    return False
+
+
+def _is_terminal_stream_chunk(chunk: object) -> bool:
+    return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
 
 
 def _incomplete_stream_error_sse_event() -> bytes:
@@ -125,17 +137,17 @@ class BaseAnthropicMessagesStreamingIterator:
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
         collected_chunks = []
-        saw_message_stop = False
+        saw_terminal_event = False
 
         async for chunk in completion_stream:
             if self.completion_start_time is None:
                 self.completion_start_time = datetime.now()
-            saw_message_stop = saw_message_stop or _is_message_stop_chunk(chunk)
+            saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
             encoded_chunk = self._convert_chunk_to_sse_format(chunk)
             collected_chunks.append(encoded_chunk)
             yield encoded_chunk
 
-        if not saw_message_stop:
+        if not saw_terminal_event:
             yield _incomplete_stream_error_sse_event()
 
         # Handle logging after all chunks are processed
