@@ -222,7 +222,7 @@ def _cost_per_token_custom_pricing_helper(
         output_cost = completion_tokens * output_cost_per_token
         return input_cost, output_cost
     elif custom_cost_per_second is not None:
-        output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
+        output_cost = custom_cost_per_second * (response_time_ms or 0.0) / 1000
         return 0, output_cost
 
     return None
@@ -662,29 +662,27 @@ def cost_per_token(
                 data_residency=data_residency,
             )
 
-        if model_info.get("input_cost_per_second", None) is not None and response_time_ms is not None:
+        input_cost_per_second = model_info.get("input_cost_per_second")
+        if input_cost_per_second is not None and response_time_ms is not None:
             verbose_logger.debug(
                 "For model=%s - input_cost_per_second: %s; response time: %s",
                 model,
-                model_info.get("input_cost_per_second", None),
+                input_cost_per_second,
                 response_time_ms,
             )
             ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = (
-                model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
-            )
+            prompt_tokens_cost_usd_dollar = input_cost_per_second * response_time_ms / 1000
 
-        if model_info.get("output_cost_per_second", None) is not None and response_time_ms is not None:
+        output_cost_per_second = model_info.get("output_cost_per_second")
+        if output_cost_per_second is not None and response_time_ms is not None:
             verbose_logger.debug(
                 "For model=%s - output_cost_per_second: %s; response time: %s",
                 model,
-                model_info.get("output_cost_per_second", None),
+                output_cost_per_second,
                 response_time_ms,
             )
             ## COST PER SECOND ##
-            completion_tokens_cost_usd_dollar = (
-                model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
-            )
+            completion_tokens_cost_usd_dollar = output_cost_per_second * response_time_ms / 1000
 
         verbose_logger.debug(
             "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",

@@ -59,8 +59,9 @@ class DiskCache(BaseCache):
 
     def increment_cache(self, key, value: int, **kwargs) -> int:
         # get the value
-        init_value = self.get_cache(key=key) or 0
-        value = init_value + value  # type: ignore
+        cached_value = self.get_cache(key=key)
+        init_value = cached_value if isinstance(cached_value, int) else 0
+        value = init_value + value
         self.set_cache(key, value, **kwargs)
         return value
 
@@ -76,8 +77,9 @@ class DiskCache(BaseCache):
 
     async def async_increment(self, key, value: int, **kwargs) -> int:
         # get the value
-        init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value  # type: ignore
+        cached_value = await self.async_get_cache(key=key)
+        init_value = cached_value if isinstance(cached_value, int) else 0
+        value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
         return value
 
