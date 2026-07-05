@@ -409,6 +409,25 @@ class RouterBudgetLimiting(CustomLogger):
         model_id: str = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: str = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
         if custom_llm_provider is None:
+            # /v1/messages and /v1/embeddings routes do not inject
+            # custom_llm_provider into litellm_params the way
+            # /v1/chat/completions does. Derive it from the model string
+            # so budget tracking is not silently skipped for those routes.
+            # See: https://github.com/BerriAI/litellm/issues/26701
+            _litellm_params = kwargs.get("litellm_params") or {}
+            _model = (
+                _litellm_params.get("model", "")
+                if isinstance(_litellm_params, dict)
+                else getattr(_litellm_params, "model", "") or ""
+            )
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=str(_model),
+                    litellm_params=_LiteLLMParamsDictView(_litellm_params if isinstance(_litellm_params, dict) else {}),
+                )
+            except Exception:
+                custom_llm_provider = None
+        if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required")
 
         budget_config = self._get_budget_config_for_provider(custom_llm_provider)
