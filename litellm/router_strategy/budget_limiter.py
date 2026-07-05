@@ -425,9 +425,15 @@ class RouterBudgetLimiting(CustomLogger):
                     model=str(_model),
                     litellm_params=_LiteLLMParamsDictView(_litellm_params if isinstance(_litellm_params, dict) else {}),
                 )
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=str(_model),
+                    litellm_params=_LiteLLMParamsDictView(_litellm_params if isinstance(_litellm_params, dict) else {}),
+                )
             except Exception as e:
                 verbose_router_logger.debug(
-                    "RouterBudgetLimiting: could not derive custom_llm_provider from model string %r: %s",
+                    "RouterBudgetLimiting: could not derive custom_llm_provider "
+                    "from model string %r: %s",
                     _model,
                     e,
                 )
