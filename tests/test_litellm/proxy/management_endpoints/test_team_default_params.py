@@ -343,6 +343,32 @@ class TestNewTeamDefaultParamsApplied:
         assert data.models == ["claude-3-5-sonnet"]
 
     @pytest.mark.asyncio
+    async def test_models_explicit_empty_list_not_overridden(self, monkeypatch):
+        """An explicit `models: []` means unrestricted access and must be preserved,
+        distinguished from an omitted field via model_fields_set."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(
+            litellm,
+            "default_team_params",
+            {"models": ["gpt-4"]},
+        )
+
+        data = NewTeamRequest(team_alias="my-team", models=[])
+        auth = self._make_admin_auth()
+
+        try:
+            await new_team(
+                data=data,
+                user_api_key_dict=auth,
+                http_request=MagicMock(),
+            )
+        except Exception:
+            pass
+
+        assert data.models == []
+
+    @pytest.mark.asyncio
     async def test_no_defaults_when_config_is_none(self, monkeypatch):
         """When default_team_params is None, no defaults applied."""
         from litellm.proxy.management_endpoints.team_endpoints import new_team
