@@ -73,8 +73,22 @@ spec:
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- else if .Values.db.deployStandalone }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.dbCredentialsSecretName" . }}
+                  key: {{ .Values.db.secret.usernameKey | default "username" }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.dbCredentialsSecretName" . }}
+                  key: {{ .Values.db.secret.passwordKey | default "password" }}
+            - name: DATABASE_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: DATABASE_NAME
+              value: {{ .Values.postgresql.auth.database | default "litellm" }}
             - name: DATABASE_URL
-              value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
+              value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
             {{- end }}
             {{- if .Values.envVars }}
             {{- range $key, $val := .Values.envVars }}

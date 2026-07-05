@@ -64,17 +64,17 @@ spec:
             - name: DATABASE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
-                  key: username
+                  name: {{ include "litellm.dbCredentialsSecretName" . }}
+                  key: {{ .Values.db.secret.usernameKey | default "username" }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
-                  key: password
+                  name: {{ include "litellm.dbCredentialsSecretName" . }}
+                  key: {{ .Values.db.secret.passwordKey | default "password" }}
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
             - name: DATABASE_NAME
-              value: litellm
+              value: {{ .Values.postgresql.auth.database | default "litellm" }}
             {{- else if .Values.db.useExisting }}
             - name: DATABASE_USERNAME
               valueFrom:

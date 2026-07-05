@@ -284,6 +284,13 @@ db:
   #  instance.  See the "postgresql" top level key for additional configuration.
   deployStandalone: true
 
+  # Optional explicit secret name for DB credentials in standalone mode.
+  # Precedence used by templates:
+  # 1) db.dbCredentialsSecretName
+  # 2) postgresql.auth.existingSecret
+  # 3) <release fullname>-dbcredentials (chart-managed fallback secret)
+  # dbCredentialsSecretName: ""
+
 # Lifecycle hooks for the LiteLLM container
 #
 # Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
@@ -326,8 +333,16 @@ postgresql:
     postgres-password: NoTaGrEaTpAsSwOrD
 
     # A secret is created by this chart (litellm-helm) with the credentials that
-    #  the new Postgres instance should use.
+    #  the new Postgres instance should use when neither db.dbCredentialsSecretName
+    #  nor postgresql.auth.existingSecret is set.
     # existingSecret: ""
+    # If you set existingSecret for standalone mode, ensure LiteLLM DB env key names
+    # match that secret using db.secret.usernameKey / db.secret.passwordKey.
+    # Example with Bitnami postgres secret shape:
+    # db:
+    #   secret:
+    #     usernameKey: username
+    #     passwordKey: postgres-password
     # secretKeys:
     #   userPasswordKey: password
 
