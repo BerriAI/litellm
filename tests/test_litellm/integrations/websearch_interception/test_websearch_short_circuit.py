@@ -5,6 +5,7 @@ Tests the short-circuit path that detects web-search-only /v1/messages requests
 and executes the search directly without routing through the backend LLM.
 """
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -212,6 +213,95 @@ class TestTryShortCircuitSearch:
         assert "usage" in result
         assert "content" in result
 
+    @pytest.mark.asyncio
+    async def test_emits_native_blocks_for_post_conversion_tool(self):
+        """Regression: native blocks must be emitted even when the tool has
+        already been renamed to ``litellm_web_search`` by the pre-request hook.
+
+        In production, ``async_pre_request_hook`` converts the client's native
+        ``web_search_20250305`` tool to the LiteLLM standard ``litellm_web_search``
+        *before* ``try_short_circuit_search`` runs. The other tests in this class
+        pass the pre-conversion Anthropic shape, which no longer reaches this
+        function on the real request path — so they did not catch that the
+        short-circuit emitted a text-only response for every real request,
+        causing Claude Code to report "Did 0 searches" and discard the results.
+        """
+        from litellm.integrations.websearch_interception.tools import (
+            get_litellm_web_search_tool,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("search results text", None)
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "Search for X"}],
+                # The post-conversion shape the real pipeline delivers here.
+                tools=[get_litellm_web_search_tool()],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        block_types = [b["type"] for b in result["content"]]
+        assert "server_tool_use" in block_types
+        assert "web_search_tool_result" in block_types
+        assert "text" in block_types
+        # server_tool_use carries the executed query so the client pairs it.
+        stu = next(b for b in result["content"] if b["type"] == "server_tool_use")
+        assert stu["input"]["query"] == "Search for X"
+        # usage advertises the search so clients that read counts see 1.
+        assert (
+            result["usage"]["server_tool_use"]["web_search_requests"] == 1
+        )
+        mock_search.assert_called_once_with("Search for X")
+
+    @pytest.mark.asyncio
+    async def test_native_result_block_carries_sources(self):
+        """The web_search_tool_result block must carry the structured sources
+        (url/title) returned by the search provider, not just text."""
+        from litellm.llms.base_llm.search.transformation import (
+            SearchResponse,
+            SearchResult,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        structured = SearchResponse(
+            results=[
+                SearchResult(
+                    title="Kubernetes Releases",
+                    url="https://kubernetes.io/releases",
+                    snippet="Latest stable release information.",
+                )
+            ]
+        )
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("formatted text", structured)
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "k8s releases"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider="github_copilot",
+            )
+
+        wstr = next(
+            b for b in result["content"] if b["type"] == "web_search_tool_result"
+        )
+        assert len(wstr["content"]) == 1
+        assert wstr["content"][0]["url"] == "https://kubernetes.io/releases"
+        assert wstr["content"][0]["title"] == "Kubernetes Releases"
+        # tool_use_id must pair with the server_tool_use block.
+        stu = next(b for b in result["content"] if b["type"] == "server_tool_use")
+        assert wstr["tool_use_id"] == stu["id"]
+
 
 # ---------------------------------------------------------------------------
 # Query extraction tests
@@ -392,3 +482,98 @@ class TestShortCircuitEntryPoint:
         assert result is not None
         text_block = next(b for b in result["content"] if b["type"] == "text")
         assert text_block["text"] == "results"
+
+
+# ---------------------------------------------------------------------------
+# Streaming serialization of native blocks
+# ---------------------------------------------------------------------------
+
+
+class TestFakeStreamIteratorNativeBlocks:
+    """The FakeAnthropicMessagesStreamIterator must serialize the native
+    server_tool_use and web_search_tool_result blocks the short-circuit emits.
+
+    Claude Code issues its WebSearch sub-request with stream=True, so the
+    synthetic dict is rebuilt into SSE by this iterator. Before this fix the
+    iterator only knew text/thinking/tool_use block types and dropped the two
+    web-search block types (emitting a bare content_block_stop with no
+    matching content_block_start), so the client never saw the search.
+    """
+
+    def _collect_sse(self, response: dict):
+        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+
+        it = FakeAnthropicMessagesStreamIterator(response)
+        events = []
+        for raw in it.chunks:
+            text = raw.decode()
+            for line in text.splitlines():
+                if line.startswith("data:"):
+                    events.append(json.loads(line[len("data:"):].strip()))
+        return events
+
+    def test_serializes_server_tool_use_and_result_blocks(self):
+        response = {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-sonnet-4",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_abc",
+                    "name": "web_search",
+                    "input": {"query": "kubernetes latest"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_abc",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://kubernetes.io/releases",
+                            "title": "Releases",
+                            "page_age": None,
+                            "encrypted_content": "",
+                        }
+                    ],
+                },
+                {"type": "text", "text": "Kubernetes 1.34 is latest."},
+            ],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+        events = self._collect_sse(response)
+        starts = [e for e in events if e["type"] == "content_block_start"]
+        stops = [e for e in events if e["type"] == "content_block_stop"]
+
+        # Every emitted block gets a well-formed start/stop pair.
+        assert len(starts) == 3
+        assert len(stops) == 3
+        started_types = [e["content_block"]["type"] for e in starts]
+        assert started_types == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "text",
+        ]
+
+        # server_tool_use carries id/name and the query arrives via input_json_delta.
+        stu_start = starts[0]["content_block"]
+        assert stu_start["id"] == "srvtoolu_abc"
+        assert stu_start["name"] == "web_search"
+        deltas = [e for e in events if e["type"] == "content_block_delta"]
+        json_deltas = [
+            json.loads(e["delta"]["partial_json"])
+            for e in deltas
+            if e["delta"]["type"] == "input_json_delta"
+        ]
+        assert {"query": "kubernetes latest"} in json_deltas
+
+        # web_search_tool_result carries the tool_use_id and sources.
+        wstr_start = starts[1]["content_block"]
+        assert wstr_start["tool_use_id"] == "srvtoolu_abc"
+        assert wstr_start["content"][0]["url"] == "https://kubernetes.io/releases"
