@@ -212,9 +212,7 @@ def stash_resolved(
     setattr(logging_obj, _stash_attr(guardrail_name), (api_key, app_id))
 
 
-def recover_resolved(
-    logging_obj: Optional["LiteLLMLoggingObj"], guardrail_name: str
-) -> tuple[str, str] | None:
+def recover_resolved(logging_obj: Optional["LiteLLMLoggingObj"], guardrail_name: str) -> tuple[str, str] | None:
     """Look up the (api_key, app_id) this guardrail stashed earlier in this
     request, or ``None``.
 

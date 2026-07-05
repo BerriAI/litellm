@@ -77,9 +77,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         max_cached_clients: int | None = None,
         connection_pool_limit: int | None = None,
         allow_request_metadata_override: bool = False,
-        event_hook: (
-            Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None
-        ) = None,
+        event_hook: (Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None) = None,
         default_on: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -123,14 +121,10 @@ class WonderFenceGuardrail(CustomGuardrail):
             logger.setLevel(logging.DEBUG)
 
         self._client_cache: OrderedDict[str, _WonderFenceV2Client] = OrderedDict()
-        self._client_cache_maxsize = max_cached_clients or int(
-            os.environ.get("ALICE_MAX_CACHED_CLIENTS", "10")
-        )
+        self._client_cache_maxsize = max_cached_clients or int(os.environ.get("ALICE_MAX_CACHED_CLIENTS", "10"))
         env_pool = os.environ.get("ALICE_CONNECTION_POOL_LIMIT")
         self._connection_pool_limit: int | None = (
-            connection_pool_limit
-            if connection_pool_limit is not None
-            else (int(env_pool) if env_pool else None)
+            connection_pool_limit if connection_pool_limit is not None else (int(env_pool) if env_pool else None)
         )
 
         supported_event_hooks = [
@@ -187,16 +181,9 @@ class WonderFenceGuardrail(CustomGuardrail):
         # Legacy top-level functions[] only exist on the request body; the
         # translation layer does not surface them in inputs, so read request_data.
         function_def_paths, function_def_segments = (
-            function_definition_segments(request_data)
-            if input_type == "request"
-            else ([], [])
+            function_definition_segments(request_data) if input_type == "request" else ([], [])
         )
-        if (
-            not texts
-            and not tool_segments
-            and not tool_def_segments
-            and not function_def_segments
-        ):
+        if not texts and not tool_segments and not tool_def_segments and not function_def_segments:
             logger.debug(
                 "Alice WonderFence (apply_guardrail): nothing to scan for %s",
                 input_type,
@@ -215,16 +202,12 @@ class WonderFenceGuardrail(CustomGuardrail):
                 ),
             )
             client = await self._get_client(api_key)
-            context = build_analysis_context(
-                request_data, self.platform, self._AnalysisContext
-            )
+            context = build_analysis_context(request_data, self.platform, self._AnalysisContext)
 
             if input_type == "request":
 
                 async def evaluate(text: str) -> object:
-                    return await client.evaluate_prompt(
-                        app_id=app_id, prompt=text, context=context, custom_fields=None
-                    )
+                    return await client.evaluate_prompt(app_id=app_id, prompt=text, context=context, custom_fields=None)
 
             else:
 
@@ -270,9 +253,7 @@ class WonderFenceGuardrail(CustomGuardrail):
                 tool_indices=tool_indices,
                 tool_verdicts=verdicts[n_text : n_text + n_tool],
                 tool_def_paths=tool_def_paths,
-                tool_def_verdicts=verdicts[
-                    n_text + n_tool : n_text + n_tool + n_tool_def
-                ],
+                tool_def_verdicts=verdicts[n_text + n_tool : n_text + n_tool + n_tool_def],
                 function_def_paths=function_def_paths,
                 function_def_verdicts=verdicts[n_text + n_tool + n_tool_def :],
                 function_def_request_data=request_data,
@@ -326,9 +307,7 @@ class WonderFenceGuardrail(CustomGuardrail):
                 },
             ) from e
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=request_data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         return inputs
 
     @staticmethod

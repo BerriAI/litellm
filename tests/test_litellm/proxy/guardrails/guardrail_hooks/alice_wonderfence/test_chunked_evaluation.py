@@ -53,9 +53,7 @@ async def test_verdicts_align_one_to_one_with_segments():
     actions = {"a": "BLOCK", "b": "MASK", "c": ""}
 
     async def evaluate(text):
-        return _result(
-            actions[text], action_text="[M]" if actions[text] == "MASK" else None
-        )
+        return _result(actions[text], action_text="[M]" if actions[text] == "MASK" else None)
 
     verdicts = await evaluate_segments(["a", "b", "c"], evaluate)
     assert [v.action for v in verdicts] == ["BLOCK", "MASK", ""]
@@ -187,9 +185,7 @@ async def test_block_phrase_split_across_chunk_boundary_is_detected():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCK ME" in text else "")
 
-    verdicts = await evaluate_segments(
-        [segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6)
-    )
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6))
     assert verdicts[0].action == "BLOCK"
 
 
@@ -202,9 +198,7 @@ async def test_no_overlap_window_lets_boundary_phrase_evade():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCK ME" in text else "")
 
-    verdicts = await evaluate_segments(
-        [segment], evaluate, max_chars=12, windows=WindowConfig(overlap=0)
-    )
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=0))
     assert verdicts[0].action == ""
 
 
@@ -230,13 +224,9 @@ async def test_boundary_window_mask_is_surfaced_as_detect_not_dropped():
 
     async def evaluate(text):
         # Only the boundary window sees the full "SECRET HERE".
-        return (
-            _result("MASK", action_text="[X]") if "SECRET HERE" in text else _result("")
-        )
+        return _result("MASK", action_text="[X]") if "SECRET HERE" in text else _result("")
 
-    verdicts = await evaluate_segments(
-        [segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6)
-    )
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6))
     assert verdicts[0].action == "DETECT"
 
 
@@ -253,9 +243,7 @@ async def test_block_phrase_split_across_adjacent_text_segments_is_detected():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCKME" in text else "")
 
-    verdicts = await evaluate_segments(
-        ["BLOCK", "ME"], evaluate, windows=WindowConfig(text_segment_count=2)
-    )
+    verdicts = await evaluate_segments(["BLOCK", "ME"], evaluate, windows=WindowConfig(text_segment_count=2))
     assert verdicts[0].action == "BLOCK"
 
 
@@ -282,9 +270,7 @@ async def test_cross_segment_window_stays_within_text_segments():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCKME" in text else "")
 
-    verdicts = await evaluate_segments(
-        ["BLOCK", "ME"], evaluate, windows=WindowConfig(text_segment_count=1)
-    )
+    verdicts = await evaluate_segments(["BLOCK", "ME"], evaluate, windows=WindowConfig(text_segment_count=1))
     assert [v.action for v in verdicts] == ["", ""]
 
 
@@ -294,13 +280,9 @@ async def test_cross_segment_window_surfaces_mask_as_detect_without_masking():
     MASK on it surfaces as DETECT and never rewrites the segment text."""
 
     async def evaluate(text):
-        return (
-            _result("MASK", action_text="[X]") if "SECRETHERE" in text else _result("")
-        )
+        return _result("MASK", action_text="[X]") if "SECRETHERE" in text else _result("")
 
-    verdicts = await evaluate_segments(
-        ["SECRET", "HERE"], evaluate, windows=WindowConfig(text_segment_count=2)
-    )
+    verdicts = await evaluate_segments(["SECRET", "HERE"], evaluate, windows=WindowConfig(text_segment_count=2))
     assert verdicts[0].action == "DETECT"
     assert verdicts[0].masked_text is None
 

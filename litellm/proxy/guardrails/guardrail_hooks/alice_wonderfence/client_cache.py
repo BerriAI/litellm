@@ -37,9 +37,7 @@ def load_sdk() -> tuple[Any, Any]:
             AnalysisContext,
         )
     except ImportError as e:
-        raise ImportError(
-            "Alice WonderFence SDK not installed. Install with: pip install wonderfence-sdk"
-        ) from e
+        raise ImportError("Alice WonderFence SDK not installed. Install with: pip install wonderfence-sdk") from e
     return WonderFenceV2Client, AnalysisContext
 
 

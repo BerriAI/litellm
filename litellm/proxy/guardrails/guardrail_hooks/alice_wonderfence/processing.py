@@ -31,16 +31,10 @@ def build_analysis_context(
             if "/" in model_str:
                 provider, model_name = model_str.split("/", 1)
 
-    user_id = (
-        metadata.get("user_api_key_end_user_id")
-        or metadata.get("end_user_id")
-        or metadata.get("user_id")
-    )
+    user_id = metadata.get("user_api_key_end_user_id") or metadata.get("end_user_id") or metadata.get("user_id")
 
     session_id = (
-        request_data.get("litellm_session_id")
-        or metadata.get("litellm_session_id")
-        or metadata.get("session_id")
+        request_data.get("litellm_session_id") or metadata.get("litellm_session_id") or metadata.get("session_id")
     )
 
     return context_class(
@@ -74,9 +68,7 @@ def tool_call_arg_segments(
     return indices, segments
 
 
-def _description_strings(
-    root: object, root_prefix: list[Any]
-) -> list[tuple[list[Any], str]]:
+def _description_strings(root: object, root_prefix: list[Any]) -> list[tuple[list[Any], str]]:
     """Collect ``(path, text)`` for every non-blank ``description`` string under
     ``root`` (a tool's ``function`` dict), walking nested JSON-schema parameters
     so parameter descriptions are included, not just the top one.
@@ -153,9 +145,7 @@ def _set_by_path(root: Any, path: list[Any], value: object) -> None:
     obj[path[-1]] = value
 
 
-def _block_detail(
-    blocked: list[SegmentVerdict], guardrail_name: str, block_message: str
-) -> dict:
+def _block_detail(blocked: list[SegmentVerdict], guardrail_name: str, block_message: str) -> dict:
     detections: list = []
     correlation_ids: list[str] = []
     for v in blocked:
@@ -170,15 +160,11 @@ def _block_detail(
         "wonderfence_correlation_ids": correlation_ids,
     }
     if detections:
-        detail["detections"] = [
-            d.model_dump() if hasattr(d, "model_dump") else d for d in detections
-        ]
+        detail["detections"] = [d.model_dump() if hasattr(d, "model_dump") else d for d in detections]
     return detail
 
 
-def _masked_value(
-    verdict: SegmentVerdict, guardrail_name: str, label: str
-) -> str | None:
+def _masked_value(verdict: SegmentVerdict, guardrail_name: str, label: str) -> str | None:
     """Return the replacement string for a MASK verdict (logging as a side
     effect), or None for DETECT/NO_ACTION. The caller writes it to the slot the
     segment came from."""
@@ -241,9 +227,7 @@ def apply_verdicts(
         if v.action == "BLOCK"
     ]
     if blocked:
-        raise WonderFenceBlockedError(
-            _block_detail(blocked, guardrail_name, block_message)
-        )
+        raise WonderFenceBlockedError(_block_detail(blocked, guardrail_name, block_message))
 
     texts = inputs.get("texts") or []
     for idx, verdict in zip(indices, verdicts):

@@ -88,14 +88,10 @@ def _boundary_windows(chunks: list[str], overlap: int) -> list[str]:
     """
     if overlap <= 0:
         return []
-    return [
-        chunks[i][-overlap:] + chunks[i + 1][:overlap] for i in range(len(chunks) - 1)
-    ]
+    return [chunks[i][-overlap:] + chunks[i + 1][:overlap] for i in range(len(chunks) - 1)]
 
 
-def _cross_segment_windows(
-    segments: list[str], text_segment_count: int, overlap: int
-) -> list[tuple[int, str]]:
+def _cross_segment_windows(segments: list[str], text_segment_count: int, overlap: int) -> list[tuple[int, str]]:
     """Detection-only windows spanning each adjacent pair of prompt-text segments.
 
     The chat translation layer emits each message content part as its own
@@ -113,9 +109,7 @@ def _cross_segment_windows(
         return []
     n = min(text_segment_count, len(segments))
     return [
-        (i, segments[i][-overlap:] + segments[i + 1][:overlap])
-        for i in range(n - 1)
-        if segments[i] and segments[i + 1]
+        (i, segments[i][-overlap:] + segments[i + 1][:overlap]) for i in range(n - 1) if segments[i] and segments[i + 1]
     ]
 
 
@@ -205,15 +199,7 @@ async def evaluate_segments(
         elif kind == "bound":
             bound_res[si][idx] = res
     cross_res: list[list[Any]] = [
-        [
-            res
-            for (kind, si, _), res in zip(index, results)
-            if kind == "cross" and si == s
-        ]
-        for s in range(len(segments))
+        [res for (kind, si, _), res in zip(index, results) if kind == "cross" and si == s] for s in range(len(segments))
     ]
 
-    return [
-        _aggregate(seg_chunks[si], chunk_res[si], bound_res[si] + cross_res[si])
-        for si in range(len(segments))
-    ]
+    return [_aggregate(seg_chunks[si], chunk_res[si], bound_res[si] + cross_res[si]) for si in range(len(segments))]

@@ -67,9 +67,7 @@ def test_tool_definition_segments_extracts_description_and_param_descriptions():
                     "description": "TOP_DESC",
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            "city": {"type": "string", "description": "PARAM_DESC"}
-                        },
+                        "properties": {"city": {"type": "string", "description": "PARAM_DESC"}},
                     },
                 },
             }
@@ -117,9 +115,7 @@ def test_function_definition_segments_extracts_descriptions_and_paths():
                 "description": "TOP_DESC",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "city": {"type": "string", "description": "PARAM_DESC"}
-                    },
+                    "properties": {"city": {"type": "string", "description": "PARAM_DESC"}},
                 },
             },
             "not-a-dict",

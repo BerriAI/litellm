@@ -110,24 +110,14 @@ def test_resolve_app_id_missing_raises():
 
 def test_resolve_api_key_from_request_metadata_requires_override_flag():
     data = _data(metadata={"alice_wonderfence_api_key": "from-req"})
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=True
-        )
-        == "from-req"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=True) == "from-req"
 
 
 def test_resolve_api_key_request_metadata_ignored_when_override_disabled():
     """With override off, a caller-supplied api_key must not be honored;
     falls back to the configured default instead."""
     data = _data(metadata={"alice_wonderfence_api_key": "from-req"})
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=False
-        )
-        == "default"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=False) == "default"
 
 
 def test_resolve_api_key_key_beats_request_even_when_override_enabled():
@@ -139,12 +129,7 @@ def test_resolve_api_key_key_beats_request_even_when_override_enabled():
             "user_api_key_metadata": {"alice_wonderfence_api_key": "from-key"},
         }
     )
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=True
-        )
-        == "from-key"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=True) == "from-key"
 
 
 def test_resolve_api_key_from_key_metadata():
@@ -153,12 +138,7 @@ def test_resolve_api_key_from_key_metadata():
             "user_api_key_metadata": {"alice_wonderfence_api_key": "from-key"},
         }
     )
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=False
-        )
-        == "from-key"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=False) == "from-key"
 
 
 def test_resolve_api_key_from_team_metadata():
@@ -167,30 +147,18 @@ def test_resolve_api_key_from_team_metadata():
             "user_api_key_team_metadata": {"alice_wonderfence_api_key": "from-team"},
         }
     )
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=False
-        )
-        == "from-team"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=False) == "from-team"
 
 
 def test_resolve_api_key_falls_back_to_default():
     data = _data(metadata={})
-    assert (
-        resolve_api_key(
-            data, default_api_key="default-key", allow_request_metadata_override=False
-        )
-        == "default-key"
-    )
+    assert resolve_api_key(data, default_api_key="default-key", allow_request_metadata_override=False) == "default-key"
 
 
 def test_resolve_api_key_missing_everywhere_raises():
     data = _data(metadata={})
     with pytest.raises(WonderFenceMissingSecrets):
-        resolve_api_key(
-            data, default_api_key=None, allow_request_metadata_override=False
-        )
+        resolve_api_key(data, default_api_key=None, allow_request_metadata_override=False)
 
 
 # ----------------------------- metadata fallback -----------------------------
@@ -202,13 +170,9 @@ def test_resolve_reads_litellm_metadata_when_metadata_absent():
     needing the request-override flag."""
     data = {
         "model": "gpt-4",
-        "litellm_metadata": {
-            "user_api_key_metadata": {"alice_wonderfence_app_id": "from-litellm-md"}
-        },
+        "litellm_metadata": {"user_api_key_metadata": {"alice_wonderfence_app_id": "from-litellm-md"}},
     }
-    assert (
-        resolve_app_id(data, allow_request_metadata_override=False) == "from-litellm-md"
-    )
+    assert resolve_app_id(data, allow_request_metadata_override=False) == "from-litellm-md"
 
 
 def test_get_metadata_merges_with_litellm_metadata_winning():
@@ -241,13 +205,9 @@ def test_get_metadata_ignores_non_dict_caller_metadata():
     (carrying the admin pins) is preserved."""
     data = {
         "metadata": "not-a-dict",
-        "litellm_metadata": {
-            "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}
-        },
+        "litellm_metadata": {"user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}},
     }
-    assert get_metadata(data) == {
-        "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}
-    }
+    assert get_metadata(data) == {"user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}}
 
 
 def test_non_dict_caller_metadata_does_not_bypass_resolution():
@@ -266,12 +226,7 @@ def test_non_dict_caller_metadata_does_not_bypass_resolution():
         },
     }
     assert resolve_app_id(data, allow_request_metadata_override=True) == "admin-pinned"
-    assert (
-        resolve_api_key(
-            data, default_api_key=None, allow_request_metadata_override=True
-        )
-        == "admin-key"
-    )
+    assert resolve_api_key(data, default_api_key=None, allow_request_metadata_override=True) == "admin-key"
 
 
 def test_responses_route_admin_pin_beats_caller_metadata():
@@ -282,9 +237,7 @@ def test_responses_route_admin_pin_beats_caller_metadata():
     data = {
         "model": "gpt-4",
         "metadata": {"alice_wonderfence_app_id": "caller-override"},
-        "litellm_metadata": {
-            "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}
-        },
+        "litellm_metadata": {"user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}},
     }
     assert resolve_app_id(data, allow_request_metadata_override=True) == "admin-pinned"
 
@@ -295,16 +248,9 @@ def test_responses_route_admin_pin_beats_caller_metadata_api_key():
     data = {
         "model": "gpt-4",
         "metadata": {"alice_wonderfence_api_key": "caller-override"},
-        "litellm_metadata": {
-            "user_api_key_metadata": {"alice_wonderfence_api_key": "admin-pinned"}
-        },
+        "litellm_metadata": {"user_api_key_metadata": {"alice_wonderfence_api_key": "admin-pinned"}},
     }
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=True
-        )
-        == "admin-pinned"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=True) == "admin-pinned"
 
 
 # --------------- stash storage: secret must not leak to logged payload ---------------
@@ -357,12 +303,7 @@ def test_resolve_api_key_ignores_non_string_request_override():
     """A truthy non-string request override must not be returned (it would reach
     the SDK and raise, which fail_open could swallow); fall back to default."""
     data = _data(metadata={"alice_wonderfence_api_key": ["not", "a", "string"]})
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=True
-        )
-        == "default"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=True) == "default"
 
 
 def test_resolve_app_id_non_string_request_override_raises():
@@ -373,12 +314,7 @@ def test_resolve_app_id_non_string_request_override_raises():
 
 def test_resolve_api_key_ignores_blank_string_override():
     data = _data(metadata={"alice_wonderfence_api_key": "   "})
-    assert (
-        resolve_api_key(
-            data, default_api_key="default", allow_request_metadata_override=True
-        )
-        == "default"
-    )
+    assert resolve_api_key(data, default_api_key="default", allow_request_metadata_override=True) == "default"
 
 
 def test_resolve_app_id_non_string_key_metadata_falls_through():

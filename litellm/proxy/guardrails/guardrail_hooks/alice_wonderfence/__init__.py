@@ -14,9 +14,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> WonderFenceGuardrail:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> WonderFenceGuardrail:
     import litellm
 
     guardrail_name = guardrail.get("guardrail_name")
@@ -34,9 +32,7 @@ def initialize_guardrail(
         "max_cached_clients": litellm_params.max_cached_clients,
         "connection_pool_limit": litellm_params.connection_pool_limit,
         "event_hook": litellm_params.mode,
-        "default_on": (
-            litellm_params.default_on if litellm_params.default_on is not None else True
-        ),
+        "default_on": (litellm_params.default_on if litellm_params.default_on is not None else True),
     }
     if litellm_params.api_timeout is not None:
         init_kwargs["api_timeout"] = litellm_params.api_timeout
@@ -47,9 +43,7 @@ def initialize_guardrail(
     if litellm_params.debug is not None:
         init_kwargs["debug"] = litellm_params.debug
     if litellm_params.allow_request_metadata_override is not None:
-        init_kwargs["allow_request_metadata_override"] = (
-            litellm_params.allow_request_metadata_override
-        )
+        init_kwargs["allow_request_metadata_override"] = litellm_params.allow_request_metadata_override
 
     wonderfence_guardrail = WonderFenceGuardrail(**init_kwargs)
 

@@ -7,9 +7,7 @@ from fastapi import HTTPException
 
 
 @pytest.mark.asyncio
-async def test_post_call_recovers_app_id_via_logging_obj_stash(
-    make_guardrail, make_request_data, make_logging_obj
-):
+async def test_post_call_recovers_app_id_via_logging_obj_stash(make_guardrail, make_request_data, make_logging_obj):
     """Reproduces the framework gap: request body metadata is dropped before
     post_call. The logging_obj stash from the prior ``input_type="request"``
     call must be used to resolve app_id."""
@@ -32,9 +30,7 @@ async def test_post_call_recovers_app_id_via_logging_obj_stash(
     # metadata — this is where the stash happens.
     await guardrail.apply_guardrail(
         inputs={"texts": ["hello"]},
-        request_data=make_request_data(
-            metadata={"alice_wonderfence_app_id": "tenant-X"}
-        ),
+        request_data=make_request_data(metadata={"alice_wonderfence_app_id": "tenant-X"}),
         input_type="request",
         logging_obj=logging_obj,
     )
@@ -54,9 +50,7 @@ async def test_post_call_recovers_app_id_via_logging_obj_stash(
 
 
 @pytest.mark.asyncio
-async def test_post_call_prefers_request_data_over_stash(
-    make_guardrail, make_request_data, make_logging_obj
-):
+async def test_post_call_prefers_request_data_over_stash(make_guardrail, make_request_data, make_logging_obj):
     """If post_call's request_data still resolves (e.g. app_id from key/team
     metadata), use it — don't fall back to the stash."""
     guardrail, client = make_guardrail(allow_request_metadata_override=True)
@@ -77,9 +71,7 @@ async def test_post_call_prefers_request_data_over_stash(
     # Stash a different app_id during the request phase.
     await guardrail.apply_guardrail(
         inputs={"texts": ["hi"]},
-        request_data=make_request_data(
-            metadata={"alice_wonderfence_app_id": "stashed-app"}
-        ),
+        request_data=make_request_data(metadata={"alice_wonderfence_app_id": "stashed-app"}),
         input_type="request",
         logging_obj=logging_obj,
     )
@@ -90,9 +82,7 @@ async def test_post_call_prefers_request_data_over_stash(
         inputs={"texts": ["resp"]},
         request_data={
             "model": "gpt-4",
-            "metadata": {
-                "user_api_key_metadata": {"alice_wonderfence_app_id": "key-app"}
-            },
+            "metadata": {"user_api_key_metadata": {"alice_wonderfence_app_id": "key-app"}},
         },
         input_type="response",
         logging_obj=logging_obj,
@@ -122,9 +112,7 @@ async def test_post_call_without_prior_stash_raises(make_guardrail, make_logging
 
 
 @pytest.mark.asyncio
-async def test_post_call_does_not_borrow_sibling_stash(
-    make_guardrail, make_request_data, make_logging_obj
-):
+async def test_post_call_does_not_borrow_sibling_stash(make_guardrail, make_request_data, make_logging_obj):
     """A stricter instance must NOT inherit a sibling's stashed credentials.
 
     Exploit being closed: a permissive writer (allow_request_metadata_override
@@ -155,9 +143,7 @@ async def test_post_call_does_not_borrow_sibling_stash(
     # Writer stashes caller-supplied request-body app_id (override allowed).
     await g_writer.apply_guardrail(
         inputs={"texts": ["hi"]},
-        request_data=make_request_data(
-            metadata={"alice_wonderfence_app_id": "caller-supplied-app"}
-        ),
+        request_data=make_request_data(metadata={"alice_wonderfence_app_id": "caller-supplied-app"}),
         input_type="request",
         logging_obj=logging_obj,
     )
@@ -177,9 +163,7 @@ async def test_post_call_does_not_borrow_sibling_stash(
 
 
 @pytest.mark.asyncio
-async def test_stash_keyed_per_guardrail_name(
-    make_guardrail, make_request_data, make_logging_obj
-):
+async def test_stash_keyed_per_guardrail_name(make_guardrail, make_request_data, make_logging_obj):
     """Two alice_wonderfence instances on the same logging_obj must not
     overwrite each other's stash — they're keyed by guardrail_name."""
     g1, c1 = make_guardrail(

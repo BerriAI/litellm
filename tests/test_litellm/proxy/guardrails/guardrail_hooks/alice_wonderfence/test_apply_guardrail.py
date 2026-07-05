@@ -29,16 +29,12 @@ async def test_apply_guardrail_block_action(guardrail_and_client, make_request_d
     assert exc.value.status_code == 400
     assert exc.value.detail["action"] == "BLOCK"
     assert exc.value.detail["wonderfence_correlation_id"] == "corr-1"
-    assert exc.value.detail["error"] == (
-        "Content violates our policies and has been blocked"
-    )
+    assert exc.value.detail["error"] == ("Content violates our policies and has been blocked")
     assert exc.value.detail["detections"][0]["policy_name"] == "x"
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_block_uses_custom_block_message(
-    make_guardrail, make_request_data
-):
+async def test_apply_guardrail_block_uses_custom_block_message(make_guardrail, make_request_data):
     guardrail, client = make_guardrail(block_message="custom blocked text")
     guardrail._client_cache["default-api-key"] = client
     result_obj = Mock()
@@ -79,9 +75,7 @@ async def test_block_not_bypassed_by_fail_open(make_guardrail, make_request_data
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_replaces_scanned_text(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_mask_replaces_scanned_text(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "MASK"
@@ -99,9 +93,7 @@ async def test_apply_guardrail_mask_replaces_scanned_text(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_targets_only_the_flagged_slot(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_mask_targets_only_the_flagged_slot(guardrail_and_client, make_request_data):
     """MASK rewrites the ``texts`` entry of the flagged segment in place; the
     other scanned entries survive untouched. Confirms positional 1:1 mapping."""
     guardrail, client = guardrail_and_client
@@ -125,9 +117,7 @@ async def test_apply_guardrail_mask_targets_only_the_flagged_slot(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_scans_non_user_role_segments(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_scans_non_user_role_segments(guardrail_and_client, make_request_data):
     """Bypass regression: blocked content in a system/assistant/tool message
     must still BLOCK. The translation layer already strips system/tool when the
     guardrail is configured to skip them, so whatever remains in ``texts`` is
@@ -169,9 +159,7 @@ def _tool_call(arguments, name="send_email"):
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_tool_call_arguments(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_tool_call_arguments(guardrail_and_client, make_request_data):
     """Bypass regression: blocked content in tool_calls[].function.arguments must
     BLOCK. tool_calls reach the model but were never scanned (texts-only)."""
     guardrail, client = guardrail_and_client
@@ -200,9 +188,7 @@ async def test_apply_guardrail_blocks_on_tool_call_arguments(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_tool_call_arguments_in_place(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_masks_tool_call_arguments_in_place(guardrail_and_client, make_request_data):
     """MASK on a tool-call argument string rewrites
     inputs['tool_calls'][i]['function']['arguments']."""
     guardrail, client = guardrail_and_client
@@ -231,9 +217,7 @@ async def test_apply_guardrail_masks_tool_call_arguments_in_place(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_detect_on_tool_call_args_passes_through(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_detect_on_tool_call_args_passes_through(guardrail_and_client, make_request_data):
     """A DETECT verdict on a tool-call argument logs but does not block or mutate
     the arguments (symmetric with the text-side DETECT behavior)."""
     guardrail, client = guardrail_and_client
@@ -259,9 +243,7 @@ async def test_apply_guardrail_detect_on_tool_call_args_passes_through(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_scans_tool_calls_when_no_texts(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_scans_tool_calls_when_no_texts(guardrail_and_client, make_request_data):
     """An assistant message can carry tool_calls with no text content, so texts
     is empty; the hook must still scan the tool-call arguments (the old
     empty-texts early return skipped them)."""
@@ -286,9 +268,7 @@ async def test_apply_guardrail_scans_tool_calls_when_no_texts(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_response_tool_call_arguments(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_response_tool_call_arguments(guardrail_and_client, make_request_data):
     """Model-generated tool-call arguments on the response side are scanned too."""
     guardrail, client = guardrail_and_client
 
@@ -311,9 +291,7 @@ async def test_apply_guardrail_blocks_on_response_tool_call_arguments(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_replaces_scanned_text_response(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_mask_replaces_scanned_text_response(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "MASK"
@@ -331,9 +309,7 @@ async def test_apply_guardrail_mask_replaces_scanned_text_response(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_fallback_when_action_text_is_none(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_mask_fallback_when_action_text_is_none(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "MASK"
@@ -354,9 +330,7 @@ async def test_apply_guardrail_mask_fallback_when_action_text_is_none(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_no_action_passthrough(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_no_action_passthrough(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "NO_ACTION"
@@ -374,9 +348,7 @@ async def test_apply_guardrail_no_action_passthrough(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_detect_action_passes_through(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_detect_action_passes_through(guardrail_and_client, make_request_data):
     """DETECT action logs a warning but does not block or mutate inputs."""
     guardrail, client = guardrail_and_client
     result_obj = Mock()
@@ -398,9 +370,7 @@ async def test_apply_guardrail_detect_action_passes_through(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_passes_app_id_per_call(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_passes_app_id_per_call(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "NO_ACTION"
@@ -410,9 +380,7 @@ async def test_apply_guardrail_passes_app_id_per_call(
 
     await guardrail.apply_guardrail(
         inputs={"texts": ["hi"]},
-        request_data=make_request_data(
-            metadata={"user_api_key_metadata": {"alice_wonderfence_app_id": "tenant-A"}}
-        ),
+        request_data=make_request_data(metadata={"user_api_key_metadata": {"alice_wonderfence_app_id": "tenant-A"}}),
         input_type="request",
     )
     kwargs = client.evaluate_prompt.call_args.kwargs
@@ -422,9 +390,7 @@ async def test_apply_guardrail_passes_app_id_per_call(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_response_path_passes_app_id(
-    make_guardrail, make_request_data
-):
+async def test_apply_guardrail_response_path_passes_app_id(make_guardrail, make_request_data):
     guardrail, client = make_guardrail()
     guardrail._client_cache["default-api-key"] = client
     result_obj = Mock()
@@ -435,9 +401,7 @@ async def test_apply_guardrail_response_path_passes_app_id(
 
     await guardrail.apply_guardrail(
         inputs={"texts": ["resp"]},
-        request_data=make_request_data(
-            metadata={"user_api_key_metadata": {"alice_wonderfence_app_id": "tenant-B"}}
-        ),
+        request_data=make_request_data(metadata={"user_api_key_metadata": {"alice_wonderfence_app_id": "tenant-B"}}),
         input_type="response",
     )
     kwargs = client.evaluate_response.call_args.kwargs
@@ -470,9 +434,7 @@ async def test_apply_guardrail_evaluates_every_text_without_structured_messages(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_earlier_user_turn(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_earlier_user_turn(guardrail_and_client, make_request_data):
     """Bypass regression: disallowed content in an earlier user turn followed by
     a benign final turn must still BLOCK. The old last-only path only saw the
     benign final message and let the request through."""
@@ -539,9 +501,7 @@ async def test_apply_guardrail_blocks_when_oversized_message_trips_in_late_chunk
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_no_text_short_circuits(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_no_text_short_circuits(guardrail_and_client, make_request_data):
     """Empty inputs must skip the SDK call and return inputs unchanged."""
     guardrail, client = guardrail_and_client
     out = await guardrail.apply_guardrail(
@@ -558,9 +518,7 @@ async def test_apply_guardrail_no_text_short_circuits(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_missing_app_id_fail_closed_returns_500(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_missing_app_id_fail_closed_returns_500(guardrail_and_client, make_request_data):
     """Missing app_id follows the fail_open pattern: fail_open=False → HTTP 500."""
     guardrail, _ = guardrail_and_client
     with pytest.raises(HTTPException) as exc:
@@ -575,9 +533,7 @@ async def test_apply_guardrail_missing_app_id_fail_closed_returns_500(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_missing_api_key_fail_closed_returns_500(
-    monkeypatch, make_guardrail, make_request_data
-):
+async def test_apply_guardrail_missing_api_key_fail_closed_returns_500(monkeypatch, make_guardrail, make_request_data):
     """Missing api_key follows the fail_open pattern: fail_open=False → HTTP 500."""
     monkeypatch.delenv("ALICE_API_KEY", raising=False)
     guardrail, _ = make_guardrail(api_key=None)
@@ -593,9 +549,7 @@ async def test_apply_guardrail_missing_api_key_fail_closed_returns_500(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_missing_app_id_fail_open_returns_500(
-    make_guardrail, make_request_data
-):
+async def test_apply_guardrail_missing_app_id_fail_open_returns_500(make_guardrail, make_request_data):
     """Missing app_id is a config error: never fail-open, even with fail_open=True."""
     guardrail, _ = make_guardrail(fail_open=True)
     with pytest.raises(HTTPException) as exc:
@@ -609,9 +563,7 @@ async def test_apply_guardrail_missing_app_id_fail_open_returns_500(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_missing_api_key_fail_open_returns_500(
-    monkeypatch, make_guardrail, make_request_data
-):
+async def test_apply_guardrail_missing_api_key_fail_open_returns_500(monkeypatch, make_guardrail, make_request_data):
     """Missing api_key is a config error: never fail-open, even with fail_open=True."""
     monkeypatch.delenv("ALICE_API_KEY", raising=False)
     guardrail, _ = make_guardrail(api_key=None, fail_open=True)
@@ -626,9 +578,7 @@ async def test_apply_guardrail_missing_api_key_fail_open_returns_500(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_fail_open_swallows_transport_error(
-    make_guardrail, make_request_data
-):
+async def test_apply_guardrail_fail_open_swallows_transport_error(make_guardrail, make_request_data):
     guardrail, client = make_guardrail(fail_open=True)
     guardrail._client_cache["default-api-key"] = client
     client.evaluate_prompt.side_effect = RuntimeError("network down")
@@ -643,9 +593,7 @@ async def test_apply_guardrail_fail_open_swallows_transport_error(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_fail_closed_returns_500(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_fail_closed_returns_500(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
     client.evaluate_prompt.side_effect = RuntimeError("network down")
 
@@ -685,9 +633,7 @@ def test_build_analysis_context_falls_back_to_slash_split(monkeypatch, make_guar
         raise ValueError("unknown provider")
 
     monkeypatch.setattr(litellm, "get_llm_provider", boom)
-    build_analysis_context(
-        {"model": "myorg/custom-llm"}, guardrail.platform, guardrail._AnalysisContext
-    )
+    build_analysis_context({"model": "myorg/custom-llm"}, guardrail.platform, guardrail._AnalysisContext)
 
     AnalysisContext = sys.modules["wonderfence_sdk.models"].AnalysisContext
     kwargs = AnalysisContext.call_args.kwargs
@@ -700,17 +646,13 @@ async def test_malformed_override_does_not_fail_open(make_guardrail, make_reques
     """A non-string request-metadata app_id override must not slip through under
     fail_open: it resolves to a config error (500), not a swallowed exception
     that skips scanning. The SDK is never called with a malformed value."""
-    guardrail, client = make_guardrail(
-        fail_open=True, allow_request_metadata_override=True
-    )
+    guardrail, client = make_guardrail(fail_open=True, allow_request_metadata_override=True)
     guardrail._client_cache["default-api-key"] = client
 
     with pytest.raises(HTTPException) as exc:
         await guardrail.apply_guardrail(
             inputs={"texts": ["hi"]},
-            request_data=make_request_data(
-                metadata={"alice_wonderfence_app_id": ["not", "a", "string"]}
-            ),
+            request_data=make_request_data(metadata={"alice_wonderfence_app_id": ["not", "a", "string"]}),
             input_type="request",
         )
     assert exc.value.status_code == 500
@@ -733,9 +675,7 @@ def _tool_def(description="a helpful tool", param_desc=None):
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_tool_definition_description(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_tool_definition_description(guardrail_and_client, make_request_data):
     """Blocked content in tools[].function.description must BLOCK; tool defs are
     forwarded to the model but were previously unscanned."""
     guardrail, client = guardrail_and_client
@@ -754,16 +694,12 @@ async def test_apply_guardrail_blocks_on_tool_definition_description(
         "tools": [_tool_def(description="DISALLOWED instructions here")],
     }
     with pytest.raises(HTTPException) as exc:
-        await guardrail.apply_guardrail(
-            inputs=inputs, request_data=make_request_data(), input_type="request"
-        )
+        await guardrail.apply_guardrail(inputs=inputs, request_data=make_request_data(), input_type="request")
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_tool_parameter_description(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_tool_parameter_description(guardrail_and_client, make_request_data):
     """Nested parameter descriptions are scanned too, not just the top-level one."""
     guardrail, client = guardrail_and_client
 
@@ -781,16 +717,12 @@ async def test_apply_guardrail_blocks_on_tool_parameter_description(
         "tools": [_tool_def(description="benign", param_desc="DISALLOWED payload")],
     }
     with pytest.raises(HTTPException) as exc:
-        await guardrail.apply_guardrail(
-            inputs=inputs, request_data=make_request_data(), input_type="request"
-        )
+        await guardrail.apply_guardrail(inputs=inputs, request_data=make_request_data(), input_type="request")
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_tool_definition_description_in_place(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_masks_tool_definition_description_in_place(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -807,16 +739,12 @@ async def test_apply_guardrail_masks_tool_definition_description_in_place(
         "texts": ["hi"],
         "tools": [_tool_def(description="contains secret stuff")],
     }
-    out = await guardrail.apply_guardrail(
-        inputs=inputs, request_data=make_request_data(), input_type="request"
-    )
+    out = await guardrail.apply_guardrail(inputs=inputs, request_data=make_request_data(), input_type="request")
     assert out["tools"][0]["function"]["description"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_scans_tools_when_no_texts_or_tool_calls(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_scans_tools_when_no_texts_or_tool_calls(guardrail_and_client, make_request_data):
     """A request carrying only tool definitions must still be scanned."""
     guardrail, client = guardrail_and_client
 
@@ -853,9 +781,7 @@ def _legacy_function(description="a function", param_desc=None):
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_legacy_function_description(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_legacy_function_description(guardrail_and_client, make_request_data):
     """Blocked content in the deprecated functions[].description (read from
     request_data, not inputs) must BLOCK."""
     guardrail, client = guardrail_and_client
@@ -872,18 +798,14 @@ async def test_apply_guardrail_blocks_on_legacy_function_description(
     with pytest.raises(HTTPException) as exc:
         await guardrail.apply_guardrail(
             inputs={"texts": ["hi"]},
-            request_data=make_request_data(
-                functions=[_legacy_function(description="DISALLOWED instructions")]
-            ),
+            request_data=make_request_data(functions=[_legacy_function(description="DISALLOWED instructions")]),
             input_type="request",
         )
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_on_legacy_function_parameter_description(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_blocks_on_legacy_function_parameter_description(guardrail_and_client, make_request_data):
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -898,18 +820,14 @@ async def test_apply_guardrail_blocks_on_legacy_function_parameter_description(
     with pytest.raises(HTTPException) as exc:
         await guardrail.apply_guardrail(
             inputs={"texts": ["hi"]},
-            request_data=make_request_data(
-                functions=[_legacy_function(description="ok", param_desc="DISALLOWED")]
-            ),
+            request_data=make_request_data(functions=[_legacy_function(description="ok", param_desc="DISALLOWED")]),
             input_type="request",
         )
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_scans_legacy_functions_when_no_other_content(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_scans_legacy_functions_when_no_other_content(guardrail_and_client, make_request_data):
     """A request whose only scannable content is functions[] is still scanned."""
     guardrail, client = guardrail_and_client
 
@@ -925,18 +843,14 @@ async def test_apply_guardrail_scans_legacy_functions_when_no_other_content(
     with pytest.raises(HTTPException) as exc:
         await guardrail.apply_guardrail(
             inputs={"texts": []},
-            request_data=make_request_data(
-                functions=[_legacy_function(description="DISALLOWED")]
-            ),
+            request_data=make_request_data(functions=[_legacy_function(description="DISALLOWED")]),
             input_type="request",
         )
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_legacy_function_detect_does_not_mutate(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_legacy_function_detect_does_not_mutate(guardrail_and_client, make_request_data):
     """A DETECT verdict on a function definition logs but does not rewrite it."""
     guardrail, client = guardrail_and_client
 
@@ -950,9 +864,7 @@ async def test_apply_guardrail_legacy_function_detect_does_not_mutate(
 
     client.evaluate_prompt.side_effect = evaluate
 
-    request_data = make_request_data(
-        functions=[_legacy_function(description="watch this")]
-    )
+    request_data = make_request_data(functions=[_legacy_function(description="watch this")])
     out = await guardrail.apply_guardrail(
         inputs={"texts": ["hi"]},
         request_data=request_data,
@@ -963,9 +875,7 @@ async def test_apply_guardrail_legacy_function_detect_does_not_mutate(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_legacy_function_description_in_place(
-    guardrail_and_client, make_request_data
-):
+async def test_apply_guardrail_masks_legacy_function_description_in_place(guardrail_and_client, make_request_data):
     """A MASK verdict on a functions[] description must be written back into
     request_data['functions'], not left as the original unredacted text."""
     guardrail, client = guardrail_and_client
@@ -980,9 +890,7 @@ async def test_apply_guardrail_masks_legacy_function_description_in_place(
 
     client.evaluate_prompt.side_effect = evaluate
 
-    request_data = make_request_data(
-        functions=[_legacy_function(description="contains secret stuff")]
-    )
+    request_data = make_request_data(functions=[_legacy_function(description="contains secret stuff")])
     await guardrail.apply_guardrail(
         inputs={"texts": ["hi"]},
         request_data=request_data,
