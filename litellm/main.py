@@ -8374,7 +8374,11 @@ def stream_chunk_builder(
         if len(chunks) == 0:
             return None
         ## Route to the text completion logic
-        first_chunk_with_choices = next((c for c in chunks if c["choices"]), None)
+        # Use .get() to guard against chunks that lack a "choices" key
+        # (e.g. ResponseCompletedEvent objects from the Responses API — see #32051)
+        first_chunk_with_choices = next(
+            (c for c in chunks if c.get("choices")), None
+        )
         if first_chunk_with_choices is not None and isinstance(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
