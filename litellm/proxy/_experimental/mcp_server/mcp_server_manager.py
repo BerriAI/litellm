@@ -50,13 +50,10 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
-from litellm.proxy._experimental.mcp_server.sampling_handler import (
-    MCP_SAMPLING_AVAILABLE,
-)
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -80,6 +77,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
     ServerSpec,
     TokenExchangeConfig,
+)
+from litellm.proxy._experimental.mcp_server.sampling_handler import (
+    MCP_SAMPLING_AVAILABLE,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -125,10 +125,8 @@ from litellm.types.utils import CallTypes
 
 try:
     from mcp.shared.tool_name_validation import (
-        validate_tool_name,  # pyright: ignore[reportAssignmentType]
-    )
-    from mcp.shared.tool_name_validation import (
         SEP_986_URL,
+        validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
 except ImportError:
     from pydantic import BaseModel
@@ -448,10 +446,10 @@ def _create_sampling_callback(user_api_key_auth: Optional[Any] = None):
         return None
 
     async def _sampling_callback(context, params):
+        import litellm
         from litellm.proxy._experimental.mcp_server.sampling_handler import (
             handle_sampling_create_message,
         )
-        import litellm
         from litellm.proxy._experimental.mcp_server.server import (
             get_active_auth_context,
         )
@@ -871,13 +869,11 @@ class MCPServerManager:
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             build_input_schema,
             create_tool_function,
+            load_openapi_spec_async,
+            resolve_operation_params,
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             get_base_url as get_openapi_base_url,
-        )
-        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-            load_openapi_spec_async,
-            resolve_operation_params,
         )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,

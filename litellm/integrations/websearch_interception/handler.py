@@ -27,13 +27,13 @@ from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.types.integrations.websearch_interception import (
-    WebSearchInterceptionConfig,
-)
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+)
+from litellm.types.integrations.websearch_interception import (
+    WebSearchInterceptionConfig,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders

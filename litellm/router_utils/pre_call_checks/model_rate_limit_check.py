@@ -20,6 +20,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
@@ -28,7 +29,6 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
-    ITPM_RESERVED_KEY,
 )
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
