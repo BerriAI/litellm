@@ -33,6 +33,7 @@ const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
 // canonical form regardless of interpreter, so the generated file is stable.
 const dumpSpec = [
   "import inspect, json, sys",
+  "from collections import deque",
   "from litellm.proxy.proxy_server import app",
   "from fastapi.routing import APIRoute",
   "q = deque(app.routes)",

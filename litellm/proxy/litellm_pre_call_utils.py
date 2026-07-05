@@ -436,6 +436,56 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     )
 
 
+def _normalize_region_subdivision(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip().upper().replace("_", "-")
+    if "-" in normalized:
+        normalized = normalized.rsplit("-", 1)[-1]
+    if len(normalized) == 4 and normalized.startswith("US"):
+        normalized = normalized[2:]
+    if len(normalized) == 2 and normalized.isalpha():
+        return normalized
+    return None
+
+
+def _canonicalize_geo_route(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    normalized = _LEGACY_GEO_ALIAS.get(normalized, normalized)
+    if normalized in _KNOWN_GEO_BUCKETS:
+        return normalized
+    return None
+
+
+def get_geo_bucket_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
+    if not headers:
+        return None
+
+    normalized = {
+        key.lower(): value.strip()
+        for key, value in headers.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+    explicit_route = _canonicalize_geo_route(normalized.get("x-geo-route"))
+    if explicit_route:
+        return explicit_route
+
+    country = normalized.get("cf-ipcountry", "").upper()
+    if country == "CA":
+        return "ca"
+    if country == "US":
+        region = _normalize_region_subdivision(normalized.get("x-geo-state"))
+        if region in _US_SOUTH_REGION_CODES:
+            return "us-south"
+        return "us-east"
+    if country:
+        return "default"
+    return None
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
     extensions and the Agent SDK run through the same CLI and share that prefix."""

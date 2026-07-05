@@ -200,9 +200,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _strip_prompt_cache_policy_headers(non_default_params: dict) -> None:
         """Remove gateway-only prompt-cache policy headers before provider calls."""
-        for (
-            header_container
-        ) in AnthropicCacheControlHook._iter_prompt_cache_policy_header_containers(
+        for header_container in AnthropicCacheControlHook._iter_prompt_cache_policy_header_containers(
             non_default_params
         ):
             for key in list(header_container.keys()):
@@ -239,9 +237,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         policy = AnthropicCacheControlHook._normalise_prompt_cache_policy(raw_policy)
 
         if policy == "":
-            policy = AnthropicCacheControlHook._normalise_prompt_cache_policy(
-                os.getenv(ANTHROPIC_PROMPT_CACHE_TTL_ENV)
-            )
+            policy = AnthropicCacheControlHook._normalise_prompt_cache_policy(os.getenv(ANTHROPIC_PROMPT_CACHE_TTL_ENV))
 
         if policy == "":
             return ChatCompletionCachedContent(type="ephemeral")
