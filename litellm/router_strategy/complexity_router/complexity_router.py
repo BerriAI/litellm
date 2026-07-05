@@ -4,7 +4,9 @@ Complexity-based Auto Router
 A rule-based routing strategy that uses weighted scoring across multiple dimensions
 to classify requests by complexity and route them to appropriate models.
 
-No external API calls - all scoring is local and <1ms.
+By default, scoring is local (regex/keyword-based) with no external API calls and <1ms
+latency. Optionally, classifier_type="llm" routes classification through a configured
+model instead, trading that latency/cost guarantee for potentially better accuracy.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
@@ -66,10 +68,10 @@ class DimensionScore:
 
 class ComplexityRouter(CustomLogger):
     """
-    Rule-based complexity router that classifies requests and routes to appropriate models.
+    Complexity router that classifies requests and routes to appropriate models.
 
-    Handles requests in <1ms with zero external API calls by using weighted scoring
-    across multiple dimensions:
+    By default, handles requests in <1ms with zero external API calls, using weighted
+    scoring across multiple dimensions:
     - Token count (short=simple, long=complex)
     - Code presence (code keywords → complex)
     - Reasoning markers ("step by step", "think through" → reasoning tier)
@@ -308,7 +310,10 @@ class ComplexityRouter(CustomLogger):
         return tier, weighted_score, signals
 
     async def aclassify(
-        self, prompt: str, system_prompt: Optional[str] = None
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        request_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[ComplexityTier, float, List[str]]:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -320,7 +325,7 @@ class ComplexityRouter(CustomLogger):
             return self.classify(prompt, system_prompt)
 
         try:
-            tier = await self._classify_with_llm(prompt, system_prompt)
+            tier = await self._classify_with_llm(prompt, system_prompt, request_kwargs)
             return tier, 1.0, [f"llm-classifier:{tier.value}"]
         except Exception as e:
             verbose_router_logger.warning(
@@ -328,7 +333,12 @@ class ComplexityRouter(CustomLogger):
             )
             return self.classify(prompt, system_prompt)
 
-    async def _classify_with_llm(self, prompt: str, system_prompt: Optional[str] = None) -> ComplexityTier:
+    async def _classify_with_llm(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        request_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> ComplexityTier:
         """Call the configured classifier model and parse its structured tier response."""
         llm_config = self.config.classifier_llm_config
         if llm_config is None:
@@ -337,11 +347,16 @@ class ComplexityRouter(CustomLogger):
         system_context = f"Context: {system_prompt}\n\n" if system_prompt else ""
         classification_prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(system_context=system_context, prompt=prompt)
 
+        # Forward the original request's metadata so the classifier call's spend and
+        # budget usage are attributed to the calling key/team instead of being dropped.
+        metadata = (request_kwargs or {}).get("litellm_metadata")
+
         response: ModelResponse = await self.litellm_router_instance.acompletion(
             model=llm_config.model,
             messages=[{"role": "user", "content": classification_prompt}],
             response_format=TierClassification,
             timeout=llm_config.timeout_ms / 1000,
+            metadata=metadata,
         )
         content = response.choices[0].message.content
         if not content:
@@ -497,7 +512,7 @@ class ComplexityRouter(CustomLogger):
                 messages=messages if has_original_messages else None,
             )
 
-        tier, score, signals = await self.aclassify(user_message, system_prompt)
+        tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(

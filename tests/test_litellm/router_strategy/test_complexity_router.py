@@ -1130,6 +1130,26 @@ class TestLLMClassifier:
         assert call_kwargs["timeout"] == 0.4
 
     @pytest.mark.asyncio
+    async def test_aclassify_forwards_request_metadata_for_spend_tracking(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """The classifier call must carry the original request's metadata.
+
+        Without this, the proxy's cost-tracking gate (_should_track_cost_callback)
+        sees no user_api_key/team_id/user_id and silently drops all spend logging
+        and budget accounting for the classifier call.
+        """
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "SIMPLE"}')
+        )
+        request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
+        await llm_complexity_router.aclassify(
+            "hi", request_kwargs={"litellm_metadata": request_metadata}
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == request_metadata
+
+    @pytest.mark.asyncio
     async def test_aclassify_falls_back_to_heuristic_on_llm_exception(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -1165,10 +1185,13 @@ class TestLLMClassifier:
         mock_router_instance.acompletion = AsyncMock(
             return_value=_llm_response('{"tier": "REASONING"}')
         )
+        request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
         result = await llm_complexity_router.async_pre_routing_hook(
             model="test-model",
-            request_kwargs={},
+            request_kwargs={"litellm_metadata": request_metadata},
             messages=[{"role": "user", "content": "hi"}],
         )
         assert result is not None
         assert result.model == "o1-preview"  # REASONING tier model
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == request_metadata

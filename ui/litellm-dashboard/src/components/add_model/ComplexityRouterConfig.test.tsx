@@ -70,7 +70,7 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith({
       ...defaultValue,
       classifier_type: "llm",
-      classifier_llm_config: { model: "", timeout_ms: 400 },
+      classifier_llm_config: { model: "", timeout_ms: 3000 },
     });
   });
 

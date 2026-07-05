@@ -5,7 +5,7 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const { Text } = Typography;
 
-export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 400;
+export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 
 export interface ComplexityTiers {
   SIMPLE: string;

@@ -204,7 +204,7 @@ class ClassifierLLMConfig(BaseModel):
         description="Model name (from the router's model_list) to call for classification",
     )
     timeout_ms: int = Field(
-        default=400,
+        default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
 
