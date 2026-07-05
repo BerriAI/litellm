@@ -99,13 +99,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={processedTopModels}
-            renderSubComponent={() => <></>}
-            getRowCanExpand={() => false}
-            isLoading={false}
-          />
+          <DataTable columns={columns} data={processedTopModels} isLoading={false} />
         </div>
       )}
     </>

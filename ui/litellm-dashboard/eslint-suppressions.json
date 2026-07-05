@@ -2077,11 +2077,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/table.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_user_spend.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2

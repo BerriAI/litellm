@@ -263,8 +263,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       <DataTable
         data={generalSettings}
         columns={columns}
-        renderSubComponent={() => <div></div>}
-        getRowCanExpand={() => false}
         isLoading={false}
         noDataMessage="No pass-through endpoints configured"
       />

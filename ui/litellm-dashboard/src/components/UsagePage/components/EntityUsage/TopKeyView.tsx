@@ -247,13 +247,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={topKeys}
-            renderSubComponent={() => <></>}
-            getRowCanExpand={() => false}
-            isLoading={false}
-          />
+          <DataTable columns={columns} data={topKeys} isLoading={false} />
         </div>
       )}
 

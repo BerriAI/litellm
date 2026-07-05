@@ -10,16 +10,15 @@ import {
   SortingState,
 } from "@tanstack/react-table";
 
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
 
 interface DataTableProps<TData, TValue> {
   data: TData[];
   columns: ColumnDef<TData, TValue>[];
+  getRowId?: (row: TData, index: number) => string;
   onRowClick?: (row: TData) => void;
-  /** Renders inside a single colspan cell (used by audit logs) */
+  /** Renders inside a single colspan cell */
   renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
-  /** Renders directly in tbody as sibling table rows (used by MCP children) */
-  renderChildRows?: (props: { row: Row<TData> }) => React.ReactNode;
   getRowCanExpand?: (row: Row<TData>) => boolean;
   isLoading?: boolean;
   loadingMessage?: string;
@@ -31,16 +30,16 @@ interface DataTableProps<TData, TValue> {
 export function DataTable<TData, TValue>({
   data = [],
   columns,
+  getRowId,
   onRowClick,
   renderSubComponent,
-  renderChildRows,
   getRowCanExpand,
   isLoading = false,
-  loadingMessage = "🚅 Loading logs...",
-  noDataMessage = "No logs found",
+  loadingMessage = "Loading...",
+  noDataMessage = "No results",
   enableSorting = false,
 }: DataTableProps<TData, TValue>) {
-  const supportsExpansion = !!(renderSubComponent || renderChildRows) && !!getRowCanExpand;
+  const supportsExpansion = !!renderSubComponent && !!getRowCanExpand;
   const hasExplicitColumnSizes = columns.some((column) => column.size !== undefined);
   const [sorting, setSorting] = useState<SortingState>([]);
 
@@ -55,24 +54,19 @@ export function DataTable<TData, TValue>({
       enableSortingRemoval: false,
     }),
     ...(supportsExpansion && { getRowCanExpand }),
-    getRowId: (row: TData, index: number) => {
-      const _row: any = row as any;
-      return _row?.request_id ?? String(index);
-    },
+    ...(getRowId && { getRowId }),
     getCoreRowModel: getCoreRowModel(),
     ...(enableSorting && { getSortedRowModel: getSortedRowModel() }),
     ...(supportsExpansion && { getExpandedRowModel: getExpandedRowModel() }),
   });
 
-  const tableClassName = hasExplicitColumnSizes
-    ? "[&_td]:py-0.5 [&_th]:py-1 [&_table]:table-fixed"
-    : "[&_td]:py-0.5 [&_th]:py-1 table-fixed w-full box-border";
+  const tableClassName = hasExplicitColumnSizes ? "table-fixed" : "table-fixed w-full box-border";
   const tableStyle = hasExplicitColumnSizes ? { minWidth: table.getCenterTotalSize() } : { minWidth: "400px" };
 
   return (
-    <div className="rounded-lg custom-border overflow-x-auto w-full max-w-full box-border">
+    <div className="rounded-lg custom-border w-full max-w-full box-border">
       <Table className={tableClassName} style={tableStyle}>
-        <TableHead>
+        <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
@@ -80,9 +74,9 @@ export function DataTable<TData, TValue>({
                 const isSorted = header.column.getIsSorted();
 
                 return (
-                  <TableHeaderCell
+                  <TableHead
                     key={header.id}
-                    className={`py-1 h-8 ${canSort ? "cursor-pointer select-none hover:bg-gray-50" : ""}`}
+                    className={`py-1 h-8 ${canSort ? "cursor-pointer select-none hover:bg-muted" : ""}`}
                     style={hasExplicitColumnSizes ? { width: header.getSize() } : undefined}
                     onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
                   >
@@ -90,23 +84,23 @@ export function DataTable<TData, TValue>({
                       <div className="flex items-center gap-1">
                         {flexRender(header.column.columnDef.header, header.getContext())}
                         {canSort && (
-                          <span className="text-gray-400">
+                          <span className="text-muted-foreground">
                             {isSorted === "asc" ? "↑" : isSorted === "desc" ? "↓" : "⇅"}
                           </span>
                         )}
                       </div>
                     )}
-                  </TableHeaderCell>
+                  </TableHead>
                 );
               })}
             </TableRow>
           ))}
-        </TableHead>
+        </TableHeader>
         <TableBody>
           {isLoading ? (
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
-                <div className="text-center text-gray-500">
+                <div className="text-center text-muted-foreground">
                   <p>{loadingMessage}</p>
                 </div>
               </TableCell>
@@ -115,7 +109,7 @@ export function DataTable<TData, TValue>({
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
                 <TableRow
-                  className={`h-8 ${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                  className={`h-8 ${onRowClick ? "cursor-pointer" : ""}`}
                   onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
@@ -129,11 +123,7 @@ export function DataTable<TData, TValue>({
                   ))}
                 </TableRow>
 
-                {/* Child rows rendered as real table rows (MCP children) */}
-                {supportsExpansion && row.getIsExpanded() && renderChildRows && renderChildRows({ row })}
-
-                {/* Legacy sub-component in colspan cell (audit logs) */}
-                {supportsExpansion && row.getIsExpanded() && renderSubComponent && !renderChildRows && (
+                {supportsExpansion && row.getIsExpanded() && renderSubComponent && (
                   <TableRow>
                     <TableCell colSpan={row.getVisibleCells().length} className="p-0">
                       <div className="w-full max-w-full overflow-hidden box-border">{renderSubComponent({ row })}</div>
@@ -145,7 +135,7 @@ export function DataTable<TData, TValue>({
           ) : (
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
-                <div className="text-center text-gray-500">
+                <div className="text-center text-muted-foreground">
                   <p>{noDataMessage}</p>
                 </div>
               </TableCell>

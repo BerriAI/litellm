@@ -74,6 +74,14 @@ describe("DataTable states", () => {
     expect(screen.getByText("Nothing here")).toBeInTheDocument();
   });
 
+  it("falls back to generic loading and empty defaults", () => {
+    const { rerender } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+
+    rerender(<DataTable data={[]} columns={unsizedColumns} />);
+    expect(screen.getByText("No results")).toBeInTheDocument();
+  });
+
   it("renders row data through plain TanStack column defs, including custom cell renderers", () => {
     const columns: ColumnDef<Row>[] = [
       { header: "A", accessorKey: "a" },
@@ -129,26 +137,33 @@ describe("DataTable expansion", () => {
     expect(screen.queryByText("details for r1")).not.toBeInTheDocument();
   });
 
-  it("renders child rows as sibling table rows (child-rows path)", async () => {
+  it("keeps expansion attached to the same row through data reorders when getRowId is injected", async () => {
     const user = userEvent.setup();
-    render(
+    const { rerender } = render(
       <DataTable
         data={rows}
         columns={[expanderColumn, ...unsizedColumns]}
+        getRowId={(row) => row.request_id}
         getRowCanExpand={() => true}
-        renderChildRows={({ row }) => (
-          <tr>
-            <td colSpan={3}>child of {row.original.request_id}</td>
-          </tr>
-        )}
+        renderSubComponent={({ row }) => <div>details for {row.original.request_id}</div>}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "expand r2" }));
+    await user.click(screen.getByRole("button", { name: "expand r1" }));
+    expect(screen.getByText("details for r1")).toBeInTheDocument();
 
-    const childCell = screen.getByText("child of r2");
-    expect(childCell.closest("tr")).not.toBeNull();
-    expect(within(screen.getByRole("table")).getByText("child of r2")).toBeInTheDocument();
+    rerender(
+      <DataTable
+        data={[...rows].reverse()}
+        columns={[expanderColumn, ...unsizedColumns]}
+        getRowId={(row) => row.request_id}
+        getRowCanExpand={() => true}
+        renderSubComponent={({ row }) => <div>details for {row.original.request_id}</div>}
+      />,
+    );
+
+    expect(screen.getByText("details for r1")).toBeInTheDocument();
+    expect(screen.queryByText("details for r2")).not.toBeInTheDocument();
   });
 
   it("does not expand rows when getRowCanExpand is missing even if a renderer is provided", () => {
