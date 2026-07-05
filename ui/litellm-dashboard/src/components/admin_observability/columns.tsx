@@ -79,22 +79,14 @@ export const createAdminObservabilityColumns = (): ColumnsType<AdminObservabilit
   {
     title: "Tool Calls",
     key: "tool_calls",
-    width: 170,
+    width: 180,
     render: (_: unknown, row: AdminObservabilityRow) => {
-      const mcpName = row.metadata?.mcp_tool_call_metadata?.namespaced_tool_name;
-      if (mcpName) {
-        return (
-          <Tooltip title={mcpName}>
-            <span className="truncate block text-amber-700" style={{ maxWidth: 160 }}>
-              {mcpName}
-            </span>
-          </Tooltip>
-        );
-      }
-
+      const mcpName = row.mcp_namespaced_tool_name || row.metadata?.mcp_tool_call_metadata?.namespaced_tool_name;
+      const mcpCount = row.mcp_tool_call_count;
+      const mcpSpend = row.mcp_tool_call_spend;
       const toolCalls = row.metadata?.mcp_tool_call_metadata?.tool_calls ?? [];
-      const count = Array.isArray(toolCalls) ? toolCalls.length : 0;
-      if (count === 0) return <span className="text-gray-400">-</span>;
+      const metadataCount = Array.isArray(toolCalls) ? toolCalls.length : 0;
+      const count = mcpCount ?? metadataCount;
 
       function toolName(tc: unknown): string {
         if (tc === null || typeof tc !== "object") return "tool";
@@ -109,10 +101,15 @@ export const createAdminObservabilityColumns = (): ColumnsType<AdminObservabilit
       }
 
       const names = toolCalls.map(toolName).filter(Boolean).join(", ");
-      const label = `${count} call${count > 1 ? "s" : ""}${names ? `: ${names}` : ""}`;
+      const spendLabel = mcpSpend ? ` ($${String(mcpSpend)})` : "";
+      const countLabel = count > 0 ? `${count} call${count > 1 ? "s" : ""}` : "";
+      const label = mcpName ? `${mcpName}${spendLabel}` : `${countLabel}${names ? `: ${names}` : ""}${spendLabel}`;
+
+      if (!label) return <span className="text-gray-400">-</span>;
+
       return (
-        <Tooltip title={names || label}>
-          <span className="truncate block" style={{ maxWidth: 160 }}>
+        <Tooltip title={label}>
+          <span className="truncate block text-amber-700" style={{ maxWidth: 170 }}>
             {label}
           </span>
         </Tooltip>

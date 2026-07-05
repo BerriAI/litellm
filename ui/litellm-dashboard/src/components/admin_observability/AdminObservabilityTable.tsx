@@ -81,7 +81,7 @@ const detailColumns: ColumnsType<AdminObservabilityRow> = [
 ];
 
 export default function AdminObservabilityTable({ accessToken }: AdminObservabilityTableProps) {
-  const [dates, setDates] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(24, "hours"), dayjs()]);
+  const [dates, setDates] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(7, "days"), dayjs()]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [filters, setFilters] = useState<AdminObservabilityFilters>({});
@@ -117,7 +117,7 @@ export default function AdminObservabilityTable({ accessToken }: AdminObservabil
     const reset: AdminObservabilityFilters = {};
     setFilters(reset);
     setAppliedFilters(reset);
-    setDates([dayjs().subtract(24, "hours"), dayjs()]);
+    setDates([dayjs().subtract(7, "days"), dayjs()]);
     setSortBy("startTime");
     setSortOrder("desc");
     setPage(1);
@@ -179,16 +179,35 @@ export default function AdminObservabilityTable({ accessToken }: AdminObservabil
       );
     }
 
-    const tools = parseToolsFromLog(detail).filter((t) => t.called);
+    const parsedTools = parseToolsFromLog(detail).filter((t) => t.called);
+    const metadataToolCalls = detail.metadata?.mcp_tool_call_metadata?.tool_calls ?? [];
+    const allToolNames = new Set<string>();
+    parsedTools.forEach((t) => allToolNames.add(t.name));
+    if (Array.isArray(metadataToolCalls)) {
+      metadataToolCalls.forEach((tc: unknown) => {
+        if (tc !== null && typeof tc === "object") {
+          const record = tc as Record<string, unknown>;
+          const name = (record.function as Record<string, unknown>)?.name || record.name;
+          if (typeof name === "string" && name) allToolNames.add(name);
+        }
+      });
+    }
+    const mcpName = detail.mcp_namespaced_tool_name || detail.metadata?.mcp_tool_call_metadata?.namespaced_tool_name;
+    if (mcpName) allToolNames.add(mcpName);
+    const toolNames = Array.from(allToolNames);
+
+    const hasRequest = detail.messages && Object.keys(detail.messages).length > 0;
+    const hasResponse = detail.response && Object.keys(detail.response).length > 0;
+
     return (
       <div className="p-4 bg-gray-50 space-y-4">
-        {tools.length > 0 && (
+        {toolNames.length > 0 && (
           <div>
-            <h4 className="text-sm font-medium mb-2">Tool Calls ({tools.length})</h4>
+            <h4 className="text-sm font-medium mb-2">Tool Calls ({toolNames.length})</h4>
             <Space wrap size="small">
-              {tools.map((t) => (
-                <Tag key={t.index} color="blue">
-                  {t.name}
+              {toolNames.map((name) => (
+                <Tag key={name} color="blue">
+                  {name}
                 </Tag>
               ))}
             </Space>
@@ -210,13 +229,13 @@ export default function AdminObservabilityTable({ accessToken }: AdminObservabil
           <div className="space-y-1">
             <h4 className="text-sm font-medium">Request</h4>
             <pre className="bg-white p-3 rounded border text-xs overflow-auto max-h-96">
-              {formatJson(detail.messages)}
+              {hasRequest ? formatJson(detail.messages) : "Request payload not stored for this log row."}
             </pre>
           </div>
           <div className="space-y-1">
             <h4 className="text-sm font-medium">Response</h4>
             <pre className="bg-white p-3 rounded border text-xs overflow-auto max-h-96">
-              {formatJson(detail.response)}
+              {hasResponse ? formatJson(detail.response) : "Response payload not stored for this log row."}
             </pre>
           </div>
         </div>
