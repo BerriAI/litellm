@@ -4090,7 +4090,7 @@ class TestResponseCostHeaderForTypedDictResponses:
         logging_obj._on_deferred_stream_complete = None
         return logging_obj
 
-    async def _drive_non_streaming(self, *, monkeypatch, response, logging_obj, route_type):
+    async def _drive_non_streaming(self, *, monkeypatch, response, logging_obj, route_type, return_result=False):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -4119,7 +4119,7 @@ class TestResponseCostHeaderForTypedDictResponses:
             "_has_post_call_guardrails",
             return_value=False,
         ):
-            await processing_obj.base_process_llm_request(
+            result = await processing_obj.base_process_llm_request(
                 request=MagicMock(spec=Request, headers={}),
                 fastapi_response=fastapi_response,
                 user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
@@ -4131,6 +4131,8 @@ class TestResponseCostHeaderForTypedDictResponses:
                 llm_router=None,
                 skip_pre_call_logic=True,
             )
+        if return_result:
+            return fastapi_response, result
         return fastapi_response
 
     @pytest.mark.asyncio
@@ -4352,3 +4354,46 @@ class TestResponseCostHeaderForTypedDictResponses:
 
         assert "x-litellm-response-cost" not in fastapi_response.headers
         recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_messages_typeddict_does_not_leak_hidden_params_into_response_body(self, monkeypatch):
+        """
+        Router.set_response_headers now writes rate-limit headers onto dict-shaped
+        responses (e.g. Anthropic /v1/messages, whose AnthropicMessagesResponse is a
+        TypedDict) via response["_hidden_params"] = ... . Unlike a pydantic model's
+        private attribute, that key is indistinguishable from any other dict key and
+        would otherwise serialize verbatim into the client-facing JSON body, leaking
+        response_cost/model_id/api_base/fallback errors. base_process_llm_request
+        must strip it before returning the response to the endpoint layer.
+        """
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        response = AnthropicMessagesResponse(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": "hi"}],
+            model="claude-haiku-4-5",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+        response["_hidden_params"] = {
+            "additional_headers": {"x-ratelimit-limit-input-tokens": "25"},
+            "response_cost": 0.00123,
+            "model_id": "internal-deployment-id",
+        }
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00123},
+            response_cost_calculator=MagicMock(return_value=999.0),
+        )
+
+        fastapi_response, result = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="anthropic_messages",
+            return_result=True,
+        )
+
+        assert "_hidden_params" not in result
+        assert fastapi_response.headers["x-ratelimit-limit-input-tokens"] == "25"
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
