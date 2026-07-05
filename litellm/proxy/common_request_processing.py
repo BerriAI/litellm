@@ -359,7 +359,7 @@ async def _aiter_with_sse_keepalive(
     exceptions propagate exactly as they would un-wrapped.
     """
     iterator = source.__aiter__()
-    pending: Optional["asyncio.Task[str]"] = None
+    pending: Optional[asyncio.Task[str]] = None
     try:
         while True:
             if pending is None:
