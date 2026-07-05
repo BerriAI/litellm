@@ -81,7 +81,7 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 
 Follow conventional commits for commit names and PR titles
 
-When referencing models while coding, QA'ing, etc., use the latest model in that model family. Use model_prices_and_context_window.json or the web to check. Because of your knowledge cutoff, your knowledge of what the latest models are is often stale
+When referencing models while coding, QA'ing, etc., use the latest in that family; your training knowledge is stale, so verify via model_prices_and_context_window.json or a web search first
 
 ## Think Before Coding
 
