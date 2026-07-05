@@ -215,19 +215,6 @@ describe("LoggingSettings", () => {
     expect(saveButton.className).toContain("ant-btn-loading");
   });
 
-  it("should disable save button while config is loading", () => {
-    mockUseProxyConfig.mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      refetch: mockRefetch,
-    } as any);
-
-    renderWithProviders(<LoggingSettings />);
-
-    const saveButton = screen.getByRole("button", { name: "Save Settings" });
-    expect(saveButton).toBeDisabled();
-  });
-
   it("should render form with initial values from config data", () => {
     mockUseProxyConfig.mockReturnValue({
       data: [
@@ -314,6 +301,7 @@ describe("LoggingSettings", () => {
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("e.g., 7d, 30d")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save Settings" })).not.toBeInTheDocument();
 
     const skeletons = document.querySelectorAll(".ant-skeleton");
     expect(skeletons.length).toBeGreaterThan(0);
