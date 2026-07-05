@@ -146,3 +146,39 @@ async def test_unresolvable_model_string_raises_value_error_with_debug_log():
                 start_time=None,
                 end_time=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_provider_derived_from_top_level_model_when_litellm_params_missing_model():
+    """
+    Regression for veria-ai review comment on #32180:
+    LoggedLiteLLMParams for /v1/messages does not include `model`, so
+    litellm_params.get("model") returns "". Must fall back to kwargs["model"]
+    so that provider spend is actually incremented (budget enforced).
+    """
+    limiter = _make_limiter()
+
+    kwargs = {
+        "model": "anthropic/claude-haiku-4-5-20251001",  # top-level, always present
+        "litellm_params": {
+            # model key absent — this is the LoggedLiteLLMParams gap
+        },
+        "standard_logging_object": {
+            "response_cost": 0.001,
+            "model_id": "deployment-abc123",
+        },
+    }
+
+    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock) as mock_increment, \
+         patch.object(limiter, "_get_budget_config_for_deployment", return_value=None), \
+         patch.object(limiter, "_get_budget_config_for_tag", return_value=None):
+
+        await limiter.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+        # Budget spend MUST be incremented — if it isn't, budget enforcement is broken
+        mock_increment.assert_called_once()

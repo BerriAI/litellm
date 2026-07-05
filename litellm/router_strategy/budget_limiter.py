@@ -420,11 +420,13 @@ class RouterBudgetLimiting(CustomLogger):
                 if isinstance(_litellm_params, dict)
                 else getattr(_litellm_params, "model", "") or ""
             )
-            try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                    model=str(_model),
-                    litellm_params=_LiteLLMParamsDictView(_litellm_params if isinstance(_litellm_params, dict) else {}),
-                )
+            # litellm_params may not carry `model` for /v1/messages and
+            # /v1/embeddings routes (LoggedLiteLLMParams gap). Fall back to
+            # the top-level model field and then the standard logging payload
+            # so budget enforcement is not silently skipped.
+            # See: https://github.com/BerriAI/litellm/issues/26701
+            if not _model:
+                _model = kwargs.get("model", "") or standard_logging_payload.get("model", "") or ""
             try:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                     model=str(_model),
@@ -432,8 +434,7 @@ class RouterBudgetLimiting(CustomLogger):
                 )
             except Exception as e:
                 verbose_router_logger.debug(
-                    "RouterBudgetLimiting: could not derive custom_llm_provider "
-                    "from model string %r: %s",
+                    "RouterBudgetLimiting: could not derive custom_llm_provider from model string %r: %s",
                     _model,
                     e,
                 )
