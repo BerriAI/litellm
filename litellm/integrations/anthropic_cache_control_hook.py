@@ -145,9 +145,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 limit_reached = True
                 break
 
-            control: ChatCompletionCachedContent = point.get("control", None) or ChatCompletionCachedContent(
-                type="ephemeral"
-            )
+            control: ChatCompletionCachedContent = point.get("control", None) or default_control
 
             for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
                 if used_blocks >= max_blocks:
@@ -409,6 +407,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             points=message_points,
             messages=cast(List[AllMessageValues], processed_messages),
             max_blocks=max_blocks - used_blocks,
+            default_control=ChatCompletionCachedContent(type="ephemeral"),
         )
 
         return processed_messages, processed_system, remaining_points
