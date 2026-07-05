@@ -6,6 +6,8 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, RootModel
 
 # ---------- keys ----------
@@ -30,6 +32,7 @@ class KeyGenerateBody(BaseModel):
     user_id: str | None = None
     team_id: str | None = None
     budget_id: str | None = None
+    key_alias: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
     budget_fallbacks: dict[str, list[str]] | None = None
     budget_limits: list[BudgetWindow] | None = None
@@ -88,6 +91,16 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class ThinkingParam(BaseModel):
+    """Extended-thinking control shared by Anthropic and DeepSeek reasoner models.
+    DeepSeek accepts only ``type`` (enabled/disabled) and ignores budget_tokens;
+    Anthropic also honors budget_tokens. Sending ``type="disabled"`` is the
+    product-facing way a caller turns reasoning off (LIT-3686 / GH #27453)."""
+
+    type: Literal["enabled", "disabled"]
+    budget_tokens: int | None = None
+
+
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
@@ -95,6 +108,9 @@ class ChatBody(BaseModel):
     max_tokens: int | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
+    reasoning_effort: str | None = None
+    thinking: ThinkingParam | None = None
+    service_tier: str | None = None
 
 
 class AnthropicMessagesBody(BaseModel):
@@ -105,16 +121,24 @@ class AnthropicMessagesBody(BaseModel):
 
 class OutMessage(BaseModel):
     content: str | None = None
+    reasoning_content: str | None = None
 
 
 class ChatChoice(BaseModel):
     message: OutMessage | None = None
 
 
+class PromptTokensDetails(BaseModel):
+    cached_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    prompt_tokens_details: PromptTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
@@ -122,6 +146,7 @@ class ChatResponse(BaseModel):
     model: str | None = None
     choices: list[ChatChoice] = []
     usage: Usage | None = None
+    service_tier: str | None = None
 
 
 class EmbedBody(BaseModel):
@@ -166,6 +191,7 @@ class OcrResponse(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
+    api_key: str | None = None
     model: str | None = None
     spend: float | None = None
     status: str | None = None
@@ -287,6 +313,32 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class FileEntry(BaseModel):
+    id: str
+
+
+class FileListResponse(BaseModel):
+    """GET /files answer. `data` is required on purpose: a 200 whose body lacks
+    the OpenAI-format file list must fail validation, not pass vacuously."""
+
+    data: list[FileEntry]
+
+
+class FineTuningJobsParams(BaseModel):
+    custom_llm_provider: Literal["openai", "azure"]
+
+
+class FineTuningJobEntry(BaseModel):
+    id: str
+
+
+class FineTuningJobsResponse(BaseModel):
+    """GET /fine_tuning/jobs answer; `data` required for the same reason as
+    FileListResponse."""
+
+    data: list[FineTuningJobEntry]
+
+
 # ---------- model management ----------
 
 
@@ -301,12 +353,23 @@ class LiteLLMParamsBody(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    aws_region_name: str | None = None
+    vertex_project: str | None = None
+    vertex_location: str | None = None
+    vertex_credentials: str | None = None
+    bucket_name: str | None = None
+    s3_bucket_name: str | None = None
+    s3_region_name: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
 
 
 class ModelInfoBody(BaseModel):
     id: str
+    mode: Literal["batch", "realtime", "image_generation"] | None = None
 
 
 class ModelNewBody(BaseModel):
