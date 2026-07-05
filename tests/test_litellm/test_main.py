@@ -1994,3 +1994,98 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.prompt_tokens > 0
     assert response.usage.completion_tokens > 0
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
+    """A trailing Responses-API event (no `choices` key) must be skipped,
+    not raise KeyError('choices') -> APIError.
+    Regression test for https://github.com/BerriAI/litellm/issues/32051"""
+    from litellm.main import stream_chunk_builder
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, StreamingChoices
+
+    text_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="gpt-x",
+        choices=[StreamingChoices(index=0, delta=Delta(content="hi"))],
+    )
+    tail = BaseLiteLLMOpenAIResponseObject()
+    tail.type = "response.completed"
+
+    response = stream_chunk_builder(chunks=[text_chunk, tail])
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "hi"
+
+
+def test_stream_chunk_builder_tolerates_choiceless_chunk_on_non_simple_path():
+    """The non-simple-text path (reasoning content) must also skip
+    chunks lacking a `choices` key in its per-feature chunk scans.
+    Regression test for https://github.com/BerriAI/litellm/issues/32051"""
+    from litellm.main import stream_chunk_builder
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, StreamingChoices
+
+    reasoning_chunk = ModelResponseStream(
+        id="chunk-r",
+        model="gpt-x",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="answer", reasoning_content="thinking..."),
+            )
+        ],
+    )
+    tail = BaseLiteLLMOpenAIResponseObject()
+    tail.type = "response.completed"
+
+    response = stream_chunk_builder(chunks=[reasoning_chunk, tail])
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "answer"
+    assert response.choices[0].message.reasoning_content == "thinking..."
+
+
+def test_stream_chunk_builder_tolerates_leading_chunk_without_choices():
+    """A choiceless Responses-API event arriving FIRST (for example
+    response.created) must not crash assembly either; model and content
+    must come from the first choices-bearing chunk.
+    Regression test for https://github.com/BerriAI/litellm/issues/32051"""
+    from litellm.main import stream_chunk_builder
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, StreamingChoices
+
+    head = BaseLiteLLMOpenAIResponseObject()
+    head.type = "response.created"
+    text_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="gpt-x",
+        choices=[StreamingChoices(index=0, delta=Delta(content="hi"))],
+    )
+
+    response = stream_chunk_builder(chunks=[head, text_chunk])
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "hi"
+    assert response.model == "gpt-x"
+
+
+def test_stream_chunk_builder_tolerates_all_choiceless_chunks():
+    """A stream that produced only raw Responses-API events (for example
+    cancelled after response.created, before any content delta) must
+    assemble a degenerate but valid response instead of crashing.
+    Regression test for https://github.com/BerriAI/litellm/issues/32051"""
+    from litellm.main import stream_chunk_builder
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.utils import ModelResponse
+
+    head = BaseLiteLLMOpenAIResponseObject()
+    head.type = "response.created"
+    tail = BaseLiteLLMOpenAIResponseObject()
+    tail.type = "response.completed"
+
+    response = stream_chunk_builder(chunks=[head, tail])
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content in (None, "")

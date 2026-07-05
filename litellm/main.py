@@ -8374,13 +8374,13 @@ def stream_chunk_builder(
         if len(chunks) == 0:
             return None
         ## Route to the text completion logic
-        first_chunk_with_choices = next((c for c in chunks if c["choices"]), None)
+        first_chunk_with_choices = next((c for c in chunks if c.get("choices")), None)
         if first_chunk_with_choices is not None and isinstance(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
-        model = chunks[0]["model"]
+        model = (first_chunk_with_choices or chunks[0]).get("model")
         # Initialize the response dictionary
         response = processor.build_base_response(chunks)
 
@@ -8389,7 +8389,7 @@ def stream_chunk_builder(
         simple_content_parts: List[str] = []
         is_simple_text_stream = True
         for chunk in chunks:
-            if len(chunk["choices"]) == 0:
+            if len(chunk.get("choices") or []) == 0:
                 continue
 
             choice = chunk["choices"][0]
@@ -8455,7 +8455,7 @@ def stream_chunk_builder(
         tool_call_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "tool_calls" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["tool_calls"] is not None
         ]
@@ -8469,7 +8469,7 @@ def stream_chunk_builder(
         function_call_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "function_call" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["function_call"] is not None
         ]
@@ -8482,7 +8482,7 @@ def stream_chunk_builder(
         content_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["content"] is not None
         ]
@@ -8493,7 +8493,7 @@ def stream_chunk_builder(
         thinking_blocks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "thinking_blocks" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
         ]
@@ -8506,7 +8506,7 @@ def stream_chunk_builder(
         reasoning_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "reasoning_content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["reasoning_content"] is not None
         ]
@@ -8519,7 +8519,7 @@ def stream_chunk_builder(
         annotation_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "annotations" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["annotations"] is not None
         ]
@@ -8536,7 +8536,7 @@ def stream_chunk_builder(
         audio_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "audio" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["audio"] is not None
         ]
@@ -8550,7 +8550,7 @@ def stream_chunk_builder(
         image_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "images" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["images"] is not None
         ]
@@ -8567,7 +8567,7 @@ def stream_chunk_builder(
         provider_specific_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if len(chunk.get("choices") or []) > 0
             and "provider_specific_fields" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
         ]

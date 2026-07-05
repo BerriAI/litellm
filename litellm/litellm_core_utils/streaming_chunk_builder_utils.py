@@ -154,17 +154,17 @@ class ChunkProcessor:
         return first_chunk_model
 
     def build_base_response(self, chunks: List[Dict[str, Any]]) -> ModelResponse:
-        chunk = self.first_chunk
+        chunk = next((c for c in chunks if c.get("choices")), self.first_chunk)
         id = ChunkProcessor._get_chunk_id(chunks)
-        object = chunk["object"]
-        created = chunk["created"]
-        first_chunk_model = chunk["model"]
+        object = chunk.get("object")
+        created = chunk.get("created")
+        first_chunk_model = chunk.get("model")
         # Get the actual model - for Azure Model Router, this finds the real model from later chunks
         model = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint = chunk.get("system_fingerprint", None)
 
-        first_chunk_with_choices = next((c for c in chunks if c.get("choices")), chunk)
-        role = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        first_chunk_with_choices = next((c for c in chunks if c.get("choices")), None)
+        role = first_chunk_with_choices["choices"][0]["delta"]["role"] if first_chunk_with_choices else "assistant"
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:

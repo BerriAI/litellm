@@ -2940,3 +2940,82 @@ def test_accumulated_responses_are_redactable_as_a_list():
     assert "secret-one" not in blob
     assert "secret-two" not in blob
     assert blob.count("[REDACTED]") == 2
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fail_open_on_assembly_error(monkeypatch):
+    """With fail_on_error=False, an exception while assembling chunks for the
+    guardrail scan must not kill the stream; original chunks are passed through.
+    Regression test for https://github.com/BerriAI/litellm/issues/32051"""
+    import litellm.main as litellm_main_module
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        fail_on_error=False,
+    )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("assembly failed")
+
+    monkeypatch.setattr(litellm_main_module, "stream_chunk_builder", _boom)
+
+    original_chunks = [
+        ModelResponseStream(
+            id="chunk-1",
+            model="gpt-x",
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"))],
+        )
+    ]
+
+    async def _stream():
+        for chunk in original_chunks:
+            yield chunk
+
+    received = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_stream(),
+            request_data={},
+        )
+    ]
+
+    assert received == original_chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fail_closed_on_assembly_error(monkeypatch):
+    """With fail_on_error=True (default), an assembly exception must propagate."""
+    import litellm.main as litellm_main_module
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("assembly failed")
+
+    monkeypatch.setattr(litellm_main_module, "stream_chunk_builder", _boom)
+
+    async def _stream():
+        yield ModelResponseStream(
+            id="chunk-1",
+            model="gpt-x",
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"))],
+        )
+
+    with pytest.raises(RuntimeError, match="assembly failed"):
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_stream(),
+            request_data={},
+        ):
+            pass

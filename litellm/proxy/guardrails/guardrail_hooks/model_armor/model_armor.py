@@ -754,7 +754,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             all_chunks.append(chunk)
 
         # Build complete response
-        assembled_response = stream_chunk_builder(chunks=all_chunks)
+        try:
+            assembled_response = stream_chunk_builder(chunks=all_chunks)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Model Armor streaming chunk assembly error: %s", str(e), exc_info=True
+            )
+            if self.optional_params.get("fail_on_error", True):
+                raise
+            assembled_response = None
 
         if isinstance(assembled_response, ModelResponse):
             # Extract content
