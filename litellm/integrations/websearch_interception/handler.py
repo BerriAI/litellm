@@ -1032,9 +1032,6 @@ class WebSearchInterceptionLogger(CustomLogger):
                 llm_router = None
 
             search_tool = self._select_search_tool_from_router(llm_router=llm_router)
-            if search_tool is None:
-                search_tool = await self._select_search_tool_from_db(llm_router=llm_router)
-
             search_provider: Optional[str] = None
             search_litellm_params: Dict[str, Any] = {}
             if search_tool is not None:
@@ -1075,37 +1072,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             return None
         search_tools = list(getattr(llm_router, "search_tools") or [])
         return self._select_search_tool_from_list(search_tools=search_tools, source="router")
-
-    async def _select_search_tool_from_db(self, llm_router: Any) -> Optional[Dict[str, Any]]:
-        try:
-            from litellm.proxy.proxy_server import prisma_client
-            from litellm.proxy.search_endpoints.search_tool_registry import (
-                SearchToolRegistry,
-            )
-            from litellm.router_utils.search_api_router import SearchAPIRouter
-        except ImportError:
-            return None
-
-        if prisma_client is None:
-            return None
-
-        try:
-            db_search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
-        except Exception as e:
-            verbose_logger.debug(f"WebSearchInterception: Could not load search tools from database: {str(e)}")
-            return None
-
-        search_tools = [dict(tool) for tool in db_search_tools]
-        search_tool = self._select_search_tool_from_list(search_tools=search_tools, source="database")
-        if search_tool is not None and llm_router is not None:
-            try:
-                await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router,
-                    search_tools=search_tools,
-                )
-            except Exception as e:
-                verbose_logger.debug(f"WebSearchInterception: Could not update router search tools: {str(e)}")
-        return search_tool
 
     def _select_search_tool_from_list(
         self,

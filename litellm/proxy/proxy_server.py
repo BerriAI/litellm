@@ -6382,7 +6382,6 @@ class ProxyConfig:
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
-        Only updates router if there are tools in the database, otherwise preserves config-loaded tools.
         """
         global llm_router
 
@@ -6392,32 +6391,54 @@ class ProxyConfig:
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
         try:
-            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+            db_search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
 
-            verbose_proxy_logger.info(f"Loading {len(search_tools)} search tool(s) from database into router")
+            config_search_tools = []
+            try:
+                config = await self.get_config()
+                parsed_tools = self.parse_search_tools(config)
+                if parsed_tools:
+                    config_search_tools = parsed_tools
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Could not get config-defined search tools: {e}")
 
-            # Only update router if there are tools in the database
-            # This prevents overwriting config-loaded tools with an empty list
-            if len(search_tools) > 0:
-                if llm_router is not None:
-                    # Add search tools to the router
-                    await SearchAPIRouter.update_router_search_tools(
-                        router_instance=llm_router, search_tools=search_tools
-                    )
-                    verbose_proxy_logger.info(f"Successfully loaded {len(search_tools)} search tool(s) into router")
-                else:
-                    verbose_proxy_logger.debug(
-                        "Router not initialized yet, search tools will be added when router is created"
-                    )
+            search_tools = self._merge_config_and_db_search_tools(
+                config_search_tools=config_search_tools,
+                db_search_tools=[dict(tool) for tool in db_search_tools],
+            )
+
+            verbose_proxy_logger.info(
+                f"Loading {len(search_tools)} search tool(s) into router "
+                f"({len(config_search_tools)} from config, {len(db_search_tools)} from database)"
+            )
+
+            if llm_router is not None:
+                await SearchAPIRouter.update_router_search_tools(router_instance=llm_router, search_tools=search_tools)
+                verbose_proxy_logger.info(f"Successfully loaded {len(search_tools)} search tool(s) into router")
             else:
                 verbose_proxy_logger.debug(
-                    "No search tools found in database, keeping config-loaded search tools (if any)"
+                    "Router not initialized yet, search tools will be added when router is created"
                 )
 
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(str(e))
             )
+
+    @staticmethod
+    def _merge_config_and_db_search_tools(
+        config_search_tools: List[SearchToolTypedDict],
+        db_search_tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        db_tool_names = {tool.get("search_tool_name") for tool in db_search_tools}
+        return [
+            *[
+                dict(config_search_tool)
+                for config_search_tool in config_search_tools
+                if config_search_tool.get("search_tool_name") not in db_tool_names
+            ],
+            *db_search_tools,
+        ]
 
     async def _init_pass_through_endpoints_in_db(self):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (

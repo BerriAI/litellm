@@ -222,53 +222,6 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_execute_search_loads_ui_search_tool_from_db_when_router_is_empty(monkeypatch):
-    import litellm
-    from litellm.proxy import proxy_server
-    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
-
-    logger = WebSearchInterceptionLogger(
-        enabled_providers=["openai"],
-        search_tool_name="my-perplexity-search",
-    )
-    router = MagicMock()
-    router.search_tools = []
-    db_prisma_client = object()
-    db_search_tool = {
-        "search_tool_id": "search-tool-id",
-        "search_tool_name": "my-perplexity-search",
-        "litellm_params": {
-            "search_provider": "exa_ai",
-            "api_key": "fake-db-ui-key",
-            "api_base": "https://api.exa.ai",
-            "max_results": 2,
-        },
-        "search_tool_info": {},
-    }
-    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
-
-    async def mock_get_all_search_tools_from_db(prisma_client):
-        assert prisma_client is db_prisma_client
-        return [db_search_tool]
-
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "prisma_client", db_prisma_client)
-    monkeypatch.setattr(SearchToolRegistry, "get_all_search_tools_from_db", mock_get_all_search_tools_from_db)
-    monkeypatch.setattr(litellm, "asearch", mock_asearch)
-
-    await logger._execute_search("what is litellm")
-
-    mock_asearch.assert_awaited_once_with(
-        query="what is litellm",
-        search_provider="exa_ai",
-        api_key="fake-db-ui-key",
-        api_base="https://api.exa.ai",
-        max_results=2,
-    )
-    assert router.search_tools == [db_search_tool]
-
-
-@pytest.mark.asyncio
 async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     """Test that async_pre_call_deployment_hook finds custom_llm_provider at top-level kwargs.
 
