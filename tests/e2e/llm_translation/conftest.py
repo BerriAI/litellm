@@ -7,9 +7,15 @@ Gateway, so the `resources` fixture cleans up keys this suite creates.
 
 import pytest
 
+from endpoints_client import EndpointsClient, build_endpoints_client
 from passthrough_client import PassthroughClient, build_client
 
 
 @pytest.fixture(scope="session")
 def client() -> PassthroughClient:
     return build_client()
+
+
+@pytest.fixture(scope="session")
+def endpoints_client() -> EndpointsClient:
+    return build_endpoints_client()
