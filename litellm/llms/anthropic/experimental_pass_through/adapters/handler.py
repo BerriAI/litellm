@@ -78,7 +78,7 @@ async def _prepare_context_managed_request(
     system: Optional[Any],
     context_management_spec: Any,
     litellm_metadata: Optional[Dict],
-    drop_params: Optional[bool],
+    additional_drop_params: Optional[list[str]],
     llm_router: Any,
     user_api_key_auth: Any = None,
 ) -> Optional[PolyfillResult]:
@@ -95,7 +95,7 @@ async def _prepare_context_managed_request(
     # silently drop intermediate turns.
     polyfill_will_run = _polyfill_will_run(
         context_management_spec=context_management_spec,
-        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
     )
 
     if polyfill_will_run:
@@ -117,7 +117,7 @@ async def _prepare_context_managed_request(
         system=working_system,
         context_management_spec=context_management_spec,
         litellm_metadata=litellm_metadata,
-        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
         llm_router=llm_router,
         user_api_key_auth=user_api_key_auth,
     )
@@ -143,18 +143,19 @@ async def _prepare_context_managed_request(
 def _polyfill_will_run(
     *,
     context_management_spec: Any,
-    drop_params: Optional[bool],
+    additional_drop_params: Optional[list[str]],
 ) -> bool:
     """Return True when ``compact_20260112`` will run via the polyfill dispatcher.
 
-    Mirrors the gating in ``_run_polyfill_if_enabled``: an empty spec or
-    effective ``drop_params`` short-circuits the polyfill. The pre-processing
-    skip only applies when the dispatcher will actually invoke
-    ``apply_compact_20260112`` (which has its own compaction-block slicing).
+    Mirrors the gating in ``_run_polyfill_if_enabled``: an empty spec or an
+    explicit ``context_management`` entry in ``additional_drop_params``
+    short-circuits the polyfill. The pre-processing skip only applies when the
+    dispatcher will actually invoke ``apply_compact_20260112`` (which has its
+    own compaction-block slicing).
     """
     edits = _normalize_spec_edits(
         context_management_spec=context_management_spec,
-        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
     )
     if edits is None:
         return False
@@ -169,7 +170,7 @@ def _polyfill_will_run(
 def _spec_has_non_compact_edits(
     *,
     context_management_spec: Any,
-    drop_params: Optional[bool],
+    additional_drop_params: Optional[list[str]],
 ) -> bool:
     """Return True when the spec includes edits other than ``compact_20260112``.
 
@@ -180,7 +181,7 @@ def _spec_has_non_compact_edits(
     """
     edits = _normalize_spec_edits(
         context_management_spec=context_management_spec,
-        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
     )
     if edits is None:
         return False
@@ -195,10 +196,22 @@ def _spec_has_non_compact_edits(
     )
 
 
+def _context_management_explicitly_dropped(additional_drop_params: Optional[list[str]]) -> bool:
+    """True when the caller opted out of context_management via ``additional_drop_params``.
+
+    ``drop_params`` deliberately does NOT gate the polyfill: ``context_management``
+    is a LiteLLM-supported param (native on Anthropic, polyfilled elsewhere), and
+    ``drop_params`` only exists to drop genuinely unsupported params.
+    """
+    if not isinstance(additional_drop_params, list):
+        return False
+    return "context_management" in additional_drop_params
+
+
 def _normalize_spec_edits(
     *,
     context_management_spec: Any,
-    drop_params: Optional[bool],
+    additional_drop_params: Optional[list[str]],
 ) -> Optional[List[Dict[str, Any]]]:
     """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
 
@@ -208,8 +221,7 @@ def _normalize_spec_edits(
     if not context_management_spec:
         return None
 
-    effective_drop_params = drop_params if drop_params is not None else litellm.drop_params
-    if effective_drop_params:
+    if _context_management_explicitly_dropped(additional_drop_params):
         return None
 
     from litellm.llms.anthropic.experimental_pass_through.context_management.dispatcher import (
@@ -230,22 +242,23 @@ async def _run_polyfill_if_enabled(
     system: Optional[Any],
     context_management_spec: Any,
     litellm_metadata: Optional[Dict],
-    drop_params: Optional[bool],
+    additional_drop_params: Optional[list[str]],
     llm_router: Any,
     user_api_key_auth: Any = None,
 ) -> Optional[PolyfillResult]:
     """Run the async context_management polyfill if a spec is present.
 
-    Returns ``None`` when the spec is empty or drop_params is on. Raises
-    ``AnthropicContextManagementError`` so the /v1/messages endpoint can
-    emit an Anthropic-format 400. All other exceptions are best-effort
-    swallowed (matches v0 behavior).
+    Returns ``None`` when the spec is empty or ``context_management`` is
+    listed in ``additional_drop_params`` (the explicit opt-out; ``drop_params``
+    does not disable the polyfill because context_management is a supported
+    param). Raises ``AnthropicContextManagementError`` so the /v1/messages
+    endpoint can emit an Anthropic-format 400. All other exceptions are
+    best-effort swallowed (matches v0 behavior).
     """
     if not context_management_spec:
         return None
 
-    effective_drop_params = drop_params if drop_params is not None else litellm.drop_params
-    if effective_drop_params:
+    if _context_management_explicitly_dropped(additional_drop_params):
         return None
 
     try:
@@ -274,7 +287,7 @@ async def _run_polyfill_if_enabled(
         # emits an Anthropic-format error.
         if _spec_has_non_compact_edits(
             context_management_spec=context_management_spec,
-            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
         ):
             raise AnthropicContextManagementError(
                 status_code=500,
@@ -533,7 +546,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     ) -> Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management = kwargs.pop("context_management", None)
-        drop_params: Optional[bool] = kwargs.get("drop_params", None)
+        additional_drop_params: Optional[list[str]] = kwargs.get("additional_drop_params", None)
         litellm_router = kwargs.pop("litellm_router", None)
         if litellm_router is None:
             try:
@@ -555,7 +568,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             system=system,
             context_management_spec=context_management,
             litellm_metadata=proxy_litellm_metadata,
-            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
             llm_router=litellm_router,
             user_api_key_auth=user_api_key_auth,
         )
@@ -661,7 +674,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``compact_20260112`` editor can ``await`` the summarization model);
         # bridge to it via ``run_async_function``.
         context_management = kwargs.pop("context_management", None)
-        drop_params: Optional[bool] = kwargs.get("drop_params", None)
+        additional_drop_params: Optional[list[str]] = kwargs.get("additional_drop_params", None)
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
         # to bridge to the async dispatcher, but the proxy router's httpx
@@ -696,7 +709,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 system=system,
                 context_management_spec=context_management,
                 litellm_metadata=proxy_litellm_metadata,
-                drop_params=drop_params,
+                additional_drop_params=additional_drop_params,
                 llm_router=litellm_router,
                 user_api_key_auth=user_api_key_auth,
             )

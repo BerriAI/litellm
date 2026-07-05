@@ -80,6 +80,20 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    async def get_fallback_model_within_budget(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+    ) -> Optional[str]:
+        budget_fallbacks: dict[str, list[str]] = user_api_key_dict.budget_fallbacks or {}
+        for fallback_model in budget_fallbacks.get(model, []):
+            try:
+                await self.is_key_within_model_budget(user_api_key_dict=user_api_key_dict, model=fallback_model)
+                return fallback_model
+            except litellm.BudgetExceededError:
+                continue
+        return None
+
     async def is_end_user_within_model_budget(
         self,
         end_user_id: str,

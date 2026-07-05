@@ -436,6 +436,227 @@ async def test_async_anthropic_messages_handler_extra_headers():
 
 
 @pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_streaming_forwards_provider_response_headers():
+    """
+    Regression test for LIT-3724 (issue 2): streaming /v1/messages responses
+    dropped the upstream provider's HTTP response headers, so Bedrock's
+    x-amzn-requestid / x-amzn-trace-id never reached clients even with
+    `return_response_headers: true`. The returned stream object must carry
+    them in `_hidden_params["additional_headers"]` (llm_provider-* prefixed),
+    which the proxy merges into the client-facing response headers.
+    """
+    from collections.abc import AsyncIterator as ABCAsyncIterator
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    handler = BaseLLMHTTPHandler()
+
+    sse_body = (
+        b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+    )
+    upstream_response = httpx.Response(
+        200,
+        headers={
+            "x-amzn-requestid": "amzn-req-123",
+            "x-amzn-trace-id": "Root=1-abc-def",
+        },
+        content=sse_body,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="sk-test",
+        stream=True,
+        kwargs={},
+    )
+
+    assert isinstance(result, ABCAsyncIterator)
+
+    additional_headers = result._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-amzn-requestid"] == "amzn-req-123"
+    assert additional_headers["llm_provider-x-amzn-trace-id"] == "Root=1-abc-def"
+
+    collected = b"".join([chunk async for chunk in result])
+    assert b"message_start" in collected
+    assert b"message_stop" in collected
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_agentic_streaming_forwards_provider_response_headers():
+    """
+    Companion to the test above for the agentic branch: when a callback
+    overrides async_should_run_agentic_loop, the handler wraps
+    AgenticAnthropicStreamingIterator in AnthropicMessagesStreamingResponse.
+    That wrapping must still expose the provider headers and delegate
+    iteration through the two-phase agentic iterator unchanged.
+    """
+    from collections.abc import AsyncIterator as ABCAsyncIterator
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        AgenticAnthropicStreamingIterator,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    class NoOpAgenticCallback(CustomLogger):
+        async def async_should_run_agentic_loop(
+            self,
+            response,
+            model,
+            messages,
+            tools,
+            stream,
+            custom_llm_provider,
+            kwargs,
+        ):
+            return False, {}
+
+    handler = BaseLLMHTTPHandler()
+
+    sse_body = (
+        b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+    )
+    upstream_response = httpx.Response(
+        200,
+        headers={"x-amzn-requestid": "amzn-req-456"},
+        content=sse_body,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.dynamic_success_callbacks = [NoOpAgenticCallback()]
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="sk-test",
+        stream=True,
+        kwargs={},
+    )
+
+    assert isinstance(result, ABCAsyncIterator)
+    assert isinstance(result.completion_stream, AgenticAnthropicStreamingIterator)
+    assert result._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "amzn-req-456"
+
+    collected = b"".join([chunk async for chunk in result])
+    assert b"message_start" in collected
+    assert b"message_stop" in collected
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stream():
+    """
+    Regression test: the proxy's streaming cleanup calls aclose on the
+    handler's return value (see _finalize_streaming_generator_cleanup's
+    hasattr(response, "aclose") check). The wrapper must forward aclose to
+    the upstream stream so provider connections are released on client
+    disconnect instead of lingering until garbage collection.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+    )
+
+    class UpstreamTracker:
+        def __init__(self):
+            self.closed = False
+
+    tracker = UpstreamTracker()
+
+    async def upstream():
+        try:
+            yield b'data: {"type": "message_start"}\n\n'
+            yield b'data: {"type": "message_stop"}\n\n'
+        finally:
+            tracker.closed = True
+
+    stream = AnthropicMessagesStreamingResponse(
+        completion_stream=upstream(),
+        hidden_params={"additional_headers": {}},
+    )
+
+    first_chunk = await stream.__anext__()
+    assert b"message_start" in first_chunk
+    assert tracker.closed is False
+
+    await stream.aclose()
+    assert tracker.closed is True
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstream_stream():
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        AgenticAnthropicStreamingIterator,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+    )
+
+    class UpstreamTracker:
+        def __init__(self):
+            self.closed = False
+
+    tracker = UpstreamTracker()
+
+    async def upstream():
+        try:
+            yield b'data: {"type": "message_start"}\n\n'
+            yield b'data: {"type": "message_stop"}\n\n'
+        finally:
+            tracker.closed = True
+
+    agentic_iterator = AgenticAnthropicStreamingIterator(
+        completion_stream=upstream(),
+        http_handler=Mock(),
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=Mock(),
+        anthropic_messages_optional_request_params={},
+        logging_obj=Mock(),
+        custom_llm_provider="anthropic",
+        kwargs={},
+    )
+    stream = AnthropicMessagesStreamingResponse(
+        completion_stream=agentic_iterator,
+        hidden_params={"additional_headers": {}},
+    )
+
+    first_chunk = await stream.__anext__()
+    assert b"message_start" in first_chunk
+    assert tracker.closed is False
+
+    await stream.aclose()
+    assert tracker.closed is True
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_passes_litellm_metadata():
     """Ensure litellm_metadata from kwargs is forwarded via update_from_kwargs.
 

@@ -2076,3 +2076,35 @@ class TestCallTypesOCR:
 
         call_type = CallTypes("aocr")
         assert call_type == CallTypes.aocr
+
+
+def test_stream_chunk_builder_text_completion_combines_text_and_usage():
+    from litellm.main import stream_chunk_builder_text_completion
+    from litellm.types.utils import TextCompletionResponse
+
+    chunks = [
+        TextCompletionResponse(
+            id="cmpl-1",
+            object="text_completion",
+            created=1,
+            model="gpt-3.5-turbo-instruct",
+            choices=[{"text": "Hello", "index": 0, "logprobs": None, "finish_reason": None}],
+        ),
+        TextCompletionResponse(
+            id="cmpl-1",
+            object="text_completion",
+            created=1,
+            model="gpt-3.5-turbo-instruct",
+            choices=[{"text": " world", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+        ),
+    ]
+
+    response = stream_chunk_builder_text_completion(
+        chunks=chunks, messages=[{"role": "user", "content": "say hello"}]
+    )
+
+    assert response.choices[0].text == "Hello world"
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.prompt_tokens > 0
+    assert response.usage.completion_tokens > 0
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens

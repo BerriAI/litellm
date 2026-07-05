@@ -45,6 +45,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
+    ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -586,7 +587,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Check if the streaming has ended.
         """
-        return all(response.choices[0].finish_reason is not None for response in responses_so_far)
+        if not responses_so_far:
+            return False
+        terminal_types = {
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+        }
+        return responses_so_far[-1].get("type") in terminal_types
 
     def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
         """
