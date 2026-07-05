@@ -1119,7 +1119,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model_response: Optional[ImageResponse],
         azure_client_params: dict,
         api_key: str,
-        input: list,
+        input: str,
         logging_obj: LiteLLMLoggingObj,
         headers: dict,
         client=None,
