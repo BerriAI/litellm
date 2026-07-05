@@ -222,10 +222,10 @@ def _is_allowed_to_make_key_request(
         return True
 
     if user_id is not None:
-        assert (
-            user_id == user_api_key_dict.user_id
-        ), "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
-            user_id, user_api_key_dict.user_id
+        assert user_id == user_api_key_dict.user_id, (
+            "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
+                user_id, user_api_key_dict.user_id
+            )
         )
 
     if team_id is not None:
