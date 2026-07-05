@@ -386,9 +386,7 @@ async def _aiter_with_sse_keepalive(
             try:
                 await aclose()
             except Exception as exc:  # noqa: BLE001
-                verbose_proxy_logger.debug(
-                    "_aiter_with_sse_keepalive: error closing source stream: %s", exc
-                )
+                verbose_proxy_logger.debug("_aiter_with_sse_keepalive: error closing source stream: %s", exc)
 
 
 async def _wait_for_http_disconnect(request: Request) -> None:
