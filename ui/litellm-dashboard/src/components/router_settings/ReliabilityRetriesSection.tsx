@@ -1,5 +1,5 @@
 import React from "react";
-import { TextInput } from "@tremor/react";
+import { Input } from "antd";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };
@@ -20,12 +20,15 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
         {Object.entries(routerSettings)
           .filter(
-            ([param, value]) =>
+            ([param]) =>
               param != "fallbacks" &&
               param != "context_window_fallbacks" &&
               param != "routing_strategy_args" &&
               param != "routing_strategy" &&
-              param != "enable_tag_filtering",
+              param != "enable_tag_filtering" &&
+              param != "retry_policy" &&
+              param != "model_group_retry_policy" &&
+              param != "routing_groups",
           )
           .map(([param, value]) => (
             <div key={param} className="space-y-2">
@@ -36,7 +39,7 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                 <p className="text-xs text-gray-500 mt-0.5 mb-2">
                   {routerFieldsMetadata[param]?.field_description || ""}
                 </p>
-                <TextInput
+                <Input
                   name={param}
                   defaultValue={
                     value === null || value === undefined || value === "null"
@@ -57,4 +60,3 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
 };
 
 export default ReliabilityRetriesSection;
-

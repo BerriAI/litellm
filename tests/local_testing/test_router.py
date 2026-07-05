@@ -20,7 +20,6 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
-from respx import MockRouter
 import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -34,6 +33,8 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
 )
 from litellm.types.router import DeploymentTypedDict
+
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 load_dotenv()
 
@@ -145,14 +146,14 @@ async def test_router_provider_wildcard_routing_regex():
                 "model_name": "openai/fo::*:static::*",
                 "litellm_params": {
                     "model": "openai/fo::*:static::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
             {
                 "model_name": "openai/foo3::hello::*",
                 "litellm_params": {
                     "model": "openai/foo3::hello::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
         ]
@@ -995,15 +996,15 @@ async def test_aimg_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "dall-e-3",
+                "model_name": "gpt-image-1",
                 "litellm_params": {
-                    "model": "dall-e-3",
+                    "model": "gpt-image-1",
                 },
             }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
-            model="dall-e-3", prompt="A cute baby sea otter"
+            model="gpt-image-1", prompt="A cute baby sea otter"
         )
         print(response)
         assert len(response.data) > 0
@@ -1030,15 +1031,15 @@ def test_img_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "dall-e-3",
+                "model_name": "gpt-image-1",
                 "litellm_params": {
-                    "model": "dall-e-3",
+                    "model": "gpt-image-1",
                 },
             }
         ]
         router = Router(model_list=model_list)
         response = router.image_generation(
-            model="dall-e-3", prompt="A cute baby sea otter"
+            model="gpt-image-1", prompt="A cute baby sea otter"
         )
         print(response)
         assert len(response.data) > 0
@@ -1640,7 +1641,7 @@ async def test_router_text_completion_client():
                 "litellm_params": {
                     "model": "text-completion-openai/gpt-3.5-turbo-instruct",
                     "api_key": os.getenv("OPENAI_API_KEY", None),
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             }
         ]

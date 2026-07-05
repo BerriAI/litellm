@@ -68,10 +68,15 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useInfiniteTeams: () => ({
     data: {
-      pages: [{
-        teams: [{ team_id: "team-1", team_alias: "Test Team", organization_id: "org-1" }],
-        total: 1, page: 1, page_size: 20, total_pages: 1,
-      }],
+      pages: [
+        {
+          teams: [{ team_id: "team-1", team_alias: "Test Team", organization_id: "org-1" }],
+          total: 1,
+          page: 1,
+          page_size: 20,
+          total_pages: 1,
+        },
+      ],
     },
     fetchNextPage: vi.fn(),
     hasNextPage: false,
@@ -82,7 +87,11 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrails", () => ({
   useGuardrails: vi.fn().mockReturnValue({
-    data: [{ guardrail_name: "test-guardrail" }],
+    data: {
+      guardrails: [{ guardrail_name: "test-guardrail" }],
+      globalGuardrailNames: new Set<string>(),
+      optionalGuardrailNames: new Set<string>(["test-guardrail"]),
+    },
     isLoading: false,
     error: null,
   }),

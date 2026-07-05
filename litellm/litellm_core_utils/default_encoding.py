@@ -11,9 +11,7 @@ except (ImportError, AttributeError):
     # Old way to access resources, which setuptools deprecated some time ago
     import pkg_resources  # type: ignore
 
-    filename = pkg_resources.resource_filename(
-        __name__, "litellm_core_utils/tokenizers"
-    )
+    filename = pkg_resources.resource_filename(__name__, "litellm_core_utils/tokenizers")
 
 # Always default TIKTOKEN_CACHE_DIR to the bundled tokenizers directory
 # unless the user explicitly overrides it via CUSTOM_TIKTOKEN_CACHE_DIR.
@@ -26,9 +24,9 @@ if custom_cache_dir:
 else:
     cache_dir = filename
 
-os.environ[
-    "TIKTOKEN_CACHE_DIR"
-] = cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+os.environ["TIKTOKEN_CACHE_DIR"] = (
+    cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+)
 
 import tiktoken
 import time

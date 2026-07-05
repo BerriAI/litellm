@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import encode_url_path_segments
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -131,9 +132,7 @@ class BytezChatConfig(BaseConfig):
         )
 
         if not messages:
-            raise Exception(
-                "kwarg `messages` must be an array of messages that follow the openai chat standard"
-            )
+            raise Exception("kwarg `messages` must be an array of messages that follow the openai chat standard")
 
         if not api_key:
             raise Exception("Missing api_key, make sure you pass in your api key")
@@ -149,7 +148,8 @@ class BytezChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return f"{API_BASE}/{model}"
+        encoded_model = encode_url_path_segments(model, field_name="model")
+        return f"{API_BASE}/{encoded_model}"
 
     def transform_request(
         self,
@@ -189,7 +189,7 @@ class BytezChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        json = raw_response.json()  # noqa: F811
+        json = raw_response.json()
 
         error = json.get("error")
 
@@ -271,9 +271,7 @@ class BytezChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise BytezError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise BytezError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
@@ -315,9 +313,7 @@ class BytezChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise BytezError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise BytezError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
@@ -445,9 +441,7 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
                 elif isinstance(content_item, dict):
                     new_content_items.append(content_item)
                 else:
-                    raise Exception(
-                        "`content` can only contain strings or openai content dicts"
-                    )
+                    raise Exception("`content` can only contain strings or openai content dicts")
 
             new_content += new_content_items
         else:

@@ -7,7 +7,10 @@ import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_base_url,
+    pop_vertex_request_labels,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -36,9 +39,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         BaseImageGenerationConfig.__init__(self)
         VertexLLM.__init__(self)
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Imagen API supported parameters
         """
@@ -132,19 +133,11 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_location = (
-            self.safe_get_vertex_ai_location(litellm_params)
-            or self._resolve_vertex_location()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
-            raise ValueError(
-                "vertex_project and vertex_location are required for Vertex AI"
-            )
+            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
         base_url = get_vertex_base_url(vertex_location)
 
@@ -170,14 +163,8 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_credentials = (
-            self.safe_get_vertex_ai_credentials(litellm_params)
-            or self._resolve_vertex_credentials()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -203,13 +190,16 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "sampleCount": 1,
         }
 
-        # Merge with optional params
+        labels = pop_vertex_request_labels(optional_params, litellm_params)
+        # Merge with optional params (after popping labels so they are not sent as Imagen parameters)
         parameters = {**default_params, **optional_params}
 
-        request_body = {
+        request_body: dict = {
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
+        if labels:
+            request_body["labels"] = labels
 
         return request_body
 

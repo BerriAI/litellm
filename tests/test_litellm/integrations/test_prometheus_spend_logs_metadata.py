@@ -4,7 +4,11 @@ Unit tests for spend_logs_metadata inclusion in Prometheus custom labels.
 Verifies that metadata from x-litellm-spend-logs-metadata header is available
 in Prometheus custom labels via combined_metadata.
 """
-from litellm.integrations.prometheus import get_custom_labels_from_metadata
+
+from litellm.integrations.prometheus import (
+    _get_combined_custom_metadata_from_standard_logging_payload,
+    get_custom_labels_from_metadata,
+)
 
 
 def test_get_custom_labels_includes_spend_logs_metadata(monkeypatch):
@@ -108,3 +112,96 @@ def test_combined_metadata_with_none_spend_logs(monkeypatch):
 
     result = get_custom_labels_from_metadata(combined_metadata)
     assert result == {"metadata_foo": "bar"}
+
+
+def test_combined_metadata_includes_top_level_fields():
+    """
+    Regression test for LIT-3741: user_api_key_project_alias (and other
+    top-level metadata fields) must be included in the combined metadata
+    so they can be referenced via custom_prometheus_metadata_labels.
+    """
+    standard_logging_payload = {
+        "metadata": {
+            "user_api_key_hash": "sk-abc123",
+            "user_api_key_alias": "hotel-key",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "hotel-team",
+            "user_api_key_project_id": "proj-1",
+            "user_api_key_project_alias": "hotel-recommendations",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_user_email": "user@example.com",
+            "user_api_key_end_user_id": None,
+            "user_api_key_org_id": None,
+            "user_api_key_org_alias": None,
+            "user_api_key_request_route": "/v1/chat/completions",
+            "requester_metadata": {"custom_field": "custom_value"},
+            "user_api_key_auth_metadata": {"auth_field": "auth_value"},
+            "spend_logs_metadata": None,
+        }
+    }
+
+    combined = _get_combined_custom_metadata_from_standard_logging_payload(
+        standard_logging_payload
+    )
+
+    assert combined["user_api_key_project_alias"] == "hotel-recommendations"
+    assert combined["user_api_key_project_id"] == "proj-1"
+    assert combined["user_api_key_team_alias"] == "hotel-team"
+    assert combined["user_api_key_request_route"] == "/v1/chat/completions"
+    assert combined["custom_field"] == "custom_value"
+    assert combined["auth_field"] == "auth_value"
+
+
+def test_project_alias_accessible_via_custom_prometheus_labels(monkeypatch):
+    """
+    Regression test for LIT-3741: configuring
+    custom_prometheus_metadata_labels with "metadata.user_api_key_project_alias"
+    should produce a label with the project's alias value.
+    """
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels",
+        ["metadata.user_api_key_project_alias"],
+    )
+
+    standard_logging_payload = {
+        "metadata": {
+            "user_api_key_project_alias": "hotel-recommendations",
+            "requester_metadata": None,
+            "user_api_key_auth_metadata": None,
+            "spend_logs_metadata": None,
+        }
+    }
+
+    combined = _get_combined_custom_metadata_from_standard_logging_payload(
+        standard_logging_payload
+    )
+    result = get_custom_labels_from_metadata(combined)
+
+    assert result == {"metadata_user_api_key_project_alias": "hotel-recommendations"}
+
+
+def test_project_alias_accessible_without_prefix(monkeypatch):
+    """
+    user_api_key_project_alias should also be accessible without
+    the "metadata." prefix in custom_prometheus_metadata_labels config.
+    """
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels",
+        ["user_api_key_project_alias"],
+    )
+
+    standard_logging_payload = {
+        "metadata": {
+            "user_api_key_project_alias": "hotel-recommendations",
+            "requester_metadata": None,
+            "user_api_key_auth_metadata": None,
+            "spend_logs_metadata": None,
+        }
+    }
+
+    combined = _get_combined_custom_metadata_from_standard_logging_payload(
+        standard_logging_payload
+    )
+    result = get_custom_labels_from_metadata(combined)
+
+    assert result == {"user_api_key_project_alias": "hotel-recommendations"}

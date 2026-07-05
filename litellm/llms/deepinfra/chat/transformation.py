@@ -94,15 +94,11 @@ class DeepInfraConfig(OpenAIGPTConfig):
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if (
-                param == "temperature"
-                and value == 0
-                and model == "mistralai/Mistral-7B-Instruct-v0.1"
+                param == "temperature" and value == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1"
             ):  # this model does no support temperature == 0
                 value = MIN_NON_ZERO_TEMPERATURE  # close to 0
             if param == "tool_choice":
-                if (
-                    value != "auto" and value != "none"
-                ):  # https://deepinfra.com/docs/advanced/function_calling
+                if value != "auto" and value != "none":  # https://deepinfra.com/docs/advanced/function_calling
                     ## UNSUPPORTED TOOL CHOICE VALUE
                     if litellm.drop_params is True or drop_params is True:
                         value = None
@@ -120,9 +116,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                     optional_params[param] = value
         return optional_params
 
-    def _transform_tool_message_content(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def _transform_tool_message_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         """
         Transform tool message content from array to string format for DeepInfra compatibility.
 
@@ -161,8 +155,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -170,8 +163,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -203,10 +195,6 @@ class DeepInfraConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-        api_base = (
-            api_base
-            or get_secret_str("DEEPINFRA_API_BASE")
-            or "https://api.deepinfra.com/v1/openai"
-        )
+        api_base = api_base or get_secret_str("DEEPINFRA_API_BASE") or "https://api.deepinfra.com/v1/openai"
         dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
         return api_base, dynamic_api_key

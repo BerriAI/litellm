@@ -89,7 +89,7 @@ describe("ToolTestPanel defaults", () => {
     expect(screen.getByLabelText("message")).toHaveValue("");
     expect(screen.getByLabelText("attempts")).toHaveValue(0);
     expect(screen.getByLabelText("ratio")).toHaveValue(0.4);
-    expect(screen.getByDisplayValue("True")).toBeInTheDocument();
+    expect(screen.getByTitle("True")).toBeInTheDocument();
 
     const keywordsTextarea = screen.getByTestId("textarea-keywords");
     expect(JSON.parse(keywordsTextarea.value)).toEqual([""]);
@@ -150,5 +150,20 @@ describe("ToolTestPanel defaults", () => {
 
     expect(screen.getByPlaceholderText("Enter input for this tool")).toBeInTheDocument();
     expect(screen.queryByText("No parameters required")).not.toBeInTheDocument();
+  });
+
+  it("renders the call button as type=button so a click never also triggers native form submission", () => {
+    const schema: InputSchema = {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "Prompt text" },
+      },
+    };
+
+    renderPanel(schema);
+
+    const callButton = screen.getByRole("button", { name: "Call Tool" });
+    expect(callButton.closest("form")).not.toBeNull();
+    expect(callButton).toHaveAttribute("type", "button");
   });
 });

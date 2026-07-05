@@ -7,8 +7,10 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 2. For DELETE requests: idempotent behavior returns success even if session doesn't exist
 """
 
-import pytest
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from litellm.types.mcp import MCPAuth
+import pytest
 
 
 class TestHandleStaleMcpSession:
@@ -50,32 +52,55 @@ class TestHandleStaleMcpSession:
         try:
             from litellm.proxy._experimental.mcp_server.server import (
                 _handle_stale_mcp_session,
+                _stateful_session_active_request_counts,
+                _stateful_session_auth_context_last_seen,
+                _stateful_session_auth_contexts,
+                _stateful_session_locks,
+                _stateful_session_owners,
             )
         except ImportError:
             pytest.skip("MCP server not available")
 
+        stale_session_id = "stale-id"
         scope = {
             "type": "http",
             "method": "DELETE",
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"mcp-session-id", b"stale-id"),
+                (b"mcp-session-id", stale_session_id.encode()),
             ],
         }
         receive = AsyncMock()
         send = AsyncMock()
         mgr = MagicMock()
         mgr._server_instances = {}  # no active sessions
+        _stateful_session_auth_contexts[stale_session_id] = MagicMock()
+        _stateful_session_auth_context_last_seen[stale_session_id] = 1.0
+        _stateful_session_owners[stale_session_id] = "owner"
+        _stateful_session_locks[stale_session_id] = MagicMock()
+        _stateful_session_active_request_counts[stale_session_id] = 1
 
-        handled = await _handle_stale_mcp_session(scope, receive, send, mgr)
+        try:
+            handled = await _handle_stale_mcp_session(scope, receive, send, mgr)
 
-        # Should be fully handled (returns True)
-        assert handled is True
-        # Should have sent a success response
-        assert send.called
-        # Header should NOT be stripped (DELETE needs the session ID)
-        header_names = [k for k, _ in scope["headers"]]
-        assert b"mcp-session-id" in header_names
+            # Should be fully handled (returns True)
+            assert handled is True
+            # Should have sent a success response
+            assert send.called
+            # Header should NOT be stripped (DELETE needs the session ID)
+            header_names = [k for k, _ in scope["headers"]]
+            assert b"mcp-session-id" in header_names
+            assert stale_session_id not in _stateful_session_auth_contexts
+            assert stale_session_id not in _stateful_session_auth_context_last_seen
+            assert stale_session_id not in _stateful_session_owners
+            assert stale_session_id not in _stateful_session_locks
+            assert stale_session_id not in _stateful_session_active_request_counts
+        finally:
+            _stateful_session_auth_contexts.pop(stale_session_id, None)
+            _stateful_session_auth_context_last_seen.pop(stale_session_id, None)
+            _stateful_session_owners.pop(stale_session_id, None)
+            _stateful_session_locks.pop(stale_session_id, None)
+            _stateful_session_active_request_counts.pop(stale_session_id, None)
 
     @pytest.mark.asyncio
     async def test_preserves_valid_session_id(self):
@@ -199,7 +224,8 @@ async def test_stale_mcp_session_id_is_stripped():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateful,
+            session_manager_stateless,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -222,36 +248,55 @@ async def test_stale_mcp_session_id_is_stripped():
 
     # Simulate: session manager has NO sessions (the stale one was cleaned up)
     captured_scope = {}
+    stateful_handle_request = AsyncMock()
 
-    async def mock_handle_request(s, r, se):
+    async def _stateless_capture(s, r, se):
         # Capture the scope that was actually passed
         captured_scope.update(s)
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        {},  # Empty dict = no active sessions
+    stateless_handle_request = AsyncMock(side_effect=_stateless_capture)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            new=stateless_handle_request,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "_server_instances",
+            {},
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=stateful_handle_request,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "_server_instances",
+            {},  # Empty dict = no active sessions
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify the mcp-session-id header was stripped
     header_names = [k for k, v in captured_scope.get("headers", [])]
-    assert b"mcp-session-id" not in header_names, (
-        "Stale mcp-session-id header should have been stripped from the scope"
-    )
+    assert b"mcp-session-id" not in header_names, "Stale mcp-session-id header should have been stripped from the scope"
+    assert stateless_handle_request.called, "Stale non-initialize requests should route stateless"
+    assert not stateful_handle_request.called, "Stale non-initialize requests should not route stateful"
 
 
 @pytest.mark.asyncio
@@ -288,33 +333,120 @@ async def test_delete_stale_mcp_session_returns_success():
     # Mock handle_request should NOT be called for stale DELETE
     mock_handle_request = AsyncMock()
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        {},  # Empty dict = no active sessions
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager,
+            "_server_instances",
+            {},  # Empty dict = no active sessions
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify session manager was NOT called (request was handled early)
-    assert not mock_handle_request.called, (
-        "Session manager should not be called for DELETE on non-existent session"
-    )
+    assert not mock_handle_request.called, "Session manager should not be called for DELETE on non-existent session"
 
     # Verify a success response was sent
     assert send.called, "A response should have been sent"
+
+
+@pytest.mark.asyncio
+async def test_failed_delete_preserves_stateful_session_tracking():
+    """
+    When the SDK fails to terminate an existing stateful session, keep the
+    owner/auth tracking so the session cannot be hijacked or hidden from cleanup.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _owner_fingerprint_for,
+            _stateful_session_auth_context_last_seen,
+            _stateful_session_auth_contexts,
+            _stateful_session_locks,
+            _stateful_session_owners,
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "delete-failure-session"
+    user_auth = MagicMock()
+    user_auth.api_key = "sk-test"
+    user_auth.user_id = "test-user"
+    auth_context = MagicMock()
+    session_lock = asyncio.Lock()
+    mock_instances = {session_id: MagicMock()}
+
+    scope = {
+        "type": "http",
+        "method": "DELETE",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"mcp-session-id", session_id.encode()),
+            (b"authorization", b"Bearer sk-test"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    _stateful_session_auth_contexts[session_id] = auth_context
+    _stateful_session_auth_context_last_seen[session_id] = 1.0
+    _stateful_session_owners[session_id] = _owner_fingerprint_for(user_auth)
+    _stateful_session_locks[session_id] = session_lock
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(user_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "handle_request",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("delete failed"),
+            ) as mock_handle_request,
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                mock_instances,
+            ),
+        ):
+            await handle_streamable_http_mcp(scope, receive, send)
+
+        assert mock_handle_request.await_count == 1
+        assert _stateful_session_auth_contexts[session_id] is auth_context
+        assert _stateful_session_auth_context_last_seen[session_id] == 1.0
+        assert _stateful_session_owners[session_id] == _owner_fingerprint_for(user_auth)
+        assert _stateful_session_locks[session_id] is session_lock
+        assert session_id in mock_instances
+    finally:
+        _stateful_session_auth_contexts.pop(session_id, None)
+        _stateful_session_auth_context_last_seen.pop(session_id, None)
+        _stateful_session_owners.pop(session_id, None)
+        _stateful_session_locks.pop(session_id, None)
 
 
 @pytest.mark.asyncio
@@ -326,7 +458,7 @@ async def test_valid_mcp_session_id_is_preserved():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateful,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -352,34 +484,38 @@ async def test_valid_mcp_session_id_is_preserved():
     async def mock_handle_request(s, r, se):
         captured_scope.update(s)
 
-    # Session manager HAS this session
+    # Stateful session manager HAS this session (requests with mcp-session-id route there)
     mock_instances = {valid_session_id: MagicMock()}
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        mock_instances,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "_server_instances",
+            mock_instances,
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify the mcp-session-id header was preserved
     header_names = [k for k, v in captured_scope.get("headers", [])]
-    assert b"mcp-session-id" in header_names, (
-        "Valid mcp-session-id header should have been preserved"
-    )
+    assert b"mcp-session-id" in header_names, "Valid mcp-session-id header should have been preserved"
 
 
 @pytest.mark.asyncio
@@ -414,23 +550,29 @@ async def test_no_mcp_session_id_header_works_normally():
     async def mock_handle_request(s, r, se):
         captured_scope.update(s)
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        {},
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager,
+            "_server_instances",
+            {},
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
@@ -438,3 +580,471 @@ async def test_no_mcp_session_id_header_works_normally():
     header_names = [k for k, v in captured_scope.get("headers", [])]
     assert b"mcp-session-id" not in header_names
     assert b"content-type" in header_names
+
+
+@pytest.mark.asyncio
+async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
+    """
+    Per-user OAuth server with no stored token should fail fast with 401 +
+    WWW-Authenticate so PKCE can start.
+    """
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "scheme": "http",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("localhost", 8000),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    oauth_server = MagicMock()
+    oauth_server.auth_type = MCPAuth.oauth2
+    oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as mock_has_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    # Verify a 401 was raised
+    assert mock_has_token.await_count == 1
+    assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    assert "www-authenticate" in exc_info.value.headers
+    assert "Bearer authorization_uri=" in exc_info.value.headers["www-authenticate"]
+
+
+@pytest.mark.asyncio
+async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_challenge():
+    """
+    OAuth2 server with ``delegate_auth_to_upstream=True`` where the client
+    already presents a bearer token the upstream rejects: the request bypasses
+    the preemptive challenge (a token is present) and reaches the session
+    manager, whose upstream ``MCPUpstreamAuthError`` is surfaced verbatim so the
+    client sees the upstream's RFC 9728 challenge rather than the gateway's.
+    """
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/delegated_oauth_server",
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("litellm.example.com", 443),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"litellm.example.com"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = None
+    delegated_server = MagicMock()
+    delegated_server.auth_type = MCPAuth.oauth2
+    delegated_server.delegate_auth_to_upstream = True
+    delegated_server.needs_user_oauth_token = True
+    delegated_server.server_id = "delegated-oauth-server"
+
+    upstream_challenge = 'Bearer resource_metadata="https://upstream.example.com/.well-known/oauth-protected-resource"'
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(
+                user_auth,
+                None,
+                ["delegated_oauth_server"],
+                None,
+                {"Authorization": "Bearer upstream-token-the-upstream-rejects"},
+                None,
+            ),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=delegated_server,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            new_callable=AsyncMock,
+            side_effect=MCPUpstreamAuthError(
+                status_code=401,
+                www_authenticate=upstream_challenge,
+                server_name="delegated_oauth_server",
+            ),
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_handle_request.await_count == 1
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.headers == {"www-authenticate": upstream_challenge}
+
+
+@pytest.mark.asyncio
+async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
+    """
+    Per-user OAuth server with an existing stored token should skip pre-emptive
+    401 and continue to session manager request handling.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "scheme": "http",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("localhost", 8000),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    oauth_server = MagicMock()
+    oauth_server.auth_type = MCPAuth.oauth2
+    oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_has_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+        patch.object(
+            session_manager_stateless,
+            "_server_instances",
+            {},
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_has_token.await_count == 1
+    assert mock_handle_request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_streamable_http_mcp_delegated_server_without_token_returns_preemptive_resource_metadata_401():
+    """
+    OAuth2 server with ``delegate_auth_to_upstream=True`` and no stored token
+    must fail fast with a 401 carrying a ``resource_metadata=`` challenge that
+    points at the gateway's proxied oauth-protected-resource well-known, so the
+    MCP client starts PKCE against the upstream IdP. On ``initialize`` the
+    gateway answers locally and never probes upstream, so this preemptive
+    challenge is the only thing that can drive the client into the OAuth flow;
+    falling through to the session manager (or emitting the gateway
+    ``authorization_uri=`` challenge) leaves the client with no tools and no
+    sign-in prompt.
+    """
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/delegated_oauth_server",
+        "_original_path": "/delegated_oauth_server/mcp",
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("litellm.example.com", 443),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"litellm.example.com"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = None
+    delegated_server = MagicMock()
+    delegated_server.auth_type = MCPAuth.oauth2
+    delegated_server.delegate_auth_to_upstream = True
+    delegated_server.needs_user_oauth_token = True
+    delegated_server.server_id = "delegated-oauth-server"
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(
+                user_auth,
+                None,
+                ["delegated_oauth_server"],
+                None,
+                None,
+                None,
+            ),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            new_callable=AsyncMock,
+        ) as mock_has_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=delegated_server,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    # Delegate-auth servers raise the resource_metadata challenge before any
+    # per-user existence check, so the v2 token store is never consulted.
+    assert mock_has_token.await_count == 0
+    assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert "resource_metadata=" in challenge
+    assert "authorization_uri=" not in challenge
+    assert "/.well-known/oauth-protected-resource/delegated_oauth_server/mcp" in challenge
+
+
+@pytest.mark.asyncio
+async def test_handle_streamable_http_mcp_token_exchange_without_subject_returns_preemptive_resource_metadata_401():
+    """An ``oauth2_token_exchange`` (OBO) server with no caller subject token must fail fast at
+    connect with a 401 carrying the RFC 9728 ``resource_metadata`` + RFC 6750 ``invalid_token``
+    challenge, so the client discovers the IdP and retries with a subject token. A tool-call-time
+    401 would be wrapped into a JSON-RPC error and the WWW-Authenticate lost, so this preemptive
+    challenge is what drives the discovery flow."""
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/obo_server",
+        "_original_path": "/mcp/obo_server",
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("litellm.example.com", 443),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"litellm.example.com"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = None
+    obo_server = MagicMock()
+    obo_server.auth_type = MCPAuth.oauth2_token_exchange
+    obo_server.alias = None
+    obo_server.server_name = "obo_server"
+    obo_server.name = "obo_server"
+    obo_server.server_id = "obo-server"
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["obo_server"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=obo_server,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    headers = {k.lower(): v for k, v in (exc_info.value.headers or {}).items()}
+    challenge = headers["www-authenticate"]
+    # Structural invariants only: the exact root-path prefix is exercised in the adapter's
+    # oauth_protected_resource_path unit test, so this handler test stays hermetic w.r.t.
+    # SERVER_ROOT_PATH (which other tests in the shard may have left set in the environment).
+    assert "resource_metadata=" in challenge
+    assert "/.well-known/oauth-protected-resource" in challenge
+    assert challenge.split('resource_metadata="', 1)[1].split('"', 1)[0].endswith("/mcp/obo_server")
+    assert 'error="invalid_token"' in challenge

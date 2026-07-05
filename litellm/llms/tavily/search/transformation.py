@@ -3,6 +3,7 @@ Calls Tavily's /search endpoint to search the web.
 
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -61,11 +62,15 @@ class TavilySearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("TAVILY_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("TAVILY_API_KEY",),
+            base_env_var="TAVILY_API_BASE",
+            default_api_base=self.TAVILY_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "TAVILY_API_KEY is not set. Set `TAVILY_API_KEY` environment variable."
-            )
+            raise ValueError("TAVILY_API_KEY is not set. Set `TAVILY_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -142,10 +147,7 @@ class TavilySearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         return result_data
@@ -180,9 +182,7 @@ class TavilySearchConfig(BaseSearchConfig):
             search_result = SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
-                snippet=result.get(
-                    "content", ""
-                ),  # Tavily uses "content" instead of "snippet"
+                snippet=result.get("content", ""),  # Tavily uses "content" instead of "snippet"
                 date=None,  # Tavily doesn't provide date in response
                 last_updated=None,  # Tavily doesn't provide last_updated in response
             )

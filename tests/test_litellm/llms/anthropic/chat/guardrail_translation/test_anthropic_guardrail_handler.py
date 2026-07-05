@@ -72,11 +72,12 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
 
         # Mock _check_streaming_has_ended to return True (stream ended)
         # and _build_complete_streaming_response to return None
-        with patch.object(
-            handler, "_check_streaming_has_ended", return_value=True
-        ), patch(
-            "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
-            return_value=None,
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=True),
+            patch(
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                return_value=None,
+            ),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -104,17 +105,15 @@ class TestAnthropicMessagesHandlerInputProcessing:
             "messages": [{"role": "user", "content": "hello"}],
             "litellm_metadata": {
                 "guardrails": [
-                    {
-                        "cygnal-monitor": {
-                            "extra_body": {"policy_id": "policy-123"}
-                        }
-                    }
+                    {"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}
                 ]
             },
         }
 
         with patch("litellm.proxy.proxy_server.premium_user", True):
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
@@ -142,11 +141,12 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         # Mock _check_streaming_has_ended to return True (stream ended)
         # and _build_complete_streaming_response to return the mock response
-        with patch.object(
-            handler, "_check_streaming_has_ended", return_value=True
-        ), patch(
-            "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
-            return_value=mock_response,
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=True),
+            patch(
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                return_value=mock_response,
+            ),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -188,11 +188,12 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         # Mock _check_streaming_has_ended to return True (stream ended)
         # and _build_complete_streaming_response to return the mock response
-        with patch.object(
-            handler, "_check_streaming_has_ended", return_value=True
-        ), patch(
-            "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
-            return_value=mock_response,
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=True),
+            patch(
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                return_value=mock_response,
+            ),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -213,10 +214,11 @@ class TestAnthropicMessagesHandlerInputProcessing:
         guardrail = MockPassThroughGuardrail(guardrail_name="test")
 
         # Mock _check_streaming_has_ended to return False (stream not ended)
-        with patch.object(
-            handler, "_check_streaming_has_ended", return_value=False
-        ), patch.object(
-            handler, "get_streaming_string_so_far", return_value="partial text"
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=False),
+            patch.object(
+                handler, "get_streaming_string_so_far", return_value="partial text"
+            ),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -230,15 +232,14 @@ class TestAnthropicMessagesHandlerInputProcessing:
             # Should return the responses
             assert result == responses_so_far
 
-
     @pytest.mark.asyncio
     async def test_process_input_messages_with_anthropic_native_tools(self):
         """Test that Anthropic native tools (tool_search_tool_regex) are preserved correctly
-        
+
         This test verifies the fix for the bug where Anthropic native tools like
         tool_search_tool_regex_20251119 were being converted to OpenAI format and then
         not properly converted back, causing API errors.
-        
+
         The guardrail converts tools to OpenAI format for processing, then they need to be
         converted back to Anthropic format. Native Anthropic tools should be preserved as-is,
         while regular tools should be converted to type="custom".
@@ -248,11 +249,13 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         data = {
             "model": "claude-opus-4-6",
-            "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+            "messages": [
+                {"role": "user", "content": "What is the weather in San Francisco?"}
+            ],
             "tools": [
                 {
                     "type": "tool_search_tool_regex_20251119",
-                    "name": "tool_search_tool_regex"
+                    "name": "tool_search_tool_regex",
                 },
                 {
                     "name": "get_weather",
@@ -263,30 +266,28 @@ class TestAnthropicMessagesHandlerInputProcessing:
                             "location": {"type": "string"},
                             "unit": {
                                 "type": "string",
-                                "enum": ["celsius", "fahrenheit"]
-                            }
+                                "enum": ["celsius", "fahrenheit"],
+                            },
                         },
-                        "required": ["location"]
+                        "required": ["location"],
                     },
-                    "defer_loading": True
-                }
-            ]
+                    "defer_loading": True,
+                },
+            ],
         }
 
         result = await handler.process_input_messages(
-            data=data,
-            guardrail_to_apply=guardrail,
-            litellm_logging_obj=MagicMock()
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
         )
 
         # Verify tools are in correct Anthropic format
         tools = result["tools"]
         assert len(tools) == 2
-        
+
         # First tool should be preserved as Anthropic native tool
         assert tools[0]["type"] == "tool_search_tool_regex_20251119"
         assert tools[0]["name"] == "tool_search_tool_regex"
-        
+
         # Second tool should be converted to Anthropic custom tool format
         assert tools[1]["type"] == "custom"
         assert tools[1]["name"] == "get_weather"

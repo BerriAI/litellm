@@ -19,6 +19,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.container_endpoints.ownership import (
+    assert_user_can_access_container,
+    get_container_forwarding_params,
+)
 
 
 def _load_endpoints_config() -> Dict:
@@ -40,10 +44,11 @@ def _get_container_provider_config(custom_llm_provider: str):
         from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 
         return OpenAIContainerConfig()
-    else:
-        raise ValueError(
-            f"Container API not supported for provider: {custom_llm_provider}"
-        )
+    elif custom_llm_provider in ("azure", "azure_text"):
+        from litellm.llms.azure.containers.transformation import AzureContainerConfig
+
+        return AzureContainerConfig()
+    raise ValueError(f"Container API not supported for provider: {custom_llm_provider}")
 
 
 def _create_handler_for_path_params(
@@ -62,10 +67,12 @@ def _create_handler_for_path_params(
             request: Request,
             container_id: str,
             file_id: str,
+            fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         ):
             return await _process_binary_request(
                 request=request,
+                fastapi_response=fastapi_response,
                 container_id=container_id,
                 file_id=file_id,
                 user_api_key_dict=user_api_key_dict,
@@ -150,54 +157,73 @@ def _create_handler_for_path_params(
 
 async def _process_binary_request(
     request: Request,
+    fastapi_response: Response,
     container_id: str,
     file_id: str,
     user_api_key_dict: UserAPIKeyAuth,
 ):
     """
-    Process binary content requests using the proper transformation pattern.
+    Process binary content requests through the standard proxy/router pipeline.
 
-    This uses the provider config transformations and llm_http_handler
-    to maintain consistency with the established pattern.
+    Validate ownership before forwarding the provider-native container id through
+    the standard proxy/router pipeline. This handler only adapts the byte
+    response to FastAPI.
     """
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.router import GenericLiteLLMParams
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
 
-    # Extract custom_llm_provider
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
 
-    # Get the provider config
-    container_provider_config = _get_container_provider_config(custom_llm_provider)
-
-    # Build litellm_params - credentials are resolved by provider config from env
-    litellm_params = GenericLiteLLMParams()
-
-    # Create logging object
-    logging_obj = Logging(
-        model="container-file-content",
-        messages=[],
-        stream=False,
-        call_type="container_file_content",
-        start_time=None,
-        litellm_call_id="",
-        function_id="",
+    original_container_id, resolved_provider = await assert_user_can_access_container(
+        container_id=container_id,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
     )
-
-    # Use the HTTP handler to make the request
-    handler = BaseLLMHTTPHandler()
+    data: Dict[str, Any] = {
+        "file_id": file_id,
+        **(
+            await get_container_forwarding_params(
+                container_id=container_id,
+                original_container_id=original_container_id,
+                custom_llm_provider=resolved_provider,
+            )
+        ),
+    }
+    processor = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
-        content = await handler.async_container_file_content_handler(
-            container_id=container_id,
-            file_id=file_id,
-            container_provider_config=container_provider_config,
-            litellm_params=litellm_params,
-            logging_obj=logging_obj,
+        content = await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aretrieve_container_file_content",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
 
         # Determine content type based on common file extensions in the file_id
@@ -218,13 +244,22 @@ async def _process_binary_request(
         elif ".pdf" in file_id_lower:
             content_type = "application/pdf"
 
+        if not isinstance(content, bytes):
+            raise TypeError(f"aretrieve_container_file_content expected bytes, got {type(content).__name__}")
+
         return Response(
             content=content,
+            headers=dict(fastapi_response.headers),
             media_type=content_type,
         )
 
     except Exception as e:
-        raise e
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
 
 
 async def _process_multipart_upload_request(
@@ -267,14 +302,25 @@ async def _process_multipart_upload_request(
     if isinstance(file_list, list) and len(file_list) > 0:
         data["file"] = file_list[0]
 
-    data["container_id"] = container_id
-
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    data["custom_llm_provider"] = custom_llm_provider
+
+    original_container_id, resolved_provider = await assert_user_can_access_container(
+        container_id=container_id,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    data.update(
+        await get_container_forwarding_params(
+            container_id=container_id,
+            original_container_id=original_container_id,
+            custom_llm_provider=resolved_provider,
+        )
+    )
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -338,7 +384,26 @@ async def _process_request(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    data["custom_llm_provider"] = custom_llm_provider
+
+    # Validate container_id ownership if present in path_params.
+    if "container_id" in path_params:
+        (
+            original_container_id,
+            resolved_provider,
+        ) = await assert_user_can_access_container(
+            container_id=path_params["container_id"],
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
+        data.update(
+            await get_container_forwarding_params(
+                container_id=path_params["container_id"],
+                original_container_id=original_container_id,
+                custom_llm_provider=resolved_provider,
+            )
+        )
+    else:
+        data["custom_llm_provider"] = custom_llm_provider
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -387,9 +452,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         is_multipart = endpoint_config.get("is_multipart", False)
 
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(
-            path_params, route_type, returns_binary, is_multipart
-        )
+        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
 
         # Register routes
         route_method = getattr(router, method)

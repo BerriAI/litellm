@@ -5,7 +5,8 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
@@ -43,9 +44,7 @@ class ArizePhoenixPromptTemplate:
         self.template_format = metadata.get("template_format", "MUSTACHE")
 
     def __repr__(self):
-        return (
-            f"ArizePhoenixPromptTemplate(id='{self.template_id}', model='{self.model}')"
-        )
+        return f"ArizePhoenixPromptTemplate(id='{self.template_id}', model='{self.model}')"
 
 
 class ArizePhoenixTemplateManager:
@@ -70,11 +69,15 @@ class ArizePhoenixTemplateManager:
         self.api_base = api_base
         self.prompt_id = prompt_id
         self.prompts: Dict[str, ArizePhoenixPromptTemplate] = {}
-        self.arize_client = ArizePhoenixClient(
-            api_key=self.api_key, api_base=self.api_base
-        )
+        self.arize_client = ArizePhoenixClient(api_key=self.api_key, api_base=self.api_base)
 
-        self.jinja_env = Environment(
+        # Templates fetched from Arize Phoenix come from external workspace
+        # users; in a plain `Environment()` a malicious template could reach
+        # `__class__.__init__.__globals__` and execute arbitrary code on the
+        # proxy host. The sandbox blocks that attribute traversal while
+        # leaving normal `{{ var }}` substitution intact. Matches the
+        # dotprompt manager's hardening.
+        self.jinja_env = ImmutableSandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Mustache/Handlebars-style delimiters
@@ -102,13 +105,9 @@ class ArizePhoenixTemplateManager:
             else:
                 raise ValueError(f"Prompt version '{prompt_version_id}' not found")
         except Exception as e:
-            raise Exception(
-                f"Failed to load prompt version '{prompt_version_id}' from Arize Phoenix: {e}"
-            )
+            raise Exception(f"Failed to load prompt version '{prompt_version_id}' from Arize Phoenix: {e}")
 
-    def _parse_prompt_data(
-        self, data: Dict[str, Any], prompt_version_id: str
-    ) -> ArizePhoenixPromptTemplate:
+    def _parse_prompt_data(self, data: Dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
         template_data = data.get("template", {})
         messages = template_data.get("messages", [])
@@ -147,9 +146,7 @@ class ArizePhoenixTemplateManager:
             metadata=metadata,
         )
 
-    def render_template(
-        self, template_id: str, variables: Optional[Dict[str, Any]] = None
-    ) -> List[AllMessageValues]:
+    def render_template(self, template_id: str, variables: Optional[Dict[str, Any]] = None) -> List[AllMessageValues]:
         """Render a template with the given variables and return formatted messages."""
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
@@ -265,9 +262,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             raise ValueError(f"Prompt template '{prompt_id}' not found")
 
         # Render the template
-        rendered_messages = self.prompt_manager.render_template(
-            prompt_id, prompt_variables or {}
-        )
+        rendered_messages = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
 
         # Extract metadata
         metadata = {
@@ -310,9 +305,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
         try:
             # Get the rendered messages and metadata
-            rendered_messages, prompt_metadata = self.get_prompt_template(
-                prompt_id, prompt_variables
-            )
+            rendered_messages, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
             # Merge rendered messages with existing messages
             if rendered_messages:
@@ -346,9 +339,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             # Log error but don't fail the call
             import litellm
 
-            litellm._logging.verbose_proxy_logger.error(
-                f"Error in Arize Phoenix prompt pre_call_hook: {e}"
-            )
+            litellm._logging.verbose_proxy_logger.error(f"Error in Arize Phoenix prompt pre_call_hook: {e}")
             return messages, litellm_params
 
     def get_available_prompts(self) -> List[str]:
@@ -401,9 +392,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
                 self.prompt_manager._load_prompt_from_arize(prompt_id)
 
             # Get the rendered messages and metadata
-            rendered_messages, prompt_metadata = self.get_prompt_template(
-                prompt_id, prompt_variables
-            )
+            rendered_messages, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
             # Extract model from metadata (if specified)
             template_model = prompt_metadata.get("model")

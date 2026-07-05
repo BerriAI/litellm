@@ -76,9 +76,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             deployment_name = deployment.get("litellm_params", {}).get("model")
             rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
 
-            local_result = self.router_cache.get_cache(
-                key=rpm_key, local_only=True
-            )  # check local result first
+            local_result = self.router_cache.get_cache(key=rpm_key, local_only=True)  # check local result first
 
             deployment_rpm = None
             if deployment_rpm is None:
@@ -106,20 +104,19 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                             model_id,
                             deployment.get("model_name", ""),
                         ),
-                        request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        request=httpx.Request(
+                            method="tpm_rpm_limits",
+                            url="https://github.com/BerriAI/litellm",
+                        ),  # type: ignore
                     ),
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
 
-                result = self.router_cache.increment_cache(
-                    key=rpm_key, value=1, ttl=self.routing_args.ttl
-                )
+                result = self.router_cache.increment_cache(key=rpm_key, value=1, ttl=self.routing_args.ttl)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
-                        message="Deployment over defined rpm limit={}. current usage={}".format(
-                            deployment_rpm, result
-                        ),
+                        message="Deployment over defined rpm limit={}. current usage={}".format(deployment_rpm, result),
                         llm_provider="",
                         model=deployment.get("litellm_params", {}).get("model"),
                         response=httpx.Response(
@@ -129,7 +126,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                                 deployment_rpm,
                                 result,
                             ),
-                            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                            request=httpx.Request(
+                                method="tpm_rpm_limits",
+                                url="https://github.com/BerriAI/litellm",
+                            ),  # type: ignore
                         ),
                     )
             return deployment
@@ -138,9 +138,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
-    async def async_pre_call_check(
-        self, deployment: Dict, parent_otel_span: Optional[Span]
-    ) -> Optional[Dict]:
+    async def async_pre_call_check(self, deployment: Dict, parent_otel_span: Optional[Span]) -> Optional[Dict]:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -190,20 +188,19 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                             local_result,
                         ),
                         headers={"retry-after": str(60)},  # type: ignore
-                        request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        request=httpx.Request(
+                            method="tpm_rpm_limits",
+                            url="https://github.com/BerriAI/litellm",
+                        ),  # type: ignore
                     ),
                     num_retries=deployment.get("num_retries"),
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
-                result = await self._increment_value_in_current_window(
-                    key=rpm_key, value=1, ttl=self.routing_args.ttl
-                )
+                result = await self._increment_value_in_current_window(key=rpm_key, value=1, ttl=self.routing_args.ttl)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
-                        message="Deployment over defined rpm limit={}. current usage={}".format(
-                            deployment_rpm, result
-                        ),
+                        message="Deployment over defined rpm limit={}. current usage={}".format(deployment_rpm, result),
                         llm_provider="",
                         model=deployment.get("litellm_params", {}).get("model"),
                         response=httpx.Response(
@@ -214,7 +211,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                                 result,
                             ),
                             headers={"retry-after": str(60)},  # type: ignore
-                            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                            request=httpx.Request(
+                                method="tpm_rpm_limits",
+                                url="https://github.com/BerriAI/litellm",
+                            ),  # type: ignore
                         ),
                         num_retries=deployment.get("num_retries"),
                     )
@@ -229,9 +229,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             """
             Update TPM/RPM usage on success
             """
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
@@ -248,9 +246,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Setup values
             # ------------
             dt = get_utc_datetime()
-            current_minute = dt.strftime(
-                "%H-%M"
-            )  # use the same timezone regardless of system clock
+            current_minute = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
 
             tpm_key = f"{id}:{model}:tpm:{current_minute}"
             # ------------
@@ -259,17 +255,13 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
 
             ## TPM
-            self.router_cache.increment_cache(
-                key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
-            )
+            self.router_cache.increment_cache(key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl)
             ### TESTING ###
             if self.test_flag:
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {}".format(str(e))
             )
             pass
 
@@ -278,9 +270,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             """
             Update TPM usage on success
             """
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
@@ -295,9 +285,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Setup values
             # ------------
             dt = get_utc_datetime()
-            current_minute = dt.strftime(
-                "%H-%M"
-            )  # use the same timezone regardless of system clock
+            current_minute = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
 
             tpm_key = f"{id}:{model}:tpm:{current_minute}"
             # ------------
@@ -334,8 +322,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         lowest_tpm = float("inf")
         potential_deployments = []  # if multiple deployments have the same low value
         deployment_lookup = {
-            deployment.get("model_info", {}).get("id"): deployment
-            for deployment in healthy_deployments
+            deployment.get("model_info", {}).get("id"): deployment for deployment in healthy_deployments
         }
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
@@ -380,7 +367,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 potential_deployments = [_deployment]
         return potential_deployments
 
-    def _common_checks_available_deployment(  # noqa: PLR0915
+    def _common_checks_available_deployment(
         self,
         model_group: str,
         healthy_deployments: list,
@@ -513,13 +500,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     if _deployment_tpm is None:
                         _deployment_tpm = _deployment.get("tpm", None)
                     if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("litellm_params", {}).get(
-                            "tpm", None
-                        )
+                        _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm", None)
                     if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("model_info", {}).get(
-                            "tpm", None
-                        )
+                        _deployment_tpm = _deployment.get("model_info", {}).get("tpm", None)
                     if _deployment_tpm is None:
                         _deployment_tpm = float("inf")
 
@@ -531,13 +514,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     if _deployment_rpm is None:
                         _deployment_rpm = _deployment.get("rpm", None)
                     if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("litellm_params", {}).get(
-                            "rpm", None
-                        )
+                        _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm", None)
                     if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("model_info", {}).get(
-                            "rpm", None
-                        )
+                        _deployment_rpm = _deployment.get("model_info", {}).get("rpm", None)
                     if _deployment_rpm is None:
                         _deployment_rpm = float("inf")
 
@@ -558,7 +537,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     status_code=429,
                     content="",
                     headers={"retry-after": str(60)},  # type: ignore
-                    request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(
+                        method="tpm_rpm_limits",
+                        url="https://github.com/BerriAI/litellm",
+                    ),  # type: ignore
                 ),
             )
 
@@ -626,13 +608,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     if _deployment_tpm is None:
                         _deployment_tpm = _deployment.get("tpm", None)
                     if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("litellm_params", {}).get(
-                            "tpm", None
-                        )
+                        _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm", None)
                     if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("model_info", {}).get(
-                            "tpm", None
-                        )
+                        _deployment_tpm = _deployment.get("model_info", {}).get("tpm", None)
                     if _deployment_tpm is None:
                         _deployment_tpm = float("inf")
 
@@ -644,13 +622,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     if _deployment_rpm is None:
                         _deployment_rpm = _deployment.get("rpm", None)
                     if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("litellm_params", {}).get(
-                            "rpm", None
-                        )
+                        _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm", None)
                     if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("model_info", {}).get(
-                            "rpm", None
-                        )
+                        _deployment_rpm = _deployment.get("model_info", {}).get("rpm", None)
                     if _deployment_rpm is None:
                         _deployment_rpm = float("inf")
 

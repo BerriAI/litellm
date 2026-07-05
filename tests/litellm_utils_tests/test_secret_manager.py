@@ -183,13 +183,14 @@ def test_oidc_env_variable():
     del os.environ[env_var_name]
 
 
-def test_oidc_file():
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
+def test_oidc_file(monkeypatch):
+    # Create a temporary file inside a directory added to the allowlist.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", temp_dir)
+        temp_file_path = os.path.join(temp_dir, "token.txt")
         secret_value = "secret-" + uuid4().hex
-        temp_file.write(secret_value)
-        temp_file.flush()
-        temp_file_path = temp_file.name
+        with open(temp_file_path, "w") as temp_file:
+            temp_file.write(secret_value)
 
         secret_val = get_secret(f"oidc/file/{temp_file_path}")
 
@@ -238,12 +239,13 @@ def test_google_secret_manager():
         }
     }
 
-    with patch(
-        "litellm.proxy.proxy_server.premium_user", True
-    ), patch.object(
-        GoogleSecretManager,
-        "sync_construct_request_headers",
-        return_value={"Authorization": "Bearer mock_token"},
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GoogleSecretManager,
+            "sync_construct_request_headers",
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
     ):
         secret_manager = GoogleSecretManager()
         secret_manager.sync_httpx_client = MagicMock()
@@ -273,12 +275,13 @@ def test_google_secret_manager_read_in_memory():
 
     os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
-    with patch(
-        "litellm.proxy.proxy_server.premium_user", True
-    ), patch.object(
-        GoogleSecretManager,
-        "sync_construct_request_headers",
-        return_value={"Authorization": "Bearer mock_token"},
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GoogleSecretManager,
+            "sync_construct_request_headers",
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
     ):
         secret_manager = GoogleSecretManager()
         secret_manager.cache.cache_dict["UNIQUE_KEY"] = None

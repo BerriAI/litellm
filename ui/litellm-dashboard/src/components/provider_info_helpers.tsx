@@ -1,3 +1,5 @@
+import { resolveLogoSrc } from "@/lib/assetPaths";
+
 export enum Providers {
   A2A_Agent = "A2A Agent",
   AI21 = "Ai21",
@@ -70,9 +72,9 @@ export enum Providers {
   OOBABOOGA = "Oobabooga",
   OpenAI = "OpenAI",
   OPENAI_LIKE = "Openai Like",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
+  OpenAI_Compatible = "OpenAI-Compatible Chat Completions (Together AI, vLLM, etc.)",
   OpenAI_Text = "OpenAI Text Completion",
-  OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
+  OpenAI_Text_Compatible = "OpenAI-Compatible Completions (legacy /v1/completions)",
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
@@ -87,6 +89,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   Snowflake = "Snowflake",
+  Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
@@ -103,6 +106,7 @@ export enum Providers {
   WATSONX_TEXT = "Watsonx Text",
   xAI = "xAI",
   XINFERENCE = "Xinference",
+  ZAI = "Z.AI (Zhipu AI)",
 }
 
 export const provider_map: Record<string, string> = {
@@ -194,6 +198,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   Snowflake: "snowflake",
+  Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
@@ -210,9 +215,12 @@ export const provider_map: Record<string, string> = {
   WATSONX_TEXT: "watsonx_text",
   xAI: "xai",
   XINFERENCE: "xinference",
+  ZAI: "zai",
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,
@@ -284,6 +292,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.SAP]: `${asset_logos_folder}sap.png`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
+  [Providers.Soniox]: `${asset_logos_folder}soniox.svg`,
   [Providers.TEXT_COMPLETION_CODESTRAL]: `${asset_logos_folder}mistral.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
   [Providers.TOPAZ]: `${asset_logos_folder}topaz.svg`,
@@ -309,14 +318,16 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
   // Handle special case for "gemini" provider value
   if (providerValue.toLowerCase() === "gemini") {
     const displayName = Providers.Google_AI_Studio;
-    const logo = providerLogoMap[displayName];
+    const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
     return { logo, displayName };
   }
 
-  // Find the enum key by matching provider_map values
-  const enumKey = Object.keys(provider_map).find(
-    (key) => provider_map[key].toLowerCase() === providerValue.toLowerCase(),
-  );
+  // Resolve by the litellm provider slug (e.g. "bedrock_mantle"); fall back to
+  // the enum key (e.g. "BedrockMantle") for callers like the Add Model dropdown
+  // that pass the key instead of the slug.
+  const enumKey =
+    Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === providerValue.toLowerCase()) ??
+    Object.keys(provider_map).find((key) => key.toLowerCase() === providerValue.toLowerCase());
 
   if (!enumKey) {
     return { logo: "", displayName: providerValue };
@@ -324,7 +335,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
   // Get the display name from Providers enum and logo from map
   const displayName = Providers[enumKey as keyof typeof Providers];
-  const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
+  const logo = resolveLogoSrc(providerLogoMap[displayName as keyof typeof providerLogoMap]) ?? "";
 
   return { logo, displayName };
 };
@@ -366,6 +377,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "watsonx/ibm/granite-3-3-8b-instruct";
   } else if (selectedProvider === Providers.Cursor) {
     return "cursor/claude-4-sonnet";
+  } else if (selectedProvider === Providers.ZAI) {
+    return "zai/glm-4.5";
   } else {
     return "gpt-3.5-turbo";
   }
@@ -373,9 +386,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
 
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
-  console.log(`Provider key: ${providerKey}`);
   let custom_llm_provider = provider_map[providerKey];
-  console.log(`Provider mapped to: ${custom_llm_provider}`);
 
   let providerModels: Array<string> = [];
 
@@ -383,9 +394,13 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     Object.entries(modelMap).forEach(([key, value]) => {
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
+        const isPrefixVariant =
+          typeof litellmProvider === "string" &&
+          (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+            litellmProvider.startsWith(`${custom_llm_provider}-`));
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+          (isPrefixVariant && !standaloneSubproviderSlugs.has(litellmProvider))
         ) {
           providerModels.push(key);
         }
@@ -394,7 +409,6 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     // Special case for cohere
     // we need both cohere_chat and cohere models to show on dropdown
     if (providerKey == Providers.Cohere) {
-      console.log("Adding cohere chat models");
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
           value !== null &&
@@ -410,7 +424,6 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     // Special case for sagemaker
     // we need both sagemaker and sagemaker_chat models to show on dropdown
     if (providerKey == Providers.SageMaker) {
-      console.log("Adding sagemaker chat models");
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
           value !== null &&

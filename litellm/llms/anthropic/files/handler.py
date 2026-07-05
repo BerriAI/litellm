@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
@@ -83,13 +84,14 @@ class AnthropicFilesHandler:
 
         # Get Anthropic API credentials
         api_base = self.anthropic_model_info.get_api_base(api_base)
-        auth_header = self.anthropic_model_info.get_auth_header(api_key)
+        auth_header = self.anthropic_model_info.get_auth_header(api_key, api_base)
 
         if auth_header is None:
             raise ValueError("Missing Anthropic API Key")
 
         # Construct the Anthropic batch results URL
-        results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}/results"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}/results"
 
         # Prepare headers
         headers = {
@@ -104,9 +106,7 @@ class AnthropicFilesHandler:
         anthropic_response.raise_for_status()
 
         # Transform Anthropic batch results to OpenAI format
-        transformed_content = self._transform_anthropic_batch_results_to_openai_format(
-            anthropic_response.content
-        )
+        transformed_content = self._transform_anthropic_batch_results_to_openai_format(anthropic_response.content)
 
         # Create a new response with transformed content
         transformed_response = httpx.Response(
@@ -127,9 +127,7 @@ class AnthropicFilesHandler:
         api_key: Optional[str] = None,
         timeout: Union[float, httpx.Timeout] = 600.0,
         max_retries: Optional[int] = None,
-    ) -> Union[
-        HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-    ]:
+    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
         """
         Retrieve file content from Anthropic.
 
@@ -165,9 +163,7 @@ class AnthropicFilesHandler:
                 )
             )
 
-    def _transform_anthropic_batch_results_to_openai_format(
-        self, anthropic_content: bytes
-    ) -> bytes:
+    def _transform_anthropic_batch_results_to_openai_format(self, anthropic_content: bytes) -> bytes:
         """
         Transform Anthropic batch results JSONL to OpenAI batch results JSONL format.
 
@@ -210,11 +206,9 @@ class AnthropicFilesHandler:
                     # Transform Anthropic message to OpenAI format
                     anthropic_message = result.get("message", {})
                     if anthropic_message:
-                        openai_response_body = (
-                            self._transform_anthropic_message_to_openai_format(
-                                anthropic_message=anthropic_message,
-                                anthropic_config=anthropic_config,
-                            )
+                        openai_response_body = self._transform_anthropic_message_to_openai_format(
+                            anthropic_message=anthropic_message,
+                            anthropic_config=anthropic_config,
                         )
 
                         # Create OpenAI batch result format
@@ -275,9 +269,7 @@ class AnthropicFilesHandler:
                 transformed_content += "\n"  # Add trailing newline for JSONL format
             return transformed_content.encode("utf-8")
         except Exception as e:
-            verbose_logger.error(
-                f"Error transforming Anthropic batch results to OpenAI format: {e}"
-            )
+            verbose_logger.error(f"Error transforming Anthropic batch results to OpenAI format: {e}")
             # Return original content if transformation fails
             return anthropic_content
 
@@ -329,9 +321,7 @@ class AnthropicFilesHandler:
             )
 
             # Convert ModelResponse to OpenAI format dict - it's already in OpenAI format
-            openai_body: OpenAIChatCompletionResponse = transformed_response.model_dump(
-                exclude_none=True
-            )
+            openai_body: OpenAIChatCompletionResponse = transformed_response.model_dump(exclude_none=True)
 
             # Ensure id comes from anthropic_message if not set
             if not openai_body.get("id"):
@@ -339,9 +329,7 @@ class AnthropicFilesHandler:
 
             return openai_body
         except Exception as e:
-            verbose_logger.error(
-                f"Error transforming Anthropic message to OpenAI format: {e}"
-            )
+            verbose_logger.error(f"Error transforming Anthropic message to OpenAI format: {e}")
             # Return a basic error response if transformation fails
             error_response: OpenAIChatCompletionResponse = {
                 "id": anthropic_message.get("id", ""),

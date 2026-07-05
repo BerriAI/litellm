@@ -26,15 +26,13 @@ class PatternUtils:
         complexity_chars = ["*", "+", "?", "\\", "^", "$", "|", "(", ")"]
         ret_val = (
             len(pattern),  # Longer patterns more specific
-            sum(
-                pattern.count(char) for char in complexity_chars
-            ),  # More regex complexity
+            sum(pattern.count(char) for char in complexity_chars),  # More regex complexity
         )
         return ret_val
 
     @staticmethod
     def sorted_patterns(
-        patterns: Dict[str, List[Dict]]
+        patterns: Dict[str, List[Dict]],
     ) -> List[Tuple[str, List[Dict]]]:
         """
         Cached property for patterns sorted by specificity.
@@ -99,15 +97,11 @@ class PatternMatchRouter:
         # return f"^{regex}$"
         return re.escape(pattern).replace(r"\*", "(.*)")
 
-    def _return_pattern_matched_deployments(
-        self, matched_pattern: Match, deployments: List[Dict]
-    ) -> List[Dict]:
+    def _return_pattern_matched_deployments(self, matched_pattern: Match, deployments: List[Dict]) -> List[Dict]:
         new_deployments = []
         for deployment in deployments:
             new_deployment = copy.deepcopy(deployment)
-            new_deployment["litellm_params"][
-                "model"
-            ] = PatternMatchRouter.set_deployment_model_name(
+            new_deployment["litellm_params"]["model"] = PatternMatchRouter.set_deployment_model_name(
                 matched_pattern=matched_pattern,
                 litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
             )
@@ -115,9 +109,7 @@ class PatternMatchRouter:
 
         return new_deployments
 
-    def route(
-        self, request: Optional[str], filtered_model_names: Optional[List[str]] = None
-    ) -> Optional[List[Dict]]:
+    def route(self, request: Optional[str], filtered_model_names: Optional[List[str]] = None) -> Optional[List[Dict]]:
         """
         Route a requested model to the corresponding llm deployments based on the regex pattern
 
@@ -137,15 +129,10 @@ class PatternMatchRouter:
 
             sorted_patterns = PatternUtils.sorted_patterns(self.patterns)
             regex_filtered_model_names = (
-                [self._pattern_to_regex(m) for m in filtered_model_names]
-                if filtered_model_names is not None
-                else []
+                [self._pattern_to_regex(m) for m in filtered_model_names] if filtered_model_names is not None else []
             )
             for pattern, llm_deployments in sorted_patterns:
-                if (
-                    filtered_model_names is not None
-                    and pattern not in regex_filtered_model_names
-                ):
+                if filtered_model_names is not None and pattern not in regex_filtered_model_names:
                     continue
                 pattern_match = re.match(pattern, request)
                 if pattern_match:
@@ -199,20 +186,14 @@ class PatternMatchRouter:
         dynamic_segments = matched_pattern.groups()
 
         if len(dynamic_segments) > wildcard_count:
-            return (
-                matched_pattern.string
-            )  # default to the user input, if unable to map based on wildcards.
+            return matched_pattern.string  # default to the user input, if unable to map based on wildcards.
         # Replace the corresponding wildcards in the litellm model pattern with extracted segments
         for segment in dynamic_segments:
-            litellm_deployment_litellm_model = litellm_deployment_litellm_model.replace(
-                "*", segment, 1
-            )
+            litellm_deployment_litellm_model = litellm_deployment_litellm_model.replace("*", segment, 1)
 
         return litellm_deployment_litellm_model
 
-    def get_pattern(
-        self, model: str, custom_llm_provider: Optional[str] = None
-    ) -> Optional[List[Dict]]:
+    def get_pattern(self, model: str, custom_llm_provider: Optional[str] = None) -> Optional[List[Dict]]:
         """
         Check if a pattern exists for the given model and custom llm provider
 
@@ -236,9 +217,7 @@ class PatternMatchRouter:
                 pass
         return self.route(model) or self.route(f"{custom_llm_provider}/{model}")
 
-    def get_deployments_by_pattern(
-        self, model: str, custom_llm_provider: Optional[str] = None
-    ) -> List[Dict]:
+    def get_deployments_by_pattern(self, model: str, custom_llm_provider: Optional[str] = None) -> List[Dict]:
         """
         Get the deployments by pattern
 

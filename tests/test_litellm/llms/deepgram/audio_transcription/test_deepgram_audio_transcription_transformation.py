@@ -216,7 +216,9 @@ def test_get_complete_url_with_detect_language():
         optional_params={"detect_language": True},
         litellm_params={},
     )
-    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
+    expected_url = (
+        "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
+    )
     assert url == expected_url
 
 
@@ -302,14 +304,29 @@ def test_transform_response_with_diarization_and_paragraphs():
                                 "transcript": "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
                             },
                             "words": [
-                                {"word": "Hello", "start": 0.0, "end": 0.5, "speaker": 0},
+                                {
+                                    "word": "Hello",
+                                    "start": 0.0,
+                                    "end": 0.5,
+                                    "speaker": 0,
+                                },
                                 {"word": "how", "start": 0.6, "end": 0.8, "speaker": 0},
                                 {"word": "are", "start": 0.9, "end": 1.1, "speaker": 0},
                                 {"word": "you", "start": 1.2, "end": 1.3, "speaker": 0},
                                 {"word": "I", "start": 2.0, "end": 2.2, "speaker": 1},
                                 {"word": "am", "start": 2.3, "end": 2.5, "speaker": 1},
-                                {"word": "fine", "start": 2.6, "end": 2.9, "speaker": 1},
-                                {"word": "thanks", "start": 3.0, "end": 3.5, "speaker": 1},
+                                {
+                                    "word": "fine",
+                                    "start": 2.6,
+                                    "end": 2.9,
+                                    "speaker": 1,
+                                },
+                                {
+                                    "word": "thanks",
+                                    "start": 3.0,
+                                    "end": 3.5,
+                                    "speaker": 1,
+                                },
                             ],
                         }
                     ]
@@ -322,7 +339,9 @@ def test_transform_response_with_diarization_and_paragraphs():
 
     assert isinstance(result, TranscriptionResponse)
     # Should use the pre-formatted paragraphs transcript
-    assert result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
+    assert (
+        result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
+    )
     assert result["task"] == "transcribe"
     assert result["duration"] == 15.0
 
@@ -344,14 +363,62 @@ def test_transform_response_with_diarization_without_paragraphs():
                         {
                             "transcript": "Hello how are you I am fine thanks",
                             "words": [
-                                {"word": "hello", "punctuated_word": "Hello", "start": 0.0, "end": 0.5, "speaker": 0},
-                                {"word": "how", "punctuated_word": "how", "start": 0.6, "end": 0.8, "speaker": 0},
-                                {"word": "are", "punctuated_word": "are", "start": 0.9, "end": 1.1, "speaker": 0},
-                                {"word": "you", "punctuated_word": "you", "start": 1.2, "end": 1.3, "speaker": 0},
-                                {"word": "i", "punctuated_word": "I", "start": 2.0, "end": 2.2, "speaker": 1},
-                                {"word": "am", "punctuated_word": "am", "start": 2.3, "end": 2.5, "speaker": 1},
-                                {"word": "fine", "punctuated_word": "fine", "start": 2.6, "end": 2.9, "speaker": 1},
-                                {"word": "thanks", "punctuated_word": "thanks.", "start": 3.0, "end": 3.5, "speaker": 1},
+                                {
+                                    "word": "hello",
+                                    "punctuated_word": "Hello",
+                                    "start": 0.0,
+                                    "end": 0.5,
+                                    "speaker": 0,
+                                },
+                                {
+                                    "word": "how",
+                                    "punctuated_word": "how",
+                                    "start": 0.6,
+                                    "end": 0.8,
+                                    "speaker": 0,
+                                },
+                                {
+                                    "word": "are",
+                                    "punctuated_word": "are",
+                                    "start": 0.9,
+                                    "end": 1.1,
+                                    "speaker": 0,
+                                },
+                                {
+                                    "word": "you",
+                                    "punctuated_word": "you",
+                                    "start": 1.2,
+                                    "end": 1.3,
+                                    "speaker": 0,
+                                },
+                                {
+                                    "word": "i",
+                                    "punctuated_word": "I",
+                                    "start": 2.0,
+                                    "end": 2.2,
+                                    "speaker": 1,
+                                },
+                                {
+                                    "word": "am",
+                                    "punctuated_word": "am",
+                                    "start": 2.3,
+                                    "end": 2.5,
+                                    "speaker": 1,
+                                },
+                                {
+                                    "word": "fine",
+                                    "punctuated_word": "fine",
+                                    "start": 2.6,
+                                    "end": 2.9,
+                                    "speaker": 1,
+                                },
+                                {
+                                    "word": "thanks",
+                                    "punctuated_word": "thanks.",
+                                    "start": 3.0,
+                                    "end": 3.5,
+                                    "speaker": 1,
+                                },
                             ],
                         }
                     ]
@@ -398,7 +465,11 @@ def test_reconstruct_diarized_transcript_fallback_to_word():
     words = [
         {"word": "Hello", "speaker": 0},  # No punctuated_word
         {"word": "world", "speaker": 0},
-        {"word": "test", "punctuated_word": "test.", "speaker": 1},  # Has punctuated_word
+        {
+            "word": "test",
+            "punctuated_word": "test.",
+            "speaker": 1,
+        },  # Has punctuated_word
     ]
 
     result = handler._reconstruct_diarized_transcript(words)

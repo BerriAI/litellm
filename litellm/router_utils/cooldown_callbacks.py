@@ -41,10 +41,7 @@ async def router_cooldown_event_callback(
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
     _model_name = _deployment.get("model_name", None) or ""
-    _api_base = (
-        litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params)
-        or ""
-    )
+    _api_base = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
     model_info = _deployment["model_info"]
     model_id = model_info.id
 
@@ -59,9 +56,7 @@ async def router_cooldown_event_callback(
         pass
 
     # get the prometheus logger from in memory loggers
-    prometheusLogger: Optional[
-        PrometheusLogger
-    ] = _get_prometheus_logger_from_callbacks()
+    prometheusLogger: Optional[PrometheusLogger] = _get_prometheus_logger_from_callbacks()
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(

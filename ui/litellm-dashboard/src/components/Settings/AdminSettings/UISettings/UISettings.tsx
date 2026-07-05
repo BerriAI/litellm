@@ -17,7 +17,9 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
+  const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
+  const enableChatUIProperty = schema?.properties?.enable_chat_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
   const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
@@ -84,9 +86,38 @@ export default function UISettings() {
     );
   };
 
+  const handleToggleForwardLLMProviderAuthHeaders = (checked: boolean) => {
+    updateSettings(
+      { forward_llm_provider_auth_headers: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
   const handleToggleEnableProjectsUI = (checked: boolean) => {
     updateSettings(
       { enable_projects_ui: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully. Refreshing page...");
+          setTimeout(() => window.location.reload(), 1000);
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleEnableChatUI = (checked: boolean) => {
+    updateSettings(
+      { enable_chat_ui: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully. Refreshing page...");
@@ -279,24 +310,60 @@ export default function UISettings() {
               <Typography.Text strong>Forward client headers to LLM API</Typography.Text>
               <Typography.Text type="secondary">
                 {forwardClientHeadersProperty?.description ??
-                  "If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription."}
+                  "Forwards client headers (Authorization, anthropic-beta, and x-* custom headers) to the upstream LLM. Enable for Claude Code with a Max subscription (forwards the OAuth token) or to pass custom/tracing headers through to the provider. Independent of the BYOK toggle — enable only the one(s) you need."}
               </Typography.Text>
             </Space>
           </Space>
 
           <Space align="start" size="middle">
             <Switch
-              checked={Boolean(values.enable_projects_ui)}
+              checked={Boolean(values.forward_llm_provider_auth_headers)}
               disabled={isUpdating}
               loading={isUpdating}
-              onChange={handleToggleEnableProjectsUI}
-              aria-label={enableProjectsUIProperty?.description ?? "Enable Projects UI"}
+              onChange={handleToggleForwardLLMProviderAuthHeaders}
+              aria-label={forwardLLMProviderAuthHeadersProperty?.description ?? "Forward LLM provider auth headers"}
             />
             <Space direction="vertical" size={4}>
-              <Typography.Text strong>[BETA] Enable Projects (page will refresh)</Typography.Text>
+              <Typography.Text strong>Forward LLM provider auth headers</Typography.Text>
               <Typography.Text type="secondary">
-                {enableProjectsUIProperty?.description ??
-                  "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."}
+                {forwardLLMProviderAuthHeadersProperty?.description ??
+                  "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream LLM, overriding any deployment-configured key for that request. Enable for Claude Code BYOK (clients bring their own API key). Independent of the client-headers toggle — enable only the one(s) you need."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          {enableProjectsUIProperty && (
+            <Space align="start" size="middle">
+              <Switch
+                checked={Boolean(values.enable_projects_ui)}
+                disabled={isUpdating}
+                loading={isUpdating}
+                onChange={handleToggleEnableProjectsUI}
+                aria-label={enableProjectsUIProperty.description ?? "Enable Projects UI"}
+              />
+              <Space direction="vertical" size={4}>
+                <Typography.Text strong>[BETA] Enable Projects (page will refresh)</Typography.Text>
+                <Typography.Text type="secondary">
+                  {enableProjectsUIProperty.description ??
+                    "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."}
+                </Typography.Text>
+              </Space>
+            </Space>
+          )}
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.enable_chat_ui)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleEnableChatUI}
+              aria-label={enableChatUIProperty?.description ?? "Enable Chat page"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>[BETA] Enable Chat page (page will refresh)</Typography.Text>
+              <Typography.Text type="secondary">
+                {enableChatUIProperty?.description ??
+                  "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."}
               </Typography.Text>
             </Space>
           </Space>

@@ -64,6 +64,93 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
+    """Regression test for #22930.  The unified /v1/messages path must
+    strip empty text blocks before forwarding, otherwise Anthropic
+    returns 400 "text content blocks must be non-empty"."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "tool_use", "id": "t", "name": "B", "input": {}},
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+    assert len(msgs[0]["content"]) == 2  # caller untouched
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    assert captured["messages"][0]["content"][0]["id"] == "functions_Bash_0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+
+async def _async_return(value):
+    return value
+
+
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
     """
     Test that litellm.completion is called when a custom LLM provider is given
@@ -183,9 +270,9 @@ def test_openai_model_with_thinking_converts_to_reasoning():
             "reasoning" in call_kwargs
         ), "reasoning should be passed to litellm.responses"
 
-        # budget_tokens=1024 -> effort="minimal" (< 2000 threshold)
+        # budget_tokens=1024 -> effort="low" (at the LOW budget threshold)
         # reasoning_auto_summary is False by default, so no summary key
-        expected_reasoning = {"effort": "minimal"}
+        expected_reasoning = {"effort": "low"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
             f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
             f"got {call_kwargs.get('reasoning')}"
@@ -229,7 +316,7 @@ class TestThinkingParameterTransformation:
         )
 
         # reasoning_auto_summary is False by default, so no summary key
-        assert result == {"reasoning_effort": "minimal"}
+        assert result == {"reasoning_effort": "low"}
         assert "thinking" not in result
         assert "summary" not in str(result["reasoning_effort"])
 
@@ -249,7 +336,7 @@ class TestThinkingParameterTransformation:
                 model="openai/gpt-5.2",
             )
             assert result == {
-                "reasoning_effort": {"effort": "medium", "summary": "detailed"}
+                "reasoning_effort": {"effort": "high", "summary": "detailed"}
             }
         finally:
             litellm.reasoning_auto_summary = original
@@ -462,7 +549,7 @@ class TestThinkingSummaryPreservation:
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking
         )
-        assert result == {"effort": "medium", "summary": "concise"}
+        assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
         """translate_thinking_to_reasoning should not include summary by default (opt-in)."""
@@ -480,7 +567,7 @@ class TestThinkingSummaryPreservation:
                     thinking
                 )
             )
-            assert result == {"effort": "medium"}
+            assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
             litellm.reasoning_auto_summary = original
@@ -497,5 +584,240 @@ class TestThinkingSummaryPreservation:
             model="openai/gpt-5.2",
         )
         assert result == {
-            "reasoning_effort": {"effort": "medium", "summary": "concise"}
+            "reasoning_effort": {"effort": "high", "summary": "concise"}
         }
+
+
+# ---------------------------------------------------------------------------
+# Parity tests: redundant empty-text-block sanitization scan removal.
+# The async wrapper sanitizes once and tells the handler to skip its second
+# (redundant) full-messages scan; the sync entry point still sanitizes.
+# ---------------------------------------------------------------------------
+
+
+def _empty_block_msgs():
+    return [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "   "},  # whitespace-only -> stripped
+                {"type": "tool_use", "id": "t", "name": "B", "input": {}},
+            ],
+        }
+    ]
+
+
+def test_handler_strips_when_no_presanitized_flag():
+    """Sync entry point (no async wrapper): handler must still sanitize."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    with patch.object(
+        handler,
+        "strip_empty_text_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+    ) as spy:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=_empty_block_msgs(),
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response="hi there",
+        )
+    assert spy.call_count == 1  # sanitized exactly once here
+    assert result is not None
+
+
+def test_handler_skips_strip_when_presanitized():
+    """Async wrapper already sanitized -> handler must NOT rescan."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    with patch.object(
+        handler,
+        "strip_empty_text_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+    ) as spy:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=_empty_block_msgs(),
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response="hi there",
+            _litellm_messages_presanitized=True,
+        )
+    assert spy.call_count == 0  # skipped the redundant scan
+    assert result is not None
+
+
+def test_presanitized_flag_not_leaked_to_provider_params():
+    """The private sentinel must be popped, never forwarded as a request param."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_base_handler(*args, **kwargs):
+        captured.update(kwargs)
+        captured["optional"] = kwargs.get(
+            "anthropic_messages_optional_request_params", {}
+        )
+        return "stub"
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+        side_effect=fake_base_handler,
+    ):
+        handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            _litellm_messages_presanitized=True,
+        )
+
+    assert "_litellm_messages_presanitized" not in captured.get("optional", {})
+    assert "_litellm_messages_presanitized" not in captured.get("kwargs", {})
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
+    """End-to-end: wrapper sanitizes (once) AND signals the handler to skip."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        captured["presanitized"] = kwargs.get("_litellm_messages_presanitized")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+        patch.object(
+            handler,
+            "strip_empty_text_blocks_from_anthropic_messages",
+            wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        ) as spy,
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=_empty_block_msgs(),
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    # Wrapper stripped exactly once (the handler is faked, so its skipped
+    # call never runs anyway -- the point is the wrapper still sanitizes).
+    assert spy.call_count == 1
+    assert captured["presanitized"] is True
+    assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+
+
+def _gate_stubs(monkeypatch):
+    """Patch the gate's downstream dispatch targets so config selection can be
+    observed without making a network call.
+
+    Returns ``(captured, translation_calls)`` where ``captured["config"]`` is the
+    provider config handed to the native passthrough path and ``translation_calls``
+    counts hits on the Anthropic->OpenAI translation handlers.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+    translation_calls = {"count": 0}
+
+    def fake_native(**kwargs):
+        captured["config"] = kwargs.get("anthropic_messages_provider_config")
+        return "native-passthrough"
+
+    def fake_translation(**kwargs):
+        translation_calls["count"] += 1
+        return "translated"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToResponsesAPIHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_translation),
+    )
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToCompletionTransformationHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_translation),
+    )
+    return captured, translation_calls
+
+
+def test_gate_passthrough_when_supported_endpoints_opts_in(monkeypatch):
+    """provider=openai + model_info.supported_endpoints containing /v1/messages
+    must route to the native passthrough config, NOT the translation handlers."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+    from litellm.llms.openai_like.messages.transformation import (
+        OpenAILikeAnthropicMessagesConfig,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info={"supported_endpoints": ["/v1/chat/completions", "/v1/messages"]},
+    )
+
+    assert result == "native-passthrough"
+    assert isinstance(captured["config"], OpenAILikeAnthropicMessagesConfig)
+    assert translation_calls["count"] == 0
+
+
+def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
+    """Default behavior is unchanged: without the /v1/messages opt-in, an openai
+    deployment is translated (Responses API), never passed through natively."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured
+
+
+def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypatch):
+    """A deployment that lists only /v1/chat/completions is still translated;
+    the opt-in is specifically the /v1/messages entry."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info={"supported_endpoints": ["/v1/chat/completions"]},
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured

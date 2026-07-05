@@ -1,11 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  extractMCPToken,
-  maskUrl,
-  getMaskedAndFullUrl,
-  validateMCPServerUrl,
-  validateMCPServerName,
-} from "./utils";
+import { extractMCPToken, maskUrl, getMaskedAndFullUrl, validateMCPServerUrl, validateMCPServerName } from "./utils";
 
 describe("extractMCPToken", () => {
   it("should extract token after /mcp/", () => {

@@ -198,7 +198,10 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
                     </KV>
                     {detection.severity && (
                       <KV label="Severity:">
-                        {chip(detection.severity, detection.severity === "high" ? "red" : detection.severity === "medium" ? "amber" : "slate")}
+                        {chip(
+                          detection.severity,
+                          detection.severity === "high" ? "red" : detection.severity === "medium" ? "amber" : "slate",
+                        )}
                       </KV>
                     )}
                   </div>
@@ -214,11 +217,10 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
 
       {/* Raw JSON (for debugging) */}
       <Section title="Raw Detection Data" defaultOpen={false}>
-        <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(detections, null, 2)}</pre>
+        <pre className="bg-gray-50 rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(detections, null, 2)}</pre>
       </Section>
     </div>
   );
 };
 
 export default ContentFilterDetails;
-

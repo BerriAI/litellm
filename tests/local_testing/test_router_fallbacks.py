@@ -18,6 +18,8 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 
 class MyCustomHandler(CustomLogger):
     success: bool = False
@@ -1345,7 +1347,7 @@ def test_router_fallbacks_with_custom_model_costs():
                 "model": "openai/claude-sonnet-4-5-20250929",
                 "input_cost_per_token": 0.000003,  # 3$/M
                 "output_cost_per_token": 0.000015,  # 15$/M
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                "api_base": FAKE_OPENAI_API_BASE,
                 "api_key": "my-fake-key",
                 "mock_response": "Hello! How can I help you today?",
             },
@@ -1509,7 +1511,7 @@ def test_router_fallbacks_with_wildcard_model_name():
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     "mock_response": "Hi this is claude!",
                 },
@@ -1555,7 +1557,7 @@ def test_fallbacks_with_different_messages():
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             },
@@ -1594,7 +1596,7 @@ async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbac
                 "litellm_params": {
                     "model": "openai/working-fake-endpoint",
                     "api_key": "my-fake-key",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
             {

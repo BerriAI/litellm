@@ -1,6 +1,7 @@
 """
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
+
 from typing import Any, Dict, List
 
 from pydantic import BaseModel
@@ -60,9 +61,7 @@ def convert_messages_to_prompt(messages: List[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
-def extract_text_from_a2a_message(
-    message: Dict[str, Any], depth: int = 0, max_depth: int = 10
-) -> str:
+def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
 
@@ -92,9 +91,7 @@ def extract_text_from_a2a_message(
     return " ".join(text_parts)
 
 
-def extract_text_from_a2a_response(
-    response_dict: Dict[str, Any], max_depth: int = 10
-) -> str:
+def extract_text_from_a2a_response(response_dict: Dict[str, Any], max_depth: int = 10) -> str:
     """
     Extract text content from A2A response result.
 
@@ -135,16 +132,12 @@ def extract_text_from_a2a_response(
     if isinstance(status, dict):
         status_message = status.get("message")
         if status_message:
-            return extract_text_from_a2a_message(
-                status_message, depth=0, max_depth=max_depth
-            )
+            return extract_text_from_a2a_message(status_message, depth=0, max_depth=max_depth)
 
     # Handle task result with artifacts (plural, array)
     artifacts = result.get("artifacts", [])
     if artifacts and len(artifacts) > 0:
         first_artifact = artifacts[0]
-        return extract_text_from_a2a_message(
-            first_artifact, depth=0, max_depth=max_depth
-        )
+        return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
 
     return ""

@@ -3,6 +3,7 @@ RunwayML Text-to-Speech transformation
 
 Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 """
+
 import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
@@ -199,11 +200,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         validated_headers = headers.copy()
 
-        final_api_key = (
-            api_key
-            or get_secret_str("RUNWAYML_API_SECRET")
-            or get_secret_str("RUNWAYML_API_KEY")
-        )
+        final_api_key = api_key or get_secret_str("RUNWAYML_API_SECRET") or get_secret_str("RUNWAYML_API_KEY")
 
         if not final_api_key:
             raise ValueError("RUNWAYML_API_SECRET or RUNWAYML_API_KEY is not set")
@@ -223,9 +220,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Get the complete URL for RunwayML TTS request
         """
-        complete_url = (
-            api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         return f"{complete_url}/{self.TTS_ENDPOINT_PATH}"
@@ -243,9 +238,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             TimeoutError: If operation has exceeded timeout
         """
         if time.time() - start_time > timeout_secs:
-            raise TimeoutError(
-                f"RunwayML TTS task polling timed out after {timeout_secs} seconds"
-            )
+            raise TimeoutError(f"RunwayML TTS task polling timed out after {timeout_secs} seconds")
 
     @staticmethod
     def _check_task_status(response_data: Dict[str, Any]) -> str:
@@ -272,9 +265,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         elif status == "FAILED":
             failure_reason = response_data.get("failure", "Unknown error")
             failure_code = response_data.get("failureCode", "unknown")
-            raise ValueError(
-                f"RunwayML TTS failed: {failure_reason} (code: {failure_code})"
-            )
+            raise ValueError(f"RunwayML TTS failed: {failure_reason} (code: {failure_code})")
         elif status == "CANCELLED":
             raise ValueError("RunwayML TTS was cancelled")
         elif status in ["PENDING", "RUNNING", "THROTTLED"]:
@@ -479,9 +470,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         # Get headers for polling (need auth)
         poll_headers = {
             "Authorization": raw_response.request.headers.get("Authorization", ""),
-            "X-Runway-Version": raw_response.request.headers.get(
-                "X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION
-            ),
+            "X-Runway-Version": raw_response.request.headers.get("X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION),
         }
 
         # Poll until task completes
@@ -550,9 +539,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         # Get headers for polling (need auth)
         poll_headers = {
             "Authorization": raw_response.request.headers.get("Authorization", ""),
-            "X-Runway-Version": raw_response.request.headers.get(
-                "X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION
-            ),
+            "X-Runway-Version": raw_response.request.headers.get("X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION),
         }
 
         # Poll until task completes (async)

@@ -1171,7 +1171,7 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p3-70b-instruct", "fireworks-ai-above-16b"),
+        ("fireworks_ai/llama-v3p1-70b-instruct", "fireworks-ai-above-16b"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1182,18 +1182,47 @@ def test_get_model_params_fireworks_ai(model, base_model):
 @pytest.mark.parametrize(
     "model",
     [
-        "fireworks_ai/llama-v3p3-70b-instruct",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
     ],
 )
 def test_completion_cost_fireworks_ai(model):
+    """
+    Mocked so it does not depend on Fireworks' rotating serverless catalog.
+    Validates the Fireworks cost path: a parsed response with usage yields a
+    non-zero cost against the local cost map.
+    """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    resp = litellm.completion(model=model, messages=messages)  # works fine
+    mock_response_data = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": model.split("fireworks_ai/")[-1],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Going great, thanks!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+    }
 
-    print(resp)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = mock_response_data
+    mock_response.text = json.dumps(mock_response_data)
+
+    sync_handler = HTTPHandler()
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response):
+        resp = litellm.completion(model=model, messages=messages, client=sync_handler)
+
     cost = completion_cost(completion_response=resp)
+    assert cost > 0
 
 
 def test_cost_azure_openai_prompt_caching():

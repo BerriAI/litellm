@@ -1,7 +1,8 @@
 import React from "react";
 import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
-import { Form, Tooltip } from "antd";
+import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Form, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -14,9 +15,7 @@ function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): a
   }
 
   if (Array.isArray(items)) {
-    return items
-      .map((item) => buildDefaultValue(item))
-      .filter((value) => value !== undefined);
+    return items.map((item) => buildDefaultValue(item)).filter((value) => value !== undefined);
   }
 
   const itemDefault = buildDefaultValue(items);
@@ -182,16 +181,18 @@ export function ToolTestPanel({
 
     Object.entries(values).forEach(([key, value]) => {
       const prop = schemaToUse.properties?.[key];
-      if (prop && value !== null && value !== undefined && value !== "") {
+      // Strip leading/trailing whitespace from string inputs before submitting
+      const normalizedValue = typeof value === "string" ? value.trim() : value;
+      if (prop && normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
         switch (prop.type) {
           case "boolean":
-            convertedValues[key] = value === "true" || value === true;
+            convertedValues[key] = normalizedValue === "true" || normalizedValue === true;
             break;
           case "number":
           case "integer": {
-            const numericValue = Number(value);
+            const numericValue = Number(normalizedValue);
             convertedValues[key] = Number.isNaN(numericValue)
-              ? value
+              ? normalizedValue
               : prop.type === "integer"
                 ? Math.trunc(numericValue)
                 : numericValue;
@@ -200,28 +201,28 @@ export function ToolTestPanel({
           case "object":
           case "array": {
             try {
-              const parsed = typeof value === "string" ? JSON.parse(value) : value;
+              const parsed = typeof normalizedValue === "string" ? JSON.parse(normalizedValue) : normalizedValue;
               const isValidObject =
                 prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
               const isValidArray = prop.type === "array" && Array.isArray(parsed);
               if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
                 convertedValues[key] = parsed;
               } else {
-                convertedValues[key] = value;
+                convertedValues[key] = normalizedValue;
               }
             } catch (err) {
-              convertedValues[key] = value;
+              convertedValues[key] = normalizedValue;
             }
             break;
           }
           case "string":
-            convertedValues[key] = String(value);
+            convertedValues[key] = String(normalizedValue);
             break;
           default:
-            convertedValues[key] = value;
+            convertedValues[key] = normalizedValue;
         }
-      } else if (value !== null && value !== undefined && value !== "") {
-        convertedValues[key] = value;
+      } else if (normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
+        convertedValues[key] = normalizedValue;
       }
     });
 
@@ -301,7 +302,7 @@ export function ToolTestPanel({
           {tool.mcp_info.logo_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={tool.mcp_info.logo_url}
+              src={resolveLogoSrc(tool.mcp_info.logo_url)}
               alt={`${tool.mcp_info.server_name} logo`}
               className="w-6 h-6 object-contain"
             />
@@ -404,52 +405,55 @@ export function ToolTestPanel({
                         rules={[
                           {
                             required: actualSchema.required?.includes(key),
-                          message: `Please enter ${key}`,
-                        },
-                        ...(prop.type === "object" || prop.type === "array"
-                          ? [
-                              {
-                                validator: (_rule: any, value: any) => {
-                                  if (
-                                    (value === undefined || value === null || value === "") &&
-                                    !actualSchema.required?.includes(key)
-                                  ) {
-                                    return Promise.resolve();
-                                  }
-
-                                  try {
-                                    const parsed = typeof value === "string" ? JSON.parse(value) : value;
-                                    const isValidObject =
-                                      prop.type === "object" &&
-                                      parsed !== null &&
-                                      typeof parsed === "object" &&
-                                      !Array.isArray(parsed);
-                                    const isValidArray = prop.type === "array" && Array.isArray(parsed);
-
-                                    if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
+                            message: `Please enter ${key}`,
+                          },
+                          ...(prop.type === "object" || prop.type === "array"
+                            ? [
+                                {
+                                  validator: (_rule: any, value: any) => {
+                                    if (
+                                      (value === undefined || value === null || value === "") &&
+                                      !actualSchema.required?.includes(key)
+                                    ) {
                                       return Promise.resolve();
                                     }
 
-                                    return Promise.reject(
-                                      new Error(
-                                        prop.type === "object"
-                                          ? "Please enter a JSON object"
-                                          : "Please enter a JSON array",
-                                      ),
-                                    );
-                                  } catch (error) {
-                                    return Promise.reject(new Error("Invalid JSON"));
-                                  }
+                                    try {
+                                      const parsed = typeof value === "string" ? JSON.parse(value) : value;
+                                      const isValidObject =
+                                        prop.type === "object" &&
+                                        parsed !== null &&
+                                        typeof parsed === "object" &&
+                                        !Array.isArray(parsed);
+                                      const isValidArray = prop.type === "array" && Array.isArray(parsed);
+
+                                      if (
+                                        (prop.type === "object" && isValidObject) ||
+                                        (prop.type === "array" && isValidArray)
+                                      ) {
+                                        return Promise.resolve();
+                                      }
+
+                                      return Promise.reject(
+                                        new Error(
+                                          prop.type === "object"
+                                            ? "Please enter a JSON object"
+                                            : "Please enter a JSON array",
+                                        ),
+                                      );
+                                    } catch (error) {
+                                      return Promise.reject(new Error("Invalid JSON"));
+                                    }
+                                  },
                                 },
-                              },
-                            ]
-                          : []),
-                      ]}
+                              ]
+                            : []),
+                        ]}
                         className="mb-3"
                       >
                         {prop.type === "string" && prop.enum && (
                           <select
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
                             defaultValue={(initialValue as string) ?? ""}
                           >
                             {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
@@ -475,19 +479,19 @@ export function ToolTestPanel({
                             step={prop.type === "integer" ? 1 : "any"}
                             placeholder={prop.description || `Enter ${key}`}
                             defaultValue={initialValue ?? 0}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
                           />
                         )}
 
                         {prop.type === "boolean" && (
-                          <select
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                            defaultValue={(initialValue ?? false).toString()}
+                          <Select
+                            placeholder={`Select ${key}`}
+                            allowClear={!actualSchema.required?.includes(key)}
+                            className="w-full"
                           >
-                            {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
-                            <option value="true">True</option>
-                            <option value="false">False</option>
-                          </select>
+                            <Select.Option value={true}>True</Select.Option>
+                            <Select.Option value={false}>False</Select.Option>
+                          </Select>
                         )}
 
                         {(prop.type === "object" || prop.type === "array") && (
@@ -496,17 +500,17 @@ export function ToolTestPanel({
                               rows={prop.type === "object" ? 6 : 4}
                               placeholder={
                                 prop.description ||
-                                (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
+                                (prop.type === "object"
+                                  ? `Enter JSON object for ${key}`
+                                  : `Enter JSON array for ${key}`)
                               }
                               defaultValue={(initialValue as string) ?? (prop.type === "object" ? "{}" : "[]")}
                               spellCheck={false}
                               data-testid={`textarea-${key}`}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
                             />
                             <p className="text-xs text-gray-500">
-                              {prop.type === "object"
-                                ? "Provide a valid JSON object."
-                                : "Provide a valid JSON array."}
+                              {prop.type === "object" ? "Provide a valid JSON object." : "Provide a valid JSON array."}
                             </p>
                           </div>
                         )}
@@ -518,6 +522,7 @@ export function ToolTestPanel({
 
               <div className="pt-3 border-t border-gray-100">
                 <Button
+                  type="button"
                   onClick={() => form.submit()}
                   disabled={isLoading}
                   variant="primary"
@@ -585,7 +590,7 @@ export function ToolTestPanel({
                       </div>
 
                       <div className="flex items-center space-x-1">
-                        <div className="flex bg-white rounded border border-green-300 p-0.5">
+                        <div className="flex bg-white rounded-sm border border-green-300 p-0.5">
                           <button
                             onClick={() => setViewMode("formatted")}
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
@@ -610,7 +615,7 @@ export function ToolTestPanel({
 
                         <button
                           onClick={handleCopyResult}
-                          className="p-1 hover:bg-green-100 rounded text-green-700"
+                          className="p-1 hover:bg-green-100 rounded-sm text-green-700"
                           title="Copy response"
                         >
                           <svg
@@ -648,7 +653,7 @@ export function ToolTestPanel({
                   {error && (
                     <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                       <div className="flex items-start space-x-2">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path
                               strokeLinecap="round"
@@ -665,7 +670,7 @@ export function ToolTestPanel({
                               <span className="text-xs text-red-600">• {(duration / 1000).toFixed(2)}s</span>
                             )}
                           </div>
-                          <div className="bg-white border border-red-200 rounded p-2 max-h-48 overflow-y-auto">
+                          <div className="bg-white border border-red-200 rounded-sm p-2 max-h-48 overflow-y-auto">
                             <pre className="text-xs whitespace-pre-wrap text-red-700 font-mono">
                               {(() => {
                                 return error.message;
@@ -691,7 +696,7 @@ export function ToolTestPanel({
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="bg-white rounded border border-gray-200 max-h-64 overflow-y-auto">
+                                  <div className="bg-white rounded-sm border border-gray-200 max-h-64 overflow-y-auto">
                                     <div className="p-3 space-y-2">
                                       {content.text
                                         .split("\n\n")
@@ -715,7 +720,7 @@ export function ToolTestPanel({
                                             return (
                                               <div
                                                 key={sectionIndex}
-                                                className="bg-blue-50 border border-blue-200 rounded p-2"
+                                                className="bg-blue-50 border border-blue-200 rounded-sm p-2"
                                               >
                                                 <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
                                                   {parts.map((part, partIndex) => {
@@ -757,7 +762,7 @@ export function ToolTestPanel({
                                           return (
                                             <div
                                               key={sectionIndex}
-                                              className="bg-gray-50 rounded p-2 border border-gray-200"
+                                              className="bg-gray-50 rounded-sm p-2 border border-gray-200"
                                             >
                                               <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap font-mono">
                                                 {section}
@@ -780,12 +785,12 @@ export function ToolTestPanel({
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="bg-gray-50 rounded p-3 border border-gray-200">
+                                  <div className="bg-gray-50 rounded-sm p-3 border border-gray-200">
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
                                       src={content.url}
                                       alt="Tool result"
-                                      className="max-w-full h-auto rounded shadow-sm"
+                                      className="max-w-full h-auto rounded-sm shadow-xs"
                                     />
                                   </div>
                                 </div>
@@ -800,8 +805,8 @@ export function ToolTestPanel({
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="flex items-center space-x-2 p-3 bg-blue-50 border border-blue-200 rounded">
-                                    <div className="flex-shrink-0">
+                                  <div className="flex items-center space-x-2 p-3 bg-blue-50 border border-blue-200 rounded-sm">
+                                    <div className="shrink-0">
                                       <svg
                                         className="h-5 w-5 text-blue-500"
                                         fill="none"
@@ -843,7 +848,7 @@ export function ToolTestPanel({
                         ))
                       ) : (
                         // JSON View
-                        <div className="bg-white rounded border border-gray-200">
+                        <div className="bg-white rounded-sm border border-gray-200">
                           <div className="p-3 overflow-auto max-h-80 bg-gray-50">
                             <pre className="text-xs font-mono whitespace-pre-wrap break-all text-gray-800">
                               {JSON.stringify(result, null, 2)}

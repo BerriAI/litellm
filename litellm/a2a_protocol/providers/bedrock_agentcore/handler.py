@@ -6,7 +6,7 @@ completion bridge that would otherwise strip the envelope.
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -29,6 +29,7 @@ class BedrockAgentCoreA2AHandler:
         request_id: str,
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Handle non-streaming A2A request to AgentCore.
@@ -37,22 +38,21 @@ class BedrockAgentCoreA2AHandler:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (model, api_key, etc.)
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Returns:
             A2A JSON-RPC response dict from the AgentCore agent
         """
-        url, headers, body = (
-            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id=request_id,
-                params=params,
-                litellm_params=litellm_params,
-                method="message/send",
-            )
+        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id=request_id,
+            params=params,
+            litellm_params=litellm_params,
+            method="message/send",
+            agent_extra_headers=agent_extra_headers,
         )
 
-        verbose_logger.info(
-            f"BedrockAgentCore A2A: Sending non-streaming request to {url}"
-        )
+        verbose_logger.info(f"BedrockAgentCore A2A: Sending non-streaming request to {url}")
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
@@ -66,9 +66,7 @@ class BedrockAgentCoreA2AHandler:
         response_data = response.json()
 
         if "error" in response_data:
-            verbose_logger.warning(
-                f"BedrockAgentCore A2A: Agent returned error: {response_data['error']}"
-            )
+            verbose_logger.warning(f"BedrockAgentCore A2A: Agent returned error: {response_data['error']}")
 
         return response_data
 
@@ -77,6 +75,7 @@ class BedrockAgentCoreA2AHandler:
         request_id: str,
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming A2A request to AgentCore.
@@ -85,23 +84,22 @@ class BedrockAgentCoreA2AHandler:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (model, api_key, etc.)
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Yields:
             A2A streaming response events from the AgentCore agent
         """
-        url, headers, body = (
-            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id=request_id,
-                params=params,
-                litellm_params=litellm_params,
-                method="message/send",
-                stream=True,
-            )
+        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id=request_id,
+            params=params,
+            litellm_params=litellm_params,
+            method="message/send",
+            stream=True,
+            agent_extra_headers=agent_extra_headers,
         )
 
-        verbose_logger.info(
-            f"BedrockAgentCore A2A: Sending streaming request to {url}"
-        )
+        verbose_logger.info(f"BedrockAgentCore A2A: Sending streaming request to {url}")
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
@@ -120,15 +118,12 @@ class BedrockAgentCoreA2AHandler:
         if "application/json" in content_type:
             # Single JSON response fallback (not SSE)
             verbose_logger.debug(
-                "BedrockAgentCore A2A streaming: received JSON instead of SSE, "
-                "yielding as single event"
+                "BedrockAgentCore A2A streaming: received JSON instead of SSE, yielding as single event"
             )
             response_body = await response.aread()
             response_data = json.loads(response_body)
             yield response_data
         else:
             # SSE stream — parse data: lines
-            async for event in BedrockAgentCoreA2ATransformation.parse_sse_events(
-                response
-            ):
+            async for event in BedrockAgentCoreA2ATransformation.parse_sse_events(response):
                 yield event

@@ -22,10 +22,13 @@ def cli_runner():
 
 def test_cli_version_flag(cli_runner):
     """Test that --version prints the correct version, server URL, and server version, and exits successfully"""
-    with patch(
-        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
-        return_value="1.2.3",
-    ), patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000"}):
+    with (
+        patch(
+            "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+            return_value="1.2.3",
+        ),
+        patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000"}),
+    ):
         result = cli_runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert f"LiteLLM Proxy CLI Version: {litellm_version}" in result.output
@@ -35,10 +38,13 @@ def test_cli_version_flag(cli_runner):
 
 def test_cli_version_command(cli_runner):
     """Test that 'version' command prints the correct version, server URL, and server version, and exits successfully"""
-    with patch(
-        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
-        return_value="1.2.3",
-    ), patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000"}):
+    with (
+        patch(
+            "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+            return_value="1.2.3",
+        ),
+        patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000"}),
+    ):
         result = cli_runner.invoke(cli, ["version"])
     assert result.exit_code == 0
     assert f"LiteLLM Proxy CLI Version: {litellm_version}" in result.output

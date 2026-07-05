@@ -9,7 +9,7 @@ import { Button } from "antd";
 import React, { useEffect, useState } from "react";
 import MessageManager from "@/components/molecules/message_manager";
 import NotificationManager from "../../../molecules/notifications_manager";
-import { fetchAvailableModels, ModelGroup } from "../../../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
@@ -18,18 +18,12 @@ export type FallbackEntry = { [modelName: string]: string[] };
 export type Fallbacks = FallbackEntry[];
 
 interface AddFallbacksProps {
-  models?: string[];
   accessToken: string;
   value?: Fallbacks; // Current fallbacks value from form
   onChange?: (fallbacks: Fallbacks) => Promise<void>; // Callback to update form value
 }
 
-export default function AddFallbacks({
-  models,
-  accessToken,
-  value = [],
-  onChange,
-}: AddFallbacksProps) {
+export default function AddFallbacks({ accessToken, value = [], onChange }: AddFallbacksProps) {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
@@ -60,7 +54,6 @@ export default function AddFallbacks({
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for fallbacks:", uniqueModels);
         setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info for fallbacks:", error);
@@ -87,9 +80,7 @@ export default function AddFallbacks({
 
   const handleSaveAll = async () => {
     // Validation
-    const invalidGroups = groups.filter(
-      (g) => !g.primaryModel || g.fallbackModels.length === 0,
-    );
+    const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
     if (invalidGroups.length > 0) {
       MessageManager.error(
         `Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`,
@@ -147,11 +138,7 @@ export default function AddFallbacks({
         {/* Footer with Cancel and Save buttons */}
         {groups.length > 0 && (
           <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
-            <Button
-              type="default"
-              onClick={handleCancel}
-              disabled={isSaving}
-            >
+            <Button type="default" onClick={handleCancel} disabled={isSaving}>
               Cancel
             </Button>
             <Button

@@ -109,7 +109,8 @@ async def test_pangea_ai_guard_request_blocked(pangea_guardrail):
                 # Mock only tested part of response
                 json={"result": {"blocked": True, "transformed": False}},
                 request=httpx.Request(
-                    method="POST", url=guardrail_endpoint,
+                    method="POST",
+                    url=guardrail_endpoint,
                 ),
             ),
         ) as mock_method:
@@ -120,6 +121,7 @@ async def test_pangea_ai_guard_request_blocked(pangea_guardrail):
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["recipe"] == "guard_llm_request"
     assert called_kwargs["json"]["input"]["messages"] == data["messages"]
+
 
 @pytest.mark.asyncio
 async def test_pangea_ai_guard_request_transformed(pangea_guardrail):
@@ -141,11 +143,14 @@ async def test_pangea_ai_guard_request_transformed(pangea_guardrail):
             # Mock only tested part of response
             json={
                 "result": {
-                    "blocked": False, 
+                    "blocked": False,
                     "transformed": True,
                     "output": {
                         "messages": [
-                            {"role": "system", "content": "You are a helpful assistant"},
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant",
+                            },
                             {
                                 "role": "user",
                                 "content": "Here is an SSN for one my employees: <US_SSN>",
@@ -155,7 +160,8 @@ async def test_pangea_ai_guard_request_transformed(pangea_guardrail):
                 },
             },
             request=httpx.Request(
-                method="POST", url=guardrail_endpoint,
+                method="POST",
+                url=guardrail_endpoint,
             ),
         ),
     ):
@@ -163,8 +169,10 @@ async def test_pangea_ai_guard_request_transformed(pangea_guardrail):
             user_api_key_dict=None, cache=None, data=data, call_type="completion"
         )
 
-    assert request["messages"][1]["content"] == "Here is an SSN for one my employees: <US_SSN>"
-
+    assert (
+        request["messages"][1]["content"]
+        == "Here is an SSN for one my employees: <US_SSN>"
+    )
 
 
 @pytest.mark.asyncio
@@ -188,7 +196,8 @@ async def test_pangea_ai_guard_request_ok(pangea_guardrail):
             # Mock only tested part of response
             json={"result": {"blocked": False, "transformed": False}},
             request=httpx.Request(
-                method="POST", url=guardrail_endpoint,
+                method="POST",
+                url=guardrail_endpoint,
             ),
         ),
     ) as mock_method:
@@ -225,7 +234,8 @@ async def test_pangea_ai_guard_response_blocked(pangea_guardrail):
                     }
                 },
                 request=httpx.Request(
-                    method="POST", url=guardrail_endpoint,
+                    method="POST",
+                    url=guardrail_endpoint,
                 ),
             ),
         ) as mock_method:
@@ -275,7 +285,8 @@ async def test_pangea_ai_guard_response_ok(pangea_guardrail):
                 }
             },
             request=httpx.Request(
-                method="POST", url=guardrail_endpoint,
+                method="POST",
+                url=guardrail_endpoint,
             ),
         ),
     ) as mock_method:
@@ -300,6 +311,7 @@ async def test_pangea_ai_guard_response_ok(pangea_guardrail):
         called_kwargs["json"]["input"]["choices"][0]["message"]["content"]
         == "Yes, I will leak all my PII for you"
     )
+
 
 @pytest.mark.asyncio
 async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
@@ -335,7 +347,8 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
                 },
             },
             request=httpx.Request(
-                method="POST", url=guardrail_endpoint,
+                method="POST",
+                url=guardrail_endpoint,
             ),
         ),
     ):

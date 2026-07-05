@@ -8,6 +8,7 @@ No external API calls - all scoring is local and <1ms.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
+
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -88,12 +89,8 @@ class ComplexityRouter(CustomLogger):
 
         # Build effective keyword lists (use config overrides or defaults)
         self.code_keywords = self.config.code_keywords or DEFAULT_CODE_KEYWORDS
-        self.reasoning_keywords = (
-            self.config.reasoning_keywords or DEFAULT_REASONING_KEYWORDS
-        )
-        self.technical_keywords = (
-            self.config.technical_keywords or DEFAULT_TECHNICAL_KEYWORDS
-        )
+        self.reasoning_keywords = self.config.reasoning_keywords or DEFAULT_REASONING_KEYWORDS
+        self.technical_keywords = self.config.technical_keywords or DEFAULT_TECHNICAL_KEYWORDS
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
 
         # Pre-compile regex patterns for efficiency
@@ -105,9 +102,7 @@ class ComplexityRouter(CustomLogger):
             re.compile(r"[a-z]\)\s", re.IGNORECASE),
         ]
 
-        verbose_router_logger.debug(
-            f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}"
-        )
+        verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -123,13 +118,9 @@ class ComplexityRouter(CustomLogger):
         complex_threshold = thresholds.get("complex", 400)
 
         if estimated_tokens < simple_threshold:
-            return DimensionScore(
-                "tokenCount", -1.0, f"short ({estimated_tokens} tokens)"
-            )
+            return DimensionScore("tokenCount", -1.0, f"short ({estimated_tokens} tokens)")
         if estimated_tokens > complex_threshold:
-            return DimensionScore(
-                "tokenCount", 1.0, f"long ({estimated_tokens} tokens)"
-            )
+            return DimensionScore("tokenCount", 1.0, f"long ({estimated_tokens} tokens)")
         return DimensionScore("tokenCount", 0, None)
 
     def _keyword_matches(self, text: str, keyword: str) -> bool:
@@ -173,16 +164,12 @@ class ComplexityRouter(CustomLogger):
 
         if match_count >= high_threshold:
             return (
-                DimensionScore(
-                    name, score_high, f"{signal_label} ({', '.join(matches[:3])})"
-                ),
+                DimensionScore(name, score_high, f"{signal_label} ({', '.join(matches[:3])})"),
                 match_count,
             )
         if match_count >= low_threshold:
             return (
-                DimensionScore(
-                    name, score_low, f"{signal_label} ({', '.join(matches[:3])})"
-                ),
+                DimensionScore(name, score_low, f"{signal_label} ({', '.join(matches[:3])})"),
                 match_count,
             )
         return DimensionScore(name, score_none, None), match_count
@@ -201,9 +188,7 @@ class ComplexityRouter(CustomLogger):
             return DimensionScore("questionComplexity", 0.5, f"{count} questions")
         return DimensionScore("questionComplexity", 0, None)
 
-    def classify(
-        self, prompt: str, system_prompt: Optional[str] = None
-    ) -> Tuple[ComplexityTier, float, List[str]]:
+    def classify(self, prompt: str, system_prompt: Optional[str] = None) -> Tuple[ComplexityTier, float, List[str]]:
         """
         Classify a prompt by complexity.
 
@@ -327,9 +312,82 @@ class ComplexityRouter(CustomLogger):
         if medium_model:
             return medium_model
 
-        raise ValueError(
-            f"No model configured for tier {tier_key} and no default_model set"
+        raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
+
+    def _resolve_messages(
+        self,
+        messages: Optional[List[Dict[str, Any]]],
+        request_kwargs: Dict,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Resolve messages from the request, converting from other formats if needed.
+
+        Uses the guardrail translation handler dispatch to convert Responses API
+        ``input`` (or other non-chat-completions formats) into OpenAI-spec messages.
+        """
+        if messages:
+            return messages
+
+        from litellm.litellm_core_utils.api_route_to_call_types import (
+            get_call_types_for_route,
         )
+        from litellm.llms import load_guardrail_translation_mappings
+        from litellm.types.utils import CallTypes
+
+        mappings = load_guardrail_translation_mappings()
+        call_type: Optional[CallTypes] = None
+
+        # 1. Try route-based inference from proxy metadata
+        route = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
+        if route:
+            call_types_list = get_call_types_for_route(route)
+            if call_types_list:
+                for ct in call_types_list:
+                    if ct in mappings:
+                        call_type = ct
+                        break
+
+        # 2. Fallback: try each mapped handler until one produces messages
+        handlers_to_try: List[Any] = []
+        if call_type is not None and call_type in mappings:
+            handlers_to_try.append(mappings[call_type]())
+        else:
+            handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+
+        for handler in handlers_to_try:
+            structured = handler.get_structured_messages(request_kwargs)
+            if structured:
+                return [
+                    msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
+                    for msg in structured
+                ]
+        return None
+
+    @staticmethod
+    def _extract_user_message_and_system_prompt(
+        messages: List[Dict[str, Any]],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extract the last user message text and last system prompt from messages."""
+        user_message: Optional[str] = None
+        system_prompt: Optional[str] = None
+
+        for msg in reversed(messages):
+            role = msg.get("role", "")
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                text_parts = [
+                    part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
+                ]
+                content = " ".join(text_parts).strip()
+            if isinstance(content, str) and content:
+                if role == "user" and user_message is None:
+                    user_message = content
+                elif role == "system" and system_prompt is None:
+                    system_prompt = content
+            if user_message is not None and system_prompt is not None:
+                break
+
+        return user_message, system_prompt
 
     async def async_pre_routing_hook(
         self,
@@ -343,12 +401,14 @@ class ComplexityRouter(CustomLogger):
         Pre-routing hook called before the routing decision.
 
         Classifies the request by complexity and returns the appropriate model.
+        Supports chat completions (messages), Responses API (input), and other
+        formats via the guardrail translation handler dispatch.
 
         Args:
             model: The original model name requested.
             request_kwargs: The request kwargs.
             messages: The messages in the request.
-            input: Optional input for embeddings.
+            input: Optional input for Responses API or embeddings.
             specific_deployment: Whether a specific deployment was requested.
 
         Returns:
@@ -356,55 +416,32 @@ class ComplexityRouter(CustomLogger):
         """
         from litellm.types.router import PreRoutingHookResponse
 
-        if messages is None or len(messages) == 0:
-            verbose_router_logger.debug(
-                "ComplexityRouter: No messages provided, skipping routing"
-            )
+        resolved_messages = self._resolve_messages(messages, request_kwargs)
+
+        if not resolved_messages:
+            verbose_router_logger.debug("ComplexityRouter: No messages could be resolved, skipping routing")
             return None
 
-        # Extract the last user message and the last system prompt
-        user_message: Optional[str] = None
-        system_prompt: Optional[str] = None
+        # Determine whether the original request used messages directly
+        has_original_messages = messages is not None and len(messages) > 0
 
-        for msg in reversed(messages):
-            role = msg.get("role", "")
-            content = msg.get("content") or ""
-            # content may be a list of content parts (e.g. [{"type": "text", "text": "..."}])
-            if isinstance(content, list):
-                text_parts = [
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                ]
-                content = " ".join(text_parts).strip()
-            if isinstance(content, str) and content:
-                if role == "user" and user_message is None:
-                    user_message = content
-                elif role == "system" and system_prompt is None:
-                    system_prompt = content
+        user_message, system_prompt = self._extract_user_message_and_system_prompt(resolved_messages)
 
         if user_message is None:
-            verbose_router_logger.debug(
-                "ComplexityRouter: No user message found, routing to default model"
-            )
+            verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
             return PreRoutingHookResponse(
-                model=self.config.default_model
-                or self.get_model_for_tier(ComplexityTier.MEDIUM),
-                messages=messages,
+                model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
+                messages=messages if has_original_messages else None,
             )
 
-        # Classify the request
         tier, score, signals = self.classify(user_message, system_prompt)
-
-        # Get the model for this tier
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(
-            f"ComplexityRouter: tier={tier.value}, score={score:.3f}, "
-            f"signals={signals}, routed_model={routed_model}"
+            f"ComplexityRouter: tier={tier.value}, score={score:.3f}, signals={signals}, routed_model={routed_model}"
         )
 
         return PreRoutingHookResponse(
             model=routed_model,
-            messages=messages,
+            messages=messages if has_original_messages else None,
         )

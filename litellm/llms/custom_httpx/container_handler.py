@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Type, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -61,18 +62,30 @@ def _build_url(
 ) -> str:
     """Build the full URL by substituting path parameters.
 
-    The api_base from get_complete_url already includes /containers,
-    so we need to strip that prefix from the path_template.
+    The api_base from get_complete_url already includes /containers and may include
+    query parameters. We need to parse the URL, append the path, then preserve the
+    query parameters.
     """
     # api_base ends with /containers, path_template starts with /containers
     # So we need to strip /containers from the path
     if path_template.startswith("/containers"):
         path_template = path_template[len("/containers") :]
 
-    url = f"{api_base.rstrip('/')}{path_template}"
+    # Substitute path parameters
     for param, value in path_params.items():
-        url = url.replace(f"{{{param}}}", value)
-    return url
+        encoded_value = encode_url_path_segment(value, field_name=param)
+        path_template = path_template.replace(f"{{{param}}}", encoded_value)
+
+    # Parse the api_base to extract existing query params
+    parsed_base = httpx.URL(api_base)
+
+    # Append the path to the existing path (before query params)
+    new_path = f"{parsed_base.path.rstrip('/')}{path_template}"
+
+    # Rebuild URL with new path, preserving query params
+    final_url = parsed_base.copy_with(path=new_path)
+
+    return str(final_url)
 
 
 def _build_query_params(
@@ -196,9 +209,7 @@ class GenericContainerHandler:
 
         # Get HTTP client
         if client is None or not isinstance(client, HTTPHandler):
-            http_client = _get_httpx_client(
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-            )
+            http_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             http_client = client
 
@@ -216,15 +227,11 @@ class GenericContainerHandler:
         )
 
         # Build URL with path params
-        path_params = {
-            p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])
-        }
+        path_params = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
         url = _build_url(api_base, endpoint_config["path"], path_params)
 
         # Build query params
-        query_params = _build_query_params(
-            endpoint_config.get("query_params", []), kwargs
-        )
+        query_params = _build_query_params(endpoint_config.get("query_params", []), kwargs)
         if extra_query:
             query_params.update(extra_query)
 
@@ -244,27 +251,22 @@ class GenericContainerHandler:
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
 
+        # An empty dict passed as `params` to httpx strips any existing query
+        # string from the URL (e.g. ?api-version=...).  Use None instead so
+        # httpx leaves the URL's own query string intact.
+        effective_params = query_params or None
+
         try:
             if method == "GET":
-                response = http_client.get(
-                    url=url, headers=headers, params=query_params
-                )
+                response = http_client.get(url=url, headers=headers, params=effective_params)
             elif method == "DELETE":
-                response = http_client.delete(
-                    url=url, headers=headers, params=query_params
-                )
+                response = http_client.delete(url=url, headers=headers, params=effective_params)
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
-                    files, headers = _prepare_multipart_file_upload(
-                        kwargs["file"], headers
-                    )
-                    response = http_client.post(
-                        url=url, headers=headers, params=query_params, files=files
-                    )
+                    files, headers = _prepare_multipart_file_upload(kwargs["file"], headers)
+                    response = http_client.post(url=url, headers=headers, params=effective_params, files=files)
                 else:
-                    response = http_client.post(
-                        url=url, headers=headers, params=query_params
-                    )
+                    response = http_client.post(url=url, headers=headers, params=effective_params)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -277,9 +279,7 @@ class GenericContainerHandler:
             if "error" in response_json:
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-                error_msg = response_json.get("error", {}).get(
-                    "message", str(response_json)
-                )
+                error_msg = response_json.get("error", {}).get("message", str(response_json))
                 raise BaseLLMException(
                     status_code=response.status_code,
                     message=error_msg,
@@ -335,15 +335,11 @@ class GenericContainerHandler:
         )
 
         # Build URL with path params
-        path_params = {
-            p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])
-        }
+        path_params = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
         url = _build_url(api_base, endpoint_config["path"], path_params)
 
         # Build query params
-        query_params = _build_query_params(
-            endpoint_config.get("query_params", []), kwargs
-        )
+        query_params = _build_query_params(endpoint_config.get("query_params", []), kwargs)
         if extra_query:
             query_params.update(extra_query)
 
@@ -363,27 +359,22 @@ class GenericContainerHandler:
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
 
+        # An empty dict passed as `params` to httpx strips any existing query
+        # string from the URL (e.g. ?api-version=...).  Use None instead so
+        # httpx leaves the URL's own query string intact.
+        effective_params = query_params or None
+
         try:
             if method == "GET":
-                response = await http_client.get(
-                    url=url, headers=headers, params=query_params
-                )
+                response = await http_client.get(url=url, headers=headers, params=effective_params)
             elif method == "DELETE":
-                response = await http_client.delete(
-                    url=url, headers=headers, params=query_params
-                )
+                response = await http_client.delete(url=url, headers=headers, params=effective_params)
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
-                    files, headers = _prepare_multipart_file_upload(
-                        kwargs["file"], headers
-                    )
-                    response = await http_client.post(
-                        url=url, headers=headers, params=query_params, files=files
-                    )
+                    files, headers = _prepare_multipart_file_upload(kwargs["file"], headers)
+                    response = await http_client.post(url=url, headers=headers, params=effective_params, files=files)
                 else:
-                    response = await http_client.post(
-                        url=url, headers=headers, params=query_params
-                    )
+                    response = await http_client.post(url=url, headers=headers, params=effective_params)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -396,9 +387,7 @@ class GenericContainerHandler:
             if "error" in response_json:
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-                error_msg = response_json.get("error", {}).get(
-                    "message", str(response_json)
-                )
+                error_msg = response_json.get("error", {}).get("message", str(response_json))
                 raise BaseLLMException(
                     status_code=response.status_code,
                     message=error_msg,

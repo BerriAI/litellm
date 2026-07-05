@@ -6,6 +6,7 @@ Verifies that:
 2. Absence of previous_response_id does not break the call
 3. The aresponses function signature exposes the expected parameters
 """
+
 import inspect
 import json
 import os
@@ -27,9 +28,9 @@ class TestResponsesSessionChaining:
     def test_responses_api_signature_accepts_previous_response_id(self):
         """aresponses must accept previous_response_id and onResponseId-like params."""
         sig = inspect.signature(litellm.aresponses)
-        assert "previous_response_id" in sig.parameters, (
-            "aresponses must accept previous_response_id for multi-turn session chaining"
-        )
+        assert (
+            "previous_response_id" in sig.parameters
+        ), "aresponses must accept previous_response_id for multi-turn session chaining"
         assert "input" in sig.parameters, "aresponses must accept input"
         assert "model" in sig.parameters, "aresponses must accept model"
 
@@ -53,7 +54,9 @@ class TestResponsesSessionChaining:
                         "type": "message",
                         "id": "msg_001",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                        "content": [
+                            {"type": "output_text", "text": "hi", "annotations": []}
+                        ],
                         "status": "completed",
                     }
                 ],
@@ -78,9 +81,9 @@ class TestResponsesSessionChaining:
             except Exception:
                 pass  # response parsing may fail; we only care about the outgoing body
 
-        assert captured_body.get("previous_response_id") == "resp_prev_abc", (
-            f"Expected previous_response_id in request body, got: {captured_body}"
-        )
+        assert (
+            captured_body.get("previous_response_id") == "resp_prev_abc"
+        ), f"Expected previous_response_id in request body, got: {captured_body}"
 
     @pytest.mark.asyncio
     async def test_no_previous_response_id_omitted_from_request(self):
@@ -101,7 +104,9 @@ class TestResponsesSessionChaining:
                         "type": "message",
                         "id": "msg_001",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                        "content": [
+                            {"type": "output_text", "text": "hi", "annotations": []}
+                        ],
                         "status": "completed",
                     }
                 ],
@@ -122,6 +127,6 @@ class TestResponsesSessionChaining:
             except Exception:
                 pass
 
-        assert "previous_response_id" not in captured_body, (
-            "previous_response_id must be omitted from the request body when None"
-        )
+        assert (
+            "previous_response_id" not in captured_body
+        ), "previous_response_id must be omitted from the request body when None"

@@ -43,13 +43,12 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
 
         _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
+        span.set_attribute("langfuse.observation.type", "generation")
 
         #########################################################
         # Set Langfuse specific attributes
         #########################################################
-        LangfuseOtelLogger._set_langfuse_specific_attributes(
-            span=span, kwargs=kwargs, response_obj=response_obj
-        )
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
         return
 
     @staticmethod
@@ -140,11 +139,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                     function = tool_call.get("function", {})
                     arguments_str = function.get("arguments", "{}")
                     try:
-                        arguments_obj = (
-                            json.loads(arguments_str)
-                            if isinstance(arguments_str, str)
-                            else arguments_str
-                        )
+                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
                     except json.JSONDecodeError:
                         arguments_obj = {}
                     langfuse_tool_call = {
@@ -192,18 +187,12 @@ class LangfuseOtelLogger(OpenTelemetry):
                         output_items_data.append(
                             {
                                 "role": getattr(item, "role", "assistant"),
-                                "content": getattr(
-                                    getattr(item, "content", [{}])[0], "text", ""
-                                ),
+                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
                             }
                         )
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = (
-                            json.loads(arguments_str)
-                            if isinstance(arguments_str, str)
-                            else arguments_str
-                        )
+                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
@@ -378,12 +367,8 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         dynamic_headers = {}
 
-        dynamic_langfuse_public_key = standard_callback_dynamic_params.get(
-            "langfuse_public_key"
-        )
-        dynamic_langfuse_secret_key = standard_callback_dynamic_params.get(
-            "langfuse_secret_key"
-        )
+        dynamic_langfuse_public_key = standard_callback_dynamic_params.get("langfuse_public_key")
+        dynamic_langfuse_secret_key = standard_callback_dynamic_params.get("langfuse_secret_key")
         if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
             auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,

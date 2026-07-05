@@ -3,7 +3,6 @@ Hooks that are triggered when a litellm user event occurs
 """
 
 import asyncio
-from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -11,6 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     AUDIT_ACTIONS,
     CommonProxyErrors,
@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.repositories.user_repository import UserRepository
 
 
 class UserManagementEventHooks:
@@ -57,13 +58,11 @@ class UserManagementEventHooks:
         try:
             if prisma_client is None:
                 raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            user_row: BaseModel = await prisma_client.db.litellm_usertable.find_first(
+            user_row: BaseModel = await UserRepository(prisma_client).table.find_first(
                 where={"user_id": response.user_id}
             )
 
-            user_row_litellm_typed = LiteLLM_UserTable(
-                **user_row.model_dump(exclude_none=True)
-            )
+            user_row_litellm_typed = LiteLLM_UserTable(**user_row.model_dump(exclude_none=True))
             asyncio.create_task(
                 UserManagementEventHooks.create_internal_user_audit_log(
                     user_id=user_row_litellm_typed.user_id,
@@ -72,15 +71,11 @@ class UserManagementEventHooks:
                     user_api_key_dict=user_api_key_dict,
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     before_value=None,
-                    after_value=user_row_litellm_typed.model_dump_json(
-                        exclude_none=True
-                    ),
+                    after_value=user_row_litellm_typed.model_dump_json(exclude_none=True),
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.warning(
-                "Unable to create audit log for user on `/user/new` - {}".format(str(e))
-            )
+            verbose_proxy_logger.warning("Unable to create audit log for user on `/user/new` - {}".format(str(e)))
         pass
 
     @staticmethod
@@ -116,8 +111,7 @@ class UserManagementEventHooks:
             use_enterprise_email_hooks = True
         except ImportError:
             verbose_proxy_logger.warning(
-                "Defaulting to using Legacy Email Hooks."
-                + CommonProxyErrors.missing_enterprise_package.value
+                "Defaulting to using Legacy Email Hooks." + CommonProxyErrors.missing_enterprise_package.value
             )
             use_enterprise_email_hooks = False
 
@@ -192,13 +186,19 @@ class UserManagementEventHooks:
         if not litellm.store_audit_logs:
             return
 
+        from litellm.proxy.management_helpers.audit_logs import (
+            get_audit_log_changed_by,
+        )
+
         await create_audit_log_for_update(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
                 updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by
-                or user_api_key_dict.user_id
-                or litellm_proxy_admin_name,
+                changed_by=get_audit_log_changed_by(
+                    litellm_changed_by=litellm_changed_by,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                ),
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.USER_TABLE_NAME,
                 object_id=user_id,

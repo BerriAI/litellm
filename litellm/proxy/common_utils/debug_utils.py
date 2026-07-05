@@ -35,9 +35,7 @@ def configure_gc_thresholds():
                     f"GC threshold not set: {gc_threshold_env}. Expected format: 'gen0,gen1,gen2'"
                 )
         except ValueError as e:
-            verbose_proxy_logger.warning(
-                f"Failed to parse GC threshold: {gc_threshold_env}. Error: {e}"
-            )
+            verbose_proxy_logger.warning(f"Failed to parse GC threshold: {gc_threshold_env}. Error: {e}")
 
     # Log current thresholds
     current_thresholds = gc.get_threshold()
@@ -50,7 +48,10 @@ def configure_gc_thresholds():
 configure_gc_thresholds()
 
 
-@router.get("/debug/asyncio-tasks")
+@router.get(
+    "/debug/asyncio-tasks",
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_active_tasks_stats():
     """
     Returns:
@@ -72,11 +73,7 @@ async def get_active_tasks_stats():
             break
         coro = task.get_coro()
         # Derive a human‐readable name from the coroutine:
-        name = (
-            getattr(coro, "__qualname__", None)
-            or getattr(coro, "__name__", None)
-            or repr(coro)
-        )
+        name = getattr(coro, "__qualname__", None) or getattr(coro, "__name__", None) or repr(coro)
         counter[name] += 1
 
     return {
@@ -89,21 +86,23 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     try:
         import objgraph  # type: ignore
 
-        print("growth of objects")  # noqa
+        print("growth of objects")  # noqa: T201
         objgraph.show_growth()
-        print("\n\nMost common types")  # noqa
+        print("\n\nMost common types")  # noqa: T201
         objgraph.show_most_common_types()
         roots = objgraph.get_leaking_objects()
-        print("\n\nLeaking objects")  # noqa
+        print("\n\nLeaking objects")  # noqa: T201
         objgraph.show_most_common_types(objects=roots)
     except ImportError:
-        raise ImportError(
-            "objgraph not found. Please install objgraph to use this feature."
-        )
+        raise ImportError("objgraph not found. Please install objgraph to use this feature.")
 
     tracemalloc.start(10)
 
-    @router.get("/memory-usage", include_in_schema=False)
+    @router.get(
+        "/memory-usage",
+        dependencies=[Depends(user_api_key_auth)],
+        include_in_schema=False,
+    )
     async def memory_usage():
         # Take a snapshot of the current memory usage
         snapshot = tracemalloc.take_snapshot()
@@ -139,13 +138,13 @@ async def memory_usage_in_mem_cache(
     if llm_router is None:
         num_items_in_llm_router_cache = 0
     else:
-        num_items_in_llm_router_cache = len(
-            llm_router.cache.in_memory_cache.cache_dict
-        ) + len(llm_router.cache.in_memory_cache.ttl_dict)
+        num_items_in_llm_router_cache = len(llm_router.cache.in_memory_cache.cache_dict) + len(
+            llm_router.cache.in_memory_cache.ttl_dict
+        )
 
-    num_items_in_user_api_key_cache = len(
-        user_api_key_cache.in_memory_cache.cache_dict
-    ) + len(user_api_key_cache.in_memory_cache.ttl_dict)
+    num_items_in_user_api_key_cache = len(user_api_key_cache.in_memory_cache.cache_dict) + len(
+        user_api_key_cache.in_memory_cache.ttl_dict
+    )
 
     num_items_in_proxy_logging_obj_cache = len(
         proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
@@ -245,9 +244,7 @@ async def get_memory_summary(
             health_status = "healthy"
 
     except ImportError:
-        process_memory[
-            "error"
-        ] = "Install psutil for memory monitoring: pip install psutil"
+        process_memory["error"] = "Install psutil for memory monitoring: pip install psutil"
     except Exception as e:
         process_memory["error"] = str(e)
 
@@ -276,9 +273,7 @@ async def get_memory_summary(
             }
 
         # Proxy logging cache
-        logging_cache_items = len(
-            proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
-        )
+        logging_cache_items = len(proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict)
         total_cache_items += logging_cache_items
         caches["usage_tracking"] = {
             "count": logging_cache_items,
@@ -301,9 +296,7 @@ async def get_memory_summary(
 
     # Add warning if garbage collection issues detected
     if uncollectable > 0:
-        gc_info[
-            "warning"
-        ] = f"{uncollectable} uncollectable objects (possible memory leak)"
+        gc_info["warning"] = f"{uncollectable} uncollectable objects (possible memory leak)"
 
     return {
         "worker_pid": os.getpid(),
@@ -369,15 +362,15 @@ def _get_uncollectable_objects_info() -> Dict[str, Any]:
     return {
         "count": len(uncollectable),
         "sample_types": [type(obj).__name__ for obj in uncollectable[:10]],
-        "warning": "If count > 0, you may have reference cycles preventing garbage collection"
-        if len(uncollectable) > 0
-        else None,
+        "warning": (
+            "If count > 0, you may have reference cycles preventing garbage collection"
+            if len(uncollectable) > 0
+            else None
+        ),
     }
 
 
-def _get_cache_memory_stats(
-    user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache
-) -> Dict[str, Any]:
+def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache) -> Dict[str, Any]:
     """Calculate memory usage for all caches."""
     cache_stats: Dict[str, Any] = {}
     try:
@@ -388,42 +381,28 @@ def _get_cache_memory_stats(
             "num_items": len(user_api_key_cache.in_memory_cache.cache_dict),
             "cache_dict_size_bytes": user_cache_size,
             "ttl_dict_size_bytes": user_ttl_size,
-            "total_size_mb": round(
-                (user_cache_size + user_ttl_size) / (1024 * 1024), 2
-            ),
+            "total_size_mb": round((user_cache_size + user_ttl_size) / (1024 * 1024), 2),
         }
 
         # Router cache
         if llm_router is not None:
-            router_cache_size = sys.getsizeof(
-                llm_router.cache.in_memory_cache.cache_dict
-            )
+            router_cache_size = sys.getsizeof(llm_router.cache.in_memory_cache.cache_dict)
             router_ttl_size = sys.getsizeof(llm_router.cache.in_memory_cache.ttl_dict)
             cache_stats["llm_router_cache"] = {
                 "num_items": len(llm_router.cache.in_memory_cache.cache_dict),
                 "cache_dict_size_bytes": router_cache_size,
                 "ttl_dict_size_bytes": router_ttl_size,
-                "total_size_mb": round(
-                    (router_cache_size + router_ttl_size) / (1024 * 1024), 2
-                ),
+                "total_size_mb": round((router_cache_size + router_ttl_size) / (1024 * 1024), 2),
             }
 
         # Proxy logging cache
-        logging_cache_size = sys.getsizeof(
-            proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
-        )
-        logging_ttl_size = sys.getsizeof(
-            proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.ttl_dict
-        )
+        logging_cache_size = sys.getsizeof(proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict)
+        logging_ttl_size = sys.getsizeof(proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.ttl_dict)
         cache_stats["proxy_logging_cache"] = {
-            "num_items": len(
-                proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
-            ),
+            "num_items": len(proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict),
             "cache_dict_size_bytes": logging_cache_size,
             "ttl_dict_size_bytes": logging_ttl_size,
-            "total_size_mb": round(
-                (logging_cache_size + logging_ttl_size) / (1024 * 1024), 2
-            ),
+            "total_size_mb": round((logging_cache_size + logging_ttl_size) / (1024 * 1024), 2),
         }
 
         # Redis cache info
@@ -434,19 +413,16 @@ def _get_cache_memory_stats(
             }
             # Try to get Redis connection pool info if available
             try:
-                if (
-                    hasattr(redis_usage_cache, "redis_client")
-                    and redis_usage_cache.redis_client
-                ):
+                if hasattr(redis_usage_cache, "redis_client") and redis_usage_cache.redis_client:
                     if hasattr(redis_usage_cache.redis_client, "connection_pool"):
                         pool_info = redis_usage_cache.redis_client.connection_pool  # type: ignore
                         cache_stats["redis_usage_cache"]["connection_pool"] = {
-                            "max_connections": pool_info.max_connections
-                            if hasattr(pool_info, "max_connections")
-                            else None,
-                            "connection_class": pool_info.connection_class.__name__
-                            if hasattr(pool_info, "connection_class")
-                            else None,
+                            "max_connections": (
+                                pool_info.max_connections if hasattr(pool_info, "max_connections") else None
+                            ),
+                            "connection_class": (
+                                pool_info.connection_class.__name__ if hasattr(pool_info, "connection_class") else None
+                            ),
                         }
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting Redis pool info: {e}")
@@ -493,10 +469,7 @@ def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
                 }
 
             # Deployment latency map
-            if (
-                hasattr(llm_router, "deployment_latency_map")
-                and llm_router.deployment_latency_map
-            ):
+            if hasattr(llm_router, "deployment_latency_map") and llm_router.deployment_latency_map:
                 latency_map_size = sys.getsizeof(llm_router.deployment_latency_map)
                 litellm_router_memory["deployment_latency_map"] = {
                     "num_tracked_deployments": len(llm_router.deployment_latency_map),
@@ -529,9 +502,7 @@ def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
     return litellm_router_memory
 
 
-def _get_process_memory_info(
-    worker_pid: int, include_process_info: bool
-) -> Optional[Dict[str, Any]]:
+def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Optional[Dict[str, Any]]:
     """Get process-level memory information using psutil."""
     if not include_process_info:
         return None
@@ -561,9 +532,7 @@ def _get_process_memory_info(
                 "description": "Percentage of total system RAM being used",
             },
             "open_file_handles": {
-                "count": process.num_fds()
-                if hasattr(process, "num_fds")
-                else "N/A (Windows)",
+                "count": (process.num_fds() if hasattr(process, "num_fds") else "N/A (Windows)"),
                 "description": "Number of open file descriptors/handles",
             },
             "threads": {
@@ -621,9 +590,7 @@ async def get_memory_details(
     gc_stats = _get_gc_statistics()
     total_objects, top_object_types = _get_object_type_counts(top_n)
     uncollectable_info = _get_uncollectable_objects_info()
-    cache_stats = _get_cache_memory_stats(
-        user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache
-    )
+    cache_stats = _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache)
     litellm_router_memory = _get_router_memory_stats(llm_router)
     process_info = _get_process_memory_info(worker_pid, include_process_info)
 
@@ -682,14 +649,11 @@ async def configure_gc_thresholds_endpoint(
     try:
         gc.set_threshold(generation_0, generation_1, generation_2)
         verbose_proxy_logger.info(
-            f"GC thresholds updated from {old_thresholds} to "
-            f"({generation_0}, {generation_1}, {generation_2})"
+            f"GC thresholds updated from {old_thresholds} to ({generation_0}, {generation_1}, {generation_2})"
         )
     except Exception as e:
         verbose_proxy_logger.error(f"Failed to set GC thresholds: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to set GC thresholds: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to set GC thresholds: {str(e)}")
 
     # Get current object count to show immediate impact
     current_count = gc.get_count()[0]
@@ -703,7 +667,11 @@ async def configure_gc_thresholds_endpoint(
     }
 
 
-@router.get("/otel-spans", include_in_schema=False)
+@router.get(
+    "/otel-spans",
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
 async def get_otel_spans():
     from litellm.proxy.proxy_server import open_telemetry_logger
 
@@ -720,7 +688,7 @@ async def get_otel_spans():
     else:
         recorded_spans = []
 
-    print("Spans: ", recorded_spans)  # noqa
+    print("Spans: ", recorded_spans)  # noqa: T201
 
     most_recent_parent = None
     most_recent_start_time = 1000000
@@ -772,9 +740,7 @@ def init_verbose_loggers():
 
             # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
             verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
-            verbose_router_logger.setLevel(
-                level=logging.INFO
-            )  # set router logs to info
+            verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
             verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
         if detailed_debug is True:
             import logging
@@ -786,12 +752,8 @@ def init_verbose_loggers():
             )
 
             verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
-            verbose_router_logger.setLevel(
-                level=logging.DEBUG
-            )  # set router logs to debug
-            verbose_proxy_logger.setLevel(
-                level=logging.DEBUG
-            )  # set proxy logs to debug
+            verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
+            verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
         elif debug is False and detailed_debug is False:
             # users can control proxy debugging using env variable = 'LITELLM_LOG'
             litellm_log_setting = os.environ.get("LITELLM_LOG", "")
@@ -806,12 +768,8 @@ def init_verbose_loggers():
 
                     # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
-                    verbose_router_logger.setLevel(
-                        level=logging.INFO
-                    )  # set router logs to info
-                    verbose_proxy_logger.setLevel(
-                        level=logging.INFO
-                    )  # set proxy logs to info
+                    verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
+                    verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
                 elif litellm_log_setting.upper() == "DEBUG":
                     import logging
 
@@ -820,12 +778,8 @@ def init_verbose_loggers():
                         verbose_router_logger,
                     )
 
-                    verbose_router_logger.setLevel(
-                        level=logging.DEBUG
-                    )  # set router logs to info
-                    verbose_proxy_logger.setLevel(
-                        level=logging.DEBUG
-                    )  # set proxy logs to debug
+                    verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
+                    verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
     except Exception as e:
         import logging
 

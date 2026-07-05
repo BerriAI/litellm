@@ -11,7 +11,7 @@ async def chat_completion(
     session,
     key,
     messages,
-    model: Union[str, List] = "gpt-4",
+    model: Union[str, List] = "gpt-5.5",
     guardrails: Optional[List] = None,
 ):
     url = "http://0.0.0.0:4000/chat/completions"

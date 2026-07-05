@@ -3,6 +3,7 @@ Calls Google Programmable Search Engine (PSE) API to search the web.
 
 Google PSE API Reference: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 
 import httpx
@@ -80,16 +81,18 @@ class GooglePSESearchConfig(BaseSearchConfig):
         Google PSE uses API key as a query parameter, not in headers.
         This method is called but headers are not used for authentication.
         """
-        api_key = api_key or get_secret_str("GOOGLE_PSE_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("GOOGLE_PSE_API_KEY",),
+            base_env_var="GOOGLE_PSE_API_BASE",
+            default_api_base=self.GOOGLE_PSE_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "GOOGLE_PSE_API_KEY is not set. Set `GOOGLE_PSE_API_KEY` environment variable."
-            )
+            raise ValueError("GOOGLE_PSE_API_KEY is not set. Set `GOOGLE_PSE_API_KEY` environment variable.")
 
         # Also check for search engine ID
-        search_engine_id = kwargs.get("search_engine_id") or get_secret_str(
-            "GOOGLE_PSE_ENGINE_ID"
-        )
+        search_engine_id = kwargs.get("search_engine_id") or get_secret_str("GOOGLE_PSE_ENGINE_ID")
         if not search_engine_id:
             raise ValueError(
                 "GOOGLE_PSE_ENGINE_ID is not set. Set `GOOGLE_PSE_ENGINE_ID` environment variable or pass `search_engine_id` parameter."
@@ -113,11 +116,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         """
         from urllib.parse import urlencode
 
-        api_base = (
-            api_base
-            or get_secret_str("GOOGLE_PSE_API_BASE")
-            or self.GOOGLE_PSE_API_BASE
-        )
+        api_base = api_base or get_secret_str("GOOGLE_PSE_API_BASE") or self.GOOGLE_PSE_API_BASE
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_google_pse_params" in data:
@@ -132,6 +131,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         query: Union[str, List[str]],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: str | None = None,
         search_engine_id: Optional[str] = None,
         **kwargs,
     ) -> Dict:
@@ -160,8 +160,16 @@ class GooglePSESearchConfig(BaseSearchConfig):
             # Google PSE only supports single string queries
             query = " ".join(query)
 
-        # Get API credentials
-        api_key = api_key or get_secret_str("GOOGLE_PSE_API_KEY")
+        # Get API credentials. The key is sent as a query param to api_base, so
+        # resolve it host-aware to avoid leaking a server-managed key to a
+        # caller-supplied host.
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("GOOGLE_PSE_API_KEY",),
+            base_env_var="GOOGLE_PSE_API_BASE",
+            default_api_base=self.GOOGLE_PSE_API_BASE,
+        )
         search_engine_id = search_engine_id or get_secret_str("GOOGLE_PSE_ENGINE_ID")
 
         if not api_key:
@@ -200,10 +208,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for URL building (Google PSE uses GET not POST)

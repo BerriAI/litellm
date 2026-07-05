@@ -8,25 +8,25 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 Usage:
     import litellm
-    
+
     # Create an interaction with a model
     response = litellm.interactions.create(
         model="gemini-2.5-flash",
         input="Hello, how are you?"
     )
-    
+
     # Create an interaction with an agent
     response = litellm.interactions.create(
         agent="deep-research-pro-preview-12-2025",
         input="Research the current state of cancer research"
     )
-    
+
     # Async version
     response = await litellm.interactions.acreate(...)
-    
+
     # Get an interaction
     response = litellm.interactions.get(interaction_id="...")
-    
+
     # Delete an interaction
     result = litellm.interactions.delete(interaction_id="...")
 """
@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.types.interactions import (
     CancelInteractionResult,
     DeleteInteractionResult,
+    InteractionEnvironment,
     InteractionInput,
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
@@ -80,6 +81,8 @@ async def acreate(
     store: Optional[bool] = None,
     # Background execution
     background: Optional[bool] = None,
+    # Agent execution environment ("remote", env id, or remote config object)
+    environment: Optional[InteractionEnvironment] = None,
     # Response format
     response_modalities: Optional[List[str]] = None,
     response_format: Optional[Dict[str, Any]] = None,
@@ -109,6 +112,10 @@ async def acreate(
         stream: Whether to stream the response
         store: Whether to store the response for later retrieval
         background: Whether to run in background
+        environment: Agent execution environment — ``"remote"``, an existing env id
+            string, or a config object such as
+            ``{"type": "remote", "sources": [...]}`` /
+            ``{"type": "remote", "network": {...}}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -127,9 +134,7 @@ async def acreate(
         kwargs["acreate_interaction"] = True
 
         if custom_llm_provider is None and model:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=kwargs.get("api_base", None)
-            )
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
         elif custom_llm_provider is None:
             custom_llm_provider = "gemini"
 
@@ -144,6 +149,7 @@ async def acreate(
             stream=stream,
             store=store,
             background=background,
+            environment=environment,
             response_modalities=response_modalities,
             response_format=response_format,
             response_mime_type=response_mime_type,
@@ -194,6 +200,8 @@ def create(
     store: Optional[bool] = None,
     # Background execution
     background: Optional[bool] = None,
+    # Agent execution environment ("remote", env id, or remote config object)
+    environment: Optional[InteractionEnvironment] = None,
     # Response format
     response_modalities: Optional[List[str]] = None,
     response_format: Optional[Dict[str, Any]] = None,
@@ -231,6 +239,10 @@ def create(
         stream: Whether to stream the response
         store: Whether to store the response for later retrieval
         background: Whether to run in background
+        environment: Agent execution environment — ``"remote"``, an existing env id
+            string, or a config object such as
+            ``{"type": "remote", "sources": [...]}`` /
+            ``{"type": "remote", "network": {...}}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -252,7 +264,14 @@ def create(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        if model:
+        # Routing logic:
+        # - agent provided (no model, or model accidentally set to agent name) → gemini
+        # - model provided → resolve provider via get_llm_provider (normal routing)
+        if agent and model == agent:
+            model = None
+        if agent and not model:
+            custom_llm_provider = custom_llm_provider or "gemini"
+        elif model:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -269,18 +288,11 @@ def create(
 
         # Get optional params using utility (similar to responses API pattern)
         local_vars.update(kwargs)
-        optional_params = (
-            InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(
-                local_vars
-            )
-        )
+        optional_params = InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(local_vars)
 
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
-        if (
-            custom_llm_provider == "litellm_responses"
-            or interactions_api_config is None
-        ):
+        if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
             # Bridge to litellm.responses() for non-native providers
             from litellm.interactions.litellm_responses_transformation.handler import (
                 LiteLLMResponsesInteractionsHandler,
@@ -404,9 +416,7 @@ def get(
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -508,9 +518,7 @@ def delete(
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -612,9 +620,7 @@ def cancel(
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,

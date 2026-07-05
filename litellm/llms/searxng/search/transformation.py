@@ -3,6 +3,7 @@ Calls SearXNG's /search endpoint to search the web.
 
 SearXNG API Reference: https://docs.searxng.org/dev/search_api.html
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -60,7 +61,13 @@ class SearXNGSearchConfig(BaseSearchConfig):
         Some instances may require authentication via headers.
         """
         # SearXNG typically doesn't require API keys, but support optional auth
-        api_key = api_key or get_secret_str("SEARXNG_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SEARXNG_API_KEY",),
+            base_env_var="SEARXNG_API_BASE",
+            default_api_base=None,
+        )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
@@ -167,10 +174,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
         # Pass through all other SearXNG-specific parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for GET request URL building

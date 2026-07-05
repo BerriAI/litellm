@@ -45,6 +45,7 @@ vi.mock("jwt-decode", () => ({
 // Mock cookie utility
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
+  getCookie: vi.fn().mockReturnValue("fake-jwt-token"),
 }));
 
 // Mock fetchTeams
@@ -84,7 +85,6 @@ const defaultProps = {
   setTeams: vi.fn(),
   setKeys: vi.fn(),
   premiumUser: false,
-  organizations: [] as any[],
   addKey: vi.fn(),
   createClicked: false,
 };
@@ -106,9 +106,7 @@ describe("UserDashboard beforeunload listener", () => {
   it("registers exactly one beforeunload listener on mount", () => {
     renderDashboard();
 
-    const beforeUnloadCalls = addEventListenerSpy.mock.calls.filter(
-      ([event]) => event === "beforeunload",
-    );
+    const beforeUnloadCalls = addEventListenerSpy.mock.calls.filter(([event]) => event === "beforeunload");
     expect(beforeUnloadCalls).toHaveLength(1);
   });
 
@@ -120,9 +118,7 @@ describe("UserDashboard beforeunload listener", () => {
     // Re-render with different props to trigger a render cycle
     rerender(<UserDashboard {...defaultProps} userEmail="updated@example.com" />);
 
-    const beforeUnloadCalls = addEventListenerSpy.mock.calls.filter(
-      ([event]) => event === "beforeunload",
-    );
+    const beforeUnloadCalls = addEventListenerSpy.mock.calls.filter(([event]) => event === "beforeunload");
     expect(beforeUnloadCalls).toHaveLength(0);
   });
 
@@ -131,9 +127,7 @@ describe("UserDashboard beforeunload listener", () => {
 
     unmount();
 
-    const removeCalls = removeEventListenerSpy.mock.calls.filter(
-      ([event]) => event === "beforeunload",
-    );
+    const removeCalls = removeEventListenerSpy.mock.calls.filter(([event]) => event === "beforeunload");
     expect(removeCalls).toHaveLength(1);
   });
 });

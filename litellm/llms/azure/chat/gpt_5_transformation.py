@@ -40,10 +40,21 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         Accepts both explicit gpt-5 model names and the ``gpt5_series/`` prefix
         used for manual routing.
         """
-        # gpt-5-chat* is a chat model and shouldn't go through GPT-5 reasoning restrictions.
-        return (
-            "gpt-5" in model and "gpt-5-chat" not in model
-        ) or "gpt5_series" in model
+        # The gpt-5-chat* family (gpt-5-chat, gpt-5-chat-latest, gpt-5-chat-2025-08-07,
+        # …) are regular chat models: they support temperature and tool_choice but NOT
+        # reasoning_effort.  They must NOT be routed through the GPT-5 reasoning path.
+        #
+        # Versioned chat models such as gpt-5.3-chat and gpt-5.1-chat ARE reasoning
+        # models and must stay on the GPT-5 path.  The distinguishing feature is that
+        # the gpt-5-chat family has a literal "-chat" immediately after "gpt-5"
+        # (i.e. "gpt-5-chat…"), while versioned chat models interpose a minor version
+        # number (i.e. "gpt-5.<digit>-chat").
+        #
+        # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
+        # than a substring check) makes this boundary explicit and avoids any ambiguity
+        # if future model names coincidentally contain "gpt-5-chat" as an interior run.
+        _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
+        return ("gpt-5" in model and not _normalized.startswith("gpt-5-chat")) or "gpt5_series" in model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
@@ -66,9 +77,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self._supports_reasoning_effort_level(
-            model, "none"
-        ) and not self.is_model_gpt_5_2_model(model):
+        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
             azure_supported_params = ["logprobs", "top_logprobs"]
@@ -84,9 +93,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        reasoning_effort_value = non_default_params.get(
-            "reasoning_effort"
-        ) or optional_params.get("reasoning_effort")
+        reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
@@ -94,15 +101,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         supports_none = self._supports_reasoning_effort_level(model, "none")
 
         if effective_effort == "none" and not supports_none:
-            if litellm.drop_params is True or (
-                drop_params is not None and drop_params is True
-            ):
+            if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 non_default_params = non_default_params.copy()
                 optional_params = optional_params.copy()
-                if (
-                    _get_effort_level(non_default_params.get("reasoning_effort"))
-                    == "none"
-                ):
+                if _get_effort_level(non_default_params.get("reasoning_effort")) == "none":
                     non_default_params.pop("reasoning_effort")
                 if _get_effort_level(optional_params.get("reasoning_effort")) == "none":
                     optional_params.pop("reasoning_effort")

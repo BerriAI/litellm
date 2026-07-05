@@ -1,29 +1,33 @@
 /**
  * TypeScript types for Claude Code Marketplace
- * Matches backend API types from /litellm/types/proxy/claude_code_endpoints.py
+ * API request/response shapes are synced from the generated OpenAPI types in @/lib/http/schema.
  */
 
+import type { components } from "@/lib/http/schema";
+
+// Kept hand-written: the backend types `source` as Dict[str, str], so the generated type is a
+// loose string map; this discriminant union is what the parser and display helpers rely on.
 export interface PluginSource {
-  source: "github" | "url";
-  repo?: string;  // Format: "org/repo" for GitHub
-  url?: string;   // Full URL for other sources
+  source: "github" | "url" | "git-subdir";
+  repo?: string; // Format: "org/repo" for GitHub
+  url?: string; // Full URL for other sources
+  path?: string; // Subdirectory path for git-subdir
 }
 
-export interface PluginAuthor {
-  name: string;
-  email?: string;
-}
+export type PluginAuthor = components["schemas"]["PluginAuthor"];
 
 export interface Plugin {
   id: string;
-  name: string;  // kebab-case
-  version?: string;  // semantic version
+  name: string; // kebab-case
+  version?: string; // semantic version
   description?: string;
   source: PluginSource;
   author?: PluginAuthor;
   homepage?: string;
   keywords?: string[];
   category?: string;
+  domain?: string;
+  namespace?: string;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -40,6 +44,8 @@ export interface PluginListItem {
   homepage?: string;
   keywords?: string[];
   category?: string;
+  domain?: string;
+  namespace?: string;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -51,22 +57,12 @@ export interface ListPluginsResponse {
   count: number;
 }
 
-export interface RegisterPluginRequest {
-  name: string;
+// Request envelope synced from the OpenAPI spec, with `source` narrowed to our PluginSource
+// union and `version` kept optional (the backend supplies its default).
+export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "source" | "version"> & {
   source: PluginSource;
   version?: string;
-  description?: string;
-  author?: PluginAuthor;
-  homepage?: string;
-  keywords?: string[];
-  category?: string;
-}
-
-export interface RegisterPluginResponse {
-  plugin: Plugin;
-  action: "created" | "updated";
-  message: string;
-}
+};
 
 // Public marketplace types
 export interface MarketplacePluginEntry {
@@ -86,7 +82,7 @@ export interface MarketplaceOwner {
 }
 
 export interface MarketplaceResponse {
-  name: string;  // Marketplace name (e.g., "litellm")
+  name: string; // Marketplace name (e.g., "litellm")
   owner: MarketplaceOwner;
   plugins: MarketplacePluginEntry[];
 }
@@ -96,18 +92,4 @@ export interface CategoryTab {
   key: string;
   label: string;
   count: number;
-}
-
-export interface PluginFormData {
-  name: string;
-  sourceType: "github" | "url";
-  repo: string;
-  url: string;
-  version: string;
-  description: string;
-  authorName: string;
-  authorEmail: string;
-  homepage: string;
-  category: string;
-  keywords: string;  // Comma-separated string, will be split into array
 }

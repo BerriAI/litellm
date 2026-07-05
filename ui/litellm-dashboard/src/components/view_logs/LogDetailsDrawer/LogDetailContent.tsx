@@ -4,6 +4,7 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import EvalViewer from "../EvalViewer/EvalViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -37,7 +38,6 @@ const { Text } = Typography;
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
-  onOpenSettings?: () => void;
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
   accessToken?: string | null;
@@ -51,7 +51,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -67,6 +67,10 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
+
+  // LLM Judge data
+  const evalInfo = metadata?.eval_information;
+  const hasEvalData = evalInfo != null;
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -108,7 +112,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
         <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
           <Descriptions column={2} size="small">
             <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
@@ -142,6 +146,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         promptTokens={logEntry.prompt_tokens}
         completionTokens={logEntry.completion_tokens}
         cacheHit={logEntry.cache_hit}
+        rawInputTokens={metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens}
+        cacheReadTokens={metadata?.additional_usage_values?.cache_read_input_tokens}
+        cacheCreationTokens={metadata?.additional_usage_values?.cache_creation_input_tokens}
       />
 
       {/* Tools */}
@@ -150,13 +157,13 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       {/* Configuration Info Message */}
       {missingData && (
         <div className="mb-6">
-          <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+          <ConfigInfoMessage show={missingData} />
         </div>
       )}
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+        <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <Spin size="default" />
           <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
         </div>
@@ -186,6 +193,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
           />
         </div>
       )}
+
+      {/* LLM Judge Results */}
+      {hasEvalData && <EvalViewer data={evalInfo} />}
 
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
@@ -224,7 +234,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </Text>
@@ -247,14 +257,25 @@ function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: nu
 
   return (
     <Space size={SPACING_MEDIUM}>
-      <a onClick={handleClick} style={{ cursor: "pointer" }}>{label}</a>
-      {maskedCount > 0 && (
-        <Tag color="blue">
-          {maskedCount} masked
-        </Tag>
-      )}
+      <a onClick={handleClick} style={{ cursor: "pointer" }}>
+        {label}
+      </a>
+      {maskedCount > 0 && <Tag color="blue">{maskedCount} masked</Tag>}
     </Space>
   );
+}
+
+/**
+ * Uncached input token count (billable non-cache prompt text), aligned with Cost Breakdown "Input".
+ * Same sources as CostBreakdownViewer rawInputTokens.
+ */
+function getUncachedInputTextTokens(metadata: Record<string, any>): number | undefined {
+  const raw =
+    metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens ??
+    metadata?.usage_object?.prompt_tokens_details?.text_tokens;
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
@@ -271,25 +292,36 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
   const cacheHitValue = String(logEntry.cache_hit ?? "None");
   const cacheHitColor =
-    cacheHitValue.toLowerCase() === "true"
-      ? "green"
-      : cacheHitValue.toLowerCase() === "false"
-        ? "red"
-        : "default";
+    cacheHitValue.toLowerCase() === "true" ? "green" : cacheHitValue.toLowerCase() === "false" ? "red" : "default";
+
+  const uncachedInputTokens = getUncachedInputTextTokens(metadata);
+  const showAnthropicMessagesInputOutput =
+    logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
-          <Descriptions.Item label="Tokens">
-            <TokenFlow
-              prompt={logEntry.prompt_tokens}
-              completion={logEntry.completion_tokens}
-              total={logEntry.total_tokens}
-            />
-          </Descriptions.Item>
+          {showAnthropicMessagesInputOutput ? (
+            <>
+              <Descriptions.Item label="Input Tokens">{formatNumberWithCommas(uncachedInputTokens)}</Descriptions.Item>
+              <Descriptions.Item label="Output Tokens">
+                {formatNumberWithCommas(logEntry.completion_tokens)}
+              </Descriptions.Item>
+            </>
+          ) : (
+            <Descriptions.Item label="Tokens">
+              <TokenFlow
+                prompt={logEntry.prompt_tokens}
+                completion={logEntry.completion_tokens}
+                total={logEntry.total_tokens}
+              />
+            </Descriptions.Item>
+          )}
           <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-          <Descriptions.Item label="Duration">{logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s</Descriptions.Item>
+          <Descriptions.Item label="Duration">
+            {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
+          </Descriptions.Item>
           {ttftMs != null && ttftMs > 0 && (
             <Descriptions.Item label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</Descriptions.Item>
           )}
@@ -319,11 +351,20 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
           )}
 
           <Descriptions.Item label="Retries">
-            {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null
-              ? metadata.attempted_retries > 0
-                ? <>{metadata.attempted_retries}{metadata.max_retries !== undefined && metadata.max_retries !== null ? ` / ${metadata.max_retries}` : ''}</>
-                : <Tag color="green">None</Tag>
-              : "-"}
+            {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null ? (
+              metadata.attempted_retries > 0 ? (
+                <>
+                  {metadata.attempted_retries}
+                  {metadata.max_retries !== undefined && metadata.max_retries !== null
+                    ? ` / ${metadata.max_retries}`
+                    : ""}
+                </>
+              ) : (
+                <Tag color="green">None</Tag>
+              )
+            ) : (
+              "-"
+            )}
           </Descriptions.Item>
 
           <Descriptions.Item label="Start Time">
@@ -354,7 +395,7 @@ function RequestResponseSection({
   logEntry,
 }: RequestResponseSectionProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
-  const [viewMode, setViewMode] = useState<'pretty' | 'json'>('pretty');
+  const [viewMode, setViewMode] = useState<"pretty" | "json">("pretty");
 
   const getCopyText = () => {
     const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
@@ -366,22 +407,20 @@ function RequestResponseSection({
   const completionTokens = logEntry.completion_tokens || 0;
   const totalTokens = promptTokens + completionTokens;
   const costBreakdown = logEntry.metadata?.cost_breakdown;
-  const useCostBreakdown =
-    costBreakdown?.input_cost !== undefined &&
-    costBreakdown?.output_cost !== undefined;
+  const useCostBreakdown = costBreakdown?.input_cost !== undefined && costBreakdown?.output_cost !== undefined;
   const inputCost = useCostBreakdown
-    ? (costBreakdown!.input_cost ?? 0)
+    ? costBreakdown!.input_cost ?? 0
     : totalTokens > 0
       ? (totalSpend * promptTokens) / totalTokens
       : 0;
   const outputCost = useCostBreakdown
-    ? (costBreakdown!.output_cost ?? 0)
+    ? costBreakdown!.output_cost ?? 0
     : totalTokens > 0
       ? (totalSpend * completionTokens) / totalTokens
       : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"
@@ -390,20 +429,18 @@ function RequestResponseSection({
             key: "1",
             label: (
               <div
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}
                 onClick={(e) => {
                   const target = e.target as HTMLElement;
-                  if (target.closest('.ant-radio-group')) {
+                  if (target.closest(".ant-radio-group")) {
                     e.stopPropagation();
                   }
                 }}
               >
-                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>Request & Response</h3>
-                <Radio.Group
-                  size="small"
-                  value={viewMode}
-                  onChange={(e) => setViewMode(e.target.value)}
-                >
+                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>
+                  Request & Response
+                </h3>
+                <Radio.Group size="small" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
                   <Radio.Button value="pretty">Pretty</Radio.Button>
                   <Radio.Button value="json">JSON</Radio.Button>
                 </Radio.Group>
@@ -411,7 +448,7 @@ function RequestResponseSection({
             ),
             children: (
               <div>
-                {viewMode === 'pretty' ? (
+                {viewMode === "pretty" ? (
                   <PrettyMessagesView
                     request={getRawRequest()}
                     response={getFormattedResponse()}
@@ -430,7 +467,7 @@ function RequestResponseSection({
                       <Text
                         copyable={{
                           text: getCopyText(),
-                          tooltips: ["Copy JSON", "Copied!"]
+                          tooltips: ["Copy JSON", "Copied!"],
                         }}
                         disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
                       />
@@ -501,7 +538,8 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
         }}
       >
-        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""}{" "}
+        evaluated
         <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
       </div>
     </div>
@@ -510,7 +548,7 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
 
 function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"
@@ -524,7 +562,7 @@ function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
                   <Text
                     copyable={{
                       text: JSON.stringify(metadata, null, 2),
-                      tooltips: ["Copy Metadata", "Copied!"]
+                      tooltips: ["Copy Metadata", "Copied!"],
                     }}
                   />
                 </div>

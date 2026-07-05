@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MCPServerPermissions from "./MCPServerPermissions";
 import * as networking from "../networking";
+import { ALL_PROXY_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("../networking");
 
@@ -43,7 +44,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for servers to load and display
@@ -87,7 +88,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={mockToolPermissions}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for server to load
@@ -145,7 +146,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for server to load
@@ -172,7 +173,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={mockAccessGroups}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for access groups to load
@@ -211,7 +212,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={mockAccessGroups}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for both to load
@@ -238,7 +239,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Verify empty state message
@@ -279,7 +280,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={mockToolPermissions}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for servers to load
@@ -298,7 +299,7 @@ describe("MCPServerPermissions", () => {
     // Expand both servers by clicking their rows
     const server1Row = screen.getByText(/DW_MCP/).closest("div");
     const server2Row = screen.getByText(/Test Server/).closest("div");
-    
+
     await userEvent.click(server1Row!); // Expand server 1
     await userEvent.click(server2Row!); // Expand server 2
 
@@ -317,9 +318,7 @@ describe("MCPServerPermissions", () => {
      * Tests that the component doesn't crash when API calls fail
      * and falls back to showing server IDs instead of names.
      */
-    vi.mocked(networking.fetchMCPServers).mockRejectedValue(
-      new Error("Failed to fetch servers")
-    );
+    vi.mocked(networking.fetchMCPServers).mockRejectedValue(new Error("Failed to fetch servers"));
 
     render(
       <MCPServerPermissions
@@ -327,7 +326,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Should still render with server ID (fallback)
@@ -350,11 +349,27 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={null}
-      />
+      />,
     );
 
     // API should not be called without token
     expect(networking.fetchMCPServers).not.toHaveBeenCalled();
   });
-});
 
+  it("should display the All Proxy MCP Servers state instead of the raw sentinel string", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[ALL_PROXY_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText("All Proxy MCP Servers")).toBeInTheDocument();
+    expect(screen.getByText("All")).toBeInTheDocument();
+    expect(screen.queryByText(ALL_PROXY_MCP_SERVERS_SENTINEL)).not.toBeInTheDocument();
+  });
+});

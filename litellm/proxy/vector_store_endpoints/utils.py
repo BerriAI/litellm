@@ -1,10 +1,281 @@
+import json
+import re
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import HTTPException, Request
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.types.utils import LlmProviders
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
+
+
+def _normalize_litellm_params(
+    vector_store: LiteLLM_ManagedVectorStore,
+) -> LiteLLM_ManagedVectorStore:
+    litellm_params = vector_store.get("litellm_params")
+    if isinstance(litellm_params, str):
+        normalized = LiteLLM_ManagedVectorStore(**dict(vector_store))
+        try:
+            parsed = json.loads(litellm_params)
+            normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            normalized["litellm_params"] = {}
+        return normalized
+    return vector_store
+
+
+def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+
+def assert_proxy_admin_for_vector_store_index_management(
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    operation: Literal["create", "delete", "update"] = "create",
+) -> None:
+    """Raise 403 unless the caller is a proxy admin."""
+    if _is_proxy_admin(user_api_key_dict):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(f"Only proxy admins can {operation} vector store indexes. Contact your LiteLLM administrator."),
+    )
+
+
+def _suffix_after_index_name(request_path: str, index_name: str) -> Optional[str]:
+    """Return the path suffix after ``/indexes/{index_name}``, or None if absent."""
+    match = re.search(rf"/indexes/{re.escape(index_name)}(?=$|[/?])", request_path)
+    if match is None:
+        return None
+    return request_path[match.end() :]
+
+
+def _is_vector_store_index_lifecycle_request(
+    request_method: str,
+    request_path: str,
+    index_name: str,
+) -> bool:
+    """
+    True when the request creates or deletes a search index itself (not documents).
+
+    Examples (admin-only):
+    - DELETE /azure_ai/indexes/my-index
+    - PUT /azure_ai/indexes/my-index
+    - POST /azure_ai/indexes
+    """
+    if request_method not in ("POST", "PUT", "DELETE", "PATCH"):
+        return False
+
+    suffix = _suffix_after_index_name(request_path, index_name)
+    if suffix is not None:
+        # Document operations live under /indexes/{name}/docs/...
+        if suffix.startswith("/docs"):
+            return False
+        # DELETE/PUT/PATCH on /indexes/{name} itself is index lifecycle.
+        if suffix == "" or suffix.startswith("?"):
+            return True
+
+    # POST /indexes (create index at service level; no index name in path).
+    normalized = request_path.rstrip("/")
+    if request_method == "POST" and normalized.endswith("/indexes"):
+        return True
+
+    return False
+
+
+def _object_permission_allows_vector_store(
+    object_permission: Optional[LiteLLM_ObjectPermissionTable],
+    vector_store_id: str,
+) -> bool:
+    """Returns True if an object permission explicitly allowlists the vector store."""
+    if object_permission is None:
+        return False
+    allowed = object_permission.vector_stores
+    if not allowed:
+        return False
+    return vector_store_id in allowed
+
+
+async def _get_object_permission_for_id(
+    object_permission_id: Optional[str],
+) -> Optional[LiteLLM_ObjectPermissionTable]:
+    """Load an object permission record by id, using the shared cache/DB helper."""
+    if not object_permission_id:
+        return None
+
+    from litellm.proxy.auth.auth_checks import get_object_permission
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return None
+
+    try:
+        return await get_object_permission(
+            object_permission_id=object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to load object_permission id=%s: %s",
+            object_permission_id,
+            e,
+        )
+        return None
+
+
+async def can_user_access_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """
+    Returns True if the caller is allowed to access this managed vector store.
+
+    Access is granted (first match wins) when any of the following is true:
+    1. The caller's role is PROXY_ADMIN.
+    2. The vector store has no team_id (legacy behavior - accessible to all).
+    3. The caller's key-level object_permission.vector_stores explicitly lists
+       this vector store id.
+    4. The caller's team-level object_permission.vector_stores explicitly lists
+       this vector store id.
+    5. The caller's team_id matches the vector store's team_id.
+
+    Otherwise access is denied.
+    """
+    if _is_proxy_admin(user_api_key_dict):
+        return True
+
+    vector_store_team_id = vector_store.get("team_id")
+    if vector_store_team_id is None:
+        return True
+
+    vector_store_id = vector_store.get("vector_store_id") or ""
+
+    key_object_permission = user_api_key_dict.object_permission
+    if key_object_permission is None:
+        key_object_permission = await _get_object_permission_for_id(user_api_key_dict.object_permission_id)
+    if _object_permission_allows_vector_store(key_object_permission, vector_store_id):
+        return True
+
+    team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = user_api_key_dict.team_object_permission
+    if team_object_permission is None:
+        team_object_permission = await _get_object_permission_for_id(user_api_key_dict.team_object_permission_id)
+    if _object_permission_allows_vector_store(team_object_permission, vector_store_id):
+        return True
+
+    if user_api_key_dict.team_id is not None and user_api_key_dict.team_id == vector_store_team_id:
+        return True
+
+    return False
+
+
+async def get_litellm_managed_vector_store(
+    vector_store_id: str,
+) -> Optional[LiteLLM_ManagedVectorStore]:
+    """
+    Resolve a LiteLLM-managed vector store from the registry or shared cache.
+
+    Provider-native vector store IDs will not be present in either location and
+    return None, preserving direct provider behavior while still protecting
+    LiteLLM-managed multi-tenant stores.
+    """
+    if not vector_store_id:
+        return None
+
+    if litellm.vector_store_registry is not None:
+        try:
+            vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+                vector_store_id=vector_store_id
+            )
+            if vector_store is not None:
+                return _normalize_litellm_params(vector_store)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to resolve vector store id=%s from registry: %s",
+                vector_store_id,
+                e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to validate vector store access",
+            ) from e
+
+    try:
+        from litellm.proxy.auth.auth_checks import (
+            get_managed_vector_store_rows_by_uuids,
+        )
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return None
+        rows = await get_managed_vector_store_rows_by_uuids(
+            uuids=[vector_store_id],
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if not rows:
+            return None
+        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to resolve vector store id=%s from shared cache: %s",
+            vector_store_id,
+            e,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to validate vector store access",
+        ) from e
+
+
+async def assert_user_can_access_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+    detail: str = "Access denied: You do not have permission to access this vector store",
+) -> None:
+    """Raise 403 unless the caller can access the resolved vector store."""
+    if not await can_user_access_vector_store(vector_store, user_api_key_dict):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+async def assert_user_can_access_vector_store_id(
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    detail: str = "Access denied: You do not have permission to access this vector store",
+) -> Optional[LiteLLM_ManagedVectorStore]:
+    """
+    Resolve a managed vector store id and enforce ownership if it exists.
+
+    Unknown ids are treated as provider-native ids and are not rejected here.
+    """
+    vector_store = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
+    if vector_store is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=vector_store,
+            user_api_key_dict=user_api_key_dict,
+            detail=detail,
+        )
+    return vector_store
 
 
 def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:
@@ -61,10 +332,7 @@ def check_vector_store_permission(
 
             if index_config.get("index_name") == index_name:
                 index_permissions = index_config.get("index_permissions", [])
-                if (
-                    isinstance(index_permissions, list)
-                    and permission in index_permissions
-                ):
+                if isinstance(index_permissions, list) and permission in index_permissions:
                     return True
 
     return False
@@ -92,35 +360,55 @@ def is_allowed_to_call_vector_store_endpoint(
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
 
-    provider_config = ProviderConfigManager.get_provider_vector_stores_config(
-        provider=provider
-    )
+    provider_config = ProviderConfigManager.get_provider_vector_stores_config(provider=provider)
     if provider_config is None:
         return None
 
-    provider_vector_store_endpoints = (
-        provider_config.get_vector_store_endpoints_by_type()
-    )
+    provider_vector_store_endpoints = provider_config.get_vector_store_endpoints_by_type()
+
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    request_route = get_request_route(request)
+
+    if _is_vector_store_index_lifecycle_request(
+        request_method=request.method,
+        request_path=request_route,
+        index_name=index_name,
+    ):
+        operation_label: Literal["create", "delete", "update"] = "create"
+        if request.method == "DELETE":
+            operation_label = "delete"
+        elif request.method in ("PUT", "PATCH"):
+            operation_label = "update"
+        assert_proxy_admin_for_vector_store_index_management(
+            user_api_key_dict,
+            operation=operation_label,
+        )
+        return True
 
     # Determine the permission type based on the request
     permission_type = None
     for endpoint in provider_vector_store_endpoints["read"]:
-        if request.method == endpoint[0] and _does_endpoint_match(
-            endpoint[1], request.url.path
-        ):
+        if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
             permission_type = "read"
             break
 
     if permission_type is None:
         for endpoint in provider_vector_store_endpoints["write"]:
-            if request.method == endpoint[0] and _does_endpoint_match(
-                endpoint[1], request.url.path
-            ):
+            if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
                 permission_type = "write"
                 break
 
     if permission_type is None:
-        return None
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"User does not have permission to call vector store endpoint "
+                f"{index_name}. Ask your administrator to add the necessary "
+                "permissions to your API key/Team."
+            ),
+        )
 
     # Check if key has specific permission for allowed_vector_store_indexes
     has_permission = check_vector_store_permission(
@@ -154,29 +442,26 @@ def is_allowed_to_call_vector_store_files_endpoint(
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
 
-    provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-        provider=provider
-    )
+    provider_config = ProviderConfigManager.get_provider_vector_store_files_config(provider=provider)
     if provider_config is None:
         return None
 
-    provider_vector_store_endpoints = (
-        provider_config.get_vector_store_file_endpoints_by_type()
-    )
+    provider_vector_store_endpoints = provider_config.get_vector_store_file_endpoints_by_type()
+
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    request_route = get_request_route(request)
 
     permission_type: Optional[str] = None
     for endpoint in provider_vector_store_endpoints.get("read", ()):
-        if request.method == endpoint[0] and _does_endpoint_match(
-            endpoint[1], request.url.path
-        ):
+        if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
             permission_type = "read"
             break
 
     if permission_type is None:
         for endpoint in provider_vector_store_endpoints.get("write", ()):
-            if request.method == endpoint[0] and _does_endpoint_match(
-                endpoint[1], request.url.path
-            ):
+            if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
                 permission_type = "write"
                 break
 

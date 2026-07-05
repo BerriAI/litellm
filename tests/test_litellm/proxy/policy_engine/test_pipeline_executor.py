@@ -10,6 +10,9 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
+    CustomCodeGuardrail,
+)
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
@@ -63,9 +66,7 @@ class HttpStatusGuardrail(CustomGuardrail):
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
-        raise HTTPException(
-            status_code=self.status_code, detail="Simulated HTTP error"
-        )
+        raise HTTPException(status_code=self.status_code, detail="Simulated HTTP error")
 
 
 class AlwaysPassGuardrail(CustomGuardrail):
@@ -85,6 +86,29 @@ class AlwaysPassGuardrail(CustomGuardrail):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
         return None
+
+
+class PassthroughBlockGuardrail(CustomGuardrail):
+    """Mock guardrail that blocks using the legacy passthrough contract."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+        )
+        self.calls = 0
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        self.raise_passthrough_exception(
+            violation_message="Content policy violation",
+            request_data=data,
+            detection_info={"source": "passthrough"},
+        )
 
 
 class PiiMaskingGuardrail(CustomGuardrail):
@@ -108,9 +132,7 @@ class PiiMaskingGuardrail(CustomGuardrail):
         masked_messages = []
         for msg in data.get("messages", []):
             masked_msg = dict(msg)
-            masked_msg["content"] = msg["content"].replace(
-                "John Smith", "[REDACTED]"
-            )
+            masked_msg["content"] = msg["content"].replace("John Smith", "[REDACTED]")
             masked_messages.append(masked_msg)
         return {"messages": masked_messages}
 
@@ -155,12 +177,8 @@ async def test_escalation_step1_fails_step2_blocks():
     pipeline = GuardrailPipeline(
         mode="pre_call",
         steps=[
-            PipelineStep(
-                guardrail="simple-filter", on_fail="next", on_pass="allow"
-            ),
-            PipelineStep(
-                guardrail="advanced-filter", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="simple-filter", on_fail="next", on_pass="allow"),
+            PipelineStep(guardrail="advanced-filter", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -193,6 +211,174 @@ async def test_escalation_step1_fails_step2_blocks():
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
+async def test_block_carries_original_guardrail_exception():
+    """A blocking step must expose the guardrail's own raised exception on the
+    result so the caller can re-raise it verbatim, giving the policy path the
+    same response/trace as a direct guardrail attachment."""
+    guard = AlwaysFailGuardrail(guardrail_name="moderation-filter")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="moderation-filter", on_fail="block", on_pass="allow"
+            )
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "bad content"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="content-safety",
+        )
+
+        assert result.terminal_action == "block"
+        assert isinstance(result.original_exception, HTTPException)
+        assert result.original_exception.status_code == 400
+        assert result.original_exception.detail == "Content policy violation"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_unsupported_mode_yields_error_outcome_without_exception():
+    """An unexpected hook mode must surface as an error outcome (carrying no
+    original exception), not crash or run the guardrail."""
+    guard = AlwaysPassGuardrail(guardrail_name="filter")
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=[PipelineStep(guardrail="filter", on_error="block", on_fail="block")],
+            mode="during_call",
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="content-safety",
+        )
+
+        assert guard.calls == 0
+        assert result.terminal_action == "block"
+        assert result.step_results[0].outcome == "error"
+        assert (
+            "Unsupported pipeline mode: during_call"
+            in result.step_results[0].error_detail
+        )
+        assert result.original_exception is None
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_passthrough_guardrail_failure_can_pipeline_block():
+    """
+    Pipeline: passthrough guardrail (on_fail: block)
+    Expected: passthrough ModifyResponseException is treated as policy fail,
+    and the pipeline terminal action is block.
+    """
+    passthrough_guard = PassthroughBlockGuardrail(guardrail_name="passthrough-filter")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="passthrough-filter",
+                on_fail="block",
+                on_pass="allow",
+            ),
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [passthrough_guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={
+                "model": "fake-model",
+                "messages": [{"role": "user", "content": "bad content"}],
+            },
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="content-safety",
+        )
+
+        assert passthrough_guard.calls == 1
+        assert result.terminal_action == "block"
+        assert len(result.step_results) == 1
+        assert result.step_results[0].guardrail_name == "passthrough-filter"
+        assert result.step_results[0].outcome == "fail"
+        assert result.step_results[0].action_taken == "block"
+        assert result.error_message == "Content policy violation"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_failure_can_pipeline_block():
+    """
+    Pipeline: custom code guardrail (on_fail: block)
+    Expected: custom code keeps its standalone passthrough block behavior, and
+    the pipeline converts that guardrail intervention into a block action.
+    """
+    custom_guard = CustomCodeGuardrail(
+        guardrail_name="custom-code-filter",
+        custom_code=(
+            "def apply_guardrail(inputs, request_data, input_type):\n"
+            '    return block("SSN detected")\n'
+        ),
+    )
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="custom-code-filter",
+                on_fail="block",
+                on_pass="allow",
+            ),
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [custom_guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={
+                "model": "fake-model",
+                "messages": [{"role": "user", "content": "123-45-6789"}],
+            },
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="content-safety",
+        )
+
+        assert result.terminal_action == "block"
+        assert len(result.step_results) == 1
+        assert result.step_results[0].guardrail_name == "custom-code-filter"
+        assert result.step_results[0].outcome == "fail"
+        assert result.step_results[0].action_taken == "block"
+        assert result.error_message == "SSN detected"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
 async def test_early_allow_step1_passes_step2_skipped():
     """
     Pipeline: simple-filter (on_pass: allow) -> advanced-filter
@@ -205,12 +391,8 @@ async def test_early_allow_step1_passes_step2_skipped():
     pipeline = GuardrailPipeline(
         mode="pre_call",
         steps=[
-            PipelineStep(
-                guardrail="simple-filter", on_fail="next", on_pass="allow"
-            ),
-            PipelineStep(
-                guardrail="advanced-filter", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="simple-filter", on_fail="next", on_pass="allow"),
+            PipelineStep(guardrail="advanced-filter", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -251,12 +433,8 @@ async def test_escalation_step1_fails_step2_passes():
     pipeline = GuardrailPipeline(
         mode="pre_call",
         steps=[
-            PipelineStep(
-                guardrail="simple-filter", on_fail="next", on_pass="allow"
-            ),
-            PipelineStep(
-                guardrail="advanced-filter", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="simple-filter", on_fail="next", on_pass="allow"),
+            PipelineStep(guardrail="advanced-filter", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -305,9 +483,7 @@ async def test_data_forwarding_pii_masking():
                 on_pass="next",
                 pass_data=True,
             ),
-            PipelineStep(
-                guardrail="content-check", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -318,9 +494,7 @@ async def test_data_forwarding_pii_masking():
         result = await PipelineExecutor.execute_steps(
             steps=pipeline.steps,
             mode=pipeline.mode,
-            data={
-                "messages": [{"role": "user", "content": "Hello John Smith"}]
-            },
+            data={"messages": [{"role": "user", "content": "Hello John Smith"}]},
             user_api_key_dict=MagicMock(),
             call_type="completion",
             policy_name="pii-then-safety",

@@ -98,12 +98,7 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
               )}
             </Form.Item>
           </div>
-          <Button
-            type="text"
-            danger
-            size="small"
-            onClick={() => removeEntry(entry.id, entry.key)}
-          >
+          <Button type="text" danger size="small" onClick={() => removeEntry(entry.id, entry.key)}>
             Remove
           </Button>
         </div>
@@ -139,7 +134,6 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
   const renderField = (fieldKey: string, field: ProviderParam) => {
     const fullFieldKey = `${parentFieldKey}.${fieldKey}`;
     const value = values?.[fieldKey];
-    console.log("value", value);
     // Handle dict fields separately since they manage their own Form.Items
     if (field.type === "dict" && field.dict_key_options) {
       return (
@@ -152,7 +146,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     }
 
     return (
-      <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-xs">
         <Form.Item
           name={[parentFieldKey, fieldKey]}
           label={
@@ -192,8 +186,8 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
             </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select placeholder={field.description}>
-              <Select.Option value="true">True</Select.Option>
-              <Select.Option value="false">False</Select.Option>
+              <Select.Option value={true}>True</Select.Option>
+              <Select.Option value={false}>False</Select.Option>
             </Select>
           ) : field.type === "number" ? (
             <NumericalInput step={1} width={400} placeholder={field.description} />
