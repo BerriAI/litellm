@@ -334,6 +334,63 @@ class _ClientDisconnectedBeforeFirstChunk(Exception):
     """
 
 
+# Anthropic-format SSE keepalive frame. The Anthropic Messages API documents that
+# streams "may include ping events at any time"; SDK clients skip them by their
+# JSON ``type``. Kept data-only (no ``event:`` line) to match every other frame
+# LiteLLM's /v1/messages SSE path emits.
+ANTHROPIC_SSE_PING_FRAME = f'{STREAM_SSE_DATA_PREFIX}{{"type": "ping"}}\n\n'
+
+
+async def _aiter_with_sse_keepalive(
+    source: AsyncGenerator[str, None],
+    interval: float,
+    keepalive_frame: str,
+) -> AsyncGenerator[str, None]:
+    """Yield from ``source``; emit ``keepalive_frame`` whenever it is silent > ``interval`` s.
+
+    Exists for providers that buffer server-side mid-stream (e.g. Bedrock delivering a
+    large ``tool_use`` input as a trailing burst — issue #32004): the upstream silence
+    is out of LiteLLM's control, but pings keep clients and intermediaries with idle
+    timeouts from dropping the connection while it lasts.
+
+    The pending ``__anext__`` is awaited with a timeout and is NOT cancelled when the
+    timeout fires — cancelling would drop the in-flight chunk. The same task is
+    re-awaited after each ping, so chunks are never lost or reordered, and source
+    exceptions propagate exactly as they would un-wrapped.
+    """
+    iterator = source.__aiter__()
+    pending: Optional["asyncio.Task[str]"] = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(iterator.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield keepalive_frame
+                continue
+            finished, pending = pending, None
+            try:
+                chunk = finished.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
+    finally:
+        if pending is not None:
+            pending.cancel()
+            try:
+                await pending
+            except BaseException:  # noqa: BLE001 — includes CancelledError; cleanup only
+                pass
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception as exc:  # noqa: BLE001
+                verbose_proxy_logger.debug(
+                    "_aiter_with_sse_keepalive: error closing source stream: %s", exc
+                )
+
+
 async def _wait_for_http_disconnect(request: Request) -> None:
     try:
         while True:
@@ -1584,6 +1641,16 @@ class ProxyBaseLLMRequestProcessing:
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
                         )
+                        # Optional Anthropic-style ping keepalives during upstream
+                        # silence (issue #32004); scoped to /v1/messages, whose
+                        # clients must tolerate ping events per the Anthropic spec.
+                        _ping_interval = litellm.anthropic_stream_ping_interval_seconds
+                        if _ping_interval is not None and _ping_interval > 0:
+                            selected_data_generator = _aiter_with_sse_keepalive(
+                                selected_data_generator,
+                                interval=_ping_interval,
+                                keepalive_frame=ANTHROPIC_SSE_PING_FRAME,
+                            )
                         return await create_response(
                             generator=selected_data_generator,
                             media_type="text/event-stream",

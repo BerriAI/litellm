@@ -14,8 +14,10 @@ from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
+    ANTHROPIC_SSE_PING_FRAME,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
+    _aiter_with_sse_keepalive,
     _await_llm_call_cancelling_on_disconnect,
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
@@ -4352,3 +4354,91 @@ class TestResponseCostHeaderForTypedDictResponses:
 
         assert "x-litellm-response-cost" not in fastapi_response.headers
         recompute.assert_not_called()
+
+
+class TestAnthropicSSEKeepalive:
+    """Regression tests for issue #32004: ping keepalives during upstream silence."""
+
+    PING = ANTHROPIC_SSE_PING_FRAME
+
+    @pytest.mark.asyncio
+    async def test_pings_fill_upstream_silence_and_preserve_order(self):
+        """A silent gap longer than the interval produces ping frames between
+        the surrounding chunks; source chunks arrive intact and in order."""
+        first = 'data: {"type": "message_start"}\n\n'
+        last = 'data: {"type": "message_stop"}\n\n'
+
+        async def slow_source():
+            yield first
+            await asyncio.sleep(0.35)
+            yield last
+
+        out = [
+            chunk
+            async for chunk in _aiter_with_sse_keepalive(
+                slow_source(), interval=0.1, keepalive_frame=self.PING
+            )
+        ]
+
+        non_pings = [c for c in out if c != self.PING]
+        pings = [c for c in out if c == self.PING]
+        assert non_pings == [first, last]
+        assert len(pings) >= 2  # ~3 pings during a 0.35s gap at 0.1s interval
+        assert out[0] == first and out[-1] == last  # pings only inside the gap
+
+    @pytest.mark.asyncio
+    async def test_fast_source_gets_no_pings(self):
+        chunks = [f'data: {{"n": {i}}}\n\n' for i in range(5)]
+
+        async def fast_source():
+            for c in chunks:
+                yield c
+
+        out = [
+            chunk
+            async for chunk in _aiter_with_sse_keepalive(
+                fast_source(), interval=5.0, keepalive_frame=self.PING
+            )
+        ]
+        assert out == chunks
+
+    @pytest.mark.asyncio
+    async def test_source_exception_propagates(self):
+        async def failing_source():
+            yield "data: ok\n\n"
+            raise ValueError("upstream broke")
+
+        received = []
+        with pytest.raises(ValueError, match="upstream broke"):
+            async for chunk in _aiter_with_sse_keepalive(
+                failing_source(), interval=0.05, keepalive_frame=self.PING
+            ):
+                received.append(chunk)
+        assert received == ["data: ok\n\n"]
+
+    @pytest.mark.asyncio
+    async def test_early_close_closes_source(self):
+        """Closing the wrapper (client disconnect) closes the inner source so its
+        cleanup (disconnect accounting, stream close) runs promptly."""
+        source_closed = asyncio.Event()
+
+        async def source():
+            try:
+                while True:
+                    yield "data: tick\n\n"
+                    await asyncio.sleep(0.01)
+            finally:
+                source_closed.set()
+
+        wrapper = _aiter_with_sse_keepalive(source(), interval=1.0, keepalive_frame=self.PING)
+        assert (await wrapper.__anext__()) == "data: tick\n\n"
+        await wrapper.aclose()
+        assert source_closed.is_set()
+
+    @pytest.mark.asyncio
+    async def test_ping_frame_is_valid_anthropic_sse(self):
+        assert self.PING.startswith("data: ")
+        assert self.PING.endswith("\n\n")
+        import json as _json
+
+        assert _json.loads(self.PING[len("data: "):]) == {"type": "ping"}

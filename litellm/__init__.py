@@ -240,6 +240,17 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # Or via `litellm_settings.strip_anthropic_total_tokens: true` in
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
+# When set (seconds), the proxy's Anthropic /v1/messages streaming responses emit
+# an SSE ping frame (`data: {"type": "ping"}`) whenever the upstream provider goes
+# silent for that long — matching the Anthropic API, whose streams "may include
+# ping events at any time". Keeps clients and intermediaries with idle timeouts
+# from dropping the connection while a provider buffers server-side (e.g. Bedrock
+# delivering a large tool_use input as a trailing burst — see issue #32004).
+# Default None (off) preserves current behavior. Opt in via Python:
+#   `litellm.anthropic_stream_ping_interval_seconds = 15`
+# Or via `litellm_settings.anthropic_stream_ping_interval_seconds: 15` in
+# config.yaml.
+anthropic_stream_ping_interval_seconds: Optional[float] = None
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
