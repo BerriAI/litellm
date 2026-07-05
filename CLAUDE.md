@@ -51,7 +51,7 @@ Every lint or type suppression must name the exact rule inside brackets and carr
 
 Commit and push your work when you're done without asking
 
-When referencing models while coding, QA'ing, etc., use the latest model in that model family unless otherwise specified; treat your training knowledge, memories, configs, and tests as stale, so pick the family's latest from model_prices_and_context_window.json or via the web
+When referencing or running models (coding, QA'ing, writing tests, etc.), use the latest model in that model family unless otherwise specified; treat your training knowledge, memories, configs, and tests as stale, and determine the family's latest with model_prices_and_context_window.json or the web
 
 If you're an internal contributor, when creating a new PR, the typical flow is to branch off litellm_internal_staging and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
 
