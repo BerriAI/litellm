@@ -174,7 +174,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
 
   return (
     <>
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow-sm">
         {/* Header */}
         <div className="border-b px-6 py-4">
           <div className="flex items-center justify-between mb-4">

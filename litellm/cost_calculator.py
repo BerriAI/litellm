@@ -52,6 +52,9 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.deepseek.cost_calculator import (
     cost_per_token as deepseek_cost_per_token,
 )
+from litellm.llms.tencent.cost_calculator import (
+    cost_per_token as tencent_cost_per_token,
+)
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
@@ -625,6 +628,8 @@ def cost_per_token(
         return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "tencent":
+        return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
@@ -1495,6 +1500,7 @@ def completion_cost(
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                         data_residency=data_residency,
+                        litellm_logging_obj=litellm_logging_obj,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2297,6 +2303,7 @@ def handle_realtime_stream_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
     data_residency: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2332,14 +2339,25 @@ def handle_realtime_stream_cost_calculation(
         input_cost_per_token += _input_cost_per_token
         output_cost_per_token += _output_cost_per_token
         break  # exit if we find a valid model
-    total_cost = input_cost_per_token + output_cost_per_token
-
-    if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results):
-        total_cost += handle_realtime_transcription_cost_calculation(
+    transcription_cost = (
+        handle_realtime_transcription_cost_calculation(
             results=results,
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
         )
+        if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
+        else 0.0
+    )
+    total_cost = input_cost_per_token + output_cost_per_token + transcription_cost
+
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=input_cost_per_token,
+        completion_tokens_cost_usd_dollar=output_cost_per_token,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=total_cost,
+        additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
+    )
 
     return total_cost
 

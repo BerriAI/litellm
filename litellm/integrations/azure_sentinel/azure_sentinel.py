@@ -61,13 +61,15 @@ class AzureSentinelLogger(CustomBatchLogger):
             client_secret (str, optional): Azure Client Secret for OAuth2 authentication.
                 If not provided, will use AZURE_SENTINEL_CLIENT_SECRET or AZURE_CLIENT_SECRET env var.
             audit_stream_name (str, optional): Stream name from DCR for audit logs.
-                If not provided, audit logs use the standard stream name.
+                If not provided, will use AZURE_SENTINEL_AUDIT_STREAM_NAME env var or the standard stream name.
         """
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         resolved_dcr_immutable_id = dcr_immutable_id or os.getenv("AZURE_SENTINEL_DCR_IMMUTABLE_ID")
         resolved_stream_name = stream_name or os.getenv("AZURE_SENTINEL_STREAM_NAME") or "Custom-LiteLLM"
-        resolved_audit_stream_name = audit_stream_name or resolved_stream_name
+        resolved_audit_stream_name = (
+            audit_stream_name or os.getenv("AZURE_SENTINEL_AUDIT_STREAM_NAME") or resolved_stream_name
+        )
         resolved_endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
         resolved_tenant_id = tenant_id or os.getenv("AZURE_SENTINEL_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
         resolved_client_id = client_id or os.getenv("AZURE_SENTINEL_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
