@@ -4286,7 +4286,12 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         bool: True if model matches the pattern, False otherwise
     """
     if "*" in allowed_model_pattern:
-        pattern = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        # Escape all regex metacharacters in the pattern first, then re-expand the
+        # (now escaped) wildcard marker back into `.*`. This prevents regex
+        # injection via an attacker-controlled `allowed_model_pattern` value while
+        # preserving existing wildcard semantics (e.g. "bedrock/*" still matches
+        # "bedrock/anthropic.claude-3-5-sonnet", and "*" still matches anything).
+        pattern = "^" + re.escape(allowed_model_pattern).replace(re.escape("*"), ".*") + "$"
         return bool(re.match(pattern, model))
 
     return False

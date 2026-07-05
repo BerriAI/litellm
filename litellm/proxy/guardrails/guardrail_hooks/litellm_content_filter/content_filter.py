@@ -445,6 +445,25 @@ class ContentFilterGuardrail(CustomGuardrail):
                 else:
                     category_file_path = yaml_path  # will trigger "not found" below
 
+            # Defense-in-depth: re-assert the resolved candidate path stays inside
+            # categories_dir before it is ever passed to os.path.exists()/loaded.
+            # category_name is already regex-validated above, but this closes the
+            # gap for any future code path that reaches here without that check
+            # (and satisfies CodeQL's path-injection analysis, which cannot see
+            # through the earlier regex validation).
+            try:
+                real_category_file_path = os.path.realpath(category_file_path)
+                real_categories_dir = os.path.realpath(categories_dir)
+                if os.path.commonpath([real_category_file_path, real_categories_dir]) != real_categories_dir:
+                    raise ValueError(
+                        f"Category file path '{category_file_path}' is outside the allowed categories directory"
+                    )
+            except ValueError as e:
+                verbose_proxy_logger.warning(
+                    f"Category '{category_name}': resolved category file path escapes categories_dir, skipping. {e}"
+                )
+                continue
+
             if not os.path.exists(category_file_path):
                 verbose_proxy_logger.warning(f"Category file not found: {category_file_path}, skipping")
                 continue
