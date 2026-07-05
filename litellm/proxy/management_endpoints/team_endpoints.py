@@ -327,7 +327,8 @@ class TeamMemberBudgetHandler:
                 f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
             )
             if updated_kv.get("metadata") is None:
-                updated_kv["metadata"] = {}
+                # Preserve existing metadata from team table to avoid dropping keys
+                updated_kv["metadata"] = team_table.metadata.copy() if team_table.metadata else {}
             updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
 
         else:  # budget does not exist
