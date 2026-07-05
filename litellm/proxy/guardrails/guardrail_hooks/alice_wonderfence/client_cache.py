@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from wonderfence_sdk.client import (  # type: ignore[import-untyped]  # pyright: ignore[reportMissingTypeStubs]
+    from wonderfence_sdk.client import (  # pyright: ignore[reportMissingTypeStubs]  # wonderfence_sdk ships no type stubs
         WonderFenceV2Client as _WonderFenceV2Client,
     )
 
@@ -30,10 +30,10 @@ def load_sdk() -> tuple[Any, Any]:
     on the instance so per-call hot paths don't re-trigger the import machinery.
     """
     try:
-        from wonderfence_sdk.client import (  # type: ignore[import-untyped]  # pyright: ignore[reportMissingTypeStubs]
+        from wonderfence_sdk.client import (  # pyright: ignore[reportMissingTypeStubs]  # wonderfence_sdk ships no type stubs
             WonderFenceV2Client,
         )
-        from wonderfence_sdk.models import (  # type: ignore[import-untyped]  # pyright: ignore[reportMissingTypeStubs]
+        from wonderfence_sdk.models import (  # pyright: ignore[reportMissingTypeStubs]  # wonderfence_sdk ships no type stubs
             AnalysisContext,
         )
     except ImportError as e:

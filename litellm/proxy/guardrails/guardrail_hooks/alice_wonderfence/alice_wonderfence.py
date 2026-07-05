@@ -38,7 +38,7 @@ from .processing import (
 )
 
 if TYPE_CHECKING:
-    from wonderfence_sdk.client import (  # type: ignore[import-untyped]  # pyright: ignore[reportMissingTypeStubs]
+    from wonderfence_sdk.client import (  # pyright: ignore[reportMissingTypeStubs]  # wonderfence_sdk ships no type stubs
         WonderFenceV2Client as _WonderFenceV2Client,
     )
 

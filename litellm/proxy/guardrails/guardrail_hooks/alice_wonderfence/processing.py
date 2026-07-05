@@ -27,7 +27,7 @@ def build_analysis_context(
     if model_str:
         try:
             model_name, provider, _, _ = litellm.get_llm_provider(model=model_str)
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort provider parse for telemetry; any failure falls back to manual split and must never break the guardrail
             if "/" in model_str:
                 provider, model_name = model_str.split("/", 1)
 
