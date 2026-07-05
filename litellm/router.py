@@ -7354,8 +7354,7 @@ class Router:
             # deployment sharing the same backend model name.
             # Each deployment's full pricing is already stored under its
             # unique model_id above.
-            _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
-            _shared_model_info = {k: v for k, v in _model_info.items() if k not in _custom_pricing_fields}
+            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
             _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
             _deployment_mode = _shared_model_info.get("mode")
             # Keep the built-in bridge mode stable for shared backend keys.
@@ -8019,8 +8018,7 @@ class Router:
         # deployment sharing the same backend model name.
         # Each deployment's full pricing is already stored under its
         # unique model_id above (when present).
-        _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
-        _shared_model_info = {k: v for k, v in _model_info_dict.items() if k not in _custom_pricing_fields}
+        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
         _backend_alias_cost = {_model_name: _shared_model_info}
         if "responses/" in _model_name:
             _stripped_model_name = _model_name.replace("responses/", "")
