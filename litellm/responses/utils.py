@@ -211,9 +211,7 @@ class ResponsesAPIRequestUtils:
         # producing a ~730-character ID that cannot be decoded in one pass on
         # turn 2, causing a 422 from upstream providers (OpenAI enforces a
         # 64-character maximum for previous_response_id).
-        _already_decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
-            response_id
-        )
+        _already_decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
         if _already_decoded.get("custom_llm_provider") is not None:
             return responses_api_response
 
