@@ -129,11 +129,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _sync_post(
-        client: Optional[Union[HTTPHandler, httpx.Client]],
+        client: HTTPHandler | httpx.Client | None,
         api_base: str,
         headers: dict,
         request_data: dict,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         if isinstance(client, HTTPHandler):
             return client.post(
@@ -164,11 +164,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     @staticmethod
     async def _async_post(
-        client: Optional[Union[AsyncHTTPHandler, httpx.AsyncClient]],
+        client: AsyncHTTPHandler | httpx.AsyncClient | None,
         api_base: str,
         headers: dict,
         request_data: dict,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.utils import LlmProviders
@@ -214,7 +214,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         acompletion: bool,
         litellm_params: dict,
         logger_fn: Optional[Callable] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, httpx.Client, httpx.AsyncClient]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
@@ -267,7 +267,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client: Optional[Union[HTTPHandler, httpx.Client]] = None,
+        client: HTTPHandler | httpx.Client | None = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         encoding: Any = None,
     ):
