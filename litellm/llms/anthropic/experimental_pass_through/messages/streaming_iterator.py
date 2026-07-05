@@ -17,6 +17,41 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
+INCOMPLETE_STREAM_ERROR_MESSAGE = (
+    "Provider stream ended before emitting a message_stop event; "
+    "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
+)
+
+
+def _is_message_stop_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") == "message_stop"
+    if isinstance(chunk, (bytes, bytearray)):
+        return any(line == b"event: message_stop" for line in chunk.splitlines())
+    return False
+
+
+def _is_provider_error_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") == "error"
+    if isinstance(chunk, (bytes, bytearray)):
+        return any(line == b"event: error" for line in chunk.splitlines())
+    return False
+
+
+def _is_terminal_stream_chunk(chunk: object) -> bool:
+    return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
+
+
+def _incomplete_stream_error_sse_event() -> bytes:
+    payload = json.dumps(
+        {
+            "type": "error",
+            "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE},
+        }
+    )
+    return f"event: error\ndata: {payload}\n\n".encode()
+
 
 class AnthropicMessagesStreamHiddenParams(TypedDict):
     additional_headers: dict[str, str]
@@ -159,13 +194,18 @@ class BaseAnthropicMessagesStreamingIterator:
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
         collected_chunks = []
+        saw_terminal_event = False
 
         async for chunk in completion_stream:
             if self.completion_start_time is None:
                 self.completion_start_time = datetime.now()
+            saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
             encoded_chunk = self._convert_chunk_to_sse_format(chunk)
             collected_chunks.append(encoded_chunk)
             yield encoded_chunk
+
+        if not saw_terminal_event:
+            yield _incomplete_stream_error_sse_event()
 
         # Handle logging after all chunks are processed
         await self._handle_streaming_logging(collected_chunks)

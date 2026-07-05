@@ -91,6 +91,87 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
 
 
 @pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_appends_error_event_when_stream_truncates_mid_tool_use():
+    """
+    Regression test for LIT-3724: Bedrock invoke streams that go silent
+    mid tool_use (no content_block_stop / message_delta / message_stop)
+    used to be closed as a successful SSE stream, handing clients
+    unterminated tool-call JSON with HTTP 200. The stream must now end
+    with an Anthropic-protocol `error` SSE event.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _truncated_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "tooluse_1", "name": "write", "input": {}},
+        }
+        yield {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path": "/builder/docs/QUAL'},
+        }
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _truncated_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "write the file"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_truncated_tool_use",
+            function_id="test_bedrock_sse_wrapper_truncated_tool_use",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    assert len(collected) == 4
+    error_event = collected[-1].decode()
+    assert error_event.startswith("event: error\n")
+    error_payload = json.loads(error_event.split("data: ", 1)[1])
+    assert error_payload["type"] == "error"
+    assert error_payload["error"]["type"] == "api_error"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_no_error_event_when_stream_ends_with_message_stop():
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _complete_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}}
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
+        yield {"type": "content_block_stop", "index": 0}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}
+        yield {"type": "message_stop"}
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _complete_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_complete_stream",
+            function_id="test_bedrock_sse_wrapper_complete_stream",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    assert len(collected) == 6
+    assert collected[-1].startswith(b"event: message_stop\n")
+    assert not any(chunk.startswith(b"event: error\n") for chunk in collected)
+
+
+@pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delta():
     """Regression test: usage should be available on both message_start and message_delta SSE events."""
 
