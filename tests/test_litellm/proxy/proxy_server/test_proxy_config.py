@@ -589,6 +589,59 @@ def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
     assert merged[1]["litellm_params"]["api_key"] == "fake-db-key"
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.search_api_router import SearchAPIRouter
+
+    pc = ProxyConfig()
+    pc.update_config_state(
+        {
+            "search_tools": [
+                {
+                    "search_tool_name": "shared-search",
+                    "litellm_params": {"search_provider": "tavily"},
+                },
+                {
+                    "search_tool_name": "config-only",
+                    "litellm_params": {"search_provider": "perplexity"},
+                },
+            ]
+        }
+    )
+    db_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+    fake_router = MagicMock()
+    mock_get_db_tools = AsyncMock(return_value=db_tools)
+    mock_update_router = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        mock_get_db_tools,
+    )
+    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    mock_get_db_tools.assert_awaited_once()
+    mock_update_router.assert_awaited_once()
+    update_kwargs = mock_update_router.await_args.kwargs
+    assert update_kwargs["router_instance"] is fake_router
+    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+        "config-only",
+        "shared-search",
+    ]
+    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._load_environment_variables
 # ---------------------------------------------------------------------------

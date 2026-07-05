@@ -91,6 +91,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: List[Dict],
         tools: Optional[List[Dict]],
         custom_llm_provider: Optional[str],
+        kwargs: Optional[dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Short-circuit web-search-only requests by executing the search directly.
@@ -176,7 +177,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Execute search — keep the structured SearchResponse so the native
         # block can carry per-result url/title/page_age.
         try:
-            search_result_text, structured = await self._execute_search(query)
+            if kwargs is None:
+                search_result_text, structured = await self._execute_search(query)
+            else:
+                search_result_text, structured = await self._execute_search(query, kwargs=kwargs)
         except Exception as e:
             verbose_logger.error(f"WebSearchInterception: Short-circuit search failed: {e}")
             search_result_text, structured = f"Search failed: {e}", None
@@ -936,7 +940,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             query = tool_call["input"].get("query")
             if query:
                 verbose_logger.debug(f"WebSearchInterception: Queuing search for query='{query}'")
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs))
             else:
                 verbose_logger.debug(f"WebSearchInterception: Tool call {tool_call['id']} has no query")
                 # Add empty result for tools without query
@@ -1009,7 +1013,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return patch, structured_results
 
-    async def _execute_search(self, query: str) -> Tuple[str, Optional[SearchResponse]]:
+    async def _execute_search(
+        self, query: str, kwargs: Optional[dict[str, Any]] = None
+    ) -> Tuple[str, Optional[SearchResponse]]:
         """
         Execute a single web search using router's search tools.
 
@@ -1035,6 +1041,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_provider: Optional[str] = None
             search_litellm_params: dict[str, Any] = {}
             if search_tool is not None:
+                await self._authorize_search_tool(search_tool=search_tool, kwargs=kwargs)
                 search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
                 search_provider = search_litellm_params.get("search_provider")
 
@@ -1066,6 +1073,71 @@ class WebSearchInterceptionLogger(CustomLogger):
         except Exception as e:
             verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {str(e)}")
             raise
+
+    async def _authorize_search_tool(
+        self,
+        search_tool: dict[str, Any],
+        kwargs: Optional[dict[str, Any]],
+    ) -> None:
+        search_tool_name = search_tool.get("search_tool_name")
+        if not isinstance(search_tool_name, str) or not search_tool_name:
+            return
+
+        user_api_key_auth = self._get_user_api_key_auth_from_kwargs(kwargs)
+        if user_api_key_auth is None:
+            return
+
+        from litellm.proxy.auth.auth_checks import (
+            can_key_call_search_tool,
+            can_team_call_search_tool,
+            get_team_object,
+        )
+
+        await can_key_call_search_tool(
+            search_tool_name=search_tool_name,
+            valid_token=user_api_key_auth,
+        )
+
+        team_id = getattr(user_api_key_auth, "team_id", None)
+        if team_id:
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=getattr(user_api_key_auth, "parent_otel_span", None),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            await can_team_call_search_tool(
+                search_tool_name=search_tool_name,
+                team_object=team_object,
+            )
+
+    @staticmethod
+    def _get_user_api_key_auth_from_kwargs(kwargs: Optional[dict[str, Any]]) -> Any:
+        if not kwargs:
+            return None
+
+        for metadata_key in ("metadata", "litellm_metadata"):
+            metadata = kwargs.get(metadata_key)
+            if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
+                return metadata["user_api_key_auth"]
+
+        litellm_params = kwargs.get("litellm_params")
+        if not isinstance(litellm_params, dict):
+            return None
+
+        for metadata_key in ("metadata", "litellm_metadata"):
+            metadata = litellm_params.get(metadata_key)
+            if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
+                return metadata["user_api_key_auth"]
+
+        return None
 
     def _select_search_tool_from_router(self, llm_router: Any) -> Optional[dict[str, Any]]:
         if llm_router is None or not hasattr(llm_router, "search_tools"):
@@ -1162,7 +1234,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             if query:
                 verbose_logger.debug(f"WebSearchInterception: Queuing search for query='{query}'")
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs))
             else:
                 verbose_logger.debug(f"WebSearchInterception: Tool call {tool_call.get('id')} has no query")
                 # Add empty result for tools without query

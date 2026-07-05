@@ -13,6 +13,7 @@ from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, ProxyException, UserAPIKeyAuth
 from litellm.types.utils import LlmProviders
 
 
@@ -205,11 +206,20 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
         }
     ]
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    user_api_key_auth = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-allowed-search",
+            search_tools=["ui-tavily"],
+        )
+    )
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(litellm, "asearch", mock_asearch)
 
-    await logger._execute_search("what is litellm")
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": user_api_key_auth}}},
+    )
 
     mock_asearch.assert_awaited_once_with(
         query="what is litellm",
@@ -219,6 +229,89 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
         timeout=10.0,
         max_retries=2,
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_enforces_key_search_tool_permission(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="blocked-search",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "blocked-search",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "fake-ui-key",
+            },
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    user_api_key_auth = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key-search",
+            search_tools=["allowed-search"],
+        )
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    with pytest.raises(ProxyException):
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    mock_asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="blocked-search",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "blocked-search",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "fake-ui-key",
+            },
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    team_key_auth = UserAPIKeyAuth(team_id="team-1")
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-team-search",
+            search_tools=["allowed-search"],
+        ),
+    )
+    mock_get_team_object = AsyncMock(return_value=team_object)
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+
+    with pytest.raises(ProxyException):
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": team_key_auth}},
+        )
+
+    mock_get_team_object.assert_awaited_once()
+    mock_asearch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
