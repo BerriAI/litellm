@@ -101,7 +101,8 @@ const LoggingSettings: React.FC = () => {
               label="Maximum Spend Logs Retention Period (Optional)"
               name="maximum_spend_logs_retention_period"
               tooltip={
-                proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")?.field_description ||
+                proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")
+                  ?.field_description ||
                 "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
               }
             >
