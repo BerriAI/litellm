@@ -11,6 +11,13 @@ from endpoints_client import EndpointsClient, build_endpoints_client
 from passthrough_client import PassthroughClient, build_client
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "covers: registry cell a test covers, e.g. llm.chat_completions.provider.basic.nonstream.works",
+    )
+
+
 @pytest.fixture(scope="session")
 def client() -> PassthroughClient:
     return build_client()
