@@ -35,6 +35,7 @@ class KeyGenerateBody(BaseModel):
     budget_limits: list[BudgetWindow] | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    allowed_routes: list[str] | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -284,3 +285,41 @@ class ModelInfoEntry(BaseModel):
 
 class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
+
+
+# ---------- model management ----------
+
+
+class LiteLLMParamsBody(BaseModel):
+    """POST /model/new litellm_params: `model` is the only required field; `api_key`
+    et al may be an `os.environ/FOO` reference the proxy resolves at call time.
+    `input_cost_per_token`/`output_cost_per_token` register a per-deployment custom
+    pricing override; left None (and dropped from the body) the deployment keeps the
+    backend's canonical rate."""
+
+    model: str
+    api_key: str | None = None
+    api_base: str | None = None
+    api_version: str | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+
+
+class ModelInfoBody(BaseModel):
+    id: str
+
+
+class ModelNewBody(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    model_name: str
+    litellm_params: LiteLLMParamsBody
+    model_info: ModelInfoBody
+
+
+class ModelNewResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    model_id: str
+
+
+class ModelDeleteBody(BaseModel):
+    id: str

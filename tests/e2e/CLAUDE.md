@@ -6,7 +6,8 @@ Code-style rules for writing tests under `tests/e2e/`. The harness already encod
 
 Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family or behavior area. If you add a new folder, you must add a line here describing what kind of tests belong in it, so the layout stays self-describing. `gateway/` is the exception: it holds proxy configuration only and never tests
 
-- `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR
+- `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, and the non-chat inference endpoints (`/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`), each against a deployment the test creates via `/model/new` and deletes on teardown
+- `access_control/` - the gateway's authorization and error-shape contract: per-key model allow-lists, route-group permissions (`allowed_routes`), and unknown-model validation
 - `embeddings/` - the `/embeddings` endpoint across providers
 - `batches/` - the `/batches` endpoint (placeholder until the first test lands)
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
