@@ -70,8 +70,8 @@ export function LogsTableToolbar({
   return (
     <>
       <div className="border-b px-6 py-4 w-full max-w-full box-border">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
-          <div className="flex flex-wrap items-center gap-3 w-full max-w-full box-border">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 w-full max-w-full box-border">
+          <div className="flex flex-wrap items-center gap-3 min-w-0 flex-1 max-w-full box-border">
             <div className="relative w-64 min-w-0 shrink-0">
               <input
                 type="text"
@@ -192,7 +192,7 @@ export function LogsTableToolbar({
             )}
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-4 shrink-0">
             <span className="text-sm text-gray-700 whitespace-nowrap">
               Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
               {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
