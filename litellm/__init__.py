@@ -359,6 +359,7 @@ enable_key_alias_format_validation: bool = (
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
+enable_vertex_context_cache_id_caching: bool = False  # opt-in: in-memory cache of resolved Vertex/Gemini explicit context-cache ids, skips the per-request cachedContents LIST
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
