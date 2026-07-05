@@ -63,6 +63,13 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
                 "user_api_key_user_id": user_id,
                 "user_api_key_team_id": team_id,
                 "user_api_key_model_max_budget": {},
+                "user_api_key_auth": UserAPIKeyAuth(
+                    api_key=_api_key,
+                    rpm_limit=100,
+                    user_rpm_limit=100,
+                    team_rpm_limit=100,
+                    end_user_rpm_limit=100,
+                ),
             }
         },
         "user": end_user_id,
