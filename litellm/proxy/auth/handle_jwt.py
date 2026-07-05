@@ -1928,6 +1928,22 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
+        elif not team_id and len(all_team_ids) == 1:
+            # Auto-select the single team from JWT when no header is provided
+            # and the JWT contains exactly one team via team_ids_jwt_field.
+            single_team_id = next(iter(all_team_ids))
+            verbose_proxy_logger.debug(
+                "Auto-selecting single team from JWT: %s", single_team_id
+            )
+            team_id = single_team_id
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            )
         elif not team_id:
             ## SPECIFIC TEAM ID
             (
