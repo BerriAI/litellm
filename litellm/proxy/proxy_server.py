@@ -6406,9 +6406,11 @@ class ProxyConfig:
                 f"({len(config_search_tools)} from config, {len(db_search_tools)} from database)"
             )
 
-            if llm_router is not None:
+            if llm_router is not None and search_tools:
                 await SearchAPIRouter.update_router_search_tools(router_instance=llm_router, search_tools=search_tools)
                 verbose_proxy_logger.info(f"Successfully loaded {len(search_tools)} search tool(s) into router")
+            elif llm_router is not None:
+                verbose_proxy_logger.debug("No search tools found in config or database, skipping router update")
             else:
                 verbose_proxy_logger.debug(
                     "Router not initialized yet, search tools will be added when router is created"

@@ -642,6 +642,29 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
     assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_skips_empty_router_update(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.search_api_router import SearchAPIRouter
+
+    pc = ProxyConfig()
+    pc.update_config_state({})
+    mock_get_db_tools = AsyncMock(return_value=[])
+    mock_update_router = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        mock_get_db_tools,
+    )
+    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    mock_get_db_tools.assert_awaited_once()
+    mock_update_router.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._load_environment_variables
 # ---------------------------------------------------------------------------
