@@ -124,6 +124,23 @@ gateway:
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps
   envSecrets: [] # Add extra environment variables to the gateway from secrets
+  extraVolumes: []
+  extraVolumeMounts: []
+  # Example — mount a custom CA for TLS to upstream LLM providers:
+  # extraVolumes:
+  #   - name: custom-ca
+  #     secret:
+  #       secretName: litellm-custom-ca
+  # extraVolumeMounts:
+  #   - name: custom-ca
+  #     mountPath: /etc/ssl/certs/custom-ca.crt
+  #     subPath: ca.crt
+  #     readOnly: true
+  # extraEnv:
+  #   - name: SSL_CERT_FILE
+  #     value: /etc/ssl/certs/custom-ca.crt
+  #   - name: REQUESTS_CA_BUNDLE
+  #     value: /etc/ssl/certs/custom-ca.crt
   config:
     create: true
     proxy_config: {}
@@ -167,6 +184,18 @@ backend:
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  # Example — mount a custom CA for TLS to upstream LLM providers (mirrors gateway example above):
+  # extraVolumes:
+  #   - name: custom-ca
+  #     secret:
+  #       secretName: litellm-custom-ca
+  # extraVolumeMounts:
+  #   - name: custom-ca
+  #     mountPath: /etc/ssl/certs/custom-ca.crt
+  #     subPath: ca.crt
+  #     readOnly: true
   image:
     repository: ghcr.io/berriai/litellm-backend
     tag: ""
