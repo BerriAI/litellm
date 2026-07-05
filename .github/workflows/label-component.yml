@@ -5,6 +5,9 @@ on:
     types:
       - opened
 
+permissions:
+  contents: read
+
 jobs:
   add-component-label:
     runs-on: ubuntu-latest

@@ -5,6 +5,9 @@ on:
     - cron: "0 0,12 * * *" # Runs every 12 hours at midnight and noon UTC
   workflow_dispatch: # Allow manual trigger
 
+permissions:
+  contents: read
+
 jobs:
   create-staging-branch:
     if: github.repository == 'rayward-external/litellm'

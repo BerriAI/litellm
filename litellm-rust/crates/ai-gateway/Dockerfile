@@ -15,7 +15,7 @@
 # cargo-chef caches the dependency build so only the gateway crate recompiles on
 # a source-only change. python3-dev is present in every rust stage because the
 # `python-config` feature links libpython via pyo3 (even in the cook step).
-FROM rust:1.90-slim-bookworm AS chef
+FROM rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9 AS chef
 ENV PYO3_PYTHON=python3.11
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -46,7 +46,7 @@ RUN cargo build --locked --release -p litellm-ai-gateway --features python-confi
 # ---- Runtime ----------------------------------------------------------------
 # python:3.11-slim-bookworm ships libpython3.11, matching the builder's PyO3
 # 3.11 ABI so the embedded interpreter links and imports cleanly.
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.11-slim-bookworm@sha256:721dc13fd1be0a771e54b72097634291d628d0007dee9da777e2ce676a9c998f AS runtime
 
 # CA certificates for outbound TLS to the OpenAI realtime endpoint.
 RUN apt-get update \
