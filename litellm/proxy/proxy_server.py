@@ -6393,14 +6393,8 @@ class ProxyConfig:
         try:
             db_search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
 
-            config_search_tools = []
-            try:
-                config = await self.get_config()
-                parsed_tools = self.parse_search_tools(config)
-                if parsed_tools:
-                    config_search_tools = parsed_tools
-            except Exception as e:
-                verbose_proxy_logger.debug(f"Could not get config-defined search tools: {e}")
+            parsed_tools = self.parse_search_tools(self.get_config_state())
+            config_search_tools = parsed_tools or []
 
             search_tools = self._merge_config_and_db_search_tools(
                 config_search_tools=config_search_tools,
@@ -6427,9 +6421,9 @@ class ProxyConfig:
 
     @staticmethod
     def _merge_config_and_db_search_tools(
-        config_search_tools: List[SearchToolTypedDict],
-        db_search_tools: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        config_search_tools: list[SearchToolTypedDict],
+        db_search_tools: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         db_tool_names = {tool.get("search_tool_name") for tool in db_search_tools}
         return [
             *[

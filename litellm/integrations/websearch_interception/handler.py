@@ -1033,7 +1033,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             search_tool = self._select_search_tool_from_router(llm_router=llm_router)
             search_provider: Optional[str] = None
-            search_litellm_params: Dict[str, Any] = {}
+            search_litellm_params: dict[str, Any] = {}
             if search_tool is not None:
                 search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
                 search_provider = search_litellm_params.get("search_provider")
@@ -1067,7 +1067,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {str(e)}")
             raise
 
-    def _select_search_tool_from_router(self, llm_router: Any) -> Optional[Dict[str, Any]]:
+    def _select_search_tool_from_router(self, llm_router: Any) -> Optional[dict[str, Any]]:
         if llm_router is None or not hasattr(llm_router, "search_tools"):
             return None
         search_tools = list(getattr(llm_router, "search_tools") or [])
@@ -1075,9 +1075,9 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     def _select_search_tool_from_list(
         self,
-        search_tools: List[Dict[str, Any]],
+        search_tools: list[dict[str, Any]],
         source: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         if self.search_tool_name:
             matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
             if matching_tools:
