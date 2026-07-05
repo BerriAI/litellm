@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import NoBody, StreamingResponse, unwrap
+from e2e_http import NoBody, StreamingResponse, is_ok, unwrap
 from models import (
     ChatMessage,
     LiteLLMParamsBody,
