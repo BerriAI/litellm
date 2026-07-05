@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
-
-import litellm
 from httpx import Response as HttpxResponse
 from typing_extensions import TypeGuard
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
