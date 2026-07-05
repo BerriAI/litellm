@@ -34,7 +34,7 @@
       "category": "Developer Tools",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.atlassian%2Fatlassian-mcp-server",
       "transport": "http",
-      "url": "https://mcp.atlassian.com/v1/mcp",
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
       "env_vars": []
     },
     {
@@ -46,6 +46,7 @@
       "registry_url": "https://registry.modelcontextprotocol.io/servers/app.linear%2Flinear",
       "transport": "http",
       "url": "https://mcp.linear.app/mcp",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {
@@ -69,13 +70,10 @@
       "icon_url": "https://cdn.simpleicons.org/slack",
       "category": "Communication",
       "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-slack"],
-      "env_vars": [
-        {"name": "SLACK_BOT_TOKEN", "description": "Slack Bot User OAuth Token", "secret": true},
-        {"name": "SLACK_TEAM_ID", "description": "Slack Team/Workspace ID", "secret": false}
-      ]
+      "transport": "http",
+      "url": "https://mcp.slack.com/mcp",
+      "auth_type": "oauth2",
+      "env_vars": []
     },
     {
       "name": "discord",
@@ -187,8 +185,9 @@
       "icon_url": "https://cdn.simpleicons.org/notion",
       "category": "Productivity",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.notion%2Fmcp",
-      "transport": "sse",
-      "url": "https://mcp.notion.com/sse",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {
@@ -338,8 +337,8 @@
       "icon_url": "https://cdn.simpleicons.org/cloudflare",
       "category": "Cloud",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.cloudflare.mcp%2Fmcp",
-      "transport": "sse",
-      "url": "https://bindings.mcp.cloudflare.com/sse",
+      "transport": "http",
+      "url": "https://bindings.mcp.cloudflare.com/mcp",
       "env_vars": []
     },
     {

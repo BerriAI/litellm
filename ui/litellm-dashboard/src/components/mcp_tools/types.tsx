@@ -332,6 +332,7 @@ export interface DiscoverableMCPServer {
   url?: string | null;
   command?: string | null;
   args?: string[] | null;
+  auth_type?: string | null;
   env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;
 }
 
