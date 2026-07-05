@@ -36,6 +36,8 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_bedrock_project_id",
         "tpm",
         "rpm",
+        "itpm",
+        "otpm",
         "use_xai_oauth",
     }
 )
