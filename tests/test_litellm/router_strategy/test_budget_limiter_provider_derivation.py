@@ -46,9 +46,13 @@ async def test_messages_route_no_custom_provider_does_not_raise():
     limiter = _make_limiter()
     kwargs = _kwargs_without_custom_provider("anthropic/claude-haiku-4-5-20251001")
 
-    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock) as mock_increment, \
-         patch.object(limiter, "_get_budget_config_for_deployment", return_value=None), \
-         patch.object(limiter, "_get_budget_config_for_tag", return_value=None):
+    with (
+        patch.object(
+            limiter, "_increment_spend_for_key", new_callable=AsyncMock
+        ) as mock_increment,
+        patch.object(limiter, "_get_budget_config_for_deployment", return_value=None),
+        patch.object(limiter, "_get_budget_config_for_tag", return_value=None),
+    ):
 
         # Before the fix this raises: ValueError("custom_llm_provider is required")
         await limiter.async_log_success_event(
@@ -68,9 +72,11 @@ async def test_embeddings_route_no_custom_provider_does_not_raise():
     limiter = _make_limiter()
     kwargs = _kwargs_without_custom_provider("openai/text-embedding-3-small")
 
-    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock), \
-         patch.object(limiter, "_get_budget_config_for_deployment", return_value=None), \
-         patch.object(limiter, "_get_budget_config_for_tag", return_value=None):
+    with (
+        patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock),
+        patch.object(limiter, "_get_budget_config_for_deployment", return_value=None),
+        patch.object(limiter, "_get_budget_config_for_tag", return_value=None),
+    ):
 
         await limiter.async_log_success_event(
             kwargs=kwargs,
@@ -99,9 +105,13 @@ async def test_chat_completions_with_explicit_provider_still_works():
         },
     }
 
-    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock) as mock_increment, \
-         patch.object(limiter, "_get_budget_config_for_deployment", return_value=None), \
-         patch.object(limiter, "_get_budget_config_for_tag", return_value=None):
+    with (
+        patch.object(
+            limiter, "_increment_spend_for_key", new_callable=AsyncMock
+        ) as mock_increment,
+        patch.object(limiter, "_get_budget_config_for_deployment", return_value=None),
+        patch.object(limiter, "_get_budget_config_for_tag", return_value=None),
+    ):
 
         await limiter.async_log_success_event(
             kwargs=kwargs,
@@ -111,3 +121,28 @@ async def test_chat_completions_with_explicit_provider_still_works():
         )
 
         mock_increment.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_model_string_raises_value_error_with_debug_log():
+    """
+    When both the dict lookup and litellm.get_llm_provider() fail
+    (completely unrecognisable model string), ValueError must still be raised
+    and the debug log must fire — covering the except branch added in #26701.
+    """
+    limiter = _make_limiter()
+    kwargs = _kwargs_without_custom_provider("totally-unresolvable-garbage-xyz-123")
+
+    with (
+        patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock),
+        patch.object(limiter, "_get_budget_config_for_deployment", return_value=None),
+        patch.object(limiter, "_get_budget_config_for_tag", return_value=None),
+    ):
+
+        with pytest.raises(ValueError, match="custom_llm_provider is required"):
+            await limiter.async_log_success_event(
+                kwargs=kwargs,
+                response_obj=None,
+                start_time=None,
+                end_time=None,
+            )
