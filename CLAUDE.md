@@ -51,7 +51,7 @@ Every lint or type suppression must name the exact rule inside brackets and carr
 
 Commit and push your work when you're done without asking
 
-When you must use real LLM models to, for example, write e2e tests, write a QA runbook, etc., make sure to use the latest models (doesn't have to be smartest, can also be a modern small, fast one. No strong preference for smart vs fast here, just use something modern) as of the year and month of the current date. Do a web search as necessary to figure that out
+When referencing models while coding, QA'ing, etc., use the latest model in that model family unless otherwise specified; your training knowledge is stale, so verify via model_prices_and_context_window.json or a web search first
 
 If you're an internal contributor, when creating a new PR, the typical flow is to branch off litellm_internal_staging and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
 
@@ -80,8 +80,6 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - API-fragmentation-aware: when logic must branch on which API surface produced or consumes data (e.g. chat completions vs Anthropic Messages vs Responses API shapes), proactively look for an existing shared helper (e.g. `litellm_core_utils/prompt_templates/factory.py`) before writing per-surface parsing in the new module; if none exists, add one there instead of duplicating the same format-detection logic in every new guardrail/integration
 
 Follow conventional commits for commit names and PR titles
-
-When referencing models while coding, QA'ing, etc., use the latest in that family; your training knowledge is stale, so verify via model_prices_and_context_window.json or a web search first
 
 ## Think Before Coding
 
