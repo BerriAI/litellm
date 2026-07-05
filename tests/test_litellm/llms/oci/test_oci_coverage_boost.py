@@ -326,6 +326,34 @@ def test_adapt_tool_definition_resolves_refs():
     assert props["location"] == {"type": "string"}
 
 
+def test_adapt_tool_definition_skips_non_function_tools():
+    """Non-function tools (code_interpreter, file_search) are skipped silently."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {"type": "code_interpreter"},
+        {"type": "file_search"},
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    result = adapt_tool_definition_to_oci_standard(tools, OCIVendors.GENERIC)
+    assert len(result) == 2
+    assert result[0].name == "get_weather"
+    assert result[1].name == "search_web"
+
+
 # ---------------------------------------------------------------------------
 # generic.py — adapt_tools_to_openai_standard
 # ---------------------------------------------------------------------------
