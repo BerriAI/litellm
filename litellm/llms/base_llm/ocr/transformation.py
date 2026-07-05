@@ -70,6 +70,9 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     model: str
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
+    content: str | None = None
+    tables: list[dict[str, object]] | None = None
+    keyValuePairs: list[dict[str, object]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
@@ -170,9 +173,7 @@ class BaseOCRConfig:
         Returns:
             OCRRequestData with data and files fields
         """
-        raise NotImplementedError(
-            "transform_ocr_request must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_request must be implemented by provider")
 
     async def async_transform_ocr_request(
         self,
@@ -218,9 +219,7 @@ class BaseOCRConfig:
         Transform provider-specific OCR response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError(
-            "transform_ocr_response must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_response must be implemented by provider")
 
     async def async_transform_ocr_response(
         self,

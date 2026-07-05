@@ -14,6 +14,11 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
 
+from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    TokenEndpointAuthConfigError,
+    build_token_endpoint_client_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
@@ -22,9 +27,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-TokenEndpointPost = Callable[
-    [str, dict[str, str]], Awaitable["dict[str, object] | None"]
-]
+TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable["dict[str, object] | None"]]
 
 
 class CredentialPersist(Protocol):
@@ -81,22 +84,28 @@ class AuthorizationCodeRefresher:
         self._persist = persist
         self._clock = clock
 
-    async def refresh(
-        self, user_id: str, server_id: str, token: OAuthToken
-    ) -> OAuthToken | None:
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         if token.refresh_token is None:
             return None
         server = self._server_lookup(server_id)
         if server is None or not server.token_url:
             return None
 
+        try:
+            client_auth = build_token_endpoint_client_auth(
+                auth_method=server.token_endpoint_auth_method,
+                client_id=server.client_id,
+                client_secret=server.client_secret,
+            )
+        except TokenEndpointAuthConfigError as exc:
+            verbose_logger.warning("MCP OAuth refresh misconfigured for server %s: %s", server_id, exc)
+            return None
         form = {
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
-            **({"client_id": server.client_id} if server.client_id else {}),
-            **({"client_secret": server.client_secret} if server.client_secret else {}),
+            **client_auth.body,
         }
-        body = await self._token_endpoint(server.token_url, form)
+        body = await self._token_endpoint(server.token_url, form, client_auth.headers)
         if body is None:
             return None
         access_token = body.get("access_token")
@@ -104,15 +113,11 @@ class AuthorizationCodeRefresher:
             return None
 
         rotated = body.get("refresh_token")
-        new_refresh = (
-            rotated if isinstance(rotated, str) and rotated else token.refresh_token
-        )
+        new_refresh = rotated if isinstance(rotated, str) and rotated else token.refresh_token
         expires_in = _parse_expires_in(body.get("expires_in"))
         scopes = _parse_scopes(body.get("scope")) or token.scopes
 
-        await self._persist(
-            user_id, server_id, access_token, new_refresh, expires_in, scopes or None
-        )
+        await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,

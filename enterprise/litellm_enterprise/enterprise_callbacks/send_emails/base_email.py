@@ -239,6 +239,7 @@ class BaseEmailLogger(CustomLogger):
             max_budget_info=max_budget_info,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
+            email_footer=email_params.signature,
         )
         await self.send_email(
             from_email=self.DEFAULT_LITELLM_EMAIL,
@@ -311,6 +312,7 @@ class BaseEmailLogger(CustomLogger):
             max_budget_info=max_budget_info,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
+            email_footer=email_params.signature,
         )
 
         # Send email to all recipients
@@ -381,6 +383,7 @@ class BaseEmailLogger(CustomLogger):
                 alert_threshold=alert_threshold_str,
                 base_url=email_params.base_url,
                 email_support_contact=email_params.support_contact,
+                email_footer=email_params.signature,
             )
             await self.send_email(
                 from_email=self.DEFAULT_LITELLM_EMAIL,
@@ -405,6 +408,7 @@ class BaseEmailLogger(CustomLogger):
                 alert_threshold=alert_threshold_str,
                 base_url=email_params.base_url,
                 email_support_contact=email_params.support_contact,
+                email_footer=email_params.signature,
             )
             await self.send_email(
                 from_email=self.DEFAULT_LITELLM_EMAIL,
@@ -475,9 +479,12 @@ class BaseEmailLogger(CustomLogger):
                     _id = user_info.token or user_info.user_id or "default_id"
                 _cache_key = f"email_budget_alerts:soft_budget_crossed:{_id}"
 
-                # Check if we've already sent this alert
-                result = await _cache.async_get_cache(key=_cache_key)
-                if result is None:
+                send_count = await _cache.async_increment_cache(
+                    key=_cache_key,
+                    value=1,
+                    ttl=EMAIL_BUDGET_ALERT_TTL,
+                )
+                if send_count is None or send_count <= 1:
                     # Create WebhookEvent for soft budget alert
                     event_message = f"Soft Budget Crossed - Total Soft Budget: ${user_info.soft_budget}"
                     webhook_event = WebhookEvent(
@@ -506,18 +513,12 @@ class BaseEmailLogger(CustomLogger):
                             await self.send_team_soft_budget_alert_email(webhook_event)
                         else:
                             await self.send_soft_budget_alert_email(webhook_event)
-
-                        # Cache the alert to prevent duplicate sends
-                        await _cache.async_set_cache(
-                            key=_cache_key,
-                            value="SENT",
-                            ttl=EMAIL_BUDGET_ALERT_TTL,
-                        )
                     except Exception as e:
                         verbose_proxy_logger.error(
                             f"Error sending soft budget alert email: {e}",
                             exc_info=True,
                         )
+                        await self._release_budget_alert_claim(_cache, _cache_key)
             return
 
         # For max_budget_alert, check if we've already sent an alert
@@ -543,9 +544,12 @@ class BaseEmailLogger(CustomLogger):
                     _id = user_info.token or user_info.user_id or "default_id"
                     _cache_key = f"email_budget_alerts:max_budget_alert:{_id}"
 
-                    # Check if we've already sent this alert
-                    result = await _cache.async_get_cache(key=_cache_key)
-                    if result is None:
+                    send_count = await _cache.async_increment_cache(
+                        key=_cache_key,
+                        value=1,
+                        ttl=EMAIL_BUDGET_ALERT_TTL,
+                    )
+                    if send_count is None or send_count <= 1:
                         # Calculate percentage
                         percentage = int(
                             EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100
@@ -574,18 +578,12 @@ class BaseEmailLogger(CustomLogger):
 
                         try:
                             await self.send_max_budget_alert_email(webhook_event)
-
-                            # Cache the alert to prevent duplicate sends
-                            await _cache.async_set_cache(
-                                key=_cache_key,
-                                value="SENT",
-                                ttl=EMAIL_BUDGET_ALERT_TTL,
-                            )
                         except Exception as e:
                             verbose_proxy_logger.error(
                                 f"Error sending max budget alert email: {e}",
                                 exc_info=True,
                             )
+                            await self._release_budget_alert_claim(_cache, _cache_key)
             return
 
     async def _handle_multi_threshold_max_budget_alert(
@@ -613,10 +611,6 @@ class BaseEmailLogger(CustomLogger):
             _id = user_info.token or user_info.user_id or "default_id"
             _cache_key = f"email_budget_alerts:max_budget_alert:{threshold_pct}:{_id}"
 
-            result = await _cache.async_get_cache(key=_cache_key)
-            if result is not None:
-                continue
-
             # Parse emails + auto-include owner
             emails = _parse_email_list(raw_emails)
             if user_info.user_email:
@@ -630,9 +624,15 @@ class BaseEmailLogger(CustomLogger):
                 continue
             recipient_emails = list(set(emails))
 
-            event_message = (
-                f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
+            send_count = await _cache.async_increment_cache(
+                key=_cache_key,
+                value=1,
+                ttl=EMAIL_BUDGET_ALERT_TTL,
             )
+            if send_count is not None and send_count > 1:
+                continue
+
+            event_message = f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
             webhook_event = WebhookEvent(
                 event="max_budget_alert",
                 event_message=event_message,
@@ -658,16 +658,21 @@ class BaseEmailLogger(CustomLogger):
                     threshold_pct=threshold_pct,
                     recipient_emails=recipient_emails,
                 )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=EMAIL_BUDGET_ALERT_TTL,
-                )
             except Exception as e:
                 verbose_proxy_logger.error(
                     f"Error sending multi-threshold max budget alert email for {threshold_pct}%: {e}",
                     exc_info=True,
                 )
+                await self._release_budget_alert_claim(_cache, _cache_key)
+
+    async def _release_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
+        try:
+            await cache.async_delete_cache(key=cache_key)
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Failed to release budget alert claim for %s; it expires with the TTL",
+                cache_key,
+            )
 
     async def _get_email_params(
         self,

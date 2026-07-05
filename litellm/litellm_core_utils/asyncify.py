@@ -45,9 +45,7 @@ def asyncify(
     and returns the result.
     """
 
-    async def wrapper(
-        *args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs
-    ) -> T_Retval:
+    async def wrapper(*args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs) -> T_Retval:
         partial_f = functools.partial(function, *args, **kwargs)
 
         # In `v4.1.0` anyio added the `abandon_on_cancel` argument and deprecated the old

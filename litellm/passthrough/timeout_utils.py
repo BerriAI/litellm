@@ -21,9 +21,7 @@ def resolve_pass_through_request_timeout(
     try:
         proxy_server = sys.modules.get("litellm.proxy.proxy_server")
         if proxy_server is not None:
-            global_timeout = getattr(proxy_server, "general_settings", {}).get(
-                "pass_through_request_timeout"
-            )
+            global_timeout = getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
             if global_timeout is not None:
                 return float(global_timeout)
     except Exception:

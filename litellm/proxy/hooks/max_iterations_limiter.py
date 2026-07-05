@@ -70,16 +70,12 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
-        self.ttl = int(
-            os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL)
-        )
+        self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
         # Register Lua script with Redis if available (same pattern as v3 limiter)
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    MAX_ITERATIONS_INCREMENT_SCRIPT
-                )
+            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                MAX_ITERATIONS_INCREMENT_SCRIPT
             )
         else:
             self.increment_script = None
@@ -117,9 +113,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         current_count = await self._increment_and_get(cache_key)
 
         if current_count > max_iterations:
-            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
-                data.get("model") if data else None
-            )
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
             raise ProxyRateLimitError(
                 detail=(
                     f"Max iterations exceeded for session {session_id}. "

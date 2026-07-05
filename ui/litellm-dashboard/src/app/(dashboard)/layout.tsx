@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useRef, useState } from "react";
+import React, { Suspense, useState, useRef, useEffect } from "react";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -126,7 +126,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             <div className="mt-2">
               <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
             </div>
-            <main className="flex-1">{children}</main>
+            <main className="flex-1 min-w-0">{children}</main>
           </>
         )}
       </div>
@@ -153,7 +153,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <LayoutContent>{children}</LayoutContent>
+      <PluginModeProviderWithAuth>
+        <LayoutContent>{children}</LayoutContent>
+      </PluginModeProviderWithAuth>
     </Suspense>
   );
 }

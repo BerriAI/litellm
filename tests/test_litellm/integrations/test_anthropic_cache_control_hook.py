@@ -1,3 +1,4 @@
+import copy
 import datetime
 import json
 import os
@@ -1429,3 +1430,197 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
                 f"Bedrock payload exceeded Anthropic's 4 cache_control block limit "
                 f"when mixing message and tool_config injection: found {cache_points}"
             )
+
+
+class TestApplyToAnthropicMessagesRequest:
+    """Tests for apply_to_anthropic_messages_request (v1/messages cache control)."""
+
+    def test_system_string_injection(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = "You are helpful"
+        injection_points = [{"location": "message", "role": "system"}]
+
+        result_msgs, result_sys, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert result_sys == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+        assert result_msgs == messages
+        assert remaining == []
+
+    def test_system_list_injection(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = [
+            {"type": "text", "text": "Part 1"},
+            {"type": "text", "text": "Part 2"},
+        ]
+        injection_points = [{"location": "message", "role": "system"}]
+
+        _, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert result_sys[0] == {"type": "text", "text": "Part 1"}
+        assert result_sys[1] == {"type": "text", "text": "Part 2", "cache_control": {"type": "ephemeral"}}
+
+    def test_user_message_injection_by_role(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "First"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Response"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Second"}]},
+        ]
+        injection_points = [{"location": "message", "role": "user"}]
+
+        result_msgs, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert result_msgs[0]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+        assert result_msgs[2]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+        assert result_msgs[1]["content"][-1].get("cache_control") is None
+
+    def test_message_injection_by_index(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "First"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Response"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Second"}]},
+        ]
+        injection_points = [{"location": "message", "index": -1}]
+
+        result_msgs, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert result_msgs[2]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+        assert result_msgs[0]["content"][-1].get("cache_control") is None
+        assert result_msgs[1]["content"][-1].get("cache_control") is None
+
+    def test_mixed_system_and_message_injection(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Question"}]},
+        ]
+        system = "System prompt"
+        injection_points = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert result_sys[0]["cache_control"] == {"type": "ephemeral"}
+        assert result_msgs[2]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+
+    def test_respects_max_4_blocks(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": f"Msg {i}"}]} for i in range(6)]
+        system = "System"
+        injection_points = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "role": "user"},
+        ]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        sys_blocks = sum(1 for b in (result_sys or []) if isinstance(b, dict) and b.get("cache_control") is not None)
+        total_blocks = sys_blocks + sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in result_msgs)
+        assert total_blocks <= 4
+
+    def test_tool_config_points_forwarded_as_remaining(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        injection_points = [
+            {"location": "message", "role": "user"},
+            {"location": "tool_config"},
+        ]
+
+        _, _, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert remaining == [{"location": "tool_config"}]
+
+    def test_no_injection_points_returns_unchanged(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = "System"
+
+        result_msgs, result_sys, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=[],
+        )
+
+        assert result_msgs == messages
+        assert result_sys == system
+        assert remaining == []
+
+    def test_does_not_mutate_input(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = [{"type": "text", "text": "System"}]
+        injection_points = [{"location": "message", "role": "system"}]
+
+        original_system = copy.deepcopy(system)
+        original_messages = copy.deepcopy(messages)
+
+        AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert messages == original_messages
+        assert system == original_system
+
+    def test_system_none_with_system_point_skipped(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        injection_points = [{"location": "message", "role": "system"}]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert result_sys is None
+
+    def test_existing_cache_control_counted_toward_limit(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "A", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "B", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "C", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "D"}]},
+            {"role": "user", "content": [{"type": "text", "text": "E"}]},
+        ]
+        system = "System"
+        injection_points = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": 3},
+            {"location": "message", "index": 4},
+        ]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        sys_blocks = sum(1 for b in (result_sys or []) if isinstance(b, dict) and b.get("cache_control") is not None)
+        total_blocks = sys_blocks + sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in result_msgs)
+        assert total_blocks <= 4

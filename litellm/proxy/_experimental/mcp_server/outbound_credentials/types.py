@@ -67,11 +67,15 @@ class Unauthorized:
 
     ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
     challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
+    ``claims`` carries an IdP step-up challenge (e.g. Entra Conditional Access) so the edge can
+    fold it into the ``WWW-Authenticate`` it builds; the client replays the claims to the IdP to
+    satisfy the step-up, then retries with the fresh token.
     """
 
     detail: str
     www_authenticate: str | None = None
     body: Mapping[str, str] | None = None
+    claims: str | None = None
 
 
 @tagged_union(frozen=True)
@@ -91,24 +95,12 @@ class CredError:
         "not_implemented",
     ] = tag()
 
-    unauthorized: Unauthorized = (
-        case()
-    )  # no usable credential for this (subject, server) -> 401 challenge
-    misconfigured: str = (
-        case()
-    )  # the declared mode is missing required config -> 5xx (operator)
-    upstream_unavailable: str = (
-        case()
-    )  # the IdP / token endpoint could not be reached -> 503
-    unsupported_mode: str = (
-        case()
-    )  # a raw mode string did not parse into AuthSpecKind (boundary)
-    precondition_required: str = (
-        case()
-    )  # a required per-user value (e.g. an env var) has not been provided -> 412
-    not_implemented: str = (
-        case()
-    )  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
+    unauthorized: Unauthorized = case()  # no usable credential for this (subject, server) -> 401 challenge
+    misconfigured: str = case()  # the declared mode is missing required config -> 5xx (operator)
+    upstream_unavailable: str = case()  # the IdP / token endpoint could not be reached -> 503
+    unsupported_mode: str = case()  # a raw mode string did not parse into AuthSpecKind (boundary)
+    precondition_required: str = case()  # a required per-user value (e.g. an env var) has not been provided -> 412
+    not_implemented: str = case()  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
 
     @staticmethod
     def of_unauthorized(
@@ -116,10 +108,14 @@ class CredError:
         *,
         www_authenticate: str | None = None,
         body: Mapping[str, str] | None = None,
+        claims: str | None = None,
     ) -> CredError:
         return CredError(
             unauthorized=Unauthorized(
-                detail=detail, www_authenticate=www_authenticate, body=body
+                detail=detail,
+                www_authenticate=www_authenticate,
+                body=body,
+                claims=claims,
             )
         )
 
@@ -198,18 +194,33 @@ class ClientCredentialsConfig(BaseModel):
 
 
 class TokenExchangeConfig(BaseModel):
-    """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
-    audience (`server.resource`, RFC 8707). The gateway authenticates to the exchange endpoint
-    as an OAuth client (`client_id`/`client_secret`); the inbound token is sent only to that
-    endpoint, never to the upstream.
+    """OBO: swap the caller's live inbound token for a token bound to the upstream's audience. The
+    gateway authenticates to the exchange endpoint as an OAuth client (`client_id`/`client_secret`);
+    the inbound token is sent only to that endpoint, never to the upstream.
+
+    `profile` selects the wire dialect, since not every IdP speaks RFC 8693:
+      - `rfc8693` (default) is the standard token-exchange grant: the inbound token is the
+        `subject_token` (typed by `subject_token_type`), the target is the optional `audience`.
+      - `entra_obo` is Microsoft Entra On-Behalf-Of, which is the RFC 7523 `jwt-bearer` grant rather
+        than 8693: the inbound token rides as `assertion`, the target resource is carried in `scopes`
+        (`api://<app-id>/.default`, since Entra has no audience parameter), and the Microsoft-only
+        `requested_token_use=on_behalf_of` extension makes the jwt-bearer grant a delegation.
+        `subject_token_type` and `audience` are unused in this profile.
+
+    `audience` (rfc8693 only) is optional and sent only when the operator configured one, since both
+    `audience` and `resource` are optional in RFC 8693 and the authorization server applies its own
+    default when neither is sent (fabricating one risks `invalid_target`).
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
+    profile: Literal["rfc8693", "entra_obo"] = "rfc8693"
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     token_exchange_endpoint: str | None = None
+    audience: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
+    token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
     scopes: tuple[str, ...] = ()
 
 
@@ -292,9 +303,7 @@ class Ambient(BaseModel):
     source: Literal["ambient"] = "ambient"
 
 
-AwsCredentialSource = Annotated[
-    StaticKeys | AssumeRole | Ambient, Field(discriminator="source")
-]
+AwsCredentialSource = Annotated[StaticKeys | AssumeRole | Ambient, Field(discriminator="source")]
 
 
 class AwsSigV4Config(BaseModel):

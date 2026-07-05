@@ -80,9 +80,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             if k in param_mapping:
                 # Map param if mapping exists and value is valid
                 if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                    mapped_params[param_mapping[k]] = (
-                        OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
-                    )  # type: ignore
+                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]  # type: ignore
                 # Don't copy "size" itself to final dict
             elif k == "n":
                 # Store for logic but do not add to outgoing params
@@ -161,8 +159,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
         if not final_api_key:
             raise ValueError(
-                "STABILITY_API_KEY is not set. "
-                "Please set it via environment variable or pass api_key parameter."
+                "STABILITY_API_KEY is not set. Please set it via environment variable or pass api_key parameter."
             )
 
         headers["Authorization"] = f"Bearer {final_api_key}"
@@ -312,9 +309,9 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         model_info = get_model_info(model, custom_llm_provider="stability")
         cost_per_image = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ] = float(cost_per_image)
+            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                cost_per_image
+            )
         return model_response
 
     def use_multipart_form_data(self) -> bool:

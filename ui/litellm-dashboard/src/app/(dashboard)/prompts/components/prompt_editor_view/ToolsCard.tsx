@@ -27,7 +27,7 @@ const ToolsCard: React.FC<ToolsCardProps> = ({ tools, onAddTool, onEditTool, onR
           {tools.map((tool, index) => (
             <div
               key={index}
-              className="flex items-center justify-between p-2 bg-gray-50 border border-gray-200 rounded"
+              className="flex items-center justify-between p-2 bg-gray-50 border border-gray-200 rounded-sm"
             >
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-xs truncate">{tool.name}</div>

@@ -8,9 +8,7 @@ from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 
 
 class InMemoryFile(io.BytesIO):
-    def __init__(
-        self, content: bytes, name: str, content_type: str = "application/jsonl"
-    ):
+    def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
         self.name = name
         self.content_type = content_type
@@ -55,9 +53,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> List[dict]:
             json_object = json.loads(buffer.strip())
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
-            verbose_logger.error(
-                f"error parsing final buffer: {buffer[:100]}..., error: {e}"
-            )
+            verbose_logger.error(f"error parsing final buffer: {buffer[:100]}..., error: {e}")
             raise e
 
     return json_objects
@@ -109,17 +105,11 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         # the model rewrite is actually applied to tuple-wrapped upload handles;
         # otherwise a restricted body.model would survive and bypass the batch
         # model allowlist (which validates the upload target alias).
-        output = InMemoryFile(
-            b"", name="modified_file.jsonl", content_type="application/jsonl"
-        )
+        output = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
         wrote_any = False
         buffer = ""
         for raw_line in line_iter:  # type: ignore[attr-defined]
-            buffer += (
-                raw_line.decode("utf-8")
-                if isinstance(raw_line, (bytes, bytearray))
-                else raw_line
-            )
+            buffer += raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
             stripped = buffer.strip()
             if not stripped:
                 buffer = ""
@@ -128,13 +118,9 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
                 json_object = json.loads(stripped)
             except json.JSONDecodeError:
                 continue  # object not complete yet; keep accumulating
-            if isinstance(json_object, dict) and isinstance(
-                json_object.get("body"), dict
-            ):
+            if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
                 json_object["body"]["model"] = new_model_name
-            output.write(
-                (("\n" if wrote_any else "") + json.dumps(json_object)).encode("utf-8")
-            )
+            output.write((("\n" if wrote_any else "") + json.dumps(json_object)).encode("utf-8"))
             wrote_any = True
             buffer = ""
 
@@ -143,9 +129,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             # that followed it). Returning the partial `output` would silently
             # drop those rows; return the unchanged original so the provider
             # rejects the batch loudly instead of accepting a truncated one.
-            verbose_logger.error(
-                f"error parsing trailing batch content: {buffer[:100]}..."
-            )
+            verbose_logger.error(f"error parsing trailing batch content: {buffer[:100]}...")
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)  # type: ignore[attr-defined]
@@ -182,9 +166,7 @@ def _get_router_metadata_variable_name(function_name: Optional[str]) -> str:
             "_ageneric_api_call_with_fallbacks",
         ]
     )
-    if function_name and any(
-        method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA
-    ):
+    if function_name and any(method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA):
         return "litellm_metadata"
     else:
         return "metadata"
