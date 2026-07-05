@@ -32,6 +32,7 @@ class KeyGenerateBody(BaseModel):
     user_id: str | None = None
     team_id: str | None = None
     budget_id: str | None = None
+    key_alias: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
     budget_limits: list[BudgetWindow] | None = None
     tpm_limit: int | None = None
@@ -89,6 +90,16 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class ThinkingParam(BaseModel):
+    """Extended-thinking control shared by Anthropic and DeepSeek reasoner models.
+    DeepSeek accepts only ``type`` (enabled/disabled) and ignores budget_tokens;
+    Anthropic also honors budget_tokens. Sending ``type="disabled"`` is the
+    product-facing way a caller turns reasoning off (LIT-3686 / GH #27453)."""
+
+    type: Literal["enabled", "disabled"]
+    budget_tokens: int | None = None
+
+
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
@@ -96,20 +107,31 @@ class ChatBody(BaseModel):
     max_tokens: int | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
+    reasoning_effort: str | None = None
+    thinking: ThinkingParam | None = None
+    service_tier: str | None = None
 
 
 class OutMessage(BaseModel):
     content: str | None = None
+    reasoning_content: str | None = None
 
 
 class ChatChoice(BaseModel):
     message: OutMessage | None = None
 
 
+class PromptTokensDetails(BaseModel):
+    cached_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    prompt_tokens_details: PromptTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
@@ -117,6 +139,7 @@ class ChatResponse(BaseModel):
     model: str | None = None
     choices: list[ChatChoice] = []
     usage: Usage | None = None
+    service_tier: str | None = None
 
 
 class EmbedBody(BaseModel):
@@ -161,6 +184,7 @@ class OcrResponse(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
+    api_key: str | None = None
     model: str | None = None
     spend: float | None = None
     status: str | None = None
@@ -313,16 +337,29 @@ class FineTuningJobsResponse(BaseModel):
 
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
-    et al may be an `os.environ/FOO` reference the proxy resolves at call time."""
+    et al may be an `os.environ/FOO` reference the proxy resolves at call time (the
+    router resolves any `os.environ/`-prefixed litellm_param on add_deployment, so
+    the vertex_* fields take the same reference form as a config declaration)."""
 
     model: str
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    aws_region_name: str | None = None
+    vertex_project: str | None = None
+    vertex_location: str | None = None
+    vertex_credentials: str | None = None
+    bucket_name: str | None = None
+    s3_bucket_name: str | None = None
+    s3_region_name: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    aws_batch_role_arn: str | None = None
 
 
 class ModelInfoBody(BaseModel):
     id: str
+    mode: Literal["batch", "realtime", "image_generation"] | None = None
 
 
 class ModelNewBody(BaseModel):
