@@ -5245,6 +5245,8 @@ async def list_keys(
         # by default restores the prior behavior; the dashboard opts in explicitly.
         use_substring_matching = substring_matching and is_proxy_admin
 
+        user_id_is_filter = user_id is not None
+
         # Admins may omit user_id to list all keys; non-admins are scoped to self.
         if not user_id and not is_proxy_admin:
             user_id = user_api_key_dict.user_id
@@ -5270,6 +5272,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            user_id_is_filter=user_id_is_filter,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5491,6 +5494,7 @@ def _build_key_filter_conditions(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    user_id_is_filter: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5501,6 +5505,16 @@ def _build_key_filter_conditions(
       teams (via member_team_ids). This prevents leaking other members' spend data.
     - created_by visibility is scoped to teams the user currently belongs to,
       so former members cannot see service accounts they created after leaving.
+
+    Filter vs. visibility:
+    - key_alias is a pure filter: it must narrow (AND) across every visibility
+      branch, so it is applied as a global AND rather than embedded in the
+      own-keys branch (which would let an unfiltered team-visibility branch
+      OR it away).
+    - user_id doubles as the own-keys visibility floor. It only narrows when it
+      is an explicit query filter (user_id_is_filter=True); when it was
+      auto-filled to scope a bare non-admin call to self, it must stay a
+      visibility branch so team admins still see all of their team's keys.
     """
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
@@ -5519,14 +5533,6 @@ def _build_key_filter_conditions(
             }
         else:
             user_condition["user_id"] = user_id
-    if key_alias and isinstance(key_alias, str):
-        if use_substring_matching:
-            user_condition["key_alias"] = {
-                "contains": key_alias,
-                "mode": "insensitive",
-            }
-        else:
-            user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
@@ -5598,6 +5604,12 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
+    if key_alias:
+        key_alias_condition = {"contains": key_alias, "mode": "insensitive"} if use_substring_matching else key_alias
+        where = {"AND": [where, {"key_alias": key_alias_condition}]}
+    if user_id_is_filter and user_id:
+        user_id_condition = {"contains": user_id, "mode": "insensitive"} if use_substring_matching else user_id
+        where = {"AND": [where, {"user_id": user_id_condition}]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5627,6 +5639,7 @@ async def _list_key_helper(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    user_id_is_filter: bool = False,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5664,6 +5677,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        user_id_is_filter=user_id_is_filter,
     )
 
     # Calculate skip for pagination
