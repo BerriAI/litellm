@@ -137,7 +137,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         response_json = raw_response.json()
         ## LOGGING
         logging_obj.post_call(
-            input=input,
+            input=request_data.get("input"),
             api_key=api_key,
             additional_args={"complete_input_dict": request_data},
             original_response=response_json,
