@@ -42,8 +42,8 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
-from litellm.types.utils import Usage
 
 
 def _extract_text_content(content: Any) -> str:
