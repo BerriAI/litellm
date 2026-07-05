@@ -509,6 +509,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 team_metadata=user_api_key_team_metadata,
             )
 
+            # The full UserAPIKeyAuth with populated rate-limit fields (rpm_limit,
+            # tpm_limit, user_rpm_limit, etc.) is stashed in metadata by the auth
+            # layer.  The locally-reconstructed user_api_key_dict above does NOT
+            # carry those fields, so we need the original for limit checks.
+            # If the object is missing (e.g. non-proxy callers), we cannot make
+            # positive "no limit set" determinations and must keep writing
+            # unconditionally to stay safe.
+            full_user_api_key_dict: Optional[UserAPIKeyAuth] = (
+                kwargs.get("litellm_params", {}).get("metadata", {}).get("user_api_key_auth")
+            )
+
             # ------------
             # Setup values
             # ------------
@@ -540,7 +551,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             values_to_update_in_cache = []
 
-            if user_api_key is not None:
+            if user_api_key is not None and (
+                full_user_api_key_dict is None
+                or getattr(full_user_api_key_dict, "rpm_limit", None) is not None
+                or getattr(full_user_api_key_dict, "tpm_limit", None) is not None
+                or getattr(full_user_api_key_dict, "max_parallel_requests", None) is not None
+            ):
                 request_count_api_key = f"{user_api_key}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
@@ -605,7 +621,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
             # Update usage - User
             # ------------
-            if user_api_key_user_id is not None:
+            if user_api_key_user_id is not None and (
+                full_user_api_key_dict is None
+                or getattr(full_user_api_key_dict, "user_rpm_limit", None) is not None
+                or getattr(full_user_api_key_dict, "user_tpm_limit", None) is not None
+            ):
                 total_tokens = 0
 
                 if isinstance(
@@ -637,7 +657,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
             # Update usage - Team
             # ------------
-            if user_api_key_team_id is not None:
+            if user_api_key_team_id is not None and (
+                full_user_api_key_dict is None
+                or getattr(full_user_api_key_dict, "team_rpm_limit", None) is not None
+                or getattr(full_user_api_key_dict, "team_tpm_limit", None) is not None
+            ):
                 total_tokens = 0
 
                 if isinstance(
@@ -669,7 +693,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
             # Update usage - End User
             # ------------
-            if user_api_key_end_user_id is not None:
+            if user_api_key_end_user_id is not None and (
+                full_user_api_key_dict is None
+                or getattr(full_user_api_key_dict, "end_user_rpm_limit", None) is not None
+                or getattr(full_user_api_key_dict, "end_user_tpm_limit", None) is not None
+            ):
                 total_tokens = 0
 
                 if isinstance(
