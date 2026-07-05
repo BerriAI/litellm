@@ -148,6 +148,34 @@ def patch_proxy_general_settings(settings: dict):
     )
 
 
+class TestMCPCredentialsTokenExchangeProfile:
+    """token_exchange_profile must be a declared MCPCredentials field so the management API can
+    persist the entra_obo profile. An undeclared key is silently stripped by pydantic when the
+    credentials dict is validated against the TypedDict, so it would never reach the JSON blob."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda creds: NewMCPServerRequest(
+                server_name="s", auth_type=MCPAuth.oauth2_token_exchange, credentials=creds
+            ),
+            lambda creds: UpdateMCPServerRequest(server_id="s", credentials=creds),
+        ],
+        ids=["new", "update"],
+    )
+    def test_request_preserves_token_exchange_profile_in_credentials(self, build):
+        creds = {
+            "client_id": "cid",
+            "client_secret": "sec",
+            "token_exchange_endpoint": "https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+            "scopes": ["api://target/.default"],
+            "token_exchange_profile": "entra_obo",
+        }
+        request = build(creds)
+        assert request.credentials is not None
+        assert request.credentials.get("token_exchange_profile") == "entra_obo"
+
+
 class TestListMCPServers:
     """Test suite for list MCP servers functionality"""
 
@@ -2353,7 +2381,54 @@ class TestTemporaryMCPSessionEndpoints:
             response_types=["code"],
             token_endpoint_auth_method="client_secret_basic",
             fallback_client_id="server-1",
+            persist_credentials=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_mcp_register_does_not_persist_for_non_admin(self):
+        """A non-admin caller (who may have access to a real server) must not persist the DCR
+        result onto the shared server row. register_client_with_server is invoked with
+        persist_credentials=False, so user-side registration returns the DCR response without
+        writing shared client credentials. Only a full PROXY_ADMIN establishes the shared client."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_register,
+        )
+
+        request = MagicMock()
+        server = generate_mock_mcp_server_config_record(server_id="server-1")
+        register_response = {"client_id": "generated"}
+        request_body = {
+            "client_name": "LiteLLM",
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "client_secret_basic",
+        }
+        non_admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value=request_body),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.register_client_with_server",
+                AsyncMock(return_value=register_response),
+            ) as register_mock,
+        ):
+            result = await mcp_register(
+                request=request,
+                server_id="server-1",
+                user_api_key_dict=non_admin_auth,
+            )
+
+        assert result is register_response
+        assert register_mock.await_args.kwargs["persist_credentials"] is False
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_falls_back_to_redis(self):

@@ -1356,6 +1356,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         value={form.getFieldValue("mcp_servers_and_groups")}
                         accessToken={accessToken || ""}
                         placeholder="Select MCP servers or access groups (optional)"
+                        allowAllProxyMcpServers={is_proxy_admin}
                       />
                     </Form.Item>
 
@@ -1467,7 +1468,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Input.TextArea rows={10} />
                     </Form.Item>
 
-                    <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 -bottom-6 -inset-x-6">
                       <div className="flex justify-end items-center gap-2">
                         <Button onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                           Cancel
@@ -1647,7 +1648,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.metadata?.secret_manager_settings && (
                       <div className="pt-4 border-t border-gray-200">
                         <Text className="font-medium">Secret Manager Settings</Text>
-                        <pre className="mt-2 bg-gray-50 p-3 rounded text-xs overflow-x-auto">
+                        <pre className="mt-2 bg-gray-50 p-3 rounded-sm text-xs overflow-x-auto">
                           {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
                         </pre>
                       </div>

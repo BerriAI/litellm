@@ -216,12 +216,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   };
 
   const getTopAPIKeys = () => {
-    console.log("debugTags", { spendData });
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     spendData.results.forEach((day) => {
       const { breakdown } = day;
       const { entities } = breakdown;
-      console.log("debugTags", { entities });
       const tagDictionary = Object.keys(entities).reduce((acc: { [key: string]: TagUsage[] }, entity) => {
         const { api_key_breakdown } = entities[entity];
         Object.keys(api_key_breakdown).forEach((key) => {
@@ -234,7 +232,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         });
         return acc;
       }, {});
-      console.log("debugTags", { tagDictionary });
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
@@ -255,7 +252,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
               tags: tagDictionary[key] || [],
             },
           };
-          console.log("debugTags", { keySpend });
         }
         keySpend[key].metrics.spend += metrics.metrics.spend;
         keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;

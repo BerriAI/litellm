@@ -97,7 +97,6 @@ export default function UserInfoView({
   }, []);
 
   React.useEffect(() => {
-    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`);
     const fetchData = async () => {
       try {
         if (!accessToken) return;
@@ -583,7 +582,7 @@ export default function UserInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.models?.length && userData.models?.length > 0 ? (
                         userData.models?.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
                             {model}
                           </span>
                         ))
@@ -609,7 +608,7 @@ export default function UserInfoView({
 
                   <div>
                     <Text className="font-medium">Metadata</Text>
-                    <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                       {JSON.stringify(userData.metadata || {}, null, 2)}
                     </pre>
                   </div>

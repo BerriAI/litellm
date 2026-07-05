@@ -14,8 +14,15 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import StreamingResponse
-from models import ChatMessage, LiteLLMParamsBody
+from e2e_http import NoBody, StreamingResponse, is_ok, unwrap
+from models import (
+    ChatMessage,
+    LiteLLMParamsBody,
+    ModelDeleteBody,
+    ModelInfoBody,
+    ModelNewBody,
+    ModelNewResponse,
+)
 
 
 class ResponsesRequest(BaseModel):
@@ -129,10 +136,32 @@ class EndpointsClient:
     gateway: Gateway
 
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
-        return self.gateway.create_model(model_name, litellm_params)
+        """Register a deployment under `model_name` (id == model_name) and return the
+        model_id. add_deployment runs synchronously in /model/new, so the model is
+        callable as soon as this returns."""
+        return unwrap(
+            self.gateway.transport.post(
+                "/model/new",
+                headers=self.gateway.transport.master,
+                json=ModelNewBody(
+                    model_name=model_name,
+                    litellm_params=litellm_params,
+                    model_info=ModelInfoBody(id=model_name),
+                ),
+                response_type=ModelNewResponse,
+            )
+        ).model_id
 
     def delete_model(self, model_id: str) -> None:
-        self.gateway.delete_model(model_id)
+        result = self.gateway.transport.post(
+            "/model/delete",
+            headers=self.gateway.transport.master,
+            json=ModelDeleteBody(id=model_id),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            import warnings
+            warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
 
     def _send(self, path: str, key: str, body: BaseModel) -> StreamingResponse:
         return self.gateway.transport.send(

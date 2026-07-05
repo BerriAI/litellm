@@ -7,6 +7,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioDelta,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,
     Choices,
@@ -541,6 +542,12 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        # Anthropic emits the cache-creation TTL breakdown (5m/1h split) only on
+        # the `message_start` event; the later `message_delta` carries the flat
+        # cache-creation count but drops the nested breakdown. prompt_tokens_details
+        # is last-wins, so without preserving this separately the 1h breakdown is
+        # lost and 1h cache writes get billed at the 5m rate.
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -594,7 +601,18 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+                prompt_tokens_details = cast(
+                    Optional[PromptTokensDetailsWrapper],
+                    usage_chunk_dict["prompt_tokens_details"],
+                )
+
+                cache_creation_token_details = self._capture_cache_creation_token_details(
+                    prompt_tokens_details, cache_creation_token_details
+                )
+
+        prompt_tokens_details = self._attach_cache_creation_token_details(
+            prompt_tokens_details, cache_creation_token_details
+        )
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
@@ -612,6 +630,34 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
         )
+
+    @staticmethod
+    def _capture_cache_creation_token_details(
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        current: Optional[CacheCreationTokenDetails],
+    ) -> Optional[CacheCreationTokenDetails]:
+        incoming = cast(
+            Optional[CacheCreationTokenDetails],
+            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        )
+        if incoming is not None:
+            return incoming
+        return current
+
+    @staticmethod
+    def _attach_cache_creation_token_details(
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        cache_creation_token_details: Optional[CacheCreationTokenDetails],
+    ) -> Optional[PromptTokensDetailsWrapper]:
+        if prompt_tokens_details is None or cache_creation_token_details is None:
+            return prompt_tokens_details
+        existing = cast(
+            Optional[CacheCreationTokenDetails],
+            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        )
+        if existing is not None:
+            return prompt_tokens_details
+        return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(

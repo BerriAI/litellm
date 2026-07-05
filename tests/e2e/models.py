@@ -34,6 +34,7 @@ class KeyGenerateBody(BaseModel):
     budget_id: str | None = None
     key_alias: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    budget_fallbacks: dict[str, list[str]] | None = None
     budget_limits: list[BudgetWindow] | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -110,6 +111,12 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+
+
+class AnthropicMessagesBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int
 
 
 class OutMessage(BaseModel):
@@ -337,9 +344,10 @@ class FineTuningJobsResponse(BaseModel):
 
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
-    et al may be an `os.environ/FOO` reference the proxy resolves at call time (the
-    router resolves any `os.environ/`-prefixed litellm_param on add_deployment, so
-    the vertex_* fields take the same reference form as a config declaration)."""
+    et al may be an `os.environ/FOO` reference the proxy resolves at call time.
+    `input_cost_per_token`/`output_cost_per_token` register a per-deployment custom
+    pricing override; left None (and dropped from the body) the deployment keeps the
+    backend's canonical rate."""
 
     model: str
     api_key: str | None = None
@@ -355,6 +363,8 @@ class LiteLLMParamsBody(BaseModel):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     aws_batch_role_arn: str | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
 
 
 class ModelInfoBody(BaseModel):
