@@ -313,8 +313,8 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        request_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[ComplexityTier, float, List[str]]:
+        request_kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[ComplexityTier, float, list[str]]:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
 
@@ -327,7 +327,7 @@ class ComplexityRouter(CustomLogger):
         try:
             tier = await self._classify_with_llm(prompt, system_prompt, request_kwargs)
             return tier, 1.0, [f"llm-classifier:{tier.value}"]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the heuristic scorer
             verbose_router_logger.warning(
                 f"ComplexityRouter: LLM classifier failed ({e}), falling back to heuristic scoring"
             )
@@ -337,7 +337,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        request_kwargs: Optional[Dict[str, Any]] = None,
+        request_kwargs: Optional[dict[str, Any]] = None,
     ) -> ComplexityTier:
         """Call the configured classifier model and parse its structured tier response."""
         llm_config = self.config.classifier_llm_config
