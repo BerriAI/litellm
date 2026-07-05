@@ -5248,3 +5248,243 @@ def test_process_candidates_merges_thought_signatures_and_server_side_tools():
     fields = model_response.choices[-1].message.provider_specific_fields
     assert fields["thought_signatures"] == ["sig-text"]
     assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
+
+
+def test_make_sync_call_invalidates_stale_cachedcontent_on_400():
+    """A 400 INVALID_ARGUMENT referencing a cachedContent on the sync streaming path drops the
+    resolved id from the in-memory cache (self-heal), so the next resolve re-LISTs."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.context_caching import id_cache as id_cache_module
+    from litellm.llms.vertex_ai.context_caching.id_cache import lookup_cache_id, store_cache_id
+    from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import _CONTEXT_CACHE_ID_KEY_FIELD
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_sync_call
+
+    prev = litellm.enable_vertex_context_cache_id_caching
+    litellm.enable_vertex_context_cache_id_caching = True
+    id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+    try:
+        key = "vertex_ai|proj|us-central1||auth|hash"
+        store_cache_id(key, "cachedContents/1973906229814099968", "2099-01-01T00:00:00Z")
+        assert lookup_cache_id(key) == "cachedContents/1973906229814099968"
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {_CONTEXT_CACHE_ID_KEY_FIELD: key}
+
+        response = MagicMock()
+        response.status_code = 400
+        response.read.return_value = (
+            b'{"error": {"code": 400, "message": "Invalid resource state for cache content'
+            b' 1973906229814099968.", "status": "INVALID_ARGUMENT"}}'
+        )
+        response.headers = {}
+        client = MagicMock(spec=HTTPHandler)
+        client.post.return_value = response
+
+        with pytest.raises(VertexAIError):
+            make_sync_call(
+                client=client,
+                gemini_client=None,
+                api_base="https://example.com",
+                headers={},
+                data="{}",
+                model="gemini-pro",
+                messages=[],
+                logging_obj=logging_obj,
+            )
+
+        assert lookup_cache_id(key) is None  # evicted -> next request re-LISTs
+    finally:
+        litellm.enable_vertex_context_cache_id_caching = prev
+        id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_make_call_invalidates_stale_cachedcontent_on_400():
+    """Async streaming equivalent: a 400 INVALID_ARGUMENT referencing a cachedContent evicts the id."""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.context_caching import id_cache as id_cache_module
+    from litellm.llms.vertex_ai.context_caching.id_cache import lookup_cache_id, store_cache_id
+    from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import _CONTEXT_CACHE_ID_KEY_FIELD
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_call
+
+    prev = litellm.enable_vertex_context_cache_id_caching
+    litellm.enable_vertex_context_cache_id_caching = True
+    id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+    try:
+        key = "vertex_ai|proj|us-central1||auth|hash"
+        store_cache_id(key, "cachedContents/1973906229814099968", "2099-01-01T00:00:00Z")
+        assert lookup_cache_id(key) == "cachedContents/1973906229814099968"
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {_CONTEXT_CACHE_ID_KEY_FIELD: key}
+
+        err_response = MagicMock()
+        err_response.status_code = 400
+        err_response.aread = AsyncMock(
+            return_value=b'{"error": {"code": 400, "message": "Invalid resource state for cache content'
+            b' 1973906229814099968.", "status": "INVALID_ARGUMENT"}}'
+        )
+        err_response.headers = {}
+        post_response = MagicMock()
+        post_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "e", request=MagicMock(), response=err_response
+        )
+        client = MagicMock(spec=AsyncHTTPHandler)
+        client.post = AsyncMock(return_value=post_response)
+
+        with pytest.raises(VertexAIError):
+            await make_call(
+                client=client,
+                gemini_client=None,
+                api_base="https://example.com",
+                headers={},
+                data="{}",
+                model="gemini-pro",
+                messages=[],
+                logging_obj=logging_obj,
+            )
+
+        assert lookup_cache_id(key) is None
+    finally:
+        litellm.enable_vertex_context_cache_id_caching = prev
+        id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+
+
+def test_completion_invalidates_stale_cachedcontent_on_400():
+    """Non-streaming sync path: a 400 INVALID_ARGUMENT referencing a cachedContent evicts the id."""
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.context_caching import id_cache as id_cache_module
+    from litellm.llms.vertex_ai.context_caching.id_cache import lookup_cache_id, store_cache_id
+    from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import _CONTEXT_CACHE_ID_KEY_FIELD
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+
+    prev = litellm.enable_vertex_context_cache_id_caching
+    litellm.enable_vertex_context_cache_id_caching = True
+    id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+    try:
+        key = "vertex_ai|proj|us-central1||auth|hash"
+        store_cache_id(key, "cachedContents/1973906229814099968", "2099-01-01T00:00:00Z")
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {_CONTEXT_CACHE_ID_KEY_FIELD: key}
+
+        err_response = MagicMock()
+        err_response.status_code = 400
+        err_response.text = (
+            '{"error": {"code": 400, "message": "Invalid resource state for cache content'
+            ' 1973906229814099968.", "status": "INVALID_ARGUMENT"}}'
+        )
+        err_response.headers = {}
+        client = MagicMock(spec=HTTPHandler)
+        client.post.side_effect = httpx.HTTPStatusError("e", request=MagicMock(), response=err_response)
+
+        with patch.object(VertexLLM, "_ensure_access_token", return_value=("auth", "proj")), patch.object(
+            VertexLLM, "_get_token_and_url", return_value=("auth", "https://x/y")
+        ), patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexGeminiConfig.validate_environment",
+            return_value={},
+        ), patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.sync_transform_request_body",
+            return_value={"contents": []},
+        ):
+            with pytest.raises(VertexAIError):
+                VertexLLM().completion(
+                    model="gemini-pro",
+                    messages=[{"role": "user", "content": "hi"}],
+                    model_response=litellm.ModelResponse(),
+                    print_verbose=lambda *a, **k: None,
+                    custom_llm_provider="vertex_ai",
+                    encoding=MagicMock(),
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    acompletion=False,
+                    timeout=30.0,
+                    vertex_project="proj",
+                    vertex_location="us-central1",
+                    vertex_credentials=None,
+                    gemini_api_key=None,
+                    litellm_params={},
+                    client=client,
+                )
+
+        assert lookup_cache_id(key) is None
+    finally:
+        litellm.enable_vertex_context_cache_id_caching = prev
+        id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_async_completion_invalidates_stale_cachedcontent_on_400():
+    """Non-streaming async path: a 400 INVALID_ARGUMENT referencing a cachedContent evicts the id."""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.context_caching import id_cache as id_cache_module
+    from litellm.llms.vertex_ai.context_caching.id_cache import lookup_cache_id, store_cache_id
+    from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import _CONTEXT_CACHE_ID_KEY_FIELD
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+
+    prev = litellm.enable_vertex_context_cache_id_caching
+    litellm.enable_vertex_context_cache_id_caching = True
+    id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
+    try:
+        key = "vertex_ai|proj|us-central1||auth|hash"
+        store_cache_id(key, "cachedContents/1973906229814099968", "2099-01-01T00:00:00Z")
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {_CONTEXT_CACHE_ID_KEY_FIELD: key}
+
+        err_response = MagicMock()
+        err_response.status_code = 400
+        err_response.text = (
+            '{"error": {"code": 400, "message": "Invalid resource state for cache content'
+            ' 1973906229814099968.", "status": "INVALID_ARGUMENT"}}'
+        )
+        err_response.headers = {}
+        post_response = MagicMock()
+        post_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "e", request=MagicMock(), response=err_response
+        )
+        client = MagicMock(spec=AsyncHTTPHandler)
+        client.post = AsyncMock(return_value=post_response)
+
+        with patch.object(
+            VertexLLM, "_ensure_access_token_async", new=AsyncMock(return_value=("auth", "proj"))
+        ), patch.object(VertexLLM, "_get_token_and_url", return_value=("auth", "https://x/y")), patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexGeminiConfig.validate_environment",
+            return_value={},
+        ), patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.async_transform_request_body",
+            new=AsyncMock(return_value={"contents": []}),
+        ):
+            with pytest.raises(VertexAIError):
+                await VertexLLM().async_completion(
+                    model="gemini-pro",
+                    messages=[{"role": "user", "content": "hi"}],
+                    model_response=litellm.ModelResponse(),
+                    print_verbose=lambda *a, **k: None,
+                    data={},
+                    custom_llm_provider="vertex_ai",
+                    timeout=30.0,
+                    encoding=MagicMock(),
+                    logging_obj=logging_obj,
+                    stream=False,
+                    optional_params={},
+                    litellm_params={},
+                    vertex_project="proj",
+                    vertex_location="us-central1",
+                    client=client,
+                )
+
+        assert lookup_cache_id(key) is None
+    finally:
+        litellm.enable_vertex_context_cache_id_caching = prev
+        id_cache_module._EXPLICIT_CACHE_ID_CACHE.flush_cache()
