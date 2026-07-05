@@ -25430,6 +25430,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Itpm */
+            itpm?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -25465,6 +25467,8 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -27261,6 +27265,8 @@ export interface components {
              * @default false
              */
             is_public_model_group: boolean;
+            /** Itpm */
+            itpm?: number | null;
             /** Max Input Tokens */
             max_input_tokens?: number | null;
             /** Max Output Tokens */
@@ -27272,6 +27278,8 @@ export interface components {
             mode: string | ("chat" | "embedding" | "completion" | "image_generation" | "audio_transcription" | "rerank" | "moderations") | null;
             /** Model Group */
             model_group: string;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Providers */
@@ -33216,6 +33224,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Itpm */
+            itpm?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -33251,6 +33261,8 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
