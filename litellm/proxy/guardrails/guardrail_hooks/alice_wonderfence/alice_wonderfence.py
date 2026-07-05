@@ -3,7 +3,7 @@
 import logging
 import os
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -77,7 +77,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         max_cached_clients: int | None = None,
         connection_pool_limit: int | None = None,
         allow_request_metadata_override: bool = False,
-        event_hook: (Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None) = None,
+        event_hook: (GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None) = None,
         default_on: bool = True,
         **kwargs: Any,
     ) -> None:
