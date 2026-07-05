@@ -10,10 +10,13 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+
+from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import ModelResponse
 
 from .config import (
     DEFAULT_CODE_KEYWORDS,
@@ -30,6 +33,24 @@ if TYPE_CHECKING:
 else:
     Router = Any
     PreRoutingHookResponse = Any
+
+
+class TierClassification(BaseModel):
+    """Structured response schema for the LLM-based complexity classifier."""
+
+    tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
+
+
+_CLASSIFICATION_PROMPT_TEMPLATE = """Classify the complexity of the following user request into exactly one tier.
+
+Tiers:
+- SIMPLE: factual lookups, greetings, short direct questions with no reasoning or code involved.
+- MEDIUM: everyday requests needing some explanation or minor code/technical content.
+- COMPLEX: requests involving non-trivial code, architecture, or multi-step technical work.
+- REASONING: requests explicitly requiring step-by-step reasoning, analysis, or weighing tradeoffs.
+
+{system_context}Request:
+{prompt}"""
 
 
 class DimensionScore:
@@ -286,6 +307,48 @@ class ComplexityRouter(CustomLogger):
 
         return tier, weighted_score, signals
 
+    async def aclassify(
+        self, prompt: str, system_prompt: Optional[str] = None
+    ) -> Tuple[ComplexityTier, float, List[str]]:
+        """
+        Classify a prompt by complexity, using the LLM classifier when configured.
+
+        Falls back to the local heuristic scorer if classifier_type is "heuristic",
+        or if the LLM call fails, times out, or returns an unparseable response.
+        """
+        if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
+            return self.classify(prompt, system_prompt)
+
+        try:
+            tier = await self._classify_with_llm(prompt, system_prompt)
+            return tier, 1.0, [f"llm-classifier:{tier.value}"]
+        except Exception as e:
+            verbose_router_logger.warning(
+                f"ComplexityRouter: LLM classifier failed ({e}), falling back to heuristic scoring"
+            )
+            return self.classify(prompt, system_prompt)
+
+    async def _classify_with_llm(self, prompt: str, system_prompt: Optional[str] = None) -> ComplexityTier:
+        """Call the configured classifier model and parse its structured tier response."""
+        llm_config = self.config.classifier_llm_config
+        if llm_config is None:
+            raise ValueError("classifier_llm_config is not set")
+
+        system_context = f"Context: {system_prompt}\n\n" if system_prompt else ""
+        classification_prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(system_context=system_context, prompt=prompt)
+
+        response: ModelResponse = await self.litellm_router_instance.acompletion(
+            model=llm_config.model,
+            messages=[{"role": "user", "content": classification_prompt}],
+            response_format=TierClassification,
+            timeout=llm_config.timeout_ms / 1000,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("LLM classifier returned empty content")
+        result = TierClassification.model_validate_json(content)
+        return ComplexityTier[result.tier]
+
     def get_model_for_tier(self, tier: ComplexityTier) -> str:
         """
         Get the model name for a given complexity tier.
@@ -434,7 +497,7 @@ class ComplexityRouter(CustomLogger):
                 messages=messages if has_original_messages else None,
             )
 
-        tier, score, signals = self.classify(user_message, system_prompt)
+        tier, score, signals = await self.aclassify(user_message, system_prompt)
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(
