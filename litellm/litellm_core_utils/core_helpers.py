@@ -18,9 +18,7 @@ else:
     Span = Any
 
 
-def safe_divide_seconds(
-    seconds: float, denominator: float, default: Optional[float] = None
-) -> Optional[float]:
+def safe_divide_seconds(seconds: float, denominator: float, default: Optional[float] = None) -> Optional[float]:
     """
     Safely divide seconds by denominator, handling zero division.
 
@@ -109,9 +107,7 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
 def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
     mapped = _FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
-        verbose_logger.warning(
-            "Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason
-        )
+        verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"
     return mapped
 
@@ -124,9 +120,7 @@ def remove_index_from_tool_calls(
             _tool_calls = message.get("tool_calls")
             if _tool_calls is not None and isinstance(_tool_calls, list):
                 for tool_call in _tool_calls:
-                    if (
-                        isinstance(tool_call, dict) and "index" in tool_call
-                    ):  # Type guard to ensure it's a dict
+                    if isinstance(tool_call, dict) and "index" in tool_call:  # Type guard to ensure it's a dict
                         tool_call.pop("index", None)
 
     return
@@ -141,9 +135,7 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(
-    litellm_metadata: dict, metadata: dict
-) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -185,9 +177,7 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
         if litellm_metadata and metadata:
-            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
-                litellm_metadata, metadata
-            )
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(litellm_metadata, metadata)
         if litellm_metadata:
             return litellm_metadata
         elif metadata:
@@ -236,9 +226,7 @@ def _get_parent_otel_span_from_kwargs(
             return kwargs["litellm_parent_otel_span"]
         return None
     except Exception as e:
-        verbose_logger.exception(
-            "Error in _get_parent_otel_span_from_kwargs: " + str(e)
-        )
+        verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
 
 
@@ -271,9 +259,7 @@ def process_response_headers(
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
             openai_headers[k] = v
-        if k.startswith(
-            "llm_provider-"
-        ):  # return raw provider headers (incl. openai-compatible ones)
+        if k.startswith("llm_provider-"):  # return raw provider headers (incl. openai-compatible ones)
             processed_headers[k] = v
         elif _preserve and k.startswith("x-litellm-"):
             # LiteLLM's own internal headers (e.g. x-litellm-attempted-fallbacks,
@@ -330,13 +316,8 @@ def safe_deep_copy(data):
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
             data["metadata"]["litellm_parent_otel_span"] = "placeholder"
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            litellm_parent_otel_span = data["litellm_metadata"].pop(
-                "litellm_parent_otel_span"
-            )
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            litellm_parent_otel_span = data["litellm_metadata"].pop("litellm_parent_otel_span")
             data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
 
     # Step 2: Per-key deepcopy with fallback
@@ -357,13 +338,8 @@ def safe_deep_copy(data):
     if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            data["litellm_metadata"]["litellm_parent_otel_span"] = (
-                litellm_parent_otel_span
-            )
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            data["litellm_metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
 
 
@@ -416,9 +392,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         result_list: list[Any] = []
         for item in data:
             # Skip exception and callable items
-            if isinstance(item, Exception) or (
-                callable(item) and not isinstance(item, type)
-            ):
+            if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
                 filtered = filter_exceptions_from_params(item, max_depth - 1)
@@ -432,9 +406,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(
-    data: dict, additional_internal_params: Optional[set] = None
-) -> dict:
+def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 

@@ -26,8 +26,13 @@ const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
 // The dashboard calls internal UI routes that the public /openapi.json hides via
 // include_in_schema=False. Force them in so they get typed here; this mutates a
 // throwaway interpreter, so the spec the proxy actually serves is unchanged.
+// Python 3.13 strips a docstring's common leading indentation at compile time
+// while 3.12 keeps it, so the same model yields differently-indented descriptions
+// depending on the interpreter — enough to make this output non-reproducible
+// across CI and contributors. inspect.cleandoc normalizes every description to one
+// canonical form regardless of interpreter, so the generated file is stable.
 const dumpSpec = [
-  "import json, sys",
+  "import inspect, json, sys",
   "from collections import deque",
   "from litellm.proxy.proxy_server import app",
   "from fastapi.routing import APIRoute",
@@ -42,7 +47,13 @@ const dumpSpec = [
   "    if orig and hasattr(orig, 'routes'):",
   "        q.extend(orig.routes)",
   "app.openapi_schema = None",
-  "with open(sys.argv[1], 'w') as f: json.dump(app.openapi(), f, sort_keys=True)",
+  "def normalize(node):",
+  "    if isinstance(node, dict):",
+  "        return {k: inspect.cleandoc(v) if k == 'description' and isinstance(v, str) else normalize(v) for k, v in node.items()}",
+  "    if isinstance(node, list):",
+  "        return [normalize(v) for v in node]",
+  "    return node",
+  "with open(sys.argv[1], 'w') as f: json.dump(normalize(app.openapi()), f, sort_keys=True)",
 ].join("\n");
 
 try {

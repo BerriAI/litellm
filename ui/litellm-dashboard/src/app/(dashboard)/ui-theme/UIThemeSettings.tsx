@@ -116,7 +116,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         <Title className="text-2xl font-bold mb-2">UI Theme Customization</Title>
         <Text className="text-gray-600">Customize your LiteLLM admin dashboard with a custom logo and favicon.</Text>
       </div>
-      <Card className="shadow-sm p-6">
+      <Card className="shadow-xs p-6">
         <div className="space-y-6">
           <div>
             <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Logo URL</Text>

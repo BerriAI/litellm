@@ -5,11 +5,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
-from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
+import base64
+
+from litellm.llms.bedrock.realtime.transformation import (
+    TRIGGER_LEADING_SILENCE,
+    TRIGGER_TRAILING_SILENCE,
+    BedrockRealtimeConfig,
+)
+from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.openai import OpenAIRealtimeEventTypes
 
 
@@ -67,19 +72,14 @@ class TestBedrockRealtimeConfig:
             }
         ]
 
-        session_config = config.session_configuration_request(
-            "amazon.nova-sonic-v1:0", tools=tools
-        )
+        session_config = config.session_configuration_request("amazon.nova-sonic-v1:0", tools=tools)
         session_dict = json.loads(session_config)
 
         prompt_start = session_dict["prompt_start"]["event"]["promptStart"]
         assert "toolConfiguration" in prompt_start
         assert "tools" in prompt_start["toolConfiguration"]
         assert len(prompt_start["toolConfiguration"]["tools"]) == 1
-        assert (
-            prompt_start["toolConfiguration"]["tools"][0]["toolSpec"]["name"]
-            == "get_weather"
-        )
+        assert prompt_start["toolConfiguration"]["tools"][0]["toolSpec"]["name"] == "get_weather"
 
     def test_transform_tools_to_bedrock_format(self):
         """Test OpenAI tool format to Bedrock format transformation"""
@@ -93,9 +93,7 @@ class TestBedrockRealtimeConfig:
                     "description": "Get current weather",
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            "location": {"type": "string", "description": "City name"}
-                        },
+                        "properties": {"location": {"type": "string", "description": "City name"}},
                         "required": ["location"],
                     },
                 },
@@ -120,18 +118,11 @@ class TestBedrockRealtimeConfig:
 
         # Test PCM16 format
         assert config._map_audio_format_to_sample_rate("pcm16", is_output=True) == 24000
-        assert (
-            config._map_audio_format_to_sample_rate("pcm16", is_output=False) == 16000
-        )
+        assert config._map_audio_format_to_sample_rate("pcm16", is_output=False) == 16000
 
         # Test G.711 formats
-        assert (
-            config._map_audio_format_to_sample_rate("g711_ulaw", is_output=True) == 8000
-        )
-        assert (
-            config._map_audio_format_to_sample_rate("g711_alaw", is_output=False)
-            == 8000
-        )
+        assert config._map_audio_format_to_sample_rate("g711_ulaw", is_output=True) == 8000
+        assert config._map_audio_format_to_sample_rate("g711_alaw", is_output=False) == 8000
 
     def test_transform_session_update_event(self):
         """Test session.update event transformation"""
@@ -158,12 +149,7 @@ class TestBedrockRealtimeConfig:
 
         # Verify session start message
         session_start = json.loads(messages[0])
-        assert (
-            session_start["event"]["sessionStart"]["inferenceConfiguration"][
-                "temperature"
-            ]
-            == 0.9
-        )
+        assert session_start["event"]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.9
 
     def test_transform_session_update_with_tools(self):
         """Test session.update with tools"""
@@ -237,12 +223,7 @@ class TestBedrockRealtimeConfig:
         content_start = json.loads(messages[0])
         assert content_start["event"]["contentStart"]["type"] == "TOOL"
         assert content_start["event"]["contentStart"]["role"] == "TOOL"
-        assert (
-            content_start["event"]["contentStart"]["toolResultInputConfiguration"][
-                "toolUseId"
-            ]
-            == "call_123"
-        )
+        assert content_start["event"]["contentStart"]["toolResultInputConfiguration"]["toolUseId"] == "call_123"
 
     def test_transform_input_audio_buffer_append(self):
         """Test input_audio_buffer.append transformation"""
@@ -260,12 +241,7 @@ class TestBedrockRealtimeConfig:
 
         content_start = json.loads(messages[0])
         assert content_start["event"]["contentStart"]["type"] == "AUDIO"
-        assert (
-            content_start["event"]["contentStart"]["audioInputConfiguration"][
-                "sampleRateHertz"
-            ]
-            == 16000
-        )
+        assert content_start["event"]["contentStart"]["audioInputConfiguration"]["sampleRateHertz"] == 16000
 
         audio_input = json.loads(messages[1])
         assert audio_input["event"]["audioInput"]["content"] == "base64_audio_data_here"
@@ -286,6 +262,144 @@ class TestBedrockRealtimeConfig:
         assert "contentEnd" in content_end["event"]
 
 
+class TestBedrockRealtimeResponseCreate:
+    """response.create must trigger Nova Sonic generation (LIT-2239 regression)"""
+
+    def _start_session(self, config):
+        config.transform_realtime_request(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"instructions": "You are a helpful assistant."},
+                }
+            ),
+            "amazon.nova-sonic-v1:0",
+        )
+
+    def test_response_create_before_session_update_is_noop(self):
+        config = BedrockRealtimeConfig()
+
+        messages = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+
+        assert messages == []
+
+    def test_response_create_emits_spoken_trigger_audio(self):
+        config = BedrockRealtimeConfig()
+        self._start_session(config)
+
+        messages = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+
+        assert len(messages) > 1
+
+        content_start = json.loads(messages[0])["event"]["contentStart"]
+        assert content_start["promptName"] == config.prompt_name
+        assert content_start["contentName"] == config.audio_content_name
+        assert content_start["type"] == "AUDIO"
+        assert content_start["interactive"] is True
+        assert content_start["role"] == "USER"
+        assert content_start["audioInputConfiguration"]["sampleRateHertz"] == 16000
+
+        audio_events = [json.loads(message)["event"]["audioInput"] for message in messages[1:]]
+        assert all(event["promptName"] == config.prompt_name for event in audio_events)
+        assert all(event["contentName"] == config.audio_content_name for event in audio_events)
+
+        sent_pcm = b"".join(base64.b64decode(event["content"]) for event in audio_events)
+        assert sent_pcm == TRIGGER_LEADING_SILENCE + ready_trigger_pcm() + TRIGGER_TRAILING_SILENCE
+
+    def test_second_response_create_reuses_open_audio_content(self):
+        config = BedrockRealtimeConfig()
+        self._start_session(config)
+
+        first = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+        second = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+
+        assert len(second) == len(first) - 1
+        assert all("audioInput" in json.loads(message)["event"] for message in second)
+
+    def test_response_create_is_noop_when_client_streams_audio(self):
+        config = BedrockRealtimeConfig()
+        self._start_session(config)
+        config.transform_realtime_request(
+            json.dumps({"type": "input_audio_buffer.append", "audio": "c2lsZW5jZQ=="}),
+            "amazon.nova-sonic-v1:0",
+        )
+
+        messages = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+
+        assert messages == []
+
+    def test_client_audio_after_trigger_reopens_block_at_client_sample_rate(self):
+        config = BedrockRealtimeConfig()
+        config.transform_realtime_request(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "instructions": "You are a helpful assistant.",
+                        "input_audio_format": "g711_ulaw",
+                    },
+                }
+            ),
+            "amazon.nova-sonic-v1:0",
+        )
+        config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+        trigger_content_name = config.audio_content_name
+
+        messages = config.transform_realtime_request(
+            json.dumps({"type": "input_audio_buffer.append", "audio": "c2lsZW5jZQ=="}),
+            "amazon.nova-sonic-v1:0",
+        )
+
+        events = [json.loads(message)["event"] for message in messages]
+        assert [next(iter(event)) for event in events] == [
+            "contentEnd",
+            "contentStart",
+            "audioInput",
+        ]
+        assert events[0]["contentEnd"]["contentName"] == trigger_content_name
+        new_content_start = events[1]["contentStart"]
+        assert new_content_start["contentName"] == config.audio_content_name
+        assert new_content_start["contentName"] != trigger_content_name
+        assert new_content_start["audioInputConfiguration"]["sampleRateHertz"] == 8000
+        assert events[2]["audioInput"]["contentName"] == config.audio_content_name
+
+    def test_client_audio_after_trigger_reuses_block_at_matching_sample_rate(self):
+        config = BedrockRealtimeConfig()
+        self._start_session(config)
+        config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+        trigger_content_name = config.audio_content_name
+
+        messages = config.transform_realtime_request(
+            json.dumps({"type": "input_audio_buffer.append", "audio": "c2lsZW5jZQ=="}),
+            "amazon.nova-sonic-v1:0",
+        )
+
+        assert len(messages) == 1
+        audio_input = json.loads(messages[0])["event"]["audioInput"]
+        assert audio_input["contentName"] == trigger_content_name
+
+    def test_session_close_messages_close_audio_prompt_and_session(self):
+        config = BedrockRealtimeConfig()
+        self._start_session(config)
+        config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+
+        close_messages = [json.loads(message)["event"] for message in config.session_close_messages()]
+
+        assert [next(iter(event)) for event in close_messages] == [
+            "contentEnd",
+            "promptEnd",
+            "sessionEnd",
+        ]
+        assert close_messages[0]["contentEnd"]["contentName"] == config.audio_content_name
+        assert close_messages[1]["promptEnd"]["promptName"] == config.prompt_name
+        assert config.session_close_messages() == []
+
+    def test_session_close_messages_before_session_update_is_empty(self):
+        config = BedrockRealtimeConfig()
+
+        assert config.session_close_messages() == []
+
+
 class TestBedrockRealtimeResponseTransformation:
     """Test suite for response transformation"""
 
@@ -296,11 +410,7 @@ class TestBedrockRealtimeResponseTransformation:
         logging_obj.litellm_trace_id = "trace_123"
 
         bedrock_message = {
-            "event": {
-                "sessionStart": {
-                    "inferenceConfiguration": {"maxTokens": 1024, "temperature": 0.7}
-                }
-            }
+            "event": {"sessionStart": {"inferenceConfiguration": {"maxTokens": 1024, "temperature": 0.7}}}
         }
 
         result = config.transform_realtime_response(
@@ -330,9 +440,7 @@ class TestBedrockRealtimeResponseTransformation:
         logging_obj.litellm_trace_id = "trace_123"
 
         # First create a content start to initialize IDs
-        content_start_message = {
-            "event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}
-        }
+        content_start_message = {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}
 
         result1 = config.transform_realtime_response(
             json.dumps(content_start_message),
@@ -368,9 +476,7 @@ class TestBedrockRealtimeResponseTransformation:
         )
 
         # Check for text delta
-        text_deltas = [
-            msg for msg in result2["response"] if msg["type"] == "response.text.delta"
-        ]
+        text_deltas = [msg for msg in result2["response"] if msg["type"] == "response.text.delta"]
         assert len(text_deltas) == 1
         assert text_deltas[0]["delta"] == "Hello, world!"
 
@@ -384,9 +490,7 @@ class TestBedrockRealtimeResponseTransformation:
         logging_obj.litellm_trace_id = "trace_123"
 
         # First create a content start for audio
-        content_start_message = {
-            "event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}
-        }
+        content_start_message = {"event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}}
 
         result1 = config.transform_realtime_response(
             json.dumps(content_start_message),
@@ -404,9 +508,7 @@ class TestBedrockRealtimeResponseTransformation:
         )
 
         # Now send audio output
-        audio_output_message = {
-            "event": {"audioOutput": {"content": "base64_audio_content"}}
-        }
+        audio_output_message = {"event": {"audioOutput": {"content": "base64_audio_content"}}}
 
         result2 = config.transform_realtime_response(
             json.dumps(audio_output_message),
@@ -424,9 +526,7 @@ class TestBedrockRealtimeResponseTransformation:
         )
 
         # Check for audio delta
-        audio_deltas = [
-            msg for msg in result2["response"] if msg["type"] == "response.audio.delta"
-        ]
+        audio_deltas = [msg for msg in result2["response"] if msg["type"] == "response.audio.delta"]
         assert len(audio_deltas) == 1
         assert audio_deltas[0]["delta"] == "base64_audio_content"
 
@@ -504,13 +604,66 @@ class TestBedrockRealtimeResponseTransformation:
         # Should have text.done, content_part.done, and output_item.done
         assert len(result["response"]) == 3
 
-        text_done = [
-            msg for msg in result["response"] if msg["type"] == "response.text.done"
-        ][0]
+        text_done = [msg for msg in result["response"] if msg["type"] == "response.text.done"][0]
         assert text_done["text"] == "Hello, world!"
 
         # Delta chunks should be reset
         assert result["current_delta_chunks"] is None
+
+    def test_content_end_end_turn_emits_response_done(self):
+        """END_TURN contentEnd must produce response.done (LIT-2239 regression)"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        content_end_message = {"event": {"contentEnd": {"stopReason": "END_TURN", "type": "AUDIO"}}}
+
+        result = config.transform_realtime_response(
+            json.dumps(content_end_message),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_123",
+                "current_response_id": "resp_123",
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "audio",
+            },
+        )
+
+        response_done_events = [msg for msg in result["response"] if msg["type"] == "response.done"]
+        assert len(response_done_events) == 1
+        assert response_done_events[0]["response"]["status"] == "completed"
+        assert result["current_output_item_id"] is None
+        assert result["current_response_id"] is None
+        assert result["current_delta_type"] is None
+
+    def test_content_end_partial_turn_does_not_emit_response_done(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        content_end_message = {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}}
+
+        result = config.transform_realtime_response(
+            json.dumps(content_end_message),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_123",
+                "current_response_id": "resp_123",
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "text",
+            },
+        )
+
+        assert all(msg["type"] != "response.done" for msg in result["response"])
+        assert result["current_response_id"] == "resp_123"
 
     def test_transform_prompt_end_response(self):
         """Test promptEnd response transformation"""
@@ -552,9 +705,7 @@ class TestBedrockRealtimeResponseTransformation:
         logging_obj.litellm_trace_id = "trace_123"
 
         # Create a sequence of messages
-        content_start = {
-            "event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}
-        }
+        content_start = {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}
         text_output1 = {"event": {"textOutput": {"content": "Hello"}}}
         text_output2 = {"event": {"textOutput": {"content": " world"}}}
 
@@ -600,9 +751,7 @@ class TestBedrockRealtimeResponseTransformation:
         logging_obj.litellm_trace_id = "trace_123"
 
         # Create a sequence of messages
-        content_start = {
-            "event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}
-        }
+        content_start = {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}
         text_output = {"event": {"textOutput": {"content": "Hello"}}}
 
         all_events = []
@@ -636,9 +785,7 @@ class TestBedrockRealtimeResponseTransformation:
             )
 
         # Check all response_ids are the same
-        response_ids = [
-            event["response_id"] for event in all_events if "response_id" in event
-        ]
+        response_ids = [event["response_id"] for event in all_events if "response_id" in event]
         assert len(set(response_ids)) == 1, "Response IDs should be consistent"
 
 

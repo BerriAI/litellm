@@ -232,7 +232,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
     >
       <Button
         type="text"
-        className="!flex max-w-[min(200px,34vw)] items-center gap-2 !rounded-md !py-0.5 !pl-1 !pr-2 transition-colors hover:!bg-gray-100"
+        className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-gray-100!"
         aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
         aria-haspopup="menu"
       >

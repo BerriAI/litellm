@@ -84,7 +84,7 @@ class TestVertexAIBatchPassthroughHandler:
                             "input_file_id": "file-123",
                             "output_file_id": "file-456",
                             "error_file_id": None,
-                            "completion_window": "24hrs",
+                            "completion_window": "24h",
                         }
                         mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
                             "123456789"
@@ -451,7 +451,7 @@ class TestVertexAIBatchPassthroughHandler:
                         "input_file_id": "file-123",
                         "output_file_id": "file-456",
                         "error_file_id": None,
-                        "completion_window": "24hrs",
+                        "completion_window": "24h",
                     }
                     mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
                         "123456789"

@@ -33,9 +33,7 @@ class LiteralAILogger(CustomBatchLogger):
         }
         if env:
             self.headers["x-env"] = env
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_http_handler = HTTPHandler()
         batch_size = os.getenv("LITERAL_BATCH_SIZE", None)
         self.flush_lock = asyncio.Lock()
@@ -62,9 +60,7 @@ class LiteralAILogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 self._send_batch()
         except Exception:
-            verbose_logger.exception(
-                "Literal AI Layer Error - error logging success event."
-            )
+            verbose_logger.exception("Literal AI Layer Error - error logging success event.")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.info("Literal AI Failure Event Logging!")
@@ -79,9 +75,7 @@ class LiteralAILogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 self._send_batch()
         except Exception:
-            verbose_logger.exception(
-                "Literal AI Layer Error - error logging failure event."
-            )
+            verbose_logger.exception("Literal AI Layer Error - error logging failure event.")
 
     def _send_batch(self):
         if not self.log_queue:
@@ -101,13 +95,9 @@ class LiteralAILogger(CustomBatchLogger):
             )
 
             if response.status_code >= 300:
-                verbose_logger.error(
-                    f"Literal AI Error: {response.status_code} - {response.text}"
-                )
+                verbose_logger.error(f"Literal AI Error: {response.status_code} - {response.text}")
             else:
-                verbose_logger.debug(
-                    f"Batch of {len(self.log_queue)} runs successfully created"
-                )
+                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
@@ -128,9 +118,7 @@ class LiteralAILogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception:
-            verbose_logger.exception(
-                "Literal AI Layer Error - error logging async success event."
-            )
+            verbose_logger.exception("Literal AI Layer Error - error logging async success event.")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.info("Literal AI Failure Event Logging!")
@@ -145,9 +133,7 @@ class LiteralAILogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception:
-            verbose_logger.exception(
-                "Literal AI Layer Error - error logging async failure event."
-            )
+            verbose_logger.exception("Literal AI Layer Error - error logging async failure event.")
 
     async def async_send_batch(self):
         if not self.log_queue:
@@ -167,24 +153,16 @@ class LiteralAILogger(CustomBatchLogger):
                 headers=self.headers,
             )
             if response.status_code >= 300:
-                verbose_logger.error(
-                    f"Literal AI Error: {response.status_code} - {response.text}"
-                )
+                verbose_logger.error(f"Literal AI Error: {response.status_code} - {response.text}")
             else:
-                verbose_logger.debug(
-                    f"Batch of {len(self.log_queue)} runs successfully created"
-                )
+                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(
-                f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}"
-            )
+            verbose_logger.exception(f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}")
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> dict:
-        logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object", None
-        )
+        logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
 
         if logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")

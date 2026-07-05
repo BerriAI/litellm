@@ -42,29 +42,19 @@ def _parse_tool_names_from_payload(payload: Dict[str, Any]) -> Set[str]:
     # Response: OpenAI-style tool_calls[].function.name or choices[0].message.tool_calls
     response_raw = payload.get("response")
     if response_raw:
-        response_obj = (
-            safe_json_loads(response_raw, default=None)
-            if isinstance(response_raw, str)
-            else response_raw
-        )
+        response_obj = safe_json_loads(response_raw, default=None) if isinstance(response_raw, str) else response_raw
         if isinstance(response_obj, dict):
             _add_tool_calls_to_set(response_obj.get("tool_calls"), tool_names)
             choices = response_obj.get("choices")
             if isinstance(choices, list) and choices:
-                msg = (
-                    choices[0].get("message") if isinstance(choices[0], dict) else None
-                )
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
                 if isinstance(msg, dict):
                     _add_tool_calls_to_set(msg.get("tool_calls"), tool_names)
 
     # Request body: tools[].function.name
     request_raw = payload.get("proxy_server_request")
     if request_raw:
-        request_obj = (
-            safe_json_loads(request_raw, default=None)
-            if isinstance(request_raw, str)
-            else request_raw
-        )
+        request_obj = safe_json_loads(request_raw, default=None) if isinstance(request_raw, str) else request_raw
         if isinstance(request_obj, dict):
             body = request_obj.get("body", request_obj)
             if isinstance(body, dict):
@@ -147,6 +137,4 @@ async def process_spend_logs_tool_usage(
                 skip_duplicates=True,
             )
     except Exception as e:
-        verbose_proxy_logger.warning(
-            "Tool usage tracking (SpendLogToolIndex) failed (non-fatal): %s", e
-        )
+        verbose_proxy_logger.warning("Tool usage tracking (SpendLogToolIndex) failed (non-fatal): %s", e)
