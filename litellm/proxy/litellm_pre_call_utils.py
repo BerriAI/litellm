@@ -464,9 +464,7 @@ def get_geo_bucket_from_headers(headers: Optional[Dict[str, str]]) -> Optional[s
         return None
 
     normalized = {
-        key.lower(): value.strip()
-        for key, value in headers.items()
-        if isinstance(key, str) and isinstance(value, str)
+        key.lower(): value.strip() for key, value in headers.items() if isinstance(key, str) and isinstance(value, str)
     }
 
     explicit_route = _canonicalize_geo_route(normalized.get("x-geo-route"))
