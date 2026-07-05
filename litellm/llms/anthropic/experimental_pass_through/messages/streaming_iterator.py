@@ -1,8 +1,13 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, AsyncIterator, List, Union
+from typing import Any, AsyncIterator, List, Protocol, Union, runtime_checkable
 
+import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
+
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -11,6 +16,58 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
+
+
+class AnthropicMessagesStreamHiddenParams(TypedDict):
+    additional_headers: dict[str, str]
+
+
+@runtime_checkable
+class SupportsAclose(Protocol):
+    async def aclose(self) -> None: ...
+
+
+async def aclose_if_supported(stream: object) -> None:
+    if isinstance(stream, SupportsAclose):
+        await stream.aclose()
+
+
+_RESPONSE_HEADERS_ADAPTER: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
+
+
+def anthropic_messages_stream_hidden_params(
+    response_headers: httpx.Headers,
+) -> AnthropicMessagesStreamHiddenParams:
+    return AnthropicMessagesStreamHiddenParams(
+        additional_headers=_RESPONSE_HEADERS_ADAPTER.validate_python(process_response_headers(response_headers))
+    )
+
+
+class AnthropicMessagesStreamingResponse:
+    """
+    Wraps the /v1/messages SSE byte stream so upstream provider response
+    headers (e.g. Bedrock's x-amzn-requestid / x-amzn-trace-id) survive as
+    ``_hidden_params["additional_headers"]``, which the proxy forwards to
+    clients as ``llm_provider-*`` response headers. Bare async generators
+    cannot carry attributes, so header context was previously dropped.
+    """
+
+    def __init__(
+        self,
+        completion_stream: AsyncIterator[bytes],
+        hidden_params: AnthropicMessagesStreamHiddenParams,
+    ) -> None:
+        self.completion_stream = completion_stream
+        self._hidden_params = hidden_params
+
+    def __aiter__(self) -> "AnthropicMessagesStreamingResponse":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self.completion_stream.__anext__()
+
+    async def aclose(self) -> None:
+        await aclose_if_supported(self.completion_stream)
 
 
 class BaseAnthropicMessagesStreamingIterator:
