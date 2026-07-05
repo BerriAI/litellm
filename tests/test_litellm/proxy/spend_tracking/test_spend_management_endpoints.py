@@ -449,6 +449,7 @@ ignored_keys = [
     "metadata.additional_usage_values.iterations",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.explicit_context_cache_id_hit",
     "metadata.user_api_key",
     "metadata.user_api_key_alias",
     "metadata.user_api_key_team_id",

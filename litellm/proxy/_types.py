@@ -3101,6 +3101,9 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    explicit_context_cache_id_hit: Optional[
+        bool
+    ]  # Vertex/Gemini explicit context-cache id resolved from the in-memory cache (True) vs re-listed (False)
 
 
 class SpendLogsPayload(TypedDict):
