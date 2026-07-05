@@ -8600,6 +8600,46 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_prefers_db_over_stale_in_memory_general_settings(monkeypatch):
+    """Regression for the "Store Prompts in Spend Logs toggle reverts to OFF" bug.
+
+    /config/list must return the persisted DB value, not the per-worker in-memory
+    ``general_settings`` global. In a multi-worker deployment that global is only
+    refreshed by the background add_deployment job (every 30s), so right after a
+    save it can hold a stale ``False`` even though the DB (source of truth) holds
+    ``True``. Preferring the stale in-memory value made the UI toggle flip back OFF."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    db_row = MagicMock()
+    db_row.param_value = {"store_prompts_in_spend_logs": True}
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=db_row)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "general_settings", {"store_prompts_in_spend_logs": False})
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["store_prompts_in_spend_logs"]["field_value"] is True
+        assert fields["store_prompts_in_spend_logs"]["stored_in_db"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_preserve_redacted_plugin_keys_keeps_stored_credential():
     """A redacted or blank plugin_key on update must not overwrite the real key."""
     from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
