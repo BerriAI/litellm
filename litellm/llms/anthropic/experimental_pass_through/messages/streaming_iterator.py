@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, AsyncIterator, List, Union
+from typing import Any, AsyncIterator, List, Protocol, Union, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
@@ -20,6 +20,16 @@ GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
 class AnthropicMessagesStreamHiddenParams(TypedDict):
     additional_headers: dict[str, str]
+
+
+@runtime_checkable
+class SupportsAclose(Protocol):
+    async def aclose(self) -> None: ...
+
+
+async def aclose_if_supported(stream: object) -> None:
+    if isinstance(stream, SupportsAclose):
+        await stream.aclose()
 
 
 _RESPONSE_HEADERS_ADAPTER: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
@@ -57,9 +67,7 @@ class AnthropicMessagesStreamingResponse:
         return await self.completion_stream.__anext__()
 
     async def aclose(self) -> None:
-        inner_aclose = getattr(self.completion_stream, "aclose", None)
-        if inner_aclose is not None:
-            await inner_aclose()
+        await aclose_if_supported(self.completion_stream)
 
 
 class BaseAnthropicMessagesStreamingIterator:
