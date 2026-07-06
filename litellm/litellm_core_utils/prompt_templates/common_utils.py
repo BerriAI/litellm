@@ -1238,7 +1238,9 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
                 if isinstance(content, str):
                     continue
                 for c in content:
-                    if c["type"] == "file":
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "file":
                         file_object = cast(ChatCompletionFileObject, c)
                         file_object_file_field = file_object.get("file")
                         if not isinstance(file_object_file_field, dict):

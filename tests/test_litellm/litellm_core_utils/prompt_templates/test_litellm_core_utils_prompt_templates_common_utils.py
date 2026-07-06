@@ -343,6 +343,32 @@ def test_get_file_ids_from_messages_file_field_not_dict():
     assert get_file_ids_from_messages(messages) == []
 
 
+def test_get_file_ids_from_messages_content_block_without_type():
+    """A content block dict that omits `type` must not raise KeyError."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "hi"},
+                {"type": "file", "file": {"file_id": "file-keep"}},
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == ["file-keep"]
+
+
+def test_get_file_ids_from_messages_non_dict_content_items():
+    """Non-dict content items (e.g. token-id lists forwarded by
+    text_completion, or bare strings) must be skipped, not indexed into."""
+    messages = [
+        {"role": "user", "content": [[1, 2, 3]]},
+        {"role": "user", "content": ["hello"]},
+    ]
+
+    assert get_file_ids_from_messages(messages) == []
+
+
 def test_update_messages_with_model_file_ids_skips_non_openai_file_blocks():
     """`update_messages_with_model_file_ids` is also called on user content
     before provider dispatch. It must tolerate non-OpenAI file blocks the same
