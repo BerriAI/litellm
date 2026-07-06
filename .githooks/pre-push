@@ -22,7 +22,7 @@ ZERO_OID_SHA256="000000000000000000000000000000000000000000000000000000000000000
 ALLOWED_TYPES="feature|bugfix|hotfix|release|chore"
 BRANCH_PATTERN="^(${ALLOWED_TYPES})/.+"
 
-PROTECTED_NAMES="main litellm_internal_staging"
+PROTECTED_NAMES="main litellm_internal_staging datareply/prod"
 PROTECTED_PREFIXES="dependabot/ gh-readonly-queue/"
 
 is_protected() {
