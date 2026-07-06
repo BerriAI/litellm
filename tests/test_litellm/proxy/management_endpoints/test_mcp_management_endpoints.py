@@ -5255,7 +5255,7 @@ def test_stamp_oauth2_flow_bare_oauth2_defaults_to_authorization_code():
     """A bare oauth2 create (no endpoints, no creds) is interactive: stamping it
     authorization_code matches how needs_user_oauth_token treats a null flow."""
     payload = _oauth2_create_payload()
-    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
     assert payload.oauth2_flow == "authorization_code"
 
 
@@ -5267,7 +5267,7 @@ def test_stamp_oauth2_flow_marks_m2m_shape_client_credentials():
         token_url="https://idp.example.com/token",
         credentials={"client_id": "cid", "client_secret": "csecret"},
     )
-    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
     assert payload.oauth2_flow == "client_credentials"
 
 
@@ -5279,7 +5279,7 @@ def test_stamp_oauth2_flow_authorization_url_wins_over_m2m_shape():
         token_url="https://idp.example.com/token",
         credentials={"client_id": "cid", "client_secret": "csecret"},
     )
-    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
     assert payload.oauth2_flow == "authorization_code"
 
 
@@ -5290,11 +5290,11 @@ def test_stamp_oauth2_flow_respects_explicit_value():
         token_url="https://idp.example.com/token",
         credentials={"client_id": "cid", "client_secret": "csecret"},
     )
-    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
     assert payload.oauth2_flow == "authorization_code"
 
 
 def test_stamp_oauth2_flow_ignores_non_oauth2():
     payload = _oauth2_create_payload(auth_type="none")
-    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
     assert payload.oauth2_flow is None
