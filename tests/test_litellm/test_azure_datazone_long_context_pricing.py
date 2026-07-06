@@ -1,5 +1,4 @@
 import json
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -10,9 +9,6 @@ from litellm.cost_calculator import cost_per_token
 
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
-    """cost_per_token reads litellm.model_cost, which is fetched from the live
-    upstream file by default. Force the bundled backup so these tests exercise
-    the entries added in this change set rather than whatever is deployed."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     original = litellm.model_cost
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -26,30 +22,58 @@ REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
-DATA_ZONE_MULTIPLIER = Decimal("1.1")
+# Data Zone token pricing transcribed from the Azure OpenAI pricing page
+# (https://azure.microsoft.com/en-us/pricing/details/azure-openai/): Standard
+# on-demand plus Priority Processing columns, and the Long Context tier only for
+# the models where Azure actually publishes a Data Zone Long Context row.
+GPT_54_DATA_ZONE = {
+    "cache_read_input_token_cost": 2.8e-07,
+    "cache_read_input_token_cost_priority": 5.5e-07,
+    "input_cost_per_token": 2.75e-06,
+    "input_cost_per_token_priority": 5.5e-06,
+    "output_cost_per_token": 1.65e-05,
+    "output_cost_per_token_priority": 3.3e-05,
+}
 
-FAMILY = (
-    "gpt-5.4",
-    "gpt-5.4-2026-03-05",
+GPT_55_DATA_ZONE = {
+    "cache_read_input_token_cost": 5.5e-07,
+    "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
+    "cache_read_input_token_cost_priority": 1.38e-06,
+    "input_cost_per_token": 5.5e-06,
+    "input_cost_per_token_above_272k_tokens": 1.1e-05,
+    "input_cost_per_token_priority": 1.375e-05,
+    "output_cost_per_token": 3.3e-05,
+    "output_cost_per_token_above_272k_tokens": 4.95e-05,
+    "output_cost_per_token_priority": 8.25e-05,
+}
+
+EXPECTED = {
+    "azure/gpt-5.4": GPT_54_DATA_ZONE,
+    "azure/gpt-5.4-2026-03-05": GPT_54_DATA_ZONE,
+    "azure/gpt-5.5": GPT_55_DATA_ZONE,
+    "azure/gpt-5.5-2026-04-23": GPT_55_DATA_ZONE,
+}
+
+NO_DATA_ZONE_MODELS = (
     "gpt-5.4-mini",
     "gpt-5.4-mini-2026-03-17",
     "gpt-5.4-nano",
     "gpt-5.4-nano-2026-03-17",
     "gpt-5.4-pro",
     "gpt-5.4-pro-2026-03-05",
-    "gpt-5.5",
-    "gpt-5.5-2026-04-23",
     "gpt-5.5-pro",
     "gpt-5.5-pro-2026-04-23",
 )
 
-DATA_ZONE_KEYS = tuple(f"azure/{zone}/{model}" for model in FAMILY for zone in ("us", "eu"))
-
-LONG_CONTEXT_MODELS = (
+NO_LONG_CONTEXT_MODELS = (
     "azure/gpt-5.4-mini",
     "azure/gpt-5.4-mini-2026-03-17",
     "azure/gpt-5.4-nano",
     "azure/gpt-5.4-nano-2026-03-17",
+)
+
+DATA_ZONE_KEYS = tuple(
+    f"azure/{zone}/{model.split('/', 1)[1]}" for model in EXPECTED for zone in ("us", "eu")
 )
 
 
@@ -63,54 +87,60 @@ def main_cost():
     return _load(MAIN_PATH)
 
 
-def _is_cost_field(key, value):
-    return "cost" in key and isinstance(value, (int, float)) and not isinstance(value, bool)
+def _cost_fields(entry):
+    return {k: v for k, v in entry.items() if "cost" in k and isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
-@pytest.mark.parametrize("data_zone_key", DATA_ZONE_KEYS)
-def test_data_zone_entry_is_110pct_of_regional(main_cost, data_zone_key):
-    regional_key = data_zone_key.replace("/us/", "/").replace("/eu/", "/")
-    regional = main_cost.get(regional_key)
-    entry = main_cost.get(data_zone_key)
-    assert regional is not None, f"regional base {regional_key} missing"
-    assert entry is not None, f"{data_zone_key} not found in model cost map"
+@pytest.mark.parametrize("regional_base", tuple(EXPECTED))
+@pytest.mark.parametrize("zone", ("us", "eu"))
+def test_data_zone_entry_matches_azure_published(main_cost, regional_base, zone):
+    zone_key = regional_base.replace("azure/", f"azure/{zone}/", 1)
+    entry = main_cost.get(zone_key)
+    assert entry is not None, f"{zone_key} not found in model cost map"
+    assert _cost_fields(entry) == EXPECTED[regional_base], f"{zone_key} cost fields do not match the Azure pricing page"
 
+    regional = main_cost[regional_base]
     for key, value in entry.items():
-        if _is_cost_field(key, value):
-            expected = float(Decimal(repr(regional[key])) * DATA_ZONE_MULTIPLIER)
-            assert value == expected, f"{data_zone_key}.{key} expected {expected}, got {value}"
-        else:
-            assert value == regional[key], f"{data_zone_key}.{key} metadata differs from regional"
-
-    # every regional cost field must be carried over (no silently dropped tier)
-    for key, value in regional.items():
-        if _is_cost_field(key, value):
-            assert key in entry, f"{data_zone_key} missing cost field {key} present on regional"
+        if "cost" not in key:
+            assert value == regional[key], f"{zone_key}.{key} metadata differs from {regional_base}"
 
 
-@pytest.mark.parametrize(
-    "model, input_above, output_above, cache_above",
-    [
-        ("azure/gpt-5.4-mini", 1.5e-06, 6.75e-06, 1.5e-07),
-        ("azure/gpt-5.4-nano", 4e-07, 1.875e-06, 4e-08),
-    ],
-)
-def test_regional_long_context_surcharge_present(main_cost, model, input_above, output_above, cache_above):
-    entry = main_cost[model]
-    assert entry["input_cost_per_token_above_272k_tokens"] == input_above
-    assert entry["output_cost_per_token_above_272k_tokens"] == output_above
-    assert entry["cache_read_input_token_cost_above_272k_tokens"] == cache_above
-    # long-context tier is only meaningful when the window exceeds the threshold
-    assert entry["max_input_tokens"] > 272000
+@pytest.mark.parametrize("model", NO_DATA_ZONE_MODELS)
+@pytest.mark.parametrize("zone", ("us", "eu"))
+def test_data_zone_not_invented_for_global_only_models(main_cost, model, zone):
+    assert f"azure/{zone}/{model}" not in main_cost
 
 
-def test_cost_per_token_data_zone_is_110pct_of_regional():
-    """The cost calculator must resolve the azure/us and azure/eu keys directly
-    (a fallback to the regional/base entry would drop the data-zone premium)."""
-    prompt, completion = 1000, 500
-    reg_in, reg_out = cost_per_token(
-        model="azure/gpt-5.5", custom_llm_provider="azure", prompt_tokens=prompt, completion_tokens=completion
+@pytest.mark.parametrize("model", NO_LONG_CONTEXT_MODELS)
+def test_mini_nano_have_no_long_context_tier(main_cost, model):
+    assert not any("above_272k" in key for key in main_cost[model]), f"{model} must not carry a long-context tier"
+
+
+def test_gpt54_data_zone_resolves_and_is_premium_over_global():
+    prompt, completion = 1_000, 500
+    base_in, base_out = cost_per_token(
+        model="azure/gpt-5.4", custom_llm_provider="azure", prompt_tokens=prompt, completion_tokens=completion
     )
+    assert base_in == pytest.approx(prompt * 2.5e-06, rel=1e-9)
+    for zone in ("us", "eu"):
+        z_in, z_out = cost_per_token(
+            model=f"azure/{zone}/gpt-5.4",
+            custom_llm_provider="azure",
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+        )
+        assert z_in == pytest.approx(prompt * 2.75e-06, rel=1e-9)
+        assert z_out == pytest.approx(completion * 1.65e-05, rel=1e-9)
+        assert z_in > base_in
+
+
+def test_gpt55_data_zone_long_context_surcharge_applies_above_threshold():
+    below_in, _ = cost_per_token(
+        model="azure/us/gpt-5.5", custom_llm_provider="azure", prompt_tokens=1_000, completion_tokens=10
+    )
+    assert below_in == pytest.approx(1_000 * 5.5e-06, rel=1e-9)
+
+    prompt, completion = 300_000, 1_000  # prompt_tokens > 272_000
     for zone in ("us", "eu"):
         z_in, z_out = cost_per_token(
             model=f"azure/{zone}/gpt-5.5",
@@ -118,38 +148,20 @@ def test_cost_per_token_data_zone_is_110pct_of_regional():
             prompt_tokens=prompt,
             completion_tokens=completion,
         )
-        assert z_in == pytest.approx(reg_in * 1.1, rel=1e-9)
-        assert z_out == pytest.approx(reg_out * 1.1, rel=1e-9)
-        assert z_in > reg_in
+        assert z_in == pytest.approx(prompt * 1.1e-05, rel=1e-9)
+        assert z_out == pytest.approx(completion * 4.95e-05, rel=1e-9)
 
 
-def test_cost_per_token_long_context_surcharge_applies_above_threshold():
-    """azure/gpt-5.4-mini must bill the above-272k rate once the prompt crosses
-    the threshold, and its data-zone variants must charge 1.1x that."""
-    prompt, completion = 300_000, 1_000  # prompt_tokens > 272_000
-    reg_in, reg_out = cost_per_token(
-        model="azure/gpt-5.4-mini", custom_llm_provider="azure", prompt_tokens=prompt, completion_tokens=completion
+def test_gpt54_data_zone_has_no_long_context_surcharge():
+    prompt, completion = 300_000, 1_000
+    z_in, z_out = cost_per_token(
+        model="azure/us/gpt-5.4", custom_llm_provider="azure", prompt_tokens=prompt, completion_tokens=completion
     )
-    assert reg_in == pytest.approx(prompt * 1.5e-06, rel=1e-9)
-    assert reg_out == pytest.approx(completion * 6.75e-06, rel=1e-9)
-
-    us_in, us_out = cost_per_token(
-        model="azure/us/gpt-5.4-mini", custom_llm_provider="azure", prompt_tokens=prompt, completion_tokens=completion
-    )
-    assert us_in == pytest.approx(prompt * 1.65e-06, rel=1e-9)
-    assert us_out == pytest.approx(completion * 7.425e-06, rel=1e-9)
+    assert z_in == pytest.approx(prompt * 2.75e-06, rel=1e-9)
+    assert z_out == pytest.approx(completion * 1.65e-05, rel=1e-9)
 
 
-def test_cost_per_token_below_threshold_uses_base_rate():
-    prompt, completion = 1_000, 100  # prompt_tokens < 272_000
-    reg_in, reg_out = cost_per_token(
-        model="azure/gpt-5.4-mini", custom_llm_provider="azure", prompt_tokens=prompt, completion_tokens=completion
-    )
-    assert reg_in == pytest.approx(prompt * 7.5e-07, rel=1e-9)
-    assert reg_out == pytest.approx(completion * 4.5e-06, rel=1e-9)
-
-
-@pytest.mark.parametrize("key", DATA_ZONE_KEYS + LONG_CONTEXT_MODELS)
+@pytest.mark.parametrize("key", DATA_ZONE_KEYS)
 def test_backup_matches_main(key):
     main = _load(MAIN_PATH)
     backup = _load(BACKUP_PATH)
