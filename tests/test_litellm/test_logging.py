@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import (
     ALL_LOGGERS,
     JsonFormatter,
+    _env_flag_enabled,
     _initialize_loggers_with_handler,
     _turn_on_json,
     verbose_logger,
@@ -64,6 +65,33 @@ def test_json_mode_emits_one_record_per_logger(capfd):
         assert "message" in obj, "`message` key missing"
         assert "level" in obj, "`level` key missing"
         assert "timestamp" in obj, "`timestamp` key missing"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("True", True),
+        ("true", True),
+        ("TRUE", True),
+        (" true ", True),
+        ("1", False),
+        ("False", False),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_env_flag_enabled_only_true_enables(value, expected):
+    """
+    Regression: JSON_LOGS is a boolean env flag, so only "true" (case-insensitive)
+    may enable it. The previous bool(os.getenv("JSON_LOGS", False)) turned any
+    non-empty string, including "False"/"0"/"no", into True, so JSON logging could
+    never be disabled via the documented env var.
+    """
+    assert _env_flag_enabled(value) is expected
 
 
 def test_json_formatter_parses_embedded_json_message():

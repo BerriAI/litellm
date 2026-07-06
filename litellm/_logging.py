@@ -77,7 +77,11 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter = SecretRedactionFilter()
 
 
-json_logs = bool(os.getenv("JSON_LOGS", False))
+def _env_flag_enabled(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() == "true"
+
+
+json_logs = _env_flag_enabled(os.getenv("JSON_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: str = getattr(logging, log_level.upper())
