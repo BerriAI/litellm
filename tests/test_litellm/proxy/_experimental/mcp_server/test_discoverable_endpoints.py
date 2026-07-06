@@ -519,7 +519,12 @@ async def test_register_client_persists_dcr_client_identity():
     """A dynamic client registration (RFC 7591) must persist the issued client_id /
     client_secret / token_endpoint_auth_method and the token_url onto the server row so
     autonomous refresh can authenticate as the registered client. Without persistence the
-    minted client_id is discarded and the refresh_token grant has no client identity."""
+    minted client_id is discarded and the refresh_token grant has no client identity.
+
+    The persist must also stamp oauth2_flow="authorization_code": only the interactive
+    flow reaches this persist, and without the stamp the row (client creds + token_url,
+    no persisted authorization_url) matches the legacy M2M inference whenever endpoint
+    discovery fails at registry build, flipping the server to client_credentials."""
     try:
         from fastapi import Request
 
@@ -597,6 +602,7 @@ async def test_register_client_persists_dcr_client_identity():
     assert update_data.credentials["client_id"] == "generated-client"
     assert update_data.credentials["client_secret"] == "generated-secret"
     assert update_data.credentials["token_endpoint_auth_method"] == "client_secret_basic"
+    assert update_data.oauth2_flow == "authorization_code"
 
     mock_update_server.assert_called_once()
 

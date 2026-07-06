@@ -772,6 +772,7 @@ async def _persist_dcr_client_registration(
             data=UpdateMCPServerRequest(
                 server_id=mcp_server.server_id,
                 credentials=credentials,
+                oauth2_flow="authorization_code",
                 **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
             ),
             touched_by="mcp_oauth_dcr",
