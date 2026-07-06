@@ -187,6 +187,84 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
 
+    def test_chunk_parser_raises_on_in_body_error_payload(self):
+        """vLLM/sglang return HTTP 200 streams whose body carries the error,
+        e.g. data: {"error": {..., "code": 400}}. chunk_parser must surface it
+        as a provider error instead of parsing an empty chunk that silently
+        ends the stream (https://github.com/BerriAI/litellm/issues/25492)."""
+        from litellm.llms.openai.common_utils import OpenAIError
+
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        error_chunk = {
+            "error": {
+                "object": "error",
+                "message": "The model is not multimodal. Please remove image inputs.",
+                "type": "BadRequestError",
+                "param": None,
+                "code": 400,
+            }
+        }
+
+        with pytest.raises(OpenAIError) as excinfo:
+            handler.chunk_parser(error_chunk)
+
+        assert excinfo.value.status_code == 400
+        assert "not multimodal" in excinfo.value.message
+
+    def test_chunk_parser_error_payload_without_usable_code_maps_to_500(self):
+        """OpenAI-style error payloads may carry a string code (e.g.
+        "invalid_api_key") or none at all; those must map to 500, not crash."""
+        from litellm.llms.openai.common_utils import OpenAIError
+
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        with pytest.raises(OpenAIError) as excinfo:
+            handler.chunk_parser(
+                {"error": {"message": "engine crashed", "code": "server_error"}}
+            )
+        assert excinfo.value.status_code == 500
+        assert "engine crashed" in excinfo.value.message
+
+        with pytest.raises(OpenAIError) as excinfo:
+            handler.chunk_parser({"error": "plain string error"})
+        assert excinfo.value.status_code == 500
+        assert "plain string error" in excinfo.value.message
+
+        with pytest.raises(OpenAIError) as excinfo:
+            handler.chunk_parser({"error": {"type": "overloaded", "code": 503}})
+        assert excinfo.value.status_code == 503
+        assert excinfo.value.message == '{"type": "overloaded", "code": 503}'
+
+    def test_chunk_parser_tolerates_null_error_field(self):
+        """A chunk that carries "error": null alongside real data must parse
+        normally, not raise."""
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "error": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0].delta.content == "Hello"
+
     def test_chunk_parser_without_usage(self):
         """Test that chunk_parser works normally for chunks without usage."""
         handler = OpenAIChatCompletionStreamingHandler(
