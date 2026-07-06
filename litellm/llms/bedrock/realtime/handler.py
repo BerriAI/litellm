@@ -59,9 +59,7 @@ class BedrockRealtime(BaseAWSLLM):
                 InvokeModelWithBidirectionalStreamOperationInput,
             )
             from aws_sdk_bedrock_runtime.config import Config
-            from smithy_aws_core.identity.environment import (
-                EnvironmentCredentialsResolver,
-            )
+            from smithy_aws_core.identity import StaticCredentialsResolver
         except ImportError:
             raise ImportError("Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime")
 
@@ -82,11 +80,27 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug(f"Bedrock Realtime: Connecting to {endpoint_uri} with model {model}")
 
+        frozen_credentials = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+        ).get_frozen_credentials()
+
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
         config = Config(
             endpoint_uri=endpoint_uri,
             region=aws_region_name,
-            aws_credentials_identity_resolver=EnvironmentCredentialsResolver(),
+            aws_access_key_id=frozen_credentials.access_key,
+            aws_secret_access_key=frozen_credentials.secret_key,
+            aws_session_token=frozen_credentials.token,
+            aws_credentials_identity_resolver=StaticCredentialsResolver(),
         )
         bedrock_client = BedrockRuntimeClient(config=config)
 
