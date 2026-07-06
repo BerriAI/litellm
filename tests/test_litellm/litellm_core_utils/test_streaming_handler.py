@@ -1428,6 +1428,27 @@ def test_calculate_total_usage_with_cost():
     assert usage.completion_tokens == 5
 
 
+def test_calculate_total_usage_with_dict_usage_cost():
+    """Regression: dict-shaped `usage` with a `cost` key must still surface
+    provider cost even though `hasattr` on a dict does not consult its keys."""
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    chunk = {
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "cost": 0.00025,
+        }
+    }
+
+    usage = calculate_total_usage([chunk])
+
+    assert usage.prompt_tokens == 10
+    assert usage.completion_tokens == 5
+    assert getattr(usage, "cost", None) == 0.00025
+
+
 @pytest.mark.asyncio
 async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Logging):
     from litellm.utils import ModelResponseListIterator

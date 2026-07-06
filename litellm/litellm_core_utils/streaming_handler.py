@@ -2273,8 +2273,14 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
         total_tokens=prompt_tokens + completion_tokens,
     )
 
-    if latest_usage_chunk and hasattr(latest_usage_chunk, "cost") and latest_usage_chunk.cost is not None:
-        returned_usage_chunk.cost = latest_usage_chunk.cost
+    if latest_usage_chunk is not None:
+        latest_cost = (
+            latest_usage_chunk.get("cost")
+            if isinstance(latest_usage_chunk, dict)
+            else getattr(latest_usage_chunk, "cost", None)
+        )
+        if latest_cost is not None:
+            returned_usage_chunk.cost = latest_cost
 
     return returned_usage_chunk
 
