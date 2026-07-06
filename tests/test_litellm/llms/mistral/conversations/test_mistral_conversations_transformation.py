@@ -113,6 +113,38 @@ def test_transform_request_premium_and_function_passthrough():
     ]
 
 
+def test_transform_request_preserves_tool_call_history():
+    cfg = MistralConversationsConfig()
+    body = cfg.transform_request(
+        model="mistral-medium-latest",
+        messages=[
+            {"role": "user", "content": "weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "user", "content": "now cite sources"},
+        ],
+        optional_params={"web_search_options": {}},
+        litellm_params={},
+        headers={},
+    )
+    assert body["inputs"] == [
+        {"role": "user", "content": "weather in Paris?"},
+        {"type": "function.call", "tool_call_id": "call_1", "name": "get_weather", "arguments": '{"city":"Paris"}'},
+        {"type": "function.result", "tool_call_id": "call_1", "result": "sunny"},
+        {"role": "user", "content": "now cite sources"},
+    ]
+
+
 def test_transform_request_drops_other_builtin_connectors():
     cfg = MistralConversationsConfig()
     body = cfg.transform_request(
