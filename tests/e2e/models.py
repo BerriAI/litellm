@@ -298,6 +298,19 @@ class CustomPricing(BaseModel):
         return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
+class DeploymentParams(BaseModel):
+    """The configured litellm_params a /model/info row reports for a deployment:
+    the backend `model` string, the per-deployment rate limit, and any
+    custom-pricing override (same field names as CustomPricing so pricing tests
+    read them unchanged)."""
+
+    model_config = ConfigDict(extra="ignore", protected_namespaces=())
+    model: str | None = None
+    tpm: int | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+
+
 class ModelInfoEntry(BaseModel):
     """One /model/info row. `litellm_params` is the configured deployment (carries
     any custom-pricing override); `model_info` is the price the proxy resolved for
@@ -305,7 +318,7 @@ class ModelInfoEntry(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
-    litellm_params: CustomPricing = CustomPricing()
+    litellm_params: DeploymentParams = DeploymentParams()
     model_info: CustomPricing = CustomPricing()
 
 
@@ -365,6 +378,7 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    tpm: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -389,3 +403,16 @@ class ModelNewResponse(BaseModel):
 
 class ModelDeleteBody(BaseModel):
     id: str
+
+
+class ModelUpdateParams(BaseModel):
+    """POST /model/update litellm_params: only the fields being changed; the proxy
+    merges them over the deployment's stored params."""
+
+    tpm: int | None = None
+
+
+class ModelUpdateBody(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    litellm_params: ModelUpdateParams
+    model_info: ModelInfoBody
