@@ -2,6 +2,8 @@ import base64
 
 from httpx import Headers, Response
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import (
     normalize_transcription_language_to_bcp47,
     process_audio_file,
@@ -28,6 +30,7 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 
 DEFAULT_SPEECH_TO_TEXT_LOCATION = "us"
 AUTO_LANGUAGE_CODE = "auto"
+SUPPORTED_RESPONSE_FORMATS = ("json", "text")
 _URL_UNSAFE_PROJECT_CHARS = ("/", "?", "#", "\\", ":", " ", "\t", "\n", "\r")
 
 
@@ -47,10 +50,23 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        return {
+        mapped = {
             **optional_params,
             **{k: v for k, v in non_default_params.items() if k in supported_params},
         }
+        response_format = mapped.get("response_format")
+        if response_format is None or response_format in SUPPORTED_RESPONSE_FORMATS:
+            return mapped
+        if drop_params or litellm.drop_params:
+            return {k: v for k, v in mapped.items() if k != "response_format"}
+        raise UnsupportedParamsError(
+            status_code=400,
+            message=(
+                f"Google Speech-to-Text does not support response_format={response_format!r}. "
+                f"Supported values: {', '.join(SUPPORTED_RESPONSE_FORMATS)}. "
+                "To drop unsupported openai params from the call, set `litellm.drop_params = True`"
+            ),
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)

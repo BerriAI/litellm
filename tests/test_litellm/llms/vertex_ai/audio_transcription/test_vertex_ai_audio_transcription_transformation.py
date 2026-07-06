@@ -286,6 +286,36 @@ class TestProviderRouting:
                 temperature=1,
             )
 
+    @pytest.mark.parametrize("response_format", ["json", "text"])
+    def test_supported_response_formats_pass_through(self, response_format):
+        optional_params = get_optional_params_transcription(
+            model="chirp_3",
+            custom_llm_provider="vertex_ai",
+            response_format=response_format,
+        )
+        assert optional_params["response_format"] == response_format
+
+    @pytest.mark.parametrize("response_format", ["verbose_json", "srt", "vtt"])
+    def test_unsupported_response_format_raises(self, response_format):
+        with pytest.raises(litellm.utils.UnsupportedParamsError, match="response_format"):
+            get_optional_params_transcription(
+                model="chirp_3",
+                custom_llm_provider="vertex_ai",
+                response_format=response_format,
+            )
+
+    @pytest.mark.parametrize("response_format", ["verbose_json", "srt", "vtt"])
+    def test_unsupported_response_format_dropped_with_drop_params(self, response_format):
+        optional_params = get_optional_params_transcription(
+            model="chirp_3",
+            custom_llm_provider="vertex_ai",
+            language="fr-FR",
+            response_format=response_format,
+            drop_params=True,
+        )
+        assert "response_format" not in optional_params
+        assert optional_params["language"] == "fr-FR"
+
 
 class TestModelCostEntry:
     REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
