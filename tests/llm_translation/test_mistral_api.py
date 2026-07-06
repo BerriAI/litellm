@@ -13,9 +13,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -57,11 +55,41 @@ class TestMistralCompletion(BaseLLMChatTest):
 
         response = litellm.completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "What's the weather like in Boston today?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
             web_search_options={},
             max_tokens=100,
         )
 
         assert response is not None
+
+    def test_web_search_with_tool_call_history(self):
+        """The Conversations API accepts prior function-call history mapped to
+        function.call / function.result input entries alongside a web search
+        request (a 400 here means the mapped wire schema is wrong)."""
+        if not os.getenv("MISTRAL_API_KEY"):
+            pytest.skip("MISTRAL_API_KEY not set")
+
+        response = litellm.completion(
+            model="mistral/mistral-medium-latest",
+            messages=[
+                {"role": "user", "content": "What's the weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "18C and sunny"},
+                {"role": "user", "content": "Now search the web for who won Euro 2024 and cite sources."},
+            ],
+            web_search_options={},
+            max_tokens=200,
+        )
+
+        assert response is not None
+        assert response.choices[0].message.content
