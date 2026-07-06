@@ -1066,7 +1066,10 @@ async def proxy_startup_event(app: FastAPI):
     # End of startup event
     yield
 
-    # Shutdown event - cancel usage reporter background task
+    # Shutdown event - flush pending usage counts then cancel reporter task
+    from litellm.proxy.usage_reporting.gateway_usage_reporter import flush_on_shutdown
+
+    await flush_on_shutdown()
     _usage_reporter_task.cancel()
 
     # Shutdown event - drain in-flight requests before tearing down dependencies

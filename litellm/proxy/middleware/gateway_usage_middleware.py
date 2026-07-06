@@ -2,27 +2,36 @@
 ASGI middleware that counts total and successful LLM-route requests for
 request-based billing via ``LITELLM_USAGE_ENDPOINT``.
 
-"Successful" means the gateway returned a non-5xx status code; 4xx
-(auth errors, bad requests) are the caller's fault and still count as the
-gateway having handled the request.
+Billable request definition: any request whose gateway response status code
+is in the range [1, 500) is counted as "successful" (i.e. the gateway
+handled it). 4xx responses (auth errors, bad requests, rate limits) are
+included because those are client-side errors and the gateway still handled
+them. 5xx responses and requests where no ``http.response.start`` was sent
+(status_code remains 0, e.g. client disconnect before response) are counted
+as "failed".
+
+Only active when ``LITELLM_USAGE_ENDPOINT`` is set to avoid overhead on
+OSS / default deployments.
 """
 
 from __future__ import annotations
 
+import os
+
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from litellm.proxy.usage_reporting.gateway_usage_reporter import record_request
+from litellm.proxy.auth.route_checks import RouteChecks
 
-_SUCCESS_THRESHOLD = 500
+_GATEWAY_HANDLED_BELOW = 500
 
 
 class GatewayUsageMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self._tracked_prefixes = _build_tracked_prefixes()
+        self._enabled = bool(os.environ.get("LITELLM_USAGE_ENDPOINT"))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not self._is_llm_route(scope):
+        if not self._enabled or scope["type"] != "http" or not self._is_llm_route(scope):
             await self.app(scope, receive, send)
             return
 
@@ -37,49 +46,11 @@ class GatewayUsageMiddleware:
         try:
             await self.app(scope, receive, _send_wrapper)
         finally:
-            record_request(succeeded=0 < status_code < _SUCCESS_THRESHOLD)
+            from litellm.proxy.usage_reporting.gateway_usage_reporter import record_request
 
-    def _is_llm_route(self, scope: Scope) -> bool:
+            await record_request(succeeded=0 < status_code < _GATEWAY_HANDLED_BELOW)
+
+    @staticmethod
+    def _is_llm_route(scope: Scope) -> bool:
         path: str = scope.get("path", "")
-        return any(path.startswith(prefix) for prefix in self._tracked_prefixes)
-
-
-def _build_tracked_prefixes() -> tuple[str, ...]:
-    return (
-        "/chat/completions",
-        "/v1/chat/completions",
-        "/completions",
-        "/v1/completions",
-        "/embeddings",
-        "/v1/embeddings",
-        "/images/generations",
-        "/v1/images/generations",
-        "/images/edits",
-        "/v1/images/edits",
-        "/audio/transcriptions",
-        "/v1/audio/transcriptions",
-        "/audio/speech",
-        "/v1/audio/speech",
-        "/moderations",
-        "/v1/moderations",
-        "/rerank",
-        "/v1/rerank",
-        "/v2/rerank",
-        "/responses",
-        "/v1/responses",
-        "/realtime",
-        "/v1/realtime",
-        "/batches",
-        "/v1/batches",
-        "/fine_tuning",
-        "/v1/fine_tuning",
-        "/engines/",
-        "/openai/deployments/",
-        "/openai/v1/realtime",
-        "/videos",
-        "/v1/videos",
-        "/ocr",
-        "/v1/ocr",
-        "/search",
-        "/v1/search",
-    )
+        return RouteChecks.is_llm_api_route(route=path)
