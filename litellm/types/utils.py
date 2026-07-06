@@ -3120,6 +3120,8 @@ all_litellm_params = (
         "client",
         "rpm",
         "tpm",
+        "itpm",
+        "otpm",
         "max_parallel_requests",
         "input_cost_per_token",
         "output_cost_per_token",
