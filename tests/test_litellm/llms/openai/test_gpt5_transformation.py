@@ -1230,6 +1230,19 @@ def test_gpt5_5_sampling_params_dropped_when_effort_omitted(config: OpenAIConfig
     assert "top_p" not in params
 
 
+def test_gpt5_5_sampling_params_error_reports_resolved_effort(config: OpenAIConfig):
+    """Raise path must report the resolved effort ('medium'), not the omitted raw value 'None'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as excinfo:
+        config.map_openai_params(
+            non_default_params={"logprobs": True, "top_p": 0.9},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+        )
+    assert "medium (model default, reasoning_effort unspecified)" in str(excinfo.value)
+    assert "reasoning_effort='None'" not in str(excinfo.value)
+
+
 def test_gpt5_1_temperature_still_forwarded_when_effort_omitted(config: OpenAIConfig):
     """Control: gpt-5.1 default is 'none', so omitted effort must still forward temperature (guards #27351)."""
     params = config.map_openai_params(

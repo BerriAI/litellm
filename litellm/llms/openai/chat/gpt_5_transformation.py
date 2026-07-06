@@ -279,12 +279,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     for p in sampling_params:
                         non_default_params.pop(p, None)
                 else:
+                    effort_desc = (
+                        resolved_effort
+                        if effective_effort is not None
+                        else f"{resolved_effort} (model default, reasoning_effort unspecified)"
+                    )
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
                             "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
                             "reasoning_effort='none'. Current reasoning_effort='{}'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(effective_effort),
+                        ).format(effort_desc),
                         status_code=400,
                     )
 
