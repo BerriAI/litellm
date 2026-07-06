@@ -44038,6 +44038,24 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "manifest/auto": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "manifest",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://manifest.build/docs",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "fallback_generalizations": {
         "rules": [
             {

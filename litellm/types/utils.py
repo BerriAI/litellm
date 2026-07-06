@@ -3370,6 +3370,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
+    MANIFEST = "manifest"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
