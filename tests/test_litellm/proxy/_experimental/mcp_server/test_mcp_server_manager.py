@@ -294,6 +294,61 @@ class TestMCPServerManager:
         assert server.server_name == "validserver"
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_on_inferred_m2m(self, caplog):
+        """Config-level M2M inference is deprecated: when the credential shape decides
+        client_credentials but the config never declared oauth2_flow, the load must warn
+        so the admin makes it explicit before inference becomes a validation error."""
+
+        manager = MCPServerManager()
+        config = {
+            "m2mserver": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "token_url": "https://idp.example.com/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+            }
+        }
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(config)
+
+        assert any("oauth2_flow inferred as client_credentials" in message for message in caplog.messages)
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow == "client_credentials"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_no_warning_for_explicit_oauth2_flow(self, caplog):
+        """An explicit oauth2_flow in config is the documented path and must load silently."""
+
+        manager = MCPServerManager()
+        config = {
+            "m2mserver": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "client_credentials",
+                "token_url": "https://idp.example.com/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+            }
+        }
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(config)
+
+        assert all("oauth2_flow inferred" not in message for message in caplog.messages)
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow == "client_credentials"
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_coerces_cost_string_to_float(self):
         """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
         manager = MCPServerManager()

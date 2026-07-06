@@ -790,6 +790,23 @@ class MCPServerManager:
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )
 
+            resolved_config_oauth2_flow = self._resolve_oauth2_flow(
+                auth_type=auth_type,
+                oauth2_flow=server_config.get("oauth2_flow", None),
+                token_url=resolved_token_url,
+                authorization_url=resolved_authorization_url,
+                client_id=server_config.get("client_id", None),
+                client_secret=server_config.get("client_secret", None),
+            )
+            if resolved_config_oauth2_flow == "client_credentials" and not server_config.get("oauth2_flow"):
+                verbose_logger.warning(
+                    "MCP server %s: oauth2_flow inferred as client_credentials from its credential "
+                    "shape (token_url + client_id + client_secret, no authorization_url). Declare "
+                    "oauth2_flow: client_credentials explicitly in config.yaml; this inference is "
+                    "deprecated and will become a config validation error in a future release.",
+                    server_name or server_id,
+                )
+
             new_server = MCPServer(
                 server_id=server_id,
                 name=name_for_prefix,
@@ -803,14 +820,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=self._resolve_oauth2_flow(
-                    auth_type=auth_type,
-                    oauth2_flow=server_config.get("oauth2_flow", None),
-                    token_url=resolved_token_url,
-                    authorization_url=resolved_authorization_url,
-                    client_id=server_config.get("client_id", None),
-                    client_secret=server_config.get("client_secret", None),
-                ),
+                oauth2_flow=resolved_config_oauth2_flow,
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
