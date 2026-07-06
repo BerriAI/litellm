@@ -325,14 +325,10 @@ if MCP_AVAILABLE:
 
         if _prisma_client is None:
             return None
-        draft = await get_draft_mcp_server(
-            _prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS
-        )
+        draft = await get_draft_mcp_server(_prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS)
         if draft is None:
             return None
-        return await global_mcp_server_manager.build_mcp_server_from_table(
-            draft, credentials_are_encrypted=True
-        )
+        return await global_mcp_server_manager.build_mcp_server_from_table(draft, credentials_are_encrypted=True)
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
@@ -1287,9 +1283,7 @@ if MCP_AVAILABLE:
         payload_with_credentials = _inherit_credentials_from_existing_server(payload)
 
         try:
-            draft_record = await create_draft_mcp_server(
-                prisma_client, payload_with_credentials, touched_by=created_by
-            )
+            draft_record = await create_draft_mcp_server(prisma_client, payload_with_credentials, touched_by=created_by)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating draft mcp server: {str(e)}")
             raise HTTPException(
