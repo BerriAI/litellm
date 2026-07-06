@@ -159,6 +159,7 @@ class TestMaskedHTTPStatusError:
         assert "SECRET" not in str(masked.request.url)
         assert masked.request.content == b""
         assert masked.request.headers.get("content-length") == "0"
+        assert "content-type" not in masked.request.headers
 
 
 class TestSafeResponseHelpers:

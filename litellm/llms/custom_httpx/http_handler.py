@@ -356,6 +356,7 @@ def _build_masked_request(
         request_content = b""
         headers.pop("content-length", None)
         headers.pop("transfer-encoding", None)
+        headers.pop("content-type", None)
 
     return httpx.Request(
         method=original_request.method,
