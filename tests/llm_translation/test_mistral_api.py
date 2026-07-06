@@ -93,3 +93,24 @@ class TestMistralCompletion(BaseLLMChatTest):
 
         assert response is not None
         assert response.choices[0].message.content
+
+    def test_web_search_truncation_reports_length(self):
+        """The Conversations API returns no finish reason, so truncation is inferred
+        from the token budget. Force a real truncation (max_tokens=1 with an
+        overflowing prompt) and assert the response reports finish_reason='length'."""
+        if not os.getenv("MISTRAL_API_KEY"):
+            pytest.skip("MISTRAL_API_KEY not set")
+
+        response = litellm.completion(
+            model="mistral/mistral-medium-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Write a very long, detailed essay about the entire history of France, at least 3000 words.",
+                }
+            ],
+            web_search_options={},
+            max_tokens=1,
+        )
+
+        assert response.choices[0].finish_reason == "length"
