@@ -567,14 +567,30 @@ class RedisCache(BaseCache):
 
         Kept separate from async_register_script so each loop caches its own
         executor; see that method for why the binding must be per loop.
+
+        The standalone executor runs EVALSHA and, when the script is not cached
+        server-side, retries with EVAL rather than the SCRIPT LOAD that redis-py's
+        Script.__call__ falls back to. Redis proxies such as Codis and Twemproxy
+        forward EVAL/EVALSHA but reject SCRIPT, so the built-in fallback fails
+        with "unknown command 'SCRIPT'"; the rate limiter then swallows the error
+        and silently drops to per-pod in-memory limits. EVAL both runs and caches
+        the script, so the following EVALSHA calls hit.
         """
+        from redis.exceptions import NoScriptError, ResponseError
+
         _redis_client: Any = self.init_async_client()
         if hasattr(_redis_client, "register_script"):
-            registered_script = _redis_client.register_script(script)
+            script_sha = hashlib.sha1(script.encode(), usedforsecurity=False).hexdigest()
 
             async def standalone_executor(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+                target = client if client is not None else _redis_client
                 namespaced_keys = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await registered_script(keys=namespaced_keys, args=args, client=client)
+                try:
+                    return await target.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
+                except ResponseError as e:
+                    if isinstance(e, NoScriptError) or "NOSCRIPT" in str(e).upper():
+                        return await target.eval(script, len(namespaced_keys), *namespaced_keys, *args)
+                    raise
 
             return standalone_executor
 
