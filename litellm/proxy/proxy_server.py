@@ -1125,6 +1125,15 @@ _DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
         "vertex_ai_credentials",
         "aws_access_key_id",
         "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
     }
 )
 

@@ -1148,6 +1148,99 @@ def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypat
     assert pc._resolve_db_litellm_param(key="tpm", value=100) == 100
 
 
+def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_params(
+    monkeypatch,
+):
+    """Regression: DB-stored Bedrock/SageMaker auth params like
+    ``aws_role_name: os.environ/BEDROCK_ASSUME_ROLE_ARN`` must resolve at
+    DB-load time. PR #30867 removed request-time expansion in
+    ``BaseAWSLLM.get_credentials``; without DB-load resolution the literal
+    string reaches STS and fails with ``ValidationError: ... is invalid``."""
+    aws_env = {
+        "aws_session_token": ("BEDROCK_SESSION_TOKEN", "resolved-session-token"),
+        "aws_region_name": ("BEDROCK_REGION", "us-east-1"),
+        "aws_session_name": ("BEDROCK_SESSION_NAME", "resolved-session"),
+        "aws_profile_name": ("BEDROCK_PROFILE", "resolved-profile"),
+        "aws_role_name": (
+            "BEDROCK_ASSUME_ROLE_ARN",
+            "arn:aws:iam::123456789012:role/resolved",
+        ),
+        "aws_web_identity_token": ("BEDROCK_WEB_IDENTITY_TOKEN", "resolved-token"),
+        "aws_sts_endpoint": (
+            "BEDROCK_STS_ENDPOINT",
+            "https://sts.us-east-1.amazonaws.com",
+        ),
+        "aws_external_id": ("BEDROCK_EXTERNAL_ID", "resolved-external-id"),
+        "aws_bedrock_runtime_endpoint": (
+            "BEDROCK_RUNTIME_ENDPOINT",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+        ),
+    }
+    for _, (env_name, env_value) in aws_env.items():
+        monkeypatch.setenv(env_name, env_value)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
+    for key, (env_name, _) in aws_env.items():
+        litellm_params[key] = f"os.environ/{env_name}"
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="bedrock-model",
+        model_info={"id": "model-1"},
+        litellm_params=litellm_params,
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    for key, (_, expected) in aws_env.items():
+        assert getattr(deployment.litellm_params, key) == expected, key
+
+
+def test_ProxyConfig__add_deployment_keeps_team_aws_env_refs_literal(monkeypatch):
+    """Team-scoped DB models must NOT resolve env refs even for AWS auth
+    params: this is the LIT-3831 defense-in-depth path where a team admin
+    could otherwise craft a DB entry that reads the process environment."""
+
+    def fail_on_call(secret_name, *args, **kwargs):
+        raise AssertionError("team DB models should not resolve env refs")
+
+    monkeypatch.setenv("BEDROCK_ASSUME_ROLE_ARN", "arn:aws:iam::123:role/should-not-leak")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="model_name_team-1_bedrock",
+        model_info={"id": "model-1", "team_id": "team-1"},
+        litellm_params={
+            "model": "bedrock/anthropic.claude-v2",
+            "aws_role_name": "os.environ/BEDROCK_ASSUME_ROLE_ARN",
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.aws_role_name == "os.environ/BEDROCK_ASSUME_ROLE_ARN"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.decrypt_model_list_from_db
 # ---------------------------------------------------------------------------
