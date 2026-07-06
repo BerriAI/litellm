@@ -10,7 +10,7 @@ route.
 
 import pytest
 
-from transport import is_control_plane_path
+from transport import HttpTransport, SplitTransport, is_control_plane_path
 
 
 @pytest.mark.parametrize(
@@ -50,3 +50,14 @@ def test_llm_routes_stay_on_the_data_plane(path: str) -> None:
     assert not is_control_plane_path(path), (
         f"{path} is an LLM route; it must go to the data plane"
     )
+
+
+def test_transport_repr_never_leaks_the_master_key() -> None:
+    """pytest prints fixture values (Gateway -> SplitTransport -> HttpTransport)
+    verbatim into failure output, which ships to CI logs and log aggregators, so
+    the repr chain must never carry the master key."""
+    secret = "sk-e2e-repr-leak-canary"
+    transport = HttpTransport(base_url="http://localhost:4000", master_key=secret)
+    split = SplitTransport(data=transport, control=transport)
+    assert secret not in repr(transport)
+    assert secret not in repr(split)
