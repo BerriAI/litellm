@@ -6058,3 +6058,48 @@ async def test_aggregate_list_still_absorbs_step_up_challenged_server():
     result = await manager.list_tools()
 
     assert [t.name for t in result] == ["good-do_thing"]
+
+
+class TestDbBuildReadsOauth2FlowColumnVerbatim:
+    """The DB build must not re-infer the flow from field shape: rows are stamped at
+    write time and by the startup backfill, and a DCR-registered interactive server
+    has the exact M2M shape (client creds + token_url, no persisted authorization_url)
+    whenever discovery is unavailable. Inference survives only for config-loaded
+    servers and the request-time backstop in _get_allowed_mcp_servers."""
+
+    def _row(self, oauth2_flow):
+        return LiteLLM_MCPServerTable(
+            server_id="flow-column-row",
+            alias="flow_column_row",
+            description="",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow=oauth2_flow,
+            token_url="https://idp.example.com/token",
+            credentials={"client_id": "cid", "client_secret": "csec"},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_null_flow_m2m_shape_row_is_not_inferred_m2m(self):
+        manager = MCPServerManager()
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(self._row(None), credentials_are_encrypted=False)
+
+        assert built.oauth2_flow is None
+        assert built.has_client_credentials is False
+        assert built.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_flow_column_is_read_verbatim(self):
+        manager = MCPServerManager()
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(
+                self._row("client_credentials"), credentials_are_encrypted=False
+            )
+
+        assert built.oauth2_flow == "client_credentials"
+        assert built.has_client_credentials is True
+        assert built.needs_user_oauth_token is False

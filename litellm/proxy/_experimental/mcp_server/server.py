@@ -1437,6 +1437,13 @@ if MCP_AVAILABLE:
                     client_secret=mcp_server.client_secret,
                 )
                 if resolved_flow and resolved_flow != mcp_server.oauth2_flow:
+                    verbose_logger.warning(
+                        "MCP server %s has no persisted oauth2_flow but matches the %s shape; "
+                        "using the inferred flow for this request. The startup backfill stamps "
+                        "this row at the next proxy boot.",
+                        mcp_server.server_id,
+                        resolved_flow,
+                    )
                     # Create a new instance with the resolved flow for this request
                     mcp_server = mcp_server.model_copy(update={"oauth2_flow": resolved_flow})
                 allowed_mcp_servers.append(mcp_server)

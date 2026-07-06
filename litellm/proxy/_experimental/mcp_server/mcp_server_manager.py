@@ -512,6 +512,21 @@ class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
     @staticmethod
+    def _explicit_oauth2_flow(
+        oauth2_flow: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """DB rows persist their flow (write-time stamps plus the startup backfill), so
+        the DB build reads the column verbatim: unknown or null values resolve to None,
+        which ``needs_user_oauth_token`` already treats as interactive. Field-shape
+        inference survives only for config-loaded servers (rebuilt from yaml each boot,
+        nothing to backfill) and the request-time security backstop in
+        ``_get_allowed_mcp_servers``.
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
+        return None
+
+    @staticmethod
     def _resolve_oauth2_flow(
         *,
         auth_type: Optional[MCPAuthType],
@@ -521,11 +536,14 @@ class MCPServerManager:
         client_id: Optional[str],
         client_secret: Optional[str],
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
-        """Infer oauth2_flow for legacy records that omit the field.
+        """Infer oauth2_flow from field shape when the value is omitted.
 
-        DB rows created before oauth2_flow support may have OAuth2 client
-        credentials + token_url but a null oauth2_flow. Treat these as M2M,
-        unless authorization_url is present (interactive OAuth).
+        Serves two callers: config.yaml-loaded servers, which are rebuilt from the
+        config on every boot and have no persisted row to backfill, and the
+        request-time security backstop in ``_get_allowed_mcp_servers``, which keeps a
+        not-yet-backfilled M2M row blocking caller Authorization forwarding. DB rows
+        are otherwise stamped at write time and by the startup backfill, and the DB
+        build reads the column verbatim via ``_explicit_oauth2_flow``.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
             return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
@@ -1170,15 +1188,7 @@ class MCPServerManager:
             env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=self._resolve_oauth2_flow(
-                auth_type=auth_type,
-                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
-                token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
-                authorization_url=mcp_server.authorization_url
-                or getattr(mcp_oauth_metadata, "authorization_url", None),
-                client_id=client_id_value or getattr(mcp_server, "client_id", None),
-                client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            ),
+            oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
             token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
