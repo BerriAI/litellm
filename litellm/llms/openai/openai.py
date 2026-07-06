@@ -648,6 +648,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
 
+            last_exception: Optional[Exception] = None
             for _ in range(2):  # if call fails due to alternating messages, retry with reformatted message
                 try:
                     max_retries = inference_params.pop("max_retries", 2)
@@ -778,11 +779,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
+                        last_exception = e
                         inference_params = drop_params_from_unprocessable_entity_error(e, inference_params)
                     else:
                         raise e
                     # e.message
                 except Exception as e:
+                    last_exception = e
                     if print_verbose is not None:
                         print_verbose(f"openai.py: Received openai error - {str(e)}")
                     if (
@@ -810,6 +813,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         litellm.remove_index_from_tool_calls(messages=messages)
                     else:
                         raise e
+
+            # retries exhausted without a successful response - raise the last
+            # captured error instead of implicitly returning None
+            if last_exception is not None:
+                raise last_exception
+            raise OpenAIError(
+                status_code=500,
+                message="Retries exhausted without a successful response",
+            )
         except OpenAIError as e:
             raise e
         except Exception as e:
@@ -857,6 +869,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             litellm_params=litellm_params,
             headers=headers or {},
         )
+        last_exception: Optional[Exception] = None
         for _ in range(2):  # if call fails due to alternating messages, retry with reformatted message
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -930,6 +943,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    last_exception = e
                     data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
@@ -949,6 +963,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     headers=error_headers,
                     body=exception_body,
                 )
+
+        # retries exhausted without a successful response - raise the last
+        # captured error instead of implicitly returning None
+        if last_exception is not None:
+            raise last_exception
+        raise OpenAIError(
+            status_code=500,
+            message="Retries exhausted without a successful response",
+        )
 
     def streaming(
         self,
@@ -1037,6 +1060,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
         data["stream"] = True
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
+        last_exception: Optional[Exception] = None
         for _ in range(2):
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -1081,6 +1105,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    last_exception = e
                     data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
@@ -1125,6 +1150,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             headers=error_headers,
                             body=exception_body,
                         )
+
+        # retries exhausted without a successful response - raise the last
+        # captured error instead of implicitly returning None
+        if last_exception is not None:
+            raise last_exception
+        raise OpenAIError(
+            status_code=500,
+            message="Retries exhausted without a successful response",
+        )
 
     def get_stream_options(self, stream_options: Optional[dict], api_base: Optional[str]) -> dict:
         """
