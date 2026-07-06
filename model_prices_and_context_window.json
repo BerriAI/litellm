@@ -34837,7 +34837,6 @@
             "original_pricing_per_minute": 0.016
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
         "source": "https://cloud.google.com/speech-to-text/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
