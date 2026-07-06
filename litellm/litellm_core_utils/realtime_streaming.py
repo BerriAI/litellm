@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, ca
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -315,8 +316,10 @@ class RealTimeStreaming:
                 self.logging_obj.model_call_details["realtime_tools"] = self.session_tools
                 self.logging_obj.model_call_details["realtime_tool_calls"] = self.tool_calls
             ## ASYNC LOGGING
-            # Create an event loop for the new thread
-            asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
+            # Route through the bounded logging worker (per-coroutine timeout +
+            # concurrency cap) instead of a bare create_task, so a slow callback
+            # can't leave suspended tasks pinning each call's response in memory.
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(self.logging_obj.async_success_handler(self.messages))
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 

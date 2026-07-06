@@ -16,10 +16,12 @@ class _Server:
         token_url="https://idp.example.com/token",
         client_id="cid",
         client_secret="sec",
+        token_endpoint_auth_method=None,
     ):
         self.token_url = token_url
         self.client_id = client_id
         self.client_secret = client_secret
+        self.token_endpoint_auth_method = token_endpoint_auth_method
 
 
 def _lookup(server):
@@ -27,9 +29,9 @@ def _lookup(server):
 
 
 def _endpoint(body, sink=None):
-    async def post(url, form):
+    async def post(url, form, headers):
         if sink is not None:
-            sink.append((url, form))
+            sink.append((url, form, headers))
         return body
 
     return post
@@ -81,8 +83,8 @@ async def test_refreshes_persists_and_returns_typed_token():
     assert token.expires_at == 1000.0 + 3600  # clock + expires_in -> epoch
     # the rotated triple is persisted for (user, server) with parsed scopes
     assert persisted == [("alice", "srv", "new-at", "new-rt", 3600, ("a", "b"))]
-    # the grant carried the refresh_token + client credentials
-    url, form = posted[0]
+    # the grant carried the refresh_token + client credentials in the body (client_secret_post default)
+    url, form, headers = posted[0]
     assert url == "https://idp.example.com/token"
     assert form == {
         "grant_type": "refresh_token",
@@ -90,6 +92,44 @@ async def test_refreshes_persists_and_returns_typed_token():
         "client_id": "cid",
         "client_secret": "sec",
     }
+    assert "Authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_client_secret_basic_sends_authorization_header_not_body():
+    """A server with token_endpoint_auth_method=client_secret_basic authenticates via HTTP Basic;
+    the secret must not also leak into the form body."""
+    import base64
+
+    posted = []
+    server = _Server(token_endpoint_auth_method="client_secret_basic")
+    refresher = _refresher(
+        server=server,
+        body={"access_token": "new-at"},
+        post_sink=posted,
+    )
+    token = await refresher.refresh(
+        "alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")
+    )
+
+    assert token is not None
+    _url, form, headers = posted[0]
+    expected = "Basic " + base64.b64encode(b"cid:sec").decode()
+    assert headers["Authorization"] == expected
+    assert "client_secret" not in form
+    assert "client_id" not in form
+    assert form == {"grant_type": "refresh_token", "refresh_token": "old-rt"}
+
+
+@pytest.mark.asyncio
+async def test_client_secret_basic_without_secret_is_a_failed_refresh():
+    """A server set to client_secret_basic but missing its secret cannot authenticate; the refresh
+    returns None (failed refresh -> needs reauth) and never posts a downgraded request to the IdP."""
+    posted = []
+    server = _Server(client_secret=None, token_endpoint_auth_method="client_secret_basic")
+    refresher = _refresher(server=server, body={"access_token": "x"}, post_sink=posted)
+    assert await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")) is None
+    assert posted == []  # never hit the IdP
 
 
 @pytest.mark.asyncio
