@@ -189,9 +189,7 @@ def test_ProxyConfig__load_yaml_file_raises_on_missing_file():
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_config_from_file_loads_yaml(tmp_path):
     f = tmp_path / "c.yaml"
-    f.write_text(
-        "model_list: []\ngeneral_settings: {}\nlitellm_settings:\n  drop_params: true\n"
-    )
+    f.write_text("model_list: []\ngeneral_settings: {}\nlitellm_settings:\n  drop_params: true\n")
     pc = ProxyConfig()
     result = await pc._get_config_from_file(config_file_path=str(f))
     assert result == {
@@ -534,6 +532,139 @@ def test_ProxyConfig_parse_search_tools_missing_returns_none():
     assert pc.parse_search_tools({}) is None
 
 
+def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():
+    config_tools = [
+        {
+            "search_tool_name": "config-search",
+            "litellm_params": {"search_provider": "tavily"},
+        }
+    ]
+    db_tools = [
+        {
+            "search_tool_name": "db-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+
+    merged = ProxyConfig._merge_config_and_db_search_tools(
+        config_search_tools=config_tools,
+        db_search_tools=db_tools,
+    )
+
+    assert [tool["search_tool_name"] for tool in merged] == ["config-search", "db-search"]
+    assert merged[1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
+def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
+    config_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {"search_provider": "tavily"},
+        },
+        {
+            "search_tool_name": "config-only",
+            "litellm_params": {"search_provider": "perplexity"},
+        },
+    ]
+    db_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+
+    merged = ProxyConfig._merge_config_and_db_search_tools(
+        config_search_tools=config_tools,
+        db_search_tools=db_tools,
+    )
+
+    assert [tool["search_tool_name"] for tool in merged] == ["config-only", "shared-search"]
+    assert merged[1]["litellm_params"]["search_provider"] == "exa_ai"
+    assert merged[1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.search_api_router import SearchAPIRouter
+
+    pc = ProxyConfig()
+    pc.update_config_state(
+        {
+            "search_tools": [
+                {
+                    "search_tool_name": "shared-search",
+                    "litellm_params": {"search_provider": "tavily"},
+                },
+                {
+                    "search_tool_name": "config-only",
+                    "litellm_params": {"search_provider": "perplexity"},
+                },
+            ]
+        }
+    )
+    db_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+    fake_router = MagicMock()
+    mock_get_db_tools = AsyncMock(return_value=db_tools)
+    mock_update_router = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        mock_get_db_tools,
+    )
+    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    mock_get_db_tools.assert_awaited_once()
+    mock_update_router.assert_awaited_once()
+    update_kwargs = mock_update_router.await_args.kwargs
+    assert update_kwargs["router_instance"] is fake_router
+    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+        "config-only",
+        "shared-search",
+    ]
+    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_skips_empty_router_update(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.search_api_router import SearchAPIRouter
+
+    pc = ProxyConfig()
+    pc.update_config_state({})
+    mock_get_db_tools = AsyncMock(return_value=[])
+    mock_update_router = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        mock_get_db_tools,
+    )
+    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    mock_get_db_tools.assert_awaited_once()
+    mock_update_router.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._load_environment_variables
 # ---------------------------------------------------------------------------
@@ -542,9 +673,7 @@ def test_ProxyConfig_parse_search_tools_missing_returns_none():
 def test_ProxyConfig__load_environment_variables_sets_env(monkeypatch):
     monkeypatch.delenv("TEST_LOAD_ENV_X", raising=False)
     pc = ProxyConfig()
-    pc._load_environment_variables(
-        {"environment_variables": {"TEST_LOAD_ENV_X": "hello"}}
-    )
+    pc._load_environment_variables({"environment_variables": {"TEST_LOAD_ENV_X": "hello"}})
     result = {
         "TEST_LOAD_ENV_X": os.environ.get("TEST_LOAD_ENV_X"),
         "set": True,
@@ -602,9 +731,7 @@ async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_forwards_callback_specific_params(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_load_config_forwards_callback_specific_params(tmp_path, monkeypatch):
     """Regression: callback_settings from config must be forwarded to
     initialize_callbacks_on_proxy as callback_specific_params.
 
@@ -645,16 +772,12 @@ async def test_ProxyConfig_load_config_forwards_callback_specific_params(
 
     # The callbacks branch must forward the loaded callback_settings.
     assert captured.get("callback_specific_params") == {
-        "datadog_cost_management": {
-            "cost_tag_keys": ["capability", "platform", "ai_product"]
-        }
+        "datadog_cost_management": {"cost_tag_keys": ["capability", "platform", "ai_product"]}
     }
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(tmp_path, monkeypatch):
     """Regression: `callback_settings:` with no body loads as None because
     dict.get() only falls back to the default when the key is absent. The None
     was forwarded verbatim to initialize_callbacks_on_proxy, where the first
@@ -678,17 +801,13 @@ async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(
         CompressionInterceptionLogger,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         pc = ProxyConfig()
         await pc.load_config(router=None, config_file_path=str(f))
 
-        assert any(
-            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
-        )
+        assert any(isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks)
     finally:
         litellm.callbacks = original_callbacks
 
@@ -782,6 +901,70 @@ def test_ProxyConfig__load_alerting_settings_invalid_alerting_raises():
     with pytest.raises(Exception):
         # alerting must be iterable — int triggers an error.
         pc._load_alerting_settings({"alerting": 12345})
+
+
+def test_ProxyConfig__load_alerting_settings_does_not_log_general_settings_dict(monkeypatch):
+    """Regression for LIT-4152.
+
+    ``_load_alerting_settings`` used to log ``general_settings`` verbatim in a
+    line labelled ``_alerting_callbacks:``, leaking ``master_key``,
+    ``database_url``, and any other secret sitting in ``general_settings`` in
+    cleartext at DEBUG. The fix logs only the alerting callback list.
+
+    The regression check runs with the last-line-of-defense regex scrubber
+    (``SecretRedactionFilter``) DISABLED, since defense in depth is the point.
+    The caller must not construct the leaky string, so consumers of the log
+    stream that bypass the module filter (versions before it existed,
+    ``LITELLM_DISABLE_REDACT_SECRETS=true`` operators, downstream handlers
+    that snapshot the record pre-filter) still do not see the secret. Uses a
+    dedicated handler rather than caplog because caplog is unreliable under
+    pytest-xdist.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    master_key_secret = "sk-lit4152-regression-master-key-abcdef1234567890"
+    db_url_secret = "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db"
+    settings = {
+        "alerting": ["slack"],
+        "alerting_threshold": 300,
+        "master_key": master_key_secret,
+        "database_url": db_url_secret,
+    }
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        try:
+            ProxyConfig()._load_alerting_settings(settings)
+        except Exception:
+            pass  # downstream init may fail without full env; the debug log fires first
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    assert master_key_secret not in rendered, f"master_key leaked in logs: {rendered!r}"
+    assert db_url_secret not in rendered, f"database_url leaked in logs: {rendered!r}"
+    assert "leak_password_9090" not in rendered
+    assert any("['slack']" in r.getMessage() for r in handler.records), (
+        f"expected the alerting callback list to appear in a debug record; got {[r.getMessage() for r in handler.records]!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1190,9 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
         lambda value, key, return_original_value: (
             "os.environ/LITELLM_DB_MODEL_API_KEY"
             if key == "api_key"
-            else "os.environ/LITELLM_MASTER_KEY" if key == "api_base" else value
+            else "os.environ/LITELLM_MASTER_KEY"
+            if key == "api_base"
+            else value
         ),
     )
     pc = ProxyConfig()
@@ -1038,9 +1223,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_afte
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
-        lambda value, key, return_original_value: (
-            "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value
-        ),
+        lambda value, key, return_original_value: "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value,
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
     pc = ProxyConfig()
@@ -1064,9 +1247,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_afte
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
     pc = ProxyConfig()
-    bad = SimpleNamespace(
-        model_id="m-1", model_name="x", model_info={}, litellm_params="not-a-dict"
-    )
+    bad = SimpleNamespace(model_id="m-1", model_name="x", model_info={}, litellm_params="not-a-dict")
     out = pc.decrypt_model_list_from_db(new_models=[bad])
     # Invalid entries skipped — empty list returned.
     assert out == []
@@ -1116,9 +1297,7 @@ async def test_ProxyConfig__update_llm_router_bad_proxy_logging_raises(monkeypat
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-x")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.general_settings", {"alerting": ["email"]}
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"alerting": ["email"]})
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", pc)
     # Passing None for proxy_logging_obj triggers AttributeError in _add_general_settings_from_db_config
     # when it calls proxy_logging_obj.update_values.
@@ -1369,9 +1548,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_router.update_settings = MagicMock()
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_config.find_first = AsyncMock(
-        return_value=SimpleNamespace(
-            param_value={"timeout": 30, "retries": 2, "fallbacks": []}
-        )
+        return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
     config_data = {"router_settings": {"timeout": 10}}
     await pc._add_router_settings_from_db_config(
@@ -1382,9 +1559,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     snapshot = {
         "called": fake_router.update_settings.called,
         "call_count": fake_router.update_settings.call_count,
-        "kwargs_keys": sorted(
-            list(fake_router.update_settings.call_args.kwargs.keys())
-        ),
+        "kwargs_keys": sorted(list(fake_router.update_settings.call_args.kwargs.keys())),
     }
     assert snapshot == {
         "called": True,
@@ -1397,9 +1572,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
-    await pc._add_router_settings_from_db_config(
-        config_data={}, llm_router=None, prisma_client=None
-    )
+    await pc._add_router_settings_from_db_config(config_data={}, llm_router=None, prisma_client=None)
     # Error-style: bad call signature raises.
     with pytest.raises(TypeError):
         await pc._add_router_settings_from_db_config()  # type: ignore[call-arg]
@@ -1504,9 +1677,7 @@ async def test_ProxyConfig__update_general_settings_updates_max_parallel(monkeyp
 
     snapshot = {
         "max_parallel_requests": ps.general_settings.get("max_parallel_requests"),
-        "global_max_parallel_requests": ps.general_settings.get(
-            "global_max_parallel_requests"
-        ),
+        "global_max_parallel_requests": ps.general_settings.get("global_max_parallel_requests"),
         "ui_access_mode": ps.general_settings.get("ui_access_mode"),
     }
     assert snapshot == {
@@ -1548,3 +1719,158 @@ def test_ProxyConfig__update_config_fields_invalid_param_raises():
     with pytest.raises(Exception):
         # Missing required arg.
         pc._update_config_fields(current_config={}, param_name="general_settings")  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# ProxyConfig._update_config_from_db
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_secrets(
+    monkeypatch,
+):
+    """Regression for LIT-4152 on the store_model_in_db path.
+
+    ``_update_config_from_db`` logged each DB ``param_value`` verbatim at DEBUG;
+    for ``general_settings`` that value is the whole dict, leaking ``master_key``
+    and ``database_url`` the same way the startup config load did. The value now
+    routes through the recursive redactor. Asserted with the module regex
+    scrubber (``_ENABLE_SECRET_REDACTION``) disabled so the caller itself must
+    not build the leaky string. The merge into the returned config must still
+    carry the raw values, proving only the log record is redacted.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    def _fake_decrypt_value_helper(value, key, **_kwargs):
+        return value
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.decrypt_value_helper", _fake_decrypt_value_helper)
+
+    master_key_secret = "sk-lit4152-db-path-master-key-abcdef1234567890"
+    db_url_secret = "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db"
+    env_db_url_secret = "postgresql://env_leak_user:env_leak_password_9090@env-leak-host.internal:5432/env_leak_db"
+    nested_webhook_secret = "https://hooks.slack.com/services/T0/B0/db-path-webhook-secret"
+
+    responses = {
+        "general_settings": SimpleNamespace(
+            param_name="general_settings",
+            param_value={
+                "master_key": master_key_secret,
+                "database_url": db_url_secret,
+                "alert_to_webhook_url": {"budget_alerts": nested_webhook_secret},
+            },
+        ),
+        "router_settings": None,
+        "litellm_settings": None,
+        "environment_variables": SimpleNamespace(
+            param_name="environment_variables",
+            param_value={"DATABASE_URL": env_db_url_secret},
+        ),
+    }
+
+    async def _fake_get_config_param(prisma_client, key):
+        return responses[key]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", _fake_get_config_param)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        merged = await ProxyConfig()._update_config_from_db(
+            prisma_client=MagicMock(),
+            config={"general_settings": {}},
+            store_model_in_db=True,
+        )
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    for secret in (
+        master_key_secret,
+        db_url_secret,
+        env_db_url_secret,
+        nested_webhook_secret,
+        "leak_password_9090",
+        "env_leak_password_9090",
+    ):
+        assert secret not in rendered, f"leak: {secret} in {rendered!r}"
+    assert merged["general_settings"]["master_key"] == master_key_secret
+    assert merged["general_settings"]["database_url"] == db_url_secret
+    assert merged["environment_variables"]["DATABASE_URL"] == env_db_url_secret
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plain(tmp_path, monkeypatch):
+    """Regression for LIT-4152 on the ``litellm_settings`` apply loop.
+
+    ``load_config`` logged ``setting litellm.<key>=<value>`` verbatim at DEBUG,
+    so a secret-bearing setting such as ``api_key`` leaked in cleartext. The
+    value now routes through ``_redact_general_setting_value``. Crucially the
+    redaction must be surgical: a secret-named key is masked, but a plain
+    operational setting like ``num_retries`` must still log its real value, so
+    the debug line keeps its signal. Asserted with the module regex scrubber
+    (``_ENABLE_SECRET_REDACTION``) disabled.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    api_key_secret = "sk-lit4152-litellm-settings-secret-abcdef1234567890"
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        f"model_list: []\ngeneral_settings: {{}}\nlitellm_settings:\n  api_key: {api_key_secret}\n  num_retries: 7\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    original_api_key = getattr(litellm, "api_key", None)
+    original_num_retries = getattr(litellm, "num_retries", None)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+        litellm.api_key = original_api_key
+        litellm.num_retries = original_num_retries
+
+    assert api_key_secret not in rendered, f"api_key leaked in logs: {rendered!r}"
+    assert "num_retries=7" in rendered, (
+        f"non-secret num_retries value was over-redacted; expected it visible in {rendered!r}"
+    )

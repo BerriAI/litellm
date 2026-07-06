@@ -604,17 +604,9 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
-def test_admin_ui_export_serves_nested_extensionless_routes(tmp_path):
-    from litellm.proxy import proxy_server
-
-    out_dir = tmp_path / "out"
-    (out_dir / "_next").mkdir(parents=True)
-    (out_dir / "index.html").write_text("<html>home</html>")
-    callback_src = out_dir / "mcp" / "oauth" / "callback.html"
-    callback_src.parent.mkdir(parents=True)
-    callback_src.write_text("<html>callback</html>")
-
-    proxy_server._restructure_ui_html_files(str(out_dir))
+def test_admin_ui_export_serves_nested_extensionless_routes():
+    out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
+    assert out_dir.is_dir(), f"missing UI export at {out_dir}"
 
     nested_html_offenders = [
         path.relative_to(out_dir).as_posix()
@@ -904,7 +896,9 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
 
     # Bypass auth dependency
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -958,7 +952,9 @@ def test_get_config_returns_email_settings(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -1015,7 +1011,9 @@ def test_get_config_returns_slack_webhook(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -1069,7 +1067,9 @@ def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -5213,7 +5213,9 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:

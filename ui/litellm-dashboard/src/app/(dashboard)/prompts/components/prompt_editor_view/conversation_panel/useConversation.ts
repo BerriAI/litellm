@@ -177,7 +177,6 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
       });
     } catch (error: any) {
       if (error.name === "AbortError") {
-        console.log("Request was cancelled");
       } else {
         console.error("Error testing prompt:", error);
         setMessages((prev) => {

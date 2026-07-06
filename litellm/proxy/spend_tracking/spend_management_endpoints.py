@@ -3444,12 +3444,59 @@ async def _build_ui_spend_logs_response(
             )
             count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
+    mcp_spend_map: dict[str, dict[str, Union[int, float]]] = {}
+    if enrich_session_counts and session_ids:
+        from prisma.errors import PrismaError
+
+        try:
+            # Collect api_keys already present in the authorized page rows so the
+            # aggregate is scoped to the same ownership as the main query — prevents
+            # cross-tenant disclosure via a colliding session_id.
+            authorized_api_keys = list(
+                {
+                    (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                    for row in data
+                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                }
+            )
+            rows = await prisma_client.db.query_raw(
+                """
+                SELECT session_id,
+                       COUNT(*)::int AS mcp_tool_call_count,
+                       COALESCE(SUM(spend), 0)::double precision AS mcp_tool_call_spend
+                FROM "LiteLLM_SpendLogs"
+                WHERE session_id = ANY($1::text[])
+                  AND api_key = ANY($2::text[])
+                  AND call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                GROUP BY session_id
+                """,
+                session_ids,
+                authorized_api_keys,
+            )
+            mcp_spend_map = {
+                row["session_id"]: {
+                    "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
+                    "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
+                }
+                for row in rows
+                if row.get("session_id")
+            }
+        except PrismaError:
+            verbose_proxy_logger.debug(
+                "Failed to enrich MCP session spend aggregates for spend logs UI",
+                exc_info=True,
+            )
+
     if enrich_session_counts:
         enriched: List[dict] = []
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
+            mcp_stats = mcp_spend_map.get(sid) if sid else None
+            if mcp_stats:
+                row_dict["mcp_tool_call_count"] = mcp_stats["mcp_tool_call_count"]
+                row_dict["mcp_tool_call_spend"] = mcp_stats["mcp_tool_call_spend"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:

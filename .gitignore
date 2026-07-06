@@ -50,6 +50,8 @@ litellm/proxy/tests/package-lock.json
 ui/litellm-dashboard/.next
 ui/litellm-dashboard/node_modules
 ui/litellm-dashboard/next-env.d.ts
+ui/litellm-dashboard/package.json
+ui/litellm-dashboard/package-lock.json
 deploy/charts/litellm/*.tgz
 deploy/charts/litellm/charts/*
 deploy/charts/*.tgz
@@ -85,12 +87,17 @@ litellm/proxy/db/migrations/*
 litellm/proxy/migrations/*config.yaml
 litellm/proxy/migrations/*
 litellm/proxy/to_delete_loadtest_work/*
+config.yaml
 tests/litellm/litellm_core_utils/llm_cost_calc/log.txt
 tests/test_custom_dir/*
+test.py
 
+litellm_config.yaml
+!.github/observatory/litellm_config.yaml
 .cursor
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
+tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
 scripts/test_vertex_ai_search.py
 LAZY_LOADING_IMPROVEMENTS.md
 STABILIZATION_TODO.md
@@ -124,6 +131,4 @@ crash.*.log
 # pytest coverage data
 .coverage
 
-# _experimental/out UI build output
-# (both componentized and non-componentized build the UI on project release)
-litellm/proxy/_experimental/out/
+ui/litellm-dashboard/out/

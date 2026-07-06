@@ -137,18 +137,18 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
       tabIndex={0}
       onClick={onClick}
       onKeyDown={handleKeyDown}
-      className={`group relative flex h-full cursor-pointer flex-col gap-3 rounded-lg p-4 transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${cardClass}`}
+      className={`group relative flex h-full cursor-pointer flex-col gap-3 rounded-lg p-4 transition-all duration-150 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-400 ${cardClass}`}
     >
       <div className="flex items-start gap-3">
         {logoUrl ? (
           <img
             src={logoUrl}
             alt={`${name} logo`}
-            className="h-10 w-10 flex-shrink-0 rounded object-contain"
+            className="h-10 w-10 shrink-0 rounded-sm object-contain"
             onError={() => setFailedLogoUrl(logoUrl)}
           />
         ) : (
-          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded bg-gray-100 font-semibold text-gray-500">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-gray-100 font-semibold text-gray-500">
             {(name || "?").slice(0, 2).toUpperCase()}
           </div>
         )}
@@ -251,7 +251,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     stop(e);
                     onOpenFillFields();
                   }}
-                  className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-red-700"
+                  className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white shadow-xs transition-colors hover:bg-red-700"
                 >
                   Set
                 </button>
@@ -300,7 +300,7 @@ const HealthChip: FC<HealthChipProps> = ({
       {error && (
         <div className="text-xs">
           <div className="font-medium text-red-300 mb-1">Error</div>
-          <div className="break-words">{error}</div>
+          <div className="wrap-break-word">{error}</div>
         </div>
       )}
       {!lastCheck && !error && <div className="text-xs text-gray-400">No health data</div>}
@@ -369,7 +369,7 @@ const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
             stop(e);
             onConnect();
           }}
-          className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+          className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow-xs transition-colors hover:bg-blue-700"
         >
           Connect
         </button>

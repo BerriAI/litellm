@@ -11,10 +11,7 @@ interface MCPEventsDisplayProps {
 }
 
 const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
-  console.log("MCPEventsDisplay: Received events:", events);
-
   if (!events || events.length === 0) {
-    console.log("MCPEventsDisplay: No events, returning null");
     return null;
   }
 
@@ -32,11 +29,7 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
     (event) => event.type === "response.output_item.done" && event.item?.type === "mcp_call",
   );
 
-  console.log("MCPEventsDisplay: toolsEvent:", toolsEvent);
-  console.log("MCPEventsDisplay: mcpCallEvents:", mcpCallEvents);
-
   if (!toolsEvent && mcpCallEvents.length === 0) {
-    console.log("MCPEventsDisplay: No valid events found, returning null");
     return null;
   }
 

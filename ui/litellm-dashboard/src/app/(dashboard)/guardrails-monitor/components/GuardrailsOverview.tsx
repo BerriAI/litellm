@@ -242,7 +242,7 @@ export function GuardrailsOverview({
         )}
         <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
           <div>
-            <Typography.Title level={5} className="!mb-0 text-gray-900">
+            <Typography.Title level={5} className="mb-0! text-gray-900">
               Guardrail Performance
             </Typography.Title>
             <p className="text-xs text-gray-500 mt-0.5">Click a guardrail to view details, logs, and configuration</p>
