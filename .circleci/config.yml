@@ -5,6 +5,16 @@ orbs:
   win: circleci/windows@5.0 # Add Windows orb
 
 commands:
+  skip_if_unrelated_changes:
+    parameters:
+      category:
+        type: enum
+        enum: ["backend", "client"]
+        default: "backend"
+    steps:
+      - run:
+          name: "Skip job when no << parameters.category >>-relevant files changed"
+          command: bash .circleci/scripts/path_filter.sh << parameters.category >>
   setup_google_dns:
     steps:
       - run:
@@ -282,6 +292,7 @@ jobs:
     parallelism: 4
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -354,6 +365,7 @@ jobs:
     parallelism: 4
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -427,6 +439,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -480,6 +493,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -545,6 +559,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -584,6 +599,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -624,6 +640,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -656,6 +673,7 @@ jobs:
       FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -705,6 +723,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -755,6 +774,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -787,6 +807,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -832,6 +853,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -877,6 +899,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -918,6 +941,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -963,6 +987,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1007,6 +1032,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -1045,6 +1071,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1089,6 +1116,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1132,6 +1160,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1163,6 +1192,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1205,6 +1235,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1248,6 +1279,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1291,6 +1323,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1321,6 +1354,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1366,6 +1400,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1407,6 +1442,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -1459,6 +1495,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1482,6 +1519,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1507,6 +1545,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1531,6 +1570,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
       - setup_google_dns
@@ -1606,6 +1646,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1698,6 +1739,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
       - setup_google_dns
@@ -1746,13 +1788,13 @@ jobs:
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
               -e RECORDER_OPENAI_BASE_URL=http://host.docker.internal:8090/v1 \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -1787,6 +1829,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1832,13 +1875,13 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -1869,6 +1912,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1911,14 +1955,14 @@ jobs:
               -e COHERE_API_KEY=$COHERE_API_KEY \
               -e RECORDER_COHERE_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.cohere.com \
               -e GCS_FLUSH_INTERVAL="1" \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -1960,13 +2004,13 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE="bad-license" \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app-3 \
               -v $(pwd)/litellm/proxy/example_config_yaml/enterprise_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug
+              --port 4000
 
       - run:
           name: Start outputting logs for second container
@@ -2000,6 +2044,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2041,13 +2086,13 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e PROXY_BATCH_WRITE_AT=2 \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2085,6 +2130,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2117,13 +2163,13 @@ jobs:
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Run Docker container 2
           command: |
@@ -2139,13 +2185,13 @@ jobs:
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app-2 \
               -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4001 \
-              --detailed_debug
+              --port 4001
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2180,6 +2226,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2201,19 +2248,20 @@ jobs:
           # the OTEL test - should get this as a trace
           command: |
             docker run -d \
+              --restart on-failure \
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2252,6 +2300,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - install_uv
@@ -2289,13 +2338,13 @@ jobs:
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2333,6 +2382,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2365,14 +2415,14 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_auth_basic.py:/app/custom_auth_basic.py \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug \
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2471,6 +2521,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2499,13 +2550,13 @@ jobs:
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
               -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
+              -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/tests/proxy_e2e_anthropic_messages_tests/test_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug
+              --port 4000
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2537,6 +2588,7 @@ jobs:
       - *python312_image
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: .
       # Check file locations
@@ -2567,6 +2619,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - restore_cache:
           keys:
@@ -2609,6 +2663,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - restore_cache:
           keys:
@@ -2629,7 +2685,7 @@ jobs:
             cd ui/litellm-dashboard
 
             CI=true npm run test -- --run \
-              --pool forks --poolOptions.forks.maxForks=8
+              --pool forks --poolOptions.forks.maxForks=6
 
   e2e_ui_testing:
     docker:
@@ -2654,6 +2710,8 @@ jobs:
       PROXY_LOGOUT_URL: "https://www.example.com"
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -2791,6 +2849,8 @@ jobs:
       SERVER_ROOT_PATH: "/litellm"
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -2892,6 +2952,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
 
       - run:
           name: Build Docker image
@@ -2917,6 +2978,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
       - setup_google_dns

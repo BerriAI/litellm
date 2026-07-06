@@ -3,15 +3,10 @@ import NotificationManager from "../molecules/notifications_manager";
 
 export const handleAddAutoRouterSubmit = async (values: any, accessToken: string, form: any, callback?: () => void) => {
   try {
-    console.log("=== AUTO ROUTER SUBMIT HANDLER CALLED ===");
-    console.log("handling auto router submit for formValues:", values);
-    console.log("Model type:", values.model_type);
-
     let autoRouterConfig: any;
 
     if (values.model_type === "complexity_router") {
       // Complexity Router configuration
-      console.log("Creating complexity router configuration");
 
       autoRouterConfig = {
         model_name: values.auto_router_name,
@@ -25,11 +20,8 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
         },
         model_info: {},
       };
-
-      console.log("Complexity router config:", values.complexity_router_config);
     } else {
       // Semantic Router configuration (existing behavior)
-      console.log("Creating semantic router configuration");
 
       autoRouterConfig = {
         model_name: values.auto_router_name,
@@ -47,8 +39,6 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
       } else if (values.custom_embedding_model) {
         autoRouterConfig.litellm_params.auto_router_embedding_model = values.custom_embedding_model;
       }
-
-      console.log("Semantic router config (stringified):", autoRouterConfig.litellm_params.auto_router_config);
     }
 
     // Add team information if provided
@@ -61,12 +51,8 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
       autoRouterConfig.model_info.access_groups = values.model_access_group;
     }
 
-    console.log("Auto router configuration to be created:", autoRouterConfig);
-
     // Create the auto router using the same model creation endpoint
-    console.log("Calling modelCreateCall...");
     const response: any = await modelCreateCall(accessToken, autoRouterConfig as Model);
-    console.log(`response for auto router create call:`, response);
 
     // Show success notification
     const routerTypeName = values.model_type === "complexity_router" ? "Complexity Router" : "Semantic Router";

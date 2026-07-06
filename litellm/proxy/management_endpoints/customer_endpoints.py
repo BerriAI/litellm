@@ -15,6 +15,7 @@ from typing import List, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -32,8 +33,24 @@ from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.proxy.management_endpoints.customer_endpoints import (
+    BlockUsersResponse,
+    CustomerResponse,
+    DeleteCustomersResponse,
+    UnblockUsersResponse,
+)
 
 router = APIRouter()
+
+
+def _to_customer_response(record: BaseModel) -> CustomerResponse:
+    """Validate a raw end-user DB row into the typed customer response.
+
+    object_permission reverse relations and the budget's audit fields are
+    dropped here by the response model's field set, so callers need no manual
+    cleanup.
+    """
+    return CustomerResponse.model_validate(record.model_dump())
 
 
 @router.post(
@@ -46,6 +63,7 @@ router = APIRouter()
     "/customer/block",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=BlockUsersResponse,
 )
 async def block_user(data: BlockUsers):
     """
@@ -100,6 +118,7 @@ async def block_user(data: BlockUsers):
     "/customer/unblock",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UnblockUsersResponse,
 )
 async def unblock_user(data: BlockUsers):
     """
@@ -213,11 +232,12 @@ async def _handle_customer_object_permission_update(
     "/customer/new",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=CustomerResponse,
 )
 async def new_end_user(
     data: NewCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> CustomerResponse:
     """
     Allow creating a new Customer 
 
@@ -370,20 +390,7 @@ async def new_end_user(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
-        # Convert to dict and clean up recursive fields
-        response_dict = end_user_record.model_dump()
-        if response_dict.get("object_permission"):
-            # Remove reverse relations from object_permission
-            for field in [
-                "teams",
-                "verification_tokens",
-                "organizations",
-                "users",
-                "end_users",
-            ]:
-                response_dict["object_permission"].pop(field, None)
-
-        return response_dict
+        return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {}".format(
@@ -404,7 +411,7 @@ async def new_end_user(
     "/customer/info",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=LiteLLM_EndUserTable,
+    response_model=CustomerResponse,
 )
 @router.get(
     "/end_user/info",
@@ -414,7 +421,7 @@ async def new_end_user(
 )
 async def end_user_info(
     end_user_id: str = fastapi.Query(description="End User ID in the request parameters"),
-):
+) -> CustomerResponse:
     """
     Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
 
@@ -449,20 +456,7 @@ async def end_user_info(
                 param="end_user_id",
             )
 
-        # Convert to dict and clean up recursive fields
-        response_dict = user_info.model_dump(exclude_none=True)
-        if response_dict.get("object_permission"):
-            # Remove reverse relations from object_permission
-            for field in [
-                "teams",
-                "verification_tokens",
-                "organizations",
-                "users",
-                "end_users",
-            ]:
-                response_dict["object_permission"].pop(field, None)
-
-        return response_dict
+        return _to_customer_response(user_info)
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -477,6 +471,7 @@ async def end_user_info(
     "/customer/update",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=CustomerResponse,
 )
 @router.post(
     "/end_user/update",
@@ -487,7 +482,7 @@ async def end_user_info(
 async def update_end_user(
     data: UpdateCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> CustomerResponse:
     """
     Example curl 
 
@@ -641,20 +636,7 @@ async def update_end_user(
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
 
-            # Convert to dict and clean up recursive fields
-            response_dict = response.model_dump()
-            if response_dict.get("object_permission"):
-                # Remove reverse relations from object_permission
-                for field in [
-                    "teams",
-                    "verification_tokens",
-                    "organizations",
-                    "users",
-                    "end_users",
-                ]:
-                    response_dict["object_permission"].pop(field, None)
-
-            return response_dict
+            return _to_customer_response(response)
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
 
@@ -671,6 +653,7 @@ async def update_end_user(
     "/customer/delete",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=DeleteCustomersResponse,
 )
 @router.post(
     "/end_user/delete",
@@ -681,7 +664,7 @@ async def update_end_user(
 async def delete_end_user(
     data: DeleteCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> DeleteCustomersResponse:
     """
     Delete multiple end-users.
 
@@ -728,10 +711,10 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
-            return {
-                "deleted_customers": response,
-                "message": "Successfully deleted customers with ids: " + str(data.user_ids),
-            }
+            return DeleteCustomersResponse(
+                deleted_customers=response,
+                message="Successfully deleted customers with ids: " + str(data.user_ids),
+            )
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_ids}")
 
@@ -747,7 +730,7 @@ async def delete_end_user(
     "/customer/list",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[LiteLLM_EndUserTable],
+    response_model=List[CustomerResponse],
 )
 @router.get(
     "/end_user/list",
@@ -758,7 +741,7 @@ async def delete_end_user(
 async def list_end_user(
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> List[CustomerResponse]:
     """
     [Admin-only] List all available customers
 
@@ -791,21 +774,7 @@ async def list_end_user(
             include={"litellm_budget_table": True, "object_permission": True}
         )
 
-        returned_response: List[LiteLLM_EndUserTable] = []
-        for item in response:
-            item_dict = item.model_dump()
-            # Remove reverse relations from object_permission
-            if item_dict.get("object_permission"):
-                for field in [
-                    "teams",
-                    "verification_tokens",
-                    "organizations",
-                    "users",
-                    "end_users",
-                ]:
-                    item_dict["object_permission"].pop(field, None)
-            returned_response.append(LiteLLM_EndUserTable(**item_dict))
-        return returned_response
+        return [_to_customer_response(item) for item in response]
 
     except Exception as e:
         verbose_proxy_logger.exception(

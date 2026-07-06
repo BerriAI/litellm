@@ -15,6 +15,9 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    iter_client_callback_metadata_dicts,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.proxy._types import (
@@ -153,6 +156,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_converted_stream",
     "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_session_scoped",
     "max_agentic_loops",
 )
 
@@ -299,6 +303,24 @@ def _key_or_team_allows_client_pricing_override(
         user_api_key_dict=user_api_key_dict,
         metadata_key=_ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY,
     )
+
+
+def _strip_client_message_redaction_opt_out(data: dict[str, Any]) -> None:
+    stripped: list[str] = []
+    if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
+        stripped.append("turn_off_message_logging")
+        data.pop("turn_off_message_logging", None)
+    for slot_label, metadata in iter_client_callback_metadata_dicts(data):
+        if "turn_off_message_logging" in metadata and _is_false_like(metadata["turn_off_message_logging"]):
+            stripped.append(f"{slot_label}.turn_off_message_logging")
+            metadata.pop("turn_off_message_logging", None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped client-supplied message-redaction opt-out fields from request body: %s. "
+            "Set `allow_client_message_redaction_opt_out: true` on the key or team metadata "
+            "to keep these values.",
+            ", ".join(stripped),
+        )
 
 
 def _strip_client_pricing_overrides(data: Dict[str, Any]) -> None:
@@ -1307,13 +1329,6 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    if (
-        not _allow_client_message_redaction_opt_out
-        and litellm.turn_off_message_logging is True
-        and "turn_off_message_logging" in data
-        and _is_false_like(data["turn_off_message_logging"])
-    ):
-        data.pop("turn_off_message_logging", None)
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
@@ -1464,6 +1479,9 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+
+    if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
+        _strip_client_message_redaction_opt_out(data)
 
     # Fill in the proxy_server_request body snapshot now that metadata has
     # been parsed. Consumers (standard_logging_payload, lago,
@@ -1647,6 +1665,16 @@ async def add_litellm_data_to_request(
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=tags,
         )
+
+    if _metadata_variable_name != "metadata":
+        _user_metadata = data.get("metadata")
+        if isinstance(_user_metadata, dict):
+            _user_tags = _user_metadata.get("tags")
+            if isinstance(_user_tags, list) and _user_tags:
+                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=_user_tags,
+                )
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(

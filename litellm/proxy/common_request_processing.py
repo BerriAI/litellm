@@ -52,6 +52,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
@@ -600,7 +601,7 @@ def _override_openai_response_model(
     if not requested_model:
         return
 
-    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    hidden_params = get_hidden_params_dict(response_obj)
     if isinstance(hidden_params, dict):
         # Check if a fallback occurred - if so, preserve the actual model used
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
@@ -896,7 +897,7 @@ class ProxyBaseLLMRequestProcessing:
         (e.g. Google native :generateContent) instead of base_process_llm_request.
         """
         if isinstance(response, dict):
-            hidden_params = response.get("_hidden_params") or {}
+            hidden_params = get_hidden_params_dict(response)
         else:
             hidden_params = getattr(response, "_hidden_params", None) or {}
         if not isinstance(hidden_params, dict):
@@ -1184,6 +1185,26 @@ class ProxyBaseLLMRequestProcessing:
             model_id = model_info.get("id", "") or ""
         return model_id
 
+    @staticmethod
+    def _response_cost_from_logging_obj(
+        *,
+        response: Any,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> float | str:
+        """
+        Recover the response cost when the response never recorded one in its
+        ``_hidden_params``: Anthropic /v1/messages returns a TypedDict that cannot
+        hold the attribute at all, and Google :generateContent carries
+        ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
+        cases the cost is read back from the logging object instead, recomputing from
+        the same calculator only when it has not been stored yet.
+        """
+        stored_cost = logging_obj.model_call_details.get("response_cost")
+        if isinstance(stored_cost, (int, float)):
+            return float(stored_cost)
+        recomputed_cost = logging_obj._response_cost_calculator(result=response)
+        return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
+
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
         if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
@@ -1409,7 +1430,7 @@ class ProxyBaseLLMRequestProcessing:
 
         _exception_raised = False
         try:
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            hidden_params = get_hidden_params_dict(response)
             model_id = self._get_model_id_from_response(hidden_params, self.data)
 
             cache_key, api_base, response_cost = (
@@ -1684,8 +1705,15 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}  # get any updated response headers
+        hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
+
+        recover_response_cost = not response_cost and hidden_params.get("response_cost") is None
+        response_cost_for_headers = (
+            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            if recover_response_cost
+            else response_cost
+        )
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1695,7 +1723,7 @@ class ProxyBaseLLMRequestProcessing:
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
-                response_cost=response_cost,
+                response_cost=response_cost_for_headers,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
@@ -1704,6 +1732,9 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
         )
+
+        if isinstance(response, dict):
+            response.pop("_hidden_params", None)
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
