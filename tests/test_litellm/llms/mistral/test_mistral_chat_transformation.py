@@ -416,6 +416,63 @@ class TestMistralNameHandling:
         assert result["content"] == "Hello"
 
 
+class TestMistralSeedParam:
+    def test_completion_seed_reaches_chat_body(self, monkeypatch, respx_mock):
+        """seed must survive the full pipeline (supported-params gate, param
+        mapping, request transform) and reach the chat body as top-level
+        random_seed; unit tests on map_openai_params alone cannot catch a
+        regression in the supported-params gate."""
+        import litellm
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "fake-mistral-api-key-12345")
+        litellm.disable_aiohttp_transport = True
+
+        chat_route = respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
+            json={
+                "id": "x",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        )
+
+        litellm.completion(
+            model="mistral/mistral-large-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            seed=7,
+        )
+
+        import json
+
+        sent = json.loads(chat_route.calls[0].request.content)
+        assert sent["random_seed"] == 7
+
+    def test_map_openai_params_maps_seed_to_random_seed(self):
+        """seed must map straight into optional_params so it reaches the chat body
+        top-level and stays visible to the Conversations transform (extra_body is
+        popped by the HTTP handler before transform_request runs)."""
+        result = MistralConfig().map_openai_params(
+            non_default_params={"seed": 7},
+            optional_params={},
+            model="mistral/mistral-large-latest",
+            drop_params=False,
+        )
+
+        assert result.get("random_seed") == 7
+        assert "extra_body" not in result
+
+    def test_transform_request_keeps_random_seed_top_level(self):
+        body = MistralConfig().transform_request(
+            model="mistral/mistral-large-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"random_seed": 7},
+            litellm_params={},
+            headers={},
+        )
+
+        assert body["random_seed"] == 7
+
+
 class TestMistralParallelToolCalls:
     """Test suite for Mistral parallel tool calls functionality."""
 

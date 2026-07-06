@@ -201,12 +201,12 @@ def test_wire_connectors_never_exceed_allowlist_checked_names(request_params):
     assert wire_connectors <= checked_names
 
 
-def test_transform_request_maps_random_seed_from_extra_body():
+def test_transform_request_maps_random_seed():
     cfg = MistralConversationsConfig()
     body = cfg.transform_request(
         model="mistral-medium-latest",
         messages=[{"role": "user", "content": "hi"}],
-        optional_params={"web_search_options": {}, "extra_body": {"random_seed": 7}},
+        optional_params={"web_search_options": {}, "random_seed": 7},
         litellm_params={},
         headers={},
     )
@@ -419,6 +419,31 @@ async def test_extra_body_cannot_override_sanitized_tools(respx_mock):
     assert sent["store"] is False
     assert sent["model"] == "mistral-medium-latest"
     assert sent["completion_args"] == {"temperature": 0.9}
+
+
+@pytest.mark.asyncio
+async def test_completion_seed_lands_in_completion_args(respx_mock):
+    """Regression: seed must survive the real pipeline (param mapping, the
+    handler's extra_body pop, transform_request) and land in completion_args,
+    never at the top level of the Conversations body."""
+    litellm.disable_aiohttp_transport = True
+
+    conversations_route = respx_mock.post("https://api.mistral.ai/v1/conversations").respond(
+        json=CONVERSATIONS_RESPONSE
+    )
+
+    litellm.completion(
+        model="mistral/mistral-medium-latest",
+        messages=[{"role": "user", "content": "Who won the last Euro?"}],
+        web_search_options={},
+        seed=7,
+    )
+
+    import json
+
+    sent = json.loads(conversations_route.calls[0].request.content)
+    assert sent["completion_args"]["random_seed"] == 7
+    assert "random_seed" not in sent
 
 
 @pytest.mark.asyncio

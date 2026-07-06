@@ -25,11 +25,6 @@ class MistralThinkingBlock(TypedDict):
     thinking: List[MistralTextBlock]
 
 
-class MistralConversationInputMessage(TypedDict):
-    role: str
-    content: str
-
-
 class MistralConversationContentChunk(BaseModel):
     """A single chunk of a Conversations API ``message.output`` content list.
 
