@@ -3554,6 +3554,28 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
     return sanitized
 
 
+def _normalize_user_url_validation(value: object) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return str_to_bool(value)
+    return bool(value)
+
+
+def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
+    user_url_allowed_hosts = settings.get("user_url_allowed_hosts")
+    if user_url_allowed_hosts is not None:
+        litellm.user_url_allowed_hosts = cast(list[str], user_url_allowed_hosts)
+
+    user_url_validation = _normalize_user_url_validation(settings.get("user_url_validation"))
+    if user_url_validation is not None:
+        litellm.user_url_validation = user_url_validation
+
+    provider_url_destination_allowed_hosts = settings.get("provider_url_destination_allowed_hosts")
+    if provider_url_destination_allowed_hosts is not None:
+        litellm.provider_url_destination_allowed_hosts = cast(list[str], provider_url_destination_allowed_hosts)
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -4542,14 +4564,7 @@ class ProxyConfig:
                 ]
 
             ### SSRF URL VALIDATION SETTINGS ###
-            if "user_url_allowed_hosts" in general_settings:
-                litellm.user_url_allowed_hosts = general_settings["user_url_allowed_hosts"]
-            if "user_url_validation" in general_settings:
-                litellm.user_url_validation = general_settings["user_url_validation"]
-            if "provider_url_destination_allowed_hosts" in general_settings:
-                litellm.provider_url_destination_allowed_hosts = general_settings[
-                    "provider_url_destination_allowed_hosts"
-                ]
+            _apply_ssrf_general_settings(general_settings)
 
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
@@ -5587,6 +5602,15 @@ class ProxyConfig:
             # Reschedule cleanup job if value changed (including when set to None)
             if old_value != new_value:
                 await self._reschedule_spend_log_cleanup_job()
+
+        for key in (
+            "user_url_allowed_hosts",
+            "user_url_validation",
+            "provider_url_destination_allowed_hosts",
+        ):
+            if key in _general_settings:
+                general_settings[key] = _general_settings[key]
+        _apply_ssrf_general_settings(_general_settings)
 
     def _update_config_fields(
         self,
@@ -14296,6 +14320,7 @@ async def update_config_general_settings(
 
     if data.field_name == "plugins":
         register_plugins_from_config(general_settings)
+    _apply_ssrf_general_settings(general_settings)
 
     return response
 
