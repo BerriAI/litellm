@@ -1806,6 +1806,22 @@ def test_get_responses_surfaces_upstream_error_status_instead_of_500():
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
 
 
+def test_list_input_items_surfaces_upstream_error_status():
+    client = _sync_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        litellm.list_input_items(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_alist_input_items_surfaces_upstream_error_status():
     client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
