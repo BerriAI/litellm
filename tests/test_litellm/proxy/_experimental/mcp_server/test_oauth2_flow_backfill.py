@@ -1,0 +1,190 @@
+"""
+Tests for the startup oauth2_flow backfill.
+
+Legacy oauth2 rows with a null oauth2_flow are classified once, at rest, using
+signals read-time inference never had (per-user token rows first), and the
+result is persisted so the read path never infers again. The signal order is
+the spec: a wrong order re-introduces the DCR trap where an interactive server
+with client creds + token_url and no persisted authorization_url is stamped M2M.
+"""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from litellm.proxy._experimental.mcp_server.oauth2_flow_backfill import (
+    backfill_null_oauth2_flows,
+    classify_null_flow_row,
+)
+
+
+def test_classify_per_user_tokens_beat_m2m_shape():
+    """The DCR trap row: creds + token_url, no authorization_url, but a user has
+    signed in. Tokens are definitive; the M2M shape must not win."""
+    flow, rule = classify_null_flow_row(
+        has_per_user_tokens=True,
+        authorization_url=None,
+        registration_url=None,
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    assert flow == "authorization_code"
+    assert rule == "per_user_tokens"
+
+
+def test_classify_authorization_url_beats_m2m_shape():
+    flow, rule = classify_null_flow_row(
+        has_per_user_tokens=False,
+        authorization_url="https://idp.example.com/authorize",
+        registration_url=None,
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    assert flow == "authorization_code"
+    assert rule == "authorization_url"
+
+
+def test_classify_registration_url_beats_m2m_shape():
+    """A registration endpoint means DCR, and DCR exists to mint interactive
+    clients; an abandoned-DCR row (no sign-in yet) must not be stamped M2M."""
+    flow, rule = classify_null_flow_row(
+        has_per_user_tokens=False,
+        authorization_url=None,
+        registration_url="https://idp.example.com/register",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    assert flow == "authorization_code"
+    assert rule == "registration_url"
+
+
+def test_classify_m2m_credential_shape():
+    flow, rule = classify_null_flow_row(
+        has_per_user_tokens=False,
+        authorization_url=None,
+        registration_url=None,
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    assert flow == "client_credentials"
+    assert rule == "m2m_credential_shape"
+
+
+def test_classify_partial_credentials_default_interactive():
+    """token_url without a full credential pair is not the M2M shape."""
+    flow, rule = classify_null_flow_row(
+        has_per_user_tokens=False,
+        authorization_url=None,
+        registration_url=None,
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid"},
+    )
+    assert flow == "authorization_code"
+    assert rule == "interactive_default"
+
+
+def test_classify_bare_row_default_interactive():
+    flow, rule = classify_null_flow_row(
+        has_per_user_tokens=False,
+        authorization_url=None,
+        registration_url=None,
+        token_url=None,
+        credentials=None,
+    )
+    assert flow == "authorization_code"
+    assert rule == "interactive_default"
+
+
+def _row(server_id, *, authorization_url=None, registration_url=None, token_url=None, credentials=None):
+    return SimpleNamespace(
+        server_id=server_id,
+        authorization_url=authorization_url,
+        registration_url=registration_url,
+        token_url=token_url,
+        credentials=credentials,
+    )
+
+
+def _mock_prisma(null_rows, token_rows):
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=null_rows)
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+    mock_prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=token_rows)
+    return mock_prisma
+
+
+@pytest.mark.asyncio
+async def test_backfill_only_targets_null_flow_oauth2_rows():
+    """The where clause is the guard that explicit and non-oauth2 rows are never touched."""
+    mock_prisma = _mock_prisma([], [])
+
+    counts = await backfill_null_oauth2_flows(mock_prisma)
+
+    assert counts == {}
+    mock_prisma.db.litellm_mcpservertable.find_many.assert_awaited_once_with(
+        where={"auth_type": "oauth2", "oauth2_flow": None},
+    )
+    mock_prisma.db.litellm_mcpusercredentials.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_stamps_rows_and_reports_rule_counts():
+    dcr_trap_row = _row(
+        "signed_in_dcr",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    m2m_row = _row(
+        "legacy_m2m",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    interactive_row = _row("legacy_interactive", authorization_url="https://idp.example.com/authorize")
+
+    mock_prisma = _mock_prisma(
+        [dcr_trap_row, m2m_row, interactive_row],
+        [SimpleNamespace(server_id="signed_in_dcr", user_id="u1")],
+    )
+
+    counts = await backfill_null_oauth2_flows(mock_prisma)
+
+    assert counts == {"per_user_tokens": 1, "m2m_credential_shape": 1, "authorization_url": 1}
+
+    stamped = {
+        call.kwargs["where"]["server_id"]: call.kwargs["data"]
+        for call in mock_prisma.db.litellm_mcpservertable.update.await_args_list
+    }
+    assert stamped["signed_in_dcr"]["oauth2_flow"] == "authorization_code"
+    assert stamped["legacy_m2m"]["oauth2_flow"] == "client_credentials"
+    assert stamped["legacy_interactive"]["oauth2_flow"] == "authorization_code"
+    assert all(data["updated_by"] == "oauth2_flow_backfill" for data in stamped.values())
+
+
+@pytest.mark.asyncio
+async def test_backfill_handles_json_string_credentials():
+    m2m_row = _row(
+        "json_creds_m2m",
+        token_url="https://idp.example.com/token",
+        credentials='{"client_id": "cid", "client_secret": "csecret"}',
+    )
+    mock_prisma = _mock_prisma([m2m_row], [])
+
+    counts = await backfill_null_oauth2_flows(mock_prisma)
+
+    assert counts == {"m2m_credential_shape": 1}
+
+
+@pytest.mark.asyncio
+async def test_backfill_treats_undecodable_credentials_as_absent():
+    row = _row(
+        "corrupt_creds",
+        token_url="https://idp.example.com/token",
+        credentials="not-json",
+    )
+    mock_prisma = _mock_prisma([row], [])
+
+    counts = await backfill_null_oauth2_flows(mock_prisma)
+
+    assert counts == {"interactive_default": 1}
