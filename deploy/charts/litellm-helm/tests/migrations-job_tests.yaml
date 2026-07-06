@@ -188,6 +188,81 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: pre-existing-sa
+  - it: should render migrationJob.envVars and migrationJob.extraEnvVars
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        envVars:
+          MIGRATION_ONLY_VAR: "migration_value"
+        extraEnvVars:
+          - name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: litellm-db-migrator
+                key: username
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MIGRATION_ONLY_VAR
+            value: "migration_value"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: litellm-db-migrator
+                key: username
+
+  - it: should render migrationJob env after shared env so migration overrides win
+    template: migrations-job.yaml
+    set:
+      db:
+        useExisting: true
+        endpoint: "shared-db"
+        database: "litellm"
+        url: "postgresql://app:pass@shared-db:5432/litellm"
+        secret:
+          name: "app-secret"
+          usernameKey: "username"
+          passwordKey: "password"
+      extraEnvVars:
+        - name: DATABASE_URL
+          value: "postgresql://app:pass@shared-db:5432/litellm"
+      migrationJob:
+        enabled: true
+        extraEnvVars:
+          - name: DATABASE_URL
+            value: "postgresql://migrator:pass@shared-db:5432/litellm"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[-1].name
+          value: DISABLE_SCHEMA_UPDATE
+      - equal:
+          path: spec.template.spec.containers[0].env[-2].name
+          value: DATABASE_URL
+      - equal:
+          path: spec.template.spec.containers[0].env[-2].value
+          value: "postgresql://migrator:pass@shared-db:5432/litellm"
+
+  - it: should not let migrationJob.extraEnvVars override DISABLE_SCHEMA_UPDATE
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        extraEnvVars:
+          - name: DISABLE_SCHEMA_UPDATE
+            value: "true"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[-1].name
+          value: DISABLE_SCHEMA_UPDATE
+      - equal:
+          path: spec.template.spec.containers[0].env[-1].value
+          value: "false"
+
   - it: should work with extraInitContainers
     template: migrations-job.yaml
     set:

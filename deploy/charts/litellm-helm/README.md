@@ -166,6 +166,8 @@ The migration job supports both ArgoCD and Helm hooks to ensure database migrati
 | `migrationJob.ttlSecondsAfterFinished` | TTL for completed migration jobs                                                                                     | `120`   |
 | `migrationJob.annotations`             | Additional annotations for the migration job pod                                                                     | `{}`    |
 | `migrationJob.extraContainers`         | Additional containers to run alongside the migration job                                                             | `[]`    |
+| `migrationJob.envVars`                 | Environment variables (map of key-value pairs) for the migration job only; override the shared `envVars`/`extraEnvVars` under last-wins semantics | `{}`    |
+| `migrationJob.extraEnvVars`            | Environment variables (list of k8s env vars, supports `valueFrom`) for the migration job only; e.g. point the schema migration at a higher-privilege DB role | `[]`    |
 | `migrationJob.hooks.argocd.enabled`    | Enable ArgoCD hooks for the migration job (uses PreSync hook with BeforeHookCreation delete policy)                  | `true`  |
 | `migrationJob.hooks.helm.enabled`      | Enable Helm hooks for the migration job (uses pre-install,pre-upgrade hooks with before-hook-creation delete policy) | `false` |
 | `migrationJob.hooks.helm.weight`       | Helm hook execution order (lower weights executed first). Optional - defaults to "1" if not specified.               | N/A     |
