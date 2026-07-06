@@ -49,6 +49,27 @@ _DEFAULT_ASQAV_API_BASE = "https://api.asqav.com"
 # stalls the callback; any timeout falls through to the local-only record.
 _CLOUD_SIGN_TIMEOUT = 5.0
 
+_SENSITIVE_KEYS = frozenset(
+    {
+        "user_api_key",
+        "Authorization",
+        "authorization",
+        "token",
+        "api_key",
+    }
+)
+_PROXY_IDENTITY_KEYS = frozenset(
+    {
+        "user_api_key_user_id",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+        "user_api_key_alias",
+        "user_id",
+        "team_id",
+        "org_id",
+    }
+)
+
 
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -85,68 +106,36 @@ def _content_digest(value: Any) -> Optional[str]:
     return _sha256_hex(raw)
 
 
-def _extract_loggable(
-    kwargs: dict[str, Any],
-    response_obj: Any,
-    start_time: Any,
-    end_time: Any,
-    status: str,
-) -> dict[str, Any]:
-    """Pull metadata + digests out of a callback invocation.
+def _merge_proxy_identity(metadata: dict[str, Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Merge allow-listed proxy identity fields from litellm_params.metadata.
 
-    Message content and response text are never stored in the clear; only their
-    SHA-256 digests appear in the log so callers can prove a payload existed
-    without reconstructing it.
+    Sensitive header/key values are filtered so raw auth tokens never reach
+    the log.
     """
-    model: str = kwargs.get("model", "")
-    messages: Any = kwargs.get("messages")
-
-    # Root metadata (user-supplied tags, etc.)
-    metadata: Any = dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
-
-    # Merge proxy identity fields from litellm_params.metadata.  Sensitive
-    # header/key values are filtered so raw auth tokens never reach the log.
-    _SENSITIVE_KEYS = frozenset(
-        {
-            "user_api_key",
-            "Authorization",
-            "authorization",
-            "token",
-            "api_key",
-        }
-    )
-    _PROXY_IDENTITY_KEYS = frozenset(
-        {
-            "user_api_key_user_id",
-            "user_api_key_team_id",
-            "user_api_key_org_id",
-            "user_api_key_alias",
-            "user_id",
-            "team_id",
-            "org_id",
-        }
-    )
     try:
         lp_meta: Any = (kwargs.get("litellm_params") or {}).get("metadata") or {}
         for k, v in lp_meta.items():
             if k in _SENSITIVE_KEYS:
                 continue
-            # Always include explicit proxy identity keys; skip other
-            # litellm_params.metadata keys to avoid unexpected bleed.
             if k in _PROXY_IDENTITY_KEYS:
                 metadata.setdefault(k, v)
-    except Exception:
+    except (AttributeError, TypeError):
         pass
+    return metadata
 
-    # Timing
-    latency_ms: Optional[int] = None
+
+def _compute_latency_ms(start_time: Any, end_time: Any) -> Optional[int]:
     try:
         if start_time is not None and end_time is not None:
-            latency_ms = int((end_time - start_time).total_seconds() * 1000)
-    except Exception:
+            return int((end_time - start_time).total_seconds() * 1000)
+    except (TypeError, AttributeError):
         pass
+    return None
 
-    # Usage
+
+def _extract_usage_fields(
+    response_obj: Any,
+) -> tuple[Optional[int], Optional[int], Optional[int], Optional[str], Optional[str]]:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
@@ -163,44 +152,68 @@ def _extract_loggable(
             provider_request_id = response_obj._hidden_params.get("x-request-id") or response_obj._hidden_params.get(
                 "cf-ray"
             )
-    except Exception:
+    except (AttributeError, IndexError, TypeError):
         pass
+    return prompt_tokens, completion_tokens, total_tokens, finish_reason, provider_request_id
 
-    # Content digests (not content itself)
-    messages_digest: Optional[str] = _content_digest(messages)
 
-    response_content_digest: Optional[str] = None
+def _extract_response_content_digest(response_obj: Any) -> Optional[str]:
     try:
         if hasattr(response_obj, "choices") and response_obj.choices:
-            content = response_obj.choices[0].message.content
-            response_content_digest = _content_digest(content)
-    except Exception:
+            return _content_digest(response_obj.choices[0].message.content)
+    except (AttributeError, IndexError):
         pass
+    return None
 
-    # Standard logging payload may carry call_id / litellm_call_id
-    call_id: Optional[str] = None
+
+def _extract_call_id(kwargs: dict[str, Any]) -> str:
+    """Prefer standard_logging_object's id, falling back to the raw call id."""
     try:
         slp: Any = kwargs.get("standard_logging_object")
         if slp and isinstance(slp, dict):
             call_id = slp.get("id") or slp.get("litellm_call_id")
-    except Exception:
+            if call_id:
+                return call_id
+    except (AttributeError, TypeError):
         pass
-    if not call_id:
-        call_id = kwargs.get("litellm_call_id") or kwargs.get("id", str(int(time.time() * 1e6)))
+    return kwargs.get("litellm_call_id") or kwargs.get("id", str(int(time.time() * 1e6)))
+
+
+def _extract_loggable(
+    kwargs: dict[str, Any],
+    response_obj: Any,
+    start_time: Any,
+    end_time: Any,
+    status: str,
+) -> dict[str, Any]:
+    """Pull metadata + digests out of a callback invocation.
+
+    Message content and response text are never stored in the clear; only their
+    SHA-256 digests appear in the log so callers can prove a payload existed
+    without reconstructing it.
+    """
+    metadata = _merge_proxy_identity(dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}), kwargs)
+    (
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        finish_reason,
+        provider_request_id,
+    ) = _extract_usage_fields(response_obj)
 
     return {
-        "call_id": call_id,
-        "model": model,
+        "call_id": _extract_call_id(kwargs),
+        "model": kwargs.get("model", ""),
         "status": status,
-        "latency_ms": latency_ms,
+        "latency_ms": _compute_latency_ms(start_time, end_time),
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
         "finish_reason": finish_reason,
         "provider_request_id": provider_request_id,
-        "messages_digest": messages_digest,
-        "response_content_digest": response_content_digest,
-        "metadata": {k: v for k, v in (metadata or {}).items() if isinstance(k, str)},
+        "messages_digest": _content_digest(kwargs.get("messages")),
+        "response_content_digest": _extract_response_content_digest(response_obj),
+        "metadata": {k: v for k, v in metadata.items() if isinstance(k, str)},
     }
 
 
@@ -334,7 +347,7 @@ class AsqavLogger(CustomLogger):
                 return
             self._prev_hash = last_main.get("record_hash", _GENESIS_HASH)
             self._call_count = last_main.get("seq", -1) + 1
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-soft: a corrupt/unreadable log must not block logger init
             verbose_logger.debug(f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}")
 
     # ------------------------------------------------------------------
@@ -363,7 +376,7 @@ class AsqavLogger(CustomLogger):
                 try:
                     if hasattr(response_obj, "choices") and response_obj.choices:
                         loggable["response_content"] = response_obj.choices[0].message.content
-                except Exception:
+                except (AttributeError, IndexError):
                     pass
 
             with self._lock:
@@ -386,7 +399,7 @@ class AsqavLogger(CustomLogger):
             if cloud is not None:
                 self._write_record({"seq": seq, "record_hash": record_hash, "asqav_cloud": cloud})
 
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-soft: a bug here must never break the underlying LLM call
             verbose_logger.debug(f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}")
 
     def _write_record(self, record: dict[str, Any]) -> bool:
@@ -417,7 +430,7 @@ class AsqavLogger(CustomLogger):
                     pass
                 raise
             return True
-        except Exception:
+        except (OSError, TypeError, ValueError):
             verbose_logger.warning(f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}")
             return False
 
@@ -547,5 +560,5 @@ class AsqavLogger(CustomLogger):
             return True, "ok"
         except FileNotFoundError:
             return False, f"log file not found: {path}"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # verify_chain always returns (False, reason), never raises
             return False, f"verification error: {exc}"
