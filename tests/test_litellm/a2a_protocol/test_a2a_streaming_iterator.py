@@ -6,6 +6,7 @@ async_success_handler (cross-thread pydantic mutation segfaults pydantic-core).
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,7 +88,9 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
 
     iterator = A2AStreamingIterator(
         stream=_empty_stream(),
-        request=object(),
+        request=SimpleNamespace(
+            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": "hi"}]})
+        ),
         logging_obj=logging_obj,
         agent_name="test-agent",
     )
