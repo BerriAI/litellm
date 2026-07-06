@@ -43,6 +43,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Tag | `test_update_daily_tag_spend.py` | partial | yes (`test_tag_spend_matches_sum_of_tagged_logs`) |
 | End-user | `test_proxy_update_spend.py` | covered | yes |
 | Spend == sum(logs) consistency | none | gap | yes (key + tag aggregate == sum of rows) |
+| Concurrent increments (one key, parallel writers) | `tests/spend_tracking_tests/test_spend_accuracy_tests.py` (burst) | partial | yes (`test_burst_of_concurrent_calls_loses_no_spend`) |
 
 ## Spend read endpoints (verification surface)
 
@@ -51,6 +52,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `/spend/logs` (request_id / api_key) | `test_spend_management_endpoints.py` | covered | yes (primary read path; `test_spend_logs_endpoint_returns_spend` asserts 200 + spend, never 5xx) |
 | `/spend/calculate` | `local_testing/test_spend_calculate_endpoint.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
 | `/spend/tags` | `test_spend_management_endpoints.py` | partial | yes (tag accuracy test) |
+| `/spend/logs/v2` pagination (total/total_pages/out-of-range) | `test_spend_query_optimization.py` | covered | yes (`test_spend_logs_v2_pagination_caps_pages_and_keeps_total`; filter takes the hashed token, not the raw key) |
 | whole spend GET surface (22 routes) | unit per-handler | partial | yes (`test_spend_routes.py` probes each for 404/5xx) |
 
 ## What this suite pins
@@ -69,6 +71,8 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_failure_call_writes_failure_status_row` | failed call -> `status=failure`, `spend=0` |
 | `test_spend_calculate_returns_nonzero_cost` | cost-map smoke (no batch wait) |
 | `test_spend_logs_endpoint_returns_spend` | `/spend/logs` returns 200 + the key's spend, never a 5xx (intermittent-500 regression) |
+| `test_burst_of_concurrent_calls_loses_no_spend` | N parallel calls on one key: N distinct costed rows, key aggregate == sum (no lost increments) |
+| `test_spend_logs_v2_pagination_caps_pages_and_keeps_total` | `/spend/logs/v2` page cap, stable total on out-of-range page, zero total on no-match filter |
 | `test_spend_routes.py` (23) | no spend route 404s or 5xxs |
 
 ## Design + timing

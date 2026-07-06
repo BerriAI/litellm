@@ -9,6 +9,7 @@ Gateway's key/customer methods for cleanup. Read-backs are eventually consistent
 from __future__ import annotations
 
 import time
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -18,6 +19,7 @@ from e2e_http import (
     Result,
     StreamingResponse,
     Success,
+    is_ok,
     unwrap,
 )
 from models import (
@@ -32,8 +34,14 @@ from models import (
     KeyInfo,
     KeyInfoParams,
     KeyInfoResponse,
+    LiteLLMParamsBody,
+    ModelDeleteBody,
+    ModelInfoBody,
     ModelInfoEntry,
     ModelInfoResponse,
+    ModelMode,
+    ModelNewBody,
+    ModelNewResponse,
     OcrBody,
     OcrResponse,
     SpendLogRow,
@@ -110,6 +118,38 @@ class Gateway:
                 response_type=ModelInfoResponse,
             )
         ).data
+
+    def create_model(
+        self,
+        model_name: str,
+        litellm_params: LiteLLMParamsBody,
+        mode: ModelMode | None = None,
+    ) -> str:
+        """Register a deployment under `model_name` (id == model_name) and return the
+        model_id. add_deployment runs synchronously in /model/new, so the model is
+        callable as soon as this returns."""
+        return unwrap(
+            self.transport.post(
+                "/model/new",
+                headers=self.transport.master,
+                json=ModelNewBody(
+                    model_name=model_name,
+                    litellm_params=litellm_params,
+                    model_info=ModelInfoBody(id=model_name, mode=mode),
+                ),
+                response_type=ModelNewResponse,
+            )
+        ).model_id
+
+    def delete_model(self, model_id: str) -> None:
+        result = self.transport.post(
+            "/model/delete",
+            headers=self.transport.master,
+            json=ModelDeleteBody(id=model_id),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
 
     # ---- LLM calls ------------------------------------------------------
 

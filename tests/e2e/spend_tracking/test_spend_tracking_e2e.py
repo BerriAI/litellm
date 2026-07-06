@@ -17,12 +17,13 @@ fails the test; a pricing or token-count drift does not.
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from e2e_http import Success
+from e2e_http import Result, Success
 from lifecycle import ResourceManager
-from models import SpendLogs, SpendLogsParams
+from models import ChatResponse, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -200,6 +201,104 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
     assert _approx_equal(
         key_spend, logs_total
     ), f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
+
+
+def test_burst_of_concurrent_calls_loses_no_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """Six concurrent calls on one key: every call lands its own spend row under a
+    distinct request_id and the key aggregate equals the sum of the rows.
+    Sequential accuracy is covered by test_key_spend_equals_sum_of_logs; this pins
+    the concurrent increment path (parallel writers racing on one key's counter),
+    where a lost update can never be reproduced by sequential calls."""
+    burst = 6
+
+    def call(idx: int) -> Result[ChatResponse]:
+        return client.chat(
+            scoped_key,
+            "gemini-2.5-flash",
+            f"burst call {idx} {unique_marker()}",
+            max_tokens=16,
+        )
+
+    with ThreadPoolExecutor(max_workers=burst) as pool:
+        results = tuple(pool.map(call, range(burst)))
+    failed = [r for r in results if not is_ok(r)]
+    assert not failed, f"{len(failed)}/{burst} burst calls failed; first: {failed[0]}"
+
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=burst,
+        predicate=lambda rs: len([r for r in rs if (r.spend or 0) > 0]) >= burst,
+    )
+    costed = [r for r in rows if (r.spend or 0) > 0]
+    assert len(costed) >= burst, (
+        f"only {len(costed)}/{burst} burst calls produced a costed row - "
+        f"rows lost under concurrency: {_summarize(rows)}"
+    )
+    request_ids = [r.request_id for r in costed]
+    assert len(set(request_ids)) == len(request_ids), (
+        f"concurrent rows collapsed onto shared request_ids: {_summarize(rows)}"
+    )
+
+    logs_total = sum((r.spend or 0) for r in rows)
+    key_spend = client.poll_key_spend(scoped_key, minimum=logs_total * 0.999)
+    assert _approx_equal(key_spend, logs_total), (
+        f"key aggregate {key_spend} != sum of {len(rows)} rows {logs_total} - "
+        f"spend increments lost under concurrency: {_summarize(rows)}"
+    )
+
+
+def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """/spend/logs/v2 pagination contract for the key filter: page_size caps the
+    rows returned, total counts every row for the filter (so with page_size=1,
+    total_pages == total), a page past the end returns no rows while reporting
+    the same total (an out-of-range page must not reset the count the UI
+    paginates by), and a filter matching nothing reports zero without erroring.
+
+    Unlike /spend/logs, the v2 filter matches the hashed token exactly as stored
+    on the row (the form the UI passes), not the raw sk- key, so the filter value
+    is read off the rows the poll returned."""
+    for _ in range(2):
+        _ = unwrap(
+            client.chat(
+                scoped_key,
+                "gemini-2.5-flash",
+                f"page fodder {unique_marker()}",
+                max_tokens=16,
+            )
+        )
+    rows = client.poll_logs_for_key(
+        scoped_key, min_rows=2, predicate=lambda rs: sum((r.spend or 0) for r in rs) > 0
+    )
+    hashed_key = rows[0].api_key
+    assert hashed_key, f"polled rows carry no api_key: {_summarize(rows)}"
+
+    first = client.spend_logs_page(api_key=hashed_key, page=1, page_size=1)
+    assert first.total >= 2, f"expected >=2 rows for the key, got total={first.total}"
+    assert len(first.data) == 1, f"page_size=1 returned {len(first.data)} rows"
+    assert first.total_pages == first.total, (
+        f"page_size=1 must give one page per row: "
+        f"total={first.total} total_pages={first.total_pages}"
+    )
+
+    beyond = client.spend_logs_page(
+        api_key=hashed_key, page=first.total_pages + 7, page_size=1
+    )
+    assert beyond.data == [], f"out-of-range page returned rows: {beyond.data}"
+    assert beyond.total == first.total, (
+        f"out-of-range page changed the total: {beyond.total} != {first.total}"
+    )
+
+    nomatch = client.spend_logs_page(
+        api_key=f"sk-no-such-key-{unique_marker()}", page=1, page_size=1
+    )
+    assert nomatch.total == 0 and nomatch.data == [], (
+        f"filter matching nothing must report zero: "
+        f"total={nomatch.total} rows={len(nomatch.data)}"
+    )
 
 
 def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
