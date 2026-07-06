@@ -34655,6 +34655,20 @@
             "/v1/audio/speech"
         ]
     },
+    "vertex_ai/chirp_3": {
+        "input_cost_per_second": 0.00026667,
+        "litellm_provider": "vertex_ai",
+        "metadata": {
+            "calculation": "$0.016/60 seconds = $0.00026667 per second",
+            "original_pricing_per_minute": 0.016
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://cloud.google.com/speech-to-text/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "vertex_ai/claude-3-5-haiku": {
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
