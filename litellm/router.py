@@ -778,6 +778,8 @@ class Router:
         "usage-based-routing-v2": "lowesttpm_logger_v2",
         "latency-based-routing": "lowestlatency_logger",
         "cost-based-routing": "lowestcost_logger",
+        "task-aware-routing": "taskaware_logger",
+        "local-first-routing": "localfirst_logger",
     }
 
     @staticmethod
@@ -845,6 +847,20 @@ class Router:
                     router_cache=self.cache,
                     routing_args={},
                 )
+            case RoutingStrategy.TASK_AWARE_ROUTING.value:
+                from litellm.router_strategy.task_aware_routing import TaskAwareRoutingStrategy
+                selector = TaskAwareRoutingStrategy(
+                    dual_cache=self.cache,
+                    task_mapping=routing_strategy_args.get("task_mapping", {}),
+                    default_task=routing_strategy_args.get("default_task", "general"),
+                )
+            case RoutingStrategy.LOCAL_FIRST_ROUTING.value:
+                from litellm.router_strategy.local_first_routing import LocalFirstRoutingStrategy
+                selector = LocalFirstRoutingStrategy(
+                    dual_cache=self.cache,
+                    local_provider=routing_strategy_args.get("local_provider", "ollama"),
+                    local_fallback_order=routing_strategy_args.get("local_fallback_order", []),
+                )
 
         if selector is not None and register_callbacks and isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(selector)  # type: ignore
@@ -880,6 +896,8 @@ class Router:
         self.lowesttpm_logger_v2: Optional[LowestTPMLoggingHandler_v2] = None
         self.lowestlatency_logger: Optional[LowestLatencyLoggingHandler] = None
         self.lowestcost_logger: Optional[LowestCostLoggingHandler] = None
+        self.taskaware_logger = None
+        self.localfirst_logger = None
 
         selector = self._build_strategy_selector(
             strategy=routing_strategy,
@@ -1040,6 +1058,14 @@ class Router:
                     input=input,
                     request_kwargs=request_kwargs,
                 )
+            case "task-aware-routing" | "local-first-routing":
+                return await selector.async_get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
             case _:
                 return None
 
@@ -1078,6 +1104,14 @@ class Router:
                     input=input,
                 )
             case "latency-based-routing":
+                return selector.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
+            case "task-aware-routing" | "local-first-routing":
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
@@ -10060,7 +10094,10 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                message = f"You passed in model={model}. There are no healthy deployments for this model"
+                if self.get_model_list(model_name=model) is None:
+                    message = f"You passed in model={model}. There is no 'model_name' with this string"
+                else:
+                    message = f"You passed in model={model}. There are no healthy deployments for this model"
 
                 raise litellm.BadRequestError(
                     message=message,
