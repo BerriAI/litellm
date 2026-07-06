@@ -50,7 +50,9 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
 
 
-def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+def _should_route_to_responses_api(
+    custom_llm_provider: Optional[str], model: Optional[str] = None
+) -> bool:
     """Return True when the provider should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
@@ -58,7 +60,19 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
-    return custom_llm_provider in _RESPONSES_API_PROVIDERS
+    if custom_llm_provider in _RESPONSES_API_PROVIDERS:
+        return True
+    # bedrock_mantle serves only its frontier models (gpt-5.x) on the Responses
+    # API; gpt-oss and non-OpenAI Mantle models are chat/completions only, so
+    # gate per-model on whether a Responses config resolves for this model.
+    if custom_llm_provider == "bedrock_mantle":
+        return (
+            ProviderConfigManager.get_provider_responses_api_config(
+                provider=litellm.LlmProviders.BEDROCK_MANTLE, model=model
+            )
+            is not None
+        )
+    return False
 
 
 def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
@@ -515,7 +529,7 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(custom_llm_provider, model):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
 
         # The in-gateway context_management polyfill runs inside
