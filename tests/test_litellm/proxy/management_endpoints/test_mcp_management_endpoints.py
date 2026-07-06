@@ -5238,3 +5238,63 @@ class TestPerUserCredentialConfigServerResolution:
         _, _, _, updates, _ = merge_mock.await_args.args
         assert updates == {"CORP_USERNAME": "alice"}
         assert result.server_id == self.CONFIG_SERVER_ID
+
+
+def _oauth2_create_payload(**overrides):
+    base = dict(
+        server_name="stamp_test_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type="oauth2",
+    )
+    base.update(overrides)
+    return NewMCPServerRequest(**base)
+
+
+def test_stamp_oauth2_flow_bare_oauth2_defaults_to_authorization_code():
+    """A bare oauth2 create (no endpoints, no creds) is interactive: stamping it
+    authorization_code matches how needs_user_oauth_token treats a null flow."""
+    payload = _oauth2_create_payload()
+    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    assert payload.oauth2_flow == "authorization_code"
+
+
+def test_stamp_oauth2_flow_marks_m2m_shape_client_credentials():
+    """token_url + full client credentials and no authorization_url is the M2M shape;
+    the stamp mirrors the legacy inference in _resolve_oauth2_flow so REST-created M2M
+    servers persist the flow instead of relying on read-time inference."""
+    payload = _oauth2_create_payload(
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    assert payload.oauth2_flow == "client_credentials"
+
+
+def test_stamp_oauth2_flow_authorization_url_wins_over_m2m_shape():
+    """An authorization endpoint means interactive even when client creds + token_url
+    are present (GitHub Enterprise style); M2M never has an authorization endpoint."""
+    payload = _oauth2_create_payload(
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    assert payload.oauth2_flow == "authorization_code"
+
+
+def test_stamp_oauth2_flow_respects_explicit_value():
+    """An explicit oauth2_flow from the caller must never be overridden by the stamp."""
+    payload = _oauth2_create_payload(
+        oauth2_flow="authorization_code",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    assert payload.oauth2_flow == "authorization_code"
+
+
+def test_stamp_oauth2_flow_ignores_non_oauth2():
+    payload = _oauth2_create_payload(auth_type="none")
+    mgmt_endpoints.stamp_oauth2_flow_on_create(payload)
+    assert payload.oauth2_flow is None
