@@ -21,7 +21,6 @@ from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.common_utils import OBJ_LIST, STR_OBJ_DICT, WEB_SEARCH_TOOL_TYPES
 from litellm.types.llms.mistral import (
     MistralConversationContentChunk,
-    MistralConversationInputMessage,
     MistralConversationOutput,
     MistralConversationsResponse,
     MistralConversationUsage,
@@ -64,6 +63,16 @@ def _content_to_str(content: object) -> str:
     if isinstance(content, list):
         return "".join(_block_text(block) for block in OBJ_LIST.validate_python(content))
     return "" if content is None else str(content)
+
+
+def _function_call_entry(call: dict[str, object]) -> dict[str, object]:
+    fn = STR_OBJ_DICT.validate_python(call["function"]) if isinstance(call.get("function"), dict) else {}
+    return {
+        "type": "function.call",
+        "tool_call_id": str(call.get("id") or ""),
+        "name": str(fn.get("name") or ""),
+        "arguments": str(fn.get("arguments") or ""),
+    }
 
 
 def _to_annotation(chunk: MistralConversationContentChunk) -> ChatCompletionAnnotation:
@@ -131,6 +140,37 @@ class MistralConversationsConfig(MistralConfig):
         )
         return {**base, **({"random_seed": random_seed} if random_seed is not None else {})}
 
+    @staticmethod
+    def _input_entries_for_message(message: AllMessageValues) -> tuple[dict[str, object], ...]:
+        """Map one OpenAI message to its Conversations ``inputs`` entries.
+
+        A ``tool`` message becomes a ``function.result`` entry; an assistant
+        message's ``tool_calls`` each become a ``function.call`` entry (preserving
+        the id/name/arguments binding); text content becomes a plain message
+        entry. Preserving this history keeps a web-search turn mid-conversation
+        from silently dropping prior tool calls the way a role+content flatten would.
+        """
+        typed = STR_OBJ_DICT.validate_python(message)
+        role = str(typed.get("role") or "")
+        if role == "tool":
+            return (
+                {
+                    "type": "function.result",
+                    "tool_call_id": str(typed.get("tool_call_id") or ""),
+                    "result": _content_to_str(typed.get("content")),
+                },
+            )
+        raw_calls = typed.get("tool_calls") if role == "assistant" else None
+        calls = OBJ_LIST.validate_python(raw_calls) if isinstance(raw_calls, list) else []
+        content = _content_to_str(typed.get("content"))
+        message_entry: tuple[dict[str, object], ...] = (
+            ({"role": role, "content": content},) if content or not calls else ()
+        )
+        call_entries = tuple(
+            _function_call_entry(STR_OBJ_DICT.validate_python(call)) for call in calls if isinstance(call, dict)
+        )
+        return message_entry + call_entries
+
     def transform_request(
         self,
         model: str,
@@ -146,12 +186,10 @@ class MistralConversationsConfig(MistralConfig):
             if message.get("role") == "system" and _content_to_str(message.get("content"))
         )
         inputs = [
-            MistralConversationInputMessage(
-                role=str(message.get("role")),
-                content=_content_to_str(message.get("content")),
-            )
+            entry
             for message in messages
-            if message.get("role") != "system"
+            if str(message.get("role")) != "system"
+            for entry in self._input_entries_for_message(message)
         ]
         completion_args = self._build_completion_args(params)
         return {
