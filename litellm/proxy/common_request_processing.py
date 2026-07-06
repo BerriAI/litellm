@@ -363,7 +363,7 @@ async def _aiter_with_sse_keepalive(
     try:
         while True:
             if pending is None:
-                pending = asyncio.ensure_future(iterator.__anext__())
+                pending = asyncio.create_task(iterator.__anext__())
             done, _ = await asyncio.wait({pending}, timeout=interval)
             if not done:
                 yield keepalive_frame
@@ -1644,9 +1644,11 @@ class ProxyBaseLLMRequestProcessing:
                         # clients must tolerate ping events per the Anthropic spec.
                         _ping_interval = litellm.anthropic_stream_ping_interval_seconds
                         if _ping_interval is not None and _ping_interval > 0:
+                            # Floor at 1s: sub-second pings add overhead without
+                            # helping any real idle-timeout scenario.
                             selected_data_generator = _aiter_with_sse_keepalive(
                                 selected_data_generator,
-                                interval=_ping_interval,
+                                interval=max(float(_ping_interval), 1.0),
                                 keepalive_frame=ANTHROPIC_SSE_PING_FRAME,
                             )
                         return await create_response(
