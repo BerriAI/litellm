@@ -631,13 +631,14 @@ async def common_checks(
                     fallback_spend=user_object.spend or 0.0,
                     max_budget=user_budget,
                 )
-                if proxy_logging_obj.slack_alerting_instance is not None:
+                slack_alerting = getattr(proxy_logging_obj, "slack_alerting_instance", None)
+                if slack_alerting is not None:
                     await _user_max_budget_alert_check(
                         user_object=user_object,
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,
                         spend=user_spend,
-                        thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.user_budget_alert_thresholds,
+                        thresholds=slack_alerting.alerting_args.user_budget_alert_thresholds,
                     )
                 if math.isfinite(user_budget) and user_spend >= user_budget:
                     raise litellm.BudgetExceededError(
@@ -3975,13 +3976,14 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
         )
 
-        if proxy_logging_obj.slack_alerting_instance is not None:
+        slack_alerting = getattr(proxy_logging_obj, "slack_alerting_instance", None)
+        if slack_alerting is not None:
             await _team_max_budget_alert_check(
                 team_object=team_object,
                 valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
                 spend=spend,
-                thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.team_budget_alert_thresholds,
+                thresholds=slack_alerting.alerting_args.team_budget_alert_thresholds,
             )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
