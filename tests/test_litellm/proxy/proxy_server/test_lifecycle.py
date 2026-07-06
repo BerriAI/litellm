@@ -31,6 +31,7 @@ from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
+    ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
@@ -335,9 +336,7 @@ def test__redact_worker_config_for_logging_masks_nested_secret_fields():
                 "database_url": nested_db_url,
                 "database_extra_connection_params": {"password": nested_extra_pw},
                 "alert_to_webhook_url": {"budget_alerts": nested_webhook},
-                "pass_through_endpoints": [
-                    {"path": "/up", "headers": {"Authorization": nested_bearer}}
-                ],
+                "pass_through_endpoints": [{"path": "/up", "headers": {"Authorization": nested_bearer}}],
             }
         }
     }
@@ -389,16 +388,13 @@ def test_load_from_azure_key_vault_disabled_no_side_effect(monkeypatch):
     import litellm
 
     sentinel_secret_mgr = object()
-    monkeypatch.setattr(
-        litellm, "secret_manager_client", sentinel_secret_mgr, raising=False
-    )
+    monkeypatch.setattr(litellm, "secret_manager_client", sentinel_secret_mgr, raising=False)
 
     result = load_from_azure_key_vault(use_azure_key_vault=False)
 
     observed = {
         "return_value": result,
-        "secret_manager_unchanged": litellm.secret_manager_client
-        is sentinel_secret_mgr,
+        "secret_manager_unchanged": litellm.secret_manager_client is sentinel_secret_mgr,
         "called_with": False,
     }
     assert normalize(observed) == {
@@ -552,9 +548,7 @@ def test_get_litellm_model_info_uses_base_model_for_lookup(monkeypatch):
 
     observed = {
         "called_arg": (
-            fake_get.call_args.args[0]
-            if fake_get.call_args.args
-            else fake_get.call_args.kwargs.get("model")
+            fake_get.call_args.args[0] if fake_get.call_args.args else fake_get.call_args.kwargs.get("model")
         ),
         "returned_max_tokens": result.get("max_tokens"),
         "returned_cost": result.get("input_cost_per_token"),
@@ -601,9 +595,7 @@ def test_run_ollama_serve_invokes_subprocess_popen(monkeypatch):
 
 def test_run_ollama_serve_popen_failure_is_swallowed(monkeypatch):
     """Popen raising OSError must NOT propagate — function logs and returns."""
-    monkeypatch.setattr(
-        ps.subprocess, "Popen", MagicMock(side_effect=OSError("no ollama binary"))
-    )
+    monkeypatch.setattr(ps.subprocess, "Popen", MagicMock(side_effect=OSError("no ollama binary")))
 
     result = run_ollama_serve()
     assert result is None
@@ -623,8 +615,7 @@ async def test_proxy_startup_event_is_async_context_manager_with_expected_signat
     observed = {
         "param_count": len(sig.parameters),
         "has_app_param": "app" in sig.parameters,
-        "wrapped_is_async": inspect.iscoroutinefunction(wrapped)
-        or inspect.isasyncgenfunction(wrapped),
+        "wrapped_is_async": inspect.iscoroutinefunction(wrapped) or inspect.isasyncgenfunction(wrapped),
         "has_asynccontextmanager_wrapper": wrapped is not None,
     }
     assert normalize(observed) == {
@@ -667,4 +658,77 @@ def test_otel_global_provider_published_after_callback_init():
         "OTEL global provider is published before callbacks are initialized; a "
         "preset logger will not exist yet and a second generic logger will own "
         "the global provider, orphaning gen-ai spans"
+    )
+
+
+# ---------------------------------------------------------------------------
+# _warn_no_redis_multi_instance
+# ---------------------------------------------------------------------------
+
+_ORCHESTRATOR_ENV_VARS = (
+    "KUBERNETES_SERVICE_HOST",
+    "ECS_CONTAINER_METADATA_URI",
+    "ECS_CONTAINER_METADATA_URI_V4",
+    "NOMAD_ALLOC_ID",
+    "FLY_APP_NAME",
+)
+
+
+@pytest.mark.parametrize("env_var", _ORCHESTRATOR_ENV_VARS)
+def test_warn_no_redis_multi_instance_warns_for_orchestrator(monkeypatch, caplog, env_var):
+    """When Redis is None and an orchestrator env var is set, a warning must
+    be emitted listing the affected features."""
+    for var in _ORCHESTRATOR_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv(env_var, "10.0.0.1")
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        ProxyStartupEvent._warn_no_redis_multi_instance(redis_usage_cache=None)
+
+    combined = "\n".join(caplog.messages)
+    assert "Redis is not configured" in combined
+    assert env_var in combined
+    assert "rate limiting" in combined
+
+
+def test_warn_no_redis_multi_instance_silent_when_redis_configured(monkeypatch, caplog):
+    """When Redis IS configured, no warning is emitted even inside k8s."""
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        ProxyStartupEvent._warn_no_redis_multi_instance(
+            redis_usage_cache=MagicMock(),
+        )
+
+    assert not any("Redis is not configured" in m for m in caplog.messages)
+
+
+def test_warn_no_redis_multi_instance_silent_outside_orchestrator(monkeypatch, caplog):
+    """When no orchestrator env var is set, no warning is emitted even without
+    Redis -- the user may be running a single instance on bare metal."""
+    for var in _ORCHESTRATOR_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        ProxyStartupEvent._warn_no_redis_multi_instance(redis_usage_cache=None)
+
+    assert not any("Redis is not configured" in m for m in caplog.messages)
+
+
+def test_warn_no_redis_multi_instance_called_during_startup():
+    """The warning call must appear in proxy_startup_event source, after
+    Redis setup and the transaction buffer validation."""
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    redis_buffer_pos = source.find("_validate_redis_transaction_buffer_config(")
+    warn_pos = source.find("_warn_no_redis_multi_instance(")
+    assert warn_pos != -1, "_warn_no_redis_multi_instance call missing from proxy_startup_event"
+    assert redis_buffer_pos < warn_pos, (
+        "_warn_no_redis_multi_instance must run after _validate_redis_transaction_buffer_config"
     )
