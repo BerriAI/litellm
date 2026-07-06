@@ -21,8 +21,12 @@ from typing_extensions import assert_never
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+<<<<<<< HEAD
     ClientAuth,
     ClientSecretAuth,
+=======
+    ClientCredentialsConfig,
+>>>>>>> 73df37ca23 (feat(mcp): migrate client_credentials (M2M) onto the v2 resolver arm)
     CredError,
     IdJagConfig,
     NoneConfig,
@@ -70,10 +74,10 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
-    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), ``oauth2_token_exchange``
-    (OBO), and the client-forwarded token modes ``true_passthrough`` / ``oauth_delegate``
-    (``PassthroughConfig``); client_credentials (M2M), delegated/passthrough oauth2, and SigV4
-    return None and stay on v1.
+    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), ``oauth2`` M2M
+    (``client_credentials``), ``oauth2_token_exchange`` (OBO), and the client-forwarded token
+    modes ``true_passthrough`` / ``oauth_delegate`` (``PassthroughConfig``); delegated/passthrough
+    oauth2 and SigV4 return None and stay on v1.
     """
     if server.is_byok:
         return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
@@ -95,13 +99,15 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.basic:
             return _shared_key_spec(server, resource, "Authorization", "Basic", encode=True)
         case MCPAuth.oauth2:
+            if server.has_client_credentials:
+                return _client_credentials_spec(server, resource)
             if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
                 return ServerSpec(
                     server_id=server.server_id,
                     resource=resource,
                     config=AuthorizationCodeConfig(),
                 )
-            # client_credentials (M2M) and delegate/passthrough oauth2 stay on v1
+            # delegate/passthrough oauth2 stay on v1
             return None
         case MCPAuth.oauth2_id_jag:
             return _id_jag_spec(server, resource)
@@ -112,6 +118,29 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.aws_sigv4:
             return None  # SigV4 is not migrated yet -> defer to v1
     assert_never(auth_type)
+
+
+def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
+    """Build a client_credentials (M2M) spec; the explicit ``oauth2_flow`` opt-in owns the server.
+
+    Missing grant fields (``client_id``/``client_secret``/``token_url``) are NOT a reason to defer:
+    v1 would connect unauthenticated and the upstream's 401 gets absorbed into an empty tool list,
+    so the arm fails closed with ``misconfigured`` instead, naming the missing fields (mirrors the
+    OBO ownership rule). ``audience`` is forwarded only when the operator set it; a missing one is
+    omitted, not derived, since a fabricated value risks the IdP rejecting the grant.
+    """
+    return ServerSpec(
+        server_id=server.server_id,
+        resource=resource,
+        config=ClientCredentialsConfig(
+            client_id=server.client_id,
+            client_secret=SecretStr(server.client_secret) if server.client_secret else None,
+            token_url=server.token_url,
+            scopes=tuple(server.scopes or ()),
+            audience=server.audience,
+            token_endpoint_auth_method=server.token_endpoint_auth_method,
+        ),
+    )
 
 
 def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
