@@ -409,6 +409,35 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             raise Exception(error_message)
 
 
+class MCPToolResultError(Exception):
+    """An MCP tool call completed with ``isError=True`` in its result.
+
+    Never raised on the wire path: streamable HTTP MCP correctly returns tool
+    failures as HTTP 200 with ``result.isError: true`` per the MCP spec. This
+    exception only drives the standard failure logging (``status="failure"``
+    payload, OTel ERROR span) for such results.
+    """
+
+
+def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
+    """The first text content of an ``isError=True`` tool result, or ``None``
+    when the result is not an error.
+
+    Accepts both ``mcp.types.CallToolResult`` objects and their dict
+    equivalents, duck-typed so the ``mcp`` package is not required.
+    """
+    is_error: object = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    if is_error is not True:
+        return None
+    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    if isinstance(content, (list, tuple)):
+        for item in content:
+            text: object = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
+            if isinstance(text, str) and text:
+                return text
+    return "MCP tool call returned isError=true"
+
+
 class MCPMissingUserEnvVarsError(Exception):
     """Raised when an MCP request can't be built because the calling user has
     not supplied one or more required per-user environment variables.

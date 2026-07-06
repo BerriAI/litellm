@@ -8,8 +8,10 @@ from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
     BlobResourceContents,
+    CallToolResult,
     Prompt,
     ResourceTemplate,
+    TextContent,
     TextResourceContents,
 )
 
@@ -6592,3 +6594,266 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
     assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
     prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------- #
+#  MCP tool-call isError failure logging (LIT-4081)
+# --------------------------------------------------------------------------- #
+
+
+def _call_tool_result(is_error: bool, text: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=text)], isError=is_error)
+
+
+def _mock_mcp_logging_obj() -> MagicMock:
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.async_failure_handler = AsyncMock()
+    return logging_obj
+
+
+def test_extract_mcp_tool_result_error_message():
+    from litellm.proxy._experimental.mcp_server.utils import (
+        extract_mcp_tool_result_error_message,
+    )
+
+    assert extract_mcp_tool_result_error_message(_call_tool_result(True, "boom")) == "boom"
+    assert extract_mcp_tool_result_error_message(_call_tool_result(False, "ok")) is None
+    assert (
+        extract_mcp_tool_result_error_message(CallToolResult(content=[], isError=True))
+        == "MCP tool call returned isError=true"
+    )
+    assert (
+        extract_mcp_tool_result_error_message({"isError": True, "content": [{"type": "text", "text": "denied"}]})
+        == "denied"
+    )
+    assert extract_mcp_tool_result_error_message({"isError": False, "content": []}) is None
+    assert extract_mcp_tool_result_error_message({}) is None
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
+    """Regression test for LIT-4081: a CallToolResult with isError=True must go
+    down the failure logging path (async_failure_handler + post_call_failure_hook),
+    never async_success_handler."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+    from litellm.proxy._experimental.mcp_server.utils import MCPToolResultError
+
+    logging_obj = _mock_mcp_logging_obj()
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        await _fire_mcp_tool_call_logging(
+            logging_obj=logging_obj,
+            result=_call_tool_result(True, "upstream exploded"),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            user_api_key_auth=user_auth,
+            request_data={"litellm_call_id": "cid"},
+        )
+
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.failure_handler.assert_called_once()
+    logging_obj.async_failure_handler.assert_awaited_once()
+    tool_error = logging_obj.async_failure_handler.await_args.args[0]
+    assert isinstance(tool_error, MCPToolResultError)
+    assert str(tool_error) == "upstream exploded"
+    logging_obj.has_run_logging.assert_any_call(event_type="sync_success")
+    logging_obj.has_run_logging.assert_any_call(event_type="async_success")
+    proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
+    hook_kwargs = proxy_logging_mock.post_call_failure_hook.await_args.kwargs
+    assert hook_kwargs["route"] == "/mcp/call_tool"
+    assert hook_kwargs["original_exception"] is tool_error
+    assert hook_kwargs["user_api_key_dict"] is user_auth
+    logging_obj.async_post_mcp_tool_call_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_success_path_unchanged():
+    """isError=False must keep today's behavior: success handler fires, no
+    failure logging, no post_call_failure_hook."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+
+    logging_obj = _mock_mcp_logging_obj()
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    result = _call_tool_result(False, "all good")
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        await _fire_mcp_tool_call_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            request_data={},
+        )
+
+    logging_obj.async_success_handler.assert_awaited_once()
+    assert logging_obj.async_success_handler.await_args.kwargs["result"] is result
+    logging_obj.async_failure_handler.assert_not_awaited()
+    logging_obj.failure_handler.assert_not_called()
+    proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_iserror_without_auth_skips_failure_hook():
+    """Without a UserAPIKeyAuth the failure handlers still fire but the proxy
+    post_call_failure_hook (which requires one) is skipped."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+
+    logging_obj = _mock_mcp_logging_obj()
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        await _fire_mcp_tool_call_logging(
+            logging_obj=logging_obj,
+            result={"isError": True, "content": [{"type": "text", "text": "denied"}]},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.async_failure_handler.assert_awaited_once()
+    assert str(logging_obj.async_failure_handler.await_args.args[0]) == "denied"
+    proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+
+
+def _real_mcp_logging_obj(call_id: str):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    start_time = datetime.now()
+    logging_obj = Logging(
+        model="MCP: weather/get_forecast",
+        messages=[{"role": "user", "content": "tool call"}],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=start_time,
+        litellm_call_id=call_id,
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model="MCP: weather/get_forecast",
+        user="",
+        optional_params={},
+        litellm_params={"api_base": ""},
+    )
+    logging_obj.model_call_details["mcp_tool_call_metadata"] = {
+        "name": "get_forecast",
+        "arguments": {"city": "Paris"},
+        "mcp_server_name": "weather",
+    }
+    return logging_obj, start_time
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_iserror_builds_failure_payload(monkeypatch):
+    """The standard logging payload for an isError=True result must carry
+    status='failure' with the tool's error text, so OTel (whose _parse_error
+    keys off status) marks the MCP span ERROR."""
+    import litellm
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+    logging_obj, start_time = _real_mcp_logging_obj("test-mcp-iserror-payload")
+
+    await _fire_mcp_tool_call_logging(
+        logging_obj=logging_obj,
+        result=_call_tool_result(True, "upstream exploded"),
+        start_time=start_time,
+        end_time=datetime.now(),
+    )
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert payload["error_str"] == "upstream exploded"
+    assert payload["error_information"]["error_class"] == "MCPToolResultError"
+    assert payload["metadata"]["mcp_tool_call_metadata"]["name"] == "get_forecast"
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_success_builds_success_payload(monkeypatch):
+    """isError=False still produces a status='success' payload."""
+    import litellm
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+    logging_obj, start_time = _real_mcp_logging_obj("test-mcp-success-payload")
+
+    await _fire_mcp_tool_call_logging(
+        logging_obj=logging_obj,
+        result=_call_tool_result(False, "all good"),
+        start_time=start_time,
+        end_time=datetime.now(),
+    )
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_iserror_emits_otel_error_span(monkeypatch):
+    """End-to-end regression for LIT-4081's OTel symptom: an isError=True tool
+    result must reach OTel as an MCP span with StatusCode.ERROR and the tool's
+    error message, while isError=False stays non-error."""
+    pytest.importorskip("opentelemetry")
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from opentelemetry.trace.status import StatusCode
+
+    import litellm
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", legacy_compat=False)
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    otel_logger = OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider)
+
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [otel_logger])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [otel_logger])
+
+    logging_obj, start_time = _real_mcp_logging_obj("test-mcp-iserror-otel")
+
+    await _fire_mcp_tool_call_logging(
+        logging_obj=logging_obj,
+        result=_call_tool_result(True, "upstream exploded"),
+        start_time=start_time,
+        end_time=datetime.now(),
+    )
+
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call get_forecast"
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "MCPToolResultError"
+    assert "upstream exploded" in (span.status.description or "")

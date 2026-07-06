@@ -8,6 +8,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Set,
     Tuple,
@@ -77,7 +78,7 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
-        _fire_mcp_success_logging,
+        _fire_mcp_tool_call_logging,
         _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
@@ -85,23 +86,32 @@ if MCP_AVAILABLE:
 
     ########################################################
     ############ MCP Server REST API Routes #################
-    async def _safe_fire_mcp_success_logging(
+    async def _safe_fire_mcp_tool_call_logging(
         logging_obj: Optional[Any],
         result: Any,
         start_time: datetime,
         end_time: datetime,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        request_data: Optional[Mapping[str, object]] = None,
     ) -> None:
         if logging_obj is None:
             return
         logging_results = await asyncio.gather(
-            _fire_mcp_success_logging(logging_obj, result, start_time, end_time),
+            _fire_mcp_tool_call_logging(
+                logging_obj,
+                result,
+                start_time,
+                end_time,
+                user_api_key_auth=user_api_key_auth,
+                request_data=request_data,
+            ),
             return_exceptions=True,
         )
         logging_error = logging_results[0]
         if isinstance(logging_error, asyncio.CancelledError):
             raise logging_error
         if isinstance(logging_error, BaseException):
-            verbose_logger.warning("MCP tool success logging failed (continuing): %s", logging_error)
+            verbose_logger.warning("MCP tool call logging failed (continuing): %s", logging_error)
 
     def _get_server_auth_header(
         server,
@@ -829,7 +839,14 @@ if MCP_AVAILABLE:
                         raw_headers=virtual_raw_headers,
                         litellm_logging_obj=virtual_logging_obj,
                     )
-                    await _safe_fire_mcp_success_logging(virtual_logging_obj, result, _tool_start_time, datetime.now())
+                    await _safe_fire_mcp_tool_call_logging(
+                        virtual_logging_obj,
+                        result,
+                        _tool_start_time,
+                        datetime.now(),
+                        user_api_key_auth=user_api_key_dict,
+                        request_data=data,
+                    )
                     return result
 
             # Validate required parameters early
@@ -912,7 +929,14 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 requested_server_id=canonical_server_id,
             )
-            await _safe_fire_mcp_success_logging(logging_obj, result, _tool_start_time, datetime.now())
+            await _safe_fire_mcp_tool_call_logging(
+                logging_obj,
+                result,
+                _tool_start_time,
+                datetime.now(),
+                user_api_key_auth=user_api_key_dict,
+                request_data=data,
+            )
             return result
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(

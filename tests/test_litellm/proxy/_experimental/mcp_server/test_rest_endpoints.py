@@ -1273,7 +1273,7 @@ class TestCallToolRestAPI:
         fire_logging = AsyncMock(side_effect=RuntimeError("logging failed"))
         monkeypatch.setattr(
             rest_endpoints,
-            "_fire_mcp_success_logging",
+            "_fire_mcp_tool_call_logging",
             fire_logging,
             raising=False,
         )
@@ -1304,13 +1304,13 @@ class TestCallToolRestAPI:
         fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
         monkeypatch.setattr(
             rest_endpoints,
-            "_fire_mcp_success_logging",
+            "_fire_mcp_tool_call_logging",
             fire_logging,
             raising=False,
         )
 
         with pytest.raises(asyncio.CancelledError):
-            await rest_endpoints._safe_fire_mcp_success_logging(
+            await rest_endpoints._safe_fire_mcp_tool_call_logging(
                 object(), {"result": "ok"}, datetime.now(), datetime.now()
             )
 
