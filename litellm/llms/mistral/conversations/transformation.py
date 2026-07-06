@@ -44,6 +44,7 @@ _COMPLETION_ARG_KEYS: tuple[str, ...] = (
     "max_tokens",
     "stop",
     "response_format",
+    "random_seed",
 )
 
 
@@ -133,12 +134,7 @@ class MistralConversationsConfig(MistralConfig):
 
     @staticmethod
     def _build_completion_args(optional_params: dict[str, object]) -> dict[str, object]:
-        base = {key: optional_params[key] for key in _COMPLETION_ARG_KEYS if optional_params.get(key) is not None}
-        extra_body = optional_params.get("extra_body")
-        random_seed = (
-            STR_OBJ_DICT.validate_python(extra_body).get("random_seed") if isinstance(extra_body, dict) else None
-        )
-        return {**base, **({"random_seed": random_seed} if random_seed is not None else {})}
+        return {key: optional_params[key] for key in _COMPLETION_ARG_KEYS if optional_params.get(key) is not None}
 
     @staticmethod
     def _input_entries_for_message(message: AllMessageValues) -> tuple[dict[str, object], ...]:

@@ -177,7 +177,7 @@ class MistralConfig(OpenAIGPTConfig):
             if param == "tool_choice" and isinstance(value, str):
                 optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
             if param == "seed":
-                optional_params["extra_body"] = {"random_seed": value}
+                optional_params["random_seed"] = value
             if param == "reasoning_effort" and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
