@@ -454,9 +454,6 @@ class LiteLLMParamsBody(BaseModel):
 ModelMode = Literal["batch", "realtime", "image_generation"]
 
 
-ModelMode = Literal["batch", "realtime", "image_generation"]
-
-
 class ModelInfoBody(BaseModel):
     id: str
     mode: ModelMode | None = None
