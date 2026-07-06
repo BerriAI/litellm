@@ -1216,6 +1216,7 @@ class MCPApprovalStatus(str, enum.Enum):
     pending_review = "pending_review"
     active = "active"
     rejected = "rejected"
+    draft = "draft"
 
 
 from litellm.models.mcp_server import (  # noqa: E402

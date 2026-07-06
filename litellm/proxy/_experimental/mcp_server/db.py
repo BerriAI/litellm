@@ -581,6 +581,76 @@ async def create_mcp_server(
     return new_mcp_server
 
 
+async def create_draft_mcp_server(
+    prisma_client: PrismaClient,
+    data: NewMCPServerRequest,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable:
+    data.approval_status = MCPApprovalStatus.draft
+    if data.server_id is None:
+        data.server_id = str(uuid.uuid4())
+
+    await _delete_draft_mcp_server(prisma_client, data.server_id)
+
+    return await create_mcp_server(prisma_client, data, touched_by)
+
+
+async def get_draft_mcp_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    ttl_seconds: int,
+) -> Optional[LiteLLM_MCPServerTable]:
+    row = await MCPServerRepository(prisma_client).table.find_first(
+        where={
+            "server_id": server_id,
+            "approval_status": MCPApprovalStatus.draft,
+        }
+    )
+    if row is None:
+        return None
+
+    created = row.created_at
+    if created is not None:
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - created > timedelta(seconds=ttl_seconds):
+            return None
+
+    _decrypt_env_vars_on_returned_row(row)
+    return LiteLLM_MCPServerTable(**row.model_dump())
+
+
+async def _delete_draft_mcp_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+) -> None:
+    try:
+        await MCPServerRepository(prisma_client).table.delete_many(
+            where={
+                "server_id": server_id,
+                "approval_status": MCPApprovalStatus.draft,
+            }
+        )
+    except Exception:
+        pass
+
+
+async def delete_expired_draft_mcp_servers(
+    prisma_client: PrismaClient,
+    ttl_seconds: int,
+) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
+    result = await MCPServerRepository(prisma_client).table.delete_many(
+        where={
+            "approval_status": MCPApprovalStatus.draft,
+            "created_at": {"lt": cutoff},
+        }
+    )
+    if result > 0:
+        verbose_proxy_logger.info("Cleaned up %d expired draft MCP server(s)", result)
+    return result
+
+
 async def update_mcp_server(
     prisma_client: PrismaClient,
     data: UpdateMCPServerRequest,

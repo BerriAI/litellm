@@ -7549,6 +7549,24 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
+        ### CLEANUP EXPIRED DRAFT MCP SERVERS ###
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            delete_expired_draft_mcp_servers,
+        )
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (  # noqa: PLC0415
+            TEMPORARY_MCP_SERVER_TTL_SECONDS,
+        )
+
+        scheduler.add_job(
+            delete_expired_draft_mcp_servers,
+            "interval",
+            seconds=300,
+            args=[prisma_client, TEMPORARY_MCP_SERVER_TTL_SECONDS],
+            id="cleanup_draft_mcp_servers_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### UPDATE SPEND ###
         scheduler.add_job(
             update_spend,
