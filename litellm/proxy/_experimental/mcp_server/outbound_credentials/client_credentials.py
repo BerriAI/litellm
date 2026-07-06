@@ -168,6 +168,7 @@ class ClientCredentialsTokenSource:
         default_ttl_seconds: float = 300.0,
         expiry_skew_seconds: float = 60.0,
         min_cache_seconds: float = 10.0,
+        max_locks: int = 1024,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._post = post
@@ -175,10 +176,18 @@ class ClientCredentialsTokenSource:
         self._default_ttl_seconds = default_ttl_seconds
         self._expiry_skew_seconds = expiry_skew_seconds
         self._min_cache_seconds = min_cache_seconds
+        self._max_locks = max_locks
         self._clock = clock
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _lock(self, server_id: str) -> asyncio.Lock:
+        """Per-server single-flight lock, bounded so ephemeral server ids (e.g. the REST tools
+        preview mints a fresh id per call) cannot grow the dict for the life of the process.
+        Evicting the oldest entry while a task still holds it only means a concurrent caller for
+        that server may run its own grant — single-flight is an optimization, not correctness.
+        """
+        if server_id not in self._locks and len(self._locks) >= self._max_locks:
+            self._locks.pop(next(iter(self._locks)), None)
         return self._locks.setdefault(server_id, asyncio.Lock())
 
     async def get(self, server_id: str, config: ClientCredentialsConfig) -> Result[OAuthToken, CredError]:
@@ -243,8 +252,11 @@ class ClientCredentialsTokenSource:
             expires_at=self._clock() + expires_in if expires_in is not None else None,
             scopes=_parse_granted_scopes(body.get("scope")) or (),
         )
+        # The min-cache floor is itself capped at the token's real lifetime, so a token whose
+        # expires_in is below the skew is never served past its actual expiry; a non-positive
+        # expires_in caches nothing (every request re-fetches, serialized by the per-server lock).
         ttl = (
-            max(expires_in - self._expiry_skew_seconds, self._min_cache_seconds)
+            max(expires_in - self._expiry_skew_seconds, min(float(expires_in), self._min_cache_seconds), 0.0)
             if expires_in is not None
             else self._default_ttl_seconds
         )

@@ -135,6 +135,34 @@ async def test_expires_in_bounds_the_cache_lifetime():
 
 
 @pytest.mark.asyncio
+async def test_short_lived_token_is_never_served_past_its_expiry():
+    # expires_in below the skew must not be floored into serving an expired token: the cache
+    # entry lapses with the token itself, and the next get re-fetches.
+    clock = _Clock(1000.0)
+    poster = _FakePoster([_success("t1", expires_in=5), _success("t2", expires_in=5)])
+    source = ClientCredentialsTokenSource(poster, expiry_skew_seconds=60.0, min_cache_seconds=10.0, clock=clock)
+    first = await source.get("s", _config())
+    assert isinstance(first, Ok) and first.ok.access_token == "t1"
+    clock.t = 1004.0  # still within the token's real lifetime
+    within = await source.get("s", _config())
+    assert isinstance(within, Ok) and within.ok.access_token == "t1"
+    clock.t = 1006.0  # past expires_at: the floor must not keep serving t1
+    lapsed = await source.get("s", _config())
+    assert isinstance(lapsed, Ok) and lapsed.ok.access_token == "t2"
+    assert len(poster.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_lock_dict_is_bounded_for_ephemeral_server_ids():
+    poster = _FakePoster([_success()])
+    source = ClientCredentialsTokenSource(poster, max_locks=8)
+    for index in range(20):
+        result = await source.get(f"ephemeral-{index}", _config())
+        assert isinstance(result, Ok)
+    assert len(source._locks) <= 8
+
+
+@pytest.mark.asyncio
 async def test_missing_expires_in_is_cached_briefly_not_an_hour():
     clock = _Clock(1000.0)
     poster = _FakePoster([_success("t1"), _success("t2")])
