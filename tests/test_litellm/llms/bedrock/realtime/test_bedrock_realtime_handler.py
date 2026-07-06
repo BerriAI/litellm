@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 
@@ -102,6 +103,11 @@ class ImmediatelyEndingBedrockStream:
 
 class FakeStaticCredentialsResolver:
     pass
+
+
+class NoCredentialsBedrockRealtime(BedrockRealtime):
+    def get_credentials(self, **kwargs):
+        return None
 
 
 class StubCredentialsBedrockRealtime(BedrockRealtime):
@@ -336,6 +342,20 @@ class TestBedrockRealtimeAwsAuth:
         assert config_kwargs["aws_secret_access_key"] == "assumed-secret-key"
         assert config_kwargs["aws_session_token"] == "assumed-session-token"
         assert isinstance(config_kwargs["aws_credentials_identity_resolver"], FakeStaticCredentialsResolver)
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_credentials_raise_clear_auth_error(self, stub_aws_sdk_client):
+        handler = NoCredentialsBedrockRealtime()
+
+        with pytest.raises(BedrockError, match="No AWS credentials found for Bedrock realtime"):
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=RealtimeClientWS(),
+                logging_obj=MagicMock(),
+                aws_region_name="us-east-1",
+            )
+
+        assert "config_kwargs" not in stub_aws_sdk_client
 
 
 if __name__ == "__main__":

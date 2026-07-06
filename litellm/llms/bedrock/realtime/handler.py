@@ -13,6 +13,7 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ..base_aws_llm import BaseAWSLLM
+from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
 
@@ -80,7 +81,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug(f"Bedrock Realtime: Connecting to {endpoint_uri} with model {model}")
 
-        frozen_credentials = self.get_credentials(
+        credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -91,7 +92,16 @@ class BedrockRealtime(BaseAWSLLM):
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
-        ).get_frozen_credentials()
+        )
+        if credentials is None:
+            raise BedrockError(
+                status_code=401,
+                message=(
+                    "No AWS credentials found for Bedrock realtime. Set aws_* params in litellm_params "
+                    "or configure credentials in the environment"
+                ),
+            )
+        frozen_credentials = credentials.get_frozen_credentials()
 
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
         config = Config(
