@@ -397,6 +397,16 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
+            # Bedrock Converse rejects requests where a ``toolResult`` is not
+            # adjacent to its ``toolUse``. The Responses API itself does not
+            # require strict adjacency, so upstream clients sometimes inject a
+            # ``message`` between a ``function_call`` and its
+            # ``function_call_output``. Normalise that here, before the
+            # conversion runs, so every downstream provider sees a payload
+            # that satisfies the strictest contract.
+            input = LiteLLMCompletionResponsesConfig._reorder_function_call_outputs_adjacent(
+                list(input)
+            )
             existing_tool_call_ids: Set[str] = set()
             for _input in input:
                 chat_completion_messages = (
@@ -941,6 +951,66 @@ class LiteLLMCompletionResponsesConfig:
             "computer_call_output",
             "tool_result",  # Anthropic/MCP format
         ]
+
+    @staticmethod
+    def _reorder_function_call_outputs_adjacent(
+        items: List[Any],
+    ) -> List[Any]:
+        """Move every ``function_call_output`` immediately after its matching
+        ``function_call`` (by ``call_id``).
+
+        OpenAI's Responses API tolerates other input items (for example a
+        ``message`` injected by an upstream client) between a ``function_call``
+        and its ``function_call_output``. Bedrock Converse, however, requires
+        each ``toolResult`` block to live in the ``user`` message *immediately*
+        following the assistant message that emitted the matching ``toolUse``.
+
+        When a Responses-API request is converted to Chat Completions and then
+        to Converse, that adjacency invariant is silently lost and Bedrock
+        rejects the request with HTTP 400::
+
+            BedrockException - The number of toolResult blocks at messages.N.content
+            exceeds the number of toolUse blocks of previous turn.
+
+        Restoring the adjacency at the Responses → Chat Completions boundary is
+        provider-agnostic: OpenAI accepts the reordered input as well, so this
+        is safe for every backend that consumes the converted request.
+
+        The helper preserves relative order for everything else, is idempotent,
+        and only touches items it can pair by ``call_id``.
+        """
+        if not isinstance(items, list) or not items:
+            return items
+
+        result = list(items)
+        i = 0
+        while i < len(result):
+            it = result[i]
+            if (
+                isinstance(it, dict)
+                and it.get("type") == "function_call_output"
+            ):
+                call_id = it.get("call_id")
+                if call_id:
+                    # Find the most recent matching function_call before i.
+                    fc_idx: Optional[int] = None
+                    for k in range(i - 1, -1, -1):
+                        prev = result[k]
+                        if (
+                            isinstance(prev, dict)
+                            and prev.get("type") == "function_call"
+                            and prev.get("call_id") == call_id
+                        ):
+                            fc_idx = k
+                            break
+                    if fc_idx is not None and fc_idx != i - 1:
+                        out = result.pop(i)
+                        result.insert(fc_idx + 1, out)
+                        # Position i now holds what was at i+1, so don't
+                        # advance the cursor.
+                        continue
+            i += 1
+        return result
 
     @staticmethod
     def _is_input_item_function_call(input_item: Any) -> bool:
