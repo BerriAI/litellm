@@ -4124,11 +4124,11 @@ def _init_custom_logger_compatible_class(
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, AsqavLogger):
-                    return callback  # type: ignore
+                    return callback
 
             asqav_logger = AsqavLogger()
             _in_memory_loggers.append(asqav_logger)
-            return asqav_logger  # type: ignore
+            return asqav_logger
         return None
     except Exception as e:
         verbose_logger.exception(f"[Non-Blocking Error] Error initializing custom logger: {e}")
