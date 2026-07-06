@@ -160,9 +160,9 @@ def _extract_loggable(
         if hasattr(response_obj, "choices") and response_obj.choices:
             finish_reason = response_obj.choices[0].finish_reason
         if hasattr(response_obj, "_hidden_params"):
-            provider_request_id = response_obj._hidden_params.get(
-                "x-request-id"
-            ) or response_obj._hidden_params.get("cf-ray")
+            provider_request_id = response_obj._hidden_params.get("x-request-id") or response_obj._hidden_params.get(
+                "cf-ray"
+            )
     except Exception:
         pass
 
@@ -186,9 +186,7 @@ def _extract_loggable(
     except Exception:
         pass
     if not call_id:
-        call_id = kwargs.get("litellm_call_id") or kwargs.get(
-            "id", str(int(time.time() * 1e6))
-        )
+        call_id = kwargs.get("litellm_call_id") or kwargs.get("id", str(int(time.time() * 1e6)))
 
     return {
         "call_id": call_id,
@@ -206,9 +204,7 @@ def _extract_loggable(
     }
 
 
-def _cloud_sign_payload(
-    record: dict[str, Any], pre_receipt_hash: str
-) -> dict[str, Any]:
+def _cloud_sign_payload(record: dict[str, Any], pre_receipt_hash: str) -> dict[str, Any]:
     """Build the digests-only body for the agent sign endpoint.
 
     The signed payload is body["hash"]; the cloud signs it verbatim in hash mode
@@ -274,21 +270,15 @@ class AsqavLogger(CustomLogger):
     ) -> None:
         super().__init__()
 
-        self._log_path: str = log_path or os.environ.get(
-            "ASQAV_LOG_PATH", _DEFAULT_LOG_PATH
-        )
+        self._log_path: str = log_path or os.environ.get("ASQAV_LOG_PATH", _DEFAULT_LOG_PATH)
         self._redact_content: bool = (
-            os.environ.get("ASQAV_REDACT_CONTENT", "true").lower() != "false"
-            if log_path is None
-            else redact_content
+            os.environ.get("ASQAV_REDACT_CONTENT", "true").lower() != "false" if log_path is None else redact_content
         )
 
         # Optional cloud signing. Active only when both env vars are present.
         self._cloud_api_key: str | None = os.environ.get("ASQAV_API_KEY") or None
         self._cloud_agent_id: str | None = os.environ.get("ASQAV_AGENT_ID") or None
-        self._cloud_api_base: str = (
-            os.environ.get("ASQAV_API_BASE") or _DEFAULT_ASQAV_API_BASE
-        ).rstrip("/")
+        self._cloud_api_base: str = (os.environ.get("ASQAV_API_BASE") or _DEFAULT_ASQAV_API_BASE).rstrip("/")
 
         self._lock: threading.Lock = threading.Lock()
         self._call_count: int = 0
@@ -299,10 +289,7 @@ class AsqavLogger(CustomLogger):
         self._load_chain_tail()
 
     def __repr__(self) -> str:
-        return (
-            f"AsqavLogger(log_path={self._log_path!r},"
-            f" redact_content={self._redact_content})"
-        )
+        return f"AsqavLogger(log_path={self._log_path!r}, redact_content={self._redact_content})"
 
     # ------------------------------------------------------------------
     # Chain state persistence
@@ -348,9 +335,7 @@ class AsqavLogger(CustomLogger):
             self._prev_hash = last_main.get("record_hash", _GENESIS_HASH)
             self._call_count = last_main.get("seq", -1) + 1
         except Exception:
-            verbose_logger.debug(
-                f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}"
-            )
+            verbose_logger.debug(f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}")
 
     # ------------------------------------------------------------------
     # Core record append
@@ -370,18 +355,14 @@ class AsqavLogger(CustomLogger):
         on-disk order always matches the chain order.
         """
         try:
-            loggable = _extract_loggable(
-                kwargs, response_obj, start_time, end_time, status
-            )
+            loggable = _extract_loggable(kwargs, response_obj, start_time, end_time, status)
 
             if not self._redact_content:
                 # Store content in the clear when the operator explicitly opts in.
                 loggable["messages"] = kwargs.get("messages")
                 try:
                     if hasattr(response_obj, "choices") and response_obj.choices:
-                        loggable["response_content"] = response_obj.choices[
-                            0
-                        ].message.content
+                        loggable["response_content"] = response_obj.choices[0].message.content
                 except Exception:
                     pass
 
@@ -403,14 +384,10 @@ class AsqavLogger(CustomLogger):
 
             cloud = self._maybe_cloud_sign(hashable, record_hash)
             if cloud is not None:
-                self._write_record(
-                    {"seq": seq, "record_hash": record_hash, "asqav_cloud": cloud}
-                )
+                self._write_record({"seq": seq, "record_hash": record_hash, "asqav_cloud": cloud})
 
         except Exception:
-            verbose_logger.debug(
-                f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}"
-            )
+            verbose_logger.debug(f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}")
 
     def _write_record(self, record: dict[str, Any]) -> bool:
         """Append one record to the log file. Returns False if the write failed."""
@@ -441,18 +418,14 @@ class AsqavLogger(CustomLogger):
                 raise
             return True
         except Exception:
-            verbose_logger.warning(
-                f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}"
-            )
+            verbose_logger.warning(f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}")
             return False
 
     # ------------------------------------------------------------------
     # Optional cloud signing
     # ------------------------------------------------------------------
 
-    def _maybe_cloud_sign(
-        self, record: dict[str, Any], pre_receipt_hash: str
-    ) -> dict[str, Any] | None:
+    def _maybe_cloud_sign(self, record: dict[str, Any], pre_receipt_hash: str) -> dict[str, Any] | None:
         """POST the record's digests to the asqav sign endpoint, fail-soft.
 
         pre_receipt_hash is the canonical content hash the signature binds to.
@@ -467,9 +440,7 @@ class AsqavLogger(CustomLogger):
             from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
             client = _get_httpx_client()
-            url = (
-                f"{self._cloud_api_base}/api/v1/agents/" f"{self._cloud_agent_id}/sign"
-            )
+            url = f"{self._cloud_api_base}/api/v1/agents/{self._cloud_agent_id}/sign"
             resp = client.post(
                 url,
                 json=_cloud_sign_payload(record, pre_receipt_hash),
@@ -478,9 +449,7 @@ class AsqavLogger(CustomLogger):
             )
             status_code = getattr(resp, "status_code", 0)
             if status_code and not (200 <= status_code < 300):
-                verbose_logger.debug(
-                    f"[AsqavLogger] cloud sign returned HTTP {status_code}"
-                )
+                verbose_logger.debug(f"[AsqavLogger] cloud sign returned HTTP {status_code}")
                 return None
             data = resp.json()
             receipt = {
@@ -491,23 +460,17 @@ class AsqavLogger(CustomLogger):
             }
             return {k: v for k, v in receipt.items() if v is not None} or None
         except Exception:  # noqa: BLE001  # fail-soft, never break logging
-            verbose_logger.debug(
-                f"[AsqavLogger] cloud sign skipped: {traceback.format_exc()}"
-            )
+            verbose_logger.debug(f"[AsqavLogger] cloud sign skipped: {traceback.format_exc()}")
             return None
 
     # ------------------------------------------------------------------
     # CustomLogger hooks
     # ------------------------------------------------------------------
 
-    def log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
-    ) -> None:
+    def log_success_event(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
-    def log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
-    ) -> None:
+    def log_failure_event(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
@@ -563,28 +526,20 @@ class AsqavLogger(CustomLogger):
                         continue
 
                     stored_hash = record.get("record_hash", "")
-                    hashable = {
-                        k: v
-                        for k, v in record.items()
-                        if k not in ("record_hash", "asqav_cloud")
-                    }
+                    hashable = {k: v for k, v in record.items() if k not in ("record_hash", "asqav_cloud")}
                     computed_hash = _sha256_hex(_canonical_bytes(hashable))
 
                     if computed_hash != stored_hash:
                         return (
                             False,
-                            f"line {lineno}: hash mismatch"
-                            f" (stored={stored_hash[:12]},"
-                            f" computed={computed_hash[:12]})",
+                            f"line {lineno}: hash mismatch (stored={stored_hash[:12]}, computed={computed_hash[:12]})",
                         )
 
                     rec_prev = record.get("prev_hash", _GENESIS_HASH)
                     if rec_prev != prev_hash:
                         return (
                             False,
-                            f"line {lineno}: prev_hash chain break"
-                            f" (expected={prev_hash[:12]},"
-                            f" got={rec_prev[:12]})",
+                            f"line {lineno}: prev_hash chain break (expected={prev_hash[:12]}, got={rec_prev[:12]})",
                         )
 
                     prev_hash = stored_hash
