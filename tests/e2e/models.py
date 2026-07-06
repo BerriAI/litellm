@@ -299,16 +299,67 @@ class CustomPricing(BaseModel):
 
 
 class DeploymentParams(BaseModel):
-    """The configured litellm_params a /model/info row reports for a deployment:
-    the backend `model` string, the per-deployment rate limit, and any
-    custom-pricing override (same field names as CustomPricing so pricing tests
-    read them unchanged)."""
+    """The configured litellm_params a /model/info row reports for a deployment,
+    mirroring litellm's LiteLLM_Params (litellm/types/router.py) field for field
+    so tests can assert any configured knob. Same pricing field names as
+    CustomPricing, so pricing tests read them unchanged. Secrets (api_key et al)
+    come back encrypted, so tests assert presence, never the value. Deliberately
+    omitted because they have no typed JSON shape to pin: mock_response,
+    model_info (surfaced as ModelInfoEntry.model_info), the *_router_config
+    blobs, and configurable_clientside_auth_params."""
 
     model_config = ConfigDict(extra="ignore", protected_namespaces=())
+
     model: str | None = None
+    custom_llm_provider: str | None = None
+
+    api_key: str | None = None
+    api_base: str | None = None
+    api_version: str | None = None
+    organization: str | None = None
+    litellm_credential_name: str | None = None
+
     tpm: int | None = None
+    rpm: int | None = None
+    itpm: int | None = None
+    otpm: int | None = None
+    max_parallel_requests: int | None = None
+    order: int | None = None
+    weight: int | None = None
+
+    timeout: float | str | None = None
+    stream_timeout: float | str | None = None
+    max_retries: int | None = None
+
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    default_api_key_tpm_limit: int | None = None
+    default_api_key_rpm_limit: int | None = None
+
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_second: float | None = None
+    output_cost_per_second: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+
+    tags: list[str] | None = None
+    tag_regex: list[str] | None = None
+
+    use_in_pass_through: bool | None = None
+    use_litellm_proxy: bool | None = None
+    use_chat_completions_api: bool | None = None
+    use_xai_oauth: bool | None = None
+    merge_reasoning_content_in_choices: bool | None = None
+
+    region_name: str | None = None
+    aws_region_name: str | None = None
+    vertex_project: str | None = None
+    vertex_location: str | None = None
+    watsonx_region_name: str | None = None
+
+    max_file_size_mb: float | None = None
+    litellm_trace_id: str | None = None
 
 
 class ModelInfoEntry(BaseModel):
