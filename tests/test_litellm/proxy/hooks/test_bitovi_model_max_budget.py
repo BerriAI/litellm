@@ -416,3 +416,279 @@ def test_validate_model_max_budget_without_enterprise_license() -> None:
             "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "30d"},
         }
     )
+
+
+def _team_model_budget() -> dict:
+    return {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+
+
+def _budget_config_for_model(model: str = "claude-sonnet-4-6"):
+    return _to_internal_model_max_budget(_team_model_budget())[model]
+
+
+@pytest.mark.asyncio
+async def test_human_user_single_key_team_budget_tracks_team_member_spend(budget_limiter):
+    team_budget = _team_model_budget()
+    budget_config = _budget_config_for_model()
+
+    await budget_limiter._increment_model_budget_spend(
+        response_cost=5.0,
+        model="claude-sonnet-4-6",
+        budget_config=budget_config,
+        scope="team",
+        virtual_key="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        end_user_id=None,
+        litellm_call_id=None,
+    )
+
+    usage = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+
+    assert usage["claude-sonnet-4-6"]["current_spend"] == 5.0
+    assert usage["claude-sonnet-4-6"]["scope"] == "team"
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    user_api_key = UserAPIKeyAuth(
+        token="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        model_max_budget={},
+    )
+    assert (
+        await budget_limiter.is_key_within_model_budget(
+            user_api_key,
+            "claude-sonnet-4-6",
+            team_model_max_budget=team_budget,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_human_user_two_keys_share_team_member_spend_pool(budget_limiter):
+    import litellm
+
+    team_budget = _team_model_budget()
+    budget_config = _budget_config_for_model()
+    key_a_spend = 7.0
+    key_b_spend = 8.0
+    key_a_final_increment = 6.0
+
+    await budget_limiter._increment_model_budget_spend(
+        response_cost=key_a_spend,
+        model="claude-sonnet-4-6",
+        budget_config=budget_config,
+        scope="team",
+        virtual_key="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        end_user_id=None,
+        litellm_call_id=None,
+    )
+
+    usage_on_key_a = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    usage_on_key_b = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="key-b",
+        team_id="team-1",
+        user_id="user-1",
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    assert usage_on_key_a["claude-sonnet-4-6"]["current_spend"] == key_a_spend
+    assert usage_on_key_b["claude-sonnet-4-6"]["current_spend"] == key_a_spend
+    assert usage_on_key_a["claude-sonnet-4-6"]["scope"] == "team"
+    assert usage_on_key_b["claude-sonnet-4-6"]["scope"] == "team"
+
+    await budget_limiter._increment_model_budget_spend(
+        response_cost=key_b_spend,
+        model="claude-sonnet-4-6",
+        budget_config=budget_config,
+        scope="team",
+        virtual_key="key-b",
+        team_id="team-1",
+        user_id="user-1",
+        end_user_id=None,
+        litellm_call_id=None,
+    )
+
+    shared_spend_after_both = key_a_spend + key_b_spend
+    usage_on_key_a_after_b = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    assert usage_on_key_a_after_b["claude-sonnet-4-6"]["current_spend"] == shared_spend_after_both
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    user_api_key_a = UserAPIKeyAuth(
+        token="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        model_max_budget={},
+    )
+    assert (
+        await budget_limiter.is_key_within_model_budget(
+            user_api_key_a,
+            "claude-sonnet-4-6",
+            team_model_max_budget=team_budget,
+        )
+        is True
+    )
+
+    await budget_limiter._increment_model_budget_spend(
+        response_cost=key_a_final_increment,
+        model="claude-sonnet-4-6",
+        budget_config=budget_config,
+        scope="team",
+        virtual_key="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        end_user_id=None,
+        litellm_call_id=None,
+    )
+
+    user_api_key_b = UserAPIKeyAuth(
+        token="key-b",
+        team_id="team-1",
+        user_id="user-1",
+        model_max_budget={},
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await budget_limiter.is_key_within_model_budget(
+            user_api_key_b,
+            "claude-sonnet-4-6",
+            team_model_max_budget=team_budget,
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_account_two_keys_have_independent_spend_pools(budget_limiter):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX,
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    team_budget = _team_model_budget()
+    budget_config = _budget_config_for_model()
+    sa_key_a_spend = 12.0
+    sa_key_b_spend = 5.0
+
+    await budget_limiter._increment_model_budget_spend(
+        response_cost=sa_key_a_spend,
+        model="claude-sonnet-4-6",
+        budget_config=budget_config,
+        scope="team",
+        virtual_key="sa-key-a",
+        team_id="team-1",
+        user_id=None,
+        end_user_id=None,
+        litellm_call_id=None,
+    )
+
+    usage_on_key_a = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="sa-key-a",
+        team_id="team-1",
+        user_id=None,
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    usage_on_key_b = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="sa-key-b",
+        team_id="team-1",
+        user_id=None,
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    assert usage_on_key_a["claude-sonnet-4-6"]["current_spend"] == sa_key_a_spend
+    assert usage_on_key_b["claude-sonnet-4-6"]["current_spend"] == 0.0
+    assert usage_on_key_a["claude-sonnet-4-6"]["scope"] == "key"
+    assert usage_on_key_b["claude-sonnet-4-6"]["scope"] == "key"
+
+    sa_key_b = UserAPIKeyAuth(
+        token="sa-key-b",
+        team_id="team-1",
+        user_id=None,
+        model_max_budget={},
+    )
+    assert (
+        await budget_limiter.is_key_within_model_budget(
+            sa_key_b,
+            "claude-sonnet-4-6",
+            team_model_max_budget=team_budget,
+        )
+        is True
+    )
+
+    await budget_limiter._increment_model_budget_spend(
+        response_cost=sa_key_b_spend,
+        model="claude-sonnet-4-6",
+        budget_config=budget_config,
+        scope="team",
+        virtual_key="sa-key-b",
+        team_id="team-1",
+        user_id=None,
+        end_user_id=None,
+        litellm_call_id=None,
+    )
+
+    usage_on_key_a_after_b = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="sa-key-a",
+        team_id="team-1",
+        user_id=None,
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    usage_on_key_b_after_b = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="sa-key-b",
+        team_id="team-1",
+        user_id=None,
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+    assert usage_on_key_a_after_b["claude-sonnet-4-6"]["current_spend"] == sa_key_a_spend
+    assert usage_on_key_b_after_b["claude-sonnet-4-6"]["current_spend"] == sa_key_b_spend
+
+    team_member_key = (
+        f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:team-1:user-1:claude-sonnet-4-6:1d"
+    )
+    sa_key_a_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-a:claude-sonnet-4-6:1d"
+    sa_key_b_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-b:claude-sonnet-4-6:1d"
+    assert await budget_limiter.dual_cache.async_get_cache(key=team_member_key) is None
+    assert await budget_limiter.dual_cache.async_get_cache(key=sa_key_a_spend_key) == sa_key_a_spend
+    assert await budget_limiter.dual_cache.async_get_cache(key=sa_key_b_spend_key) == sa_key_b_spend

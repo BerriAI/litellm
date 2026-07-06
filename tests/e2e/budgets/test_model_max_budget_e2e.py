@@ -197,17 +197,21 @@ class TestTeamModelMaxBudget:
         require_successful_call(other)
 
 
-def test_team_model_max_budget_human_shared_and_sa_isolated(
+def _setup_shared_team_model_budget(
     client: BudgetClient,
     resources: ResourceManager,
-) -> None:
+    *,
+    marker_prefix: str,
+) -> tuple[str, str]:
     marker = unique_marker()
-    team_id = client.create_team(alias=f"e2e-team-shared-model-budget-{marker}", max_budget=TEAM_BUDGET)
+    team_id = client.create_team(
+        alias=f"{marker_prefix}-{marker}",
+        max_budget=TEAM_BUDGET,
+    )
     resources.defer(lambda: client.delete_team(team_id))
     user_id = client.create_user(max_budget=TEAM_BUDGET)
     resources.defer(lambda: client.delete_user(user_id))
     client.add_team_member(team_id, user_id)
-
     client.update_team(
         team_id,
         model_max_budget={
@@ -215,15 +219,23 @@ def test_team_model_max_budget_human_shared_and_sa_isolated(
             **model_budget(FREE_MODEL, 1000.0),
         },
     )
+    return team_id, user_id
+
+
+def test_human_user_two_keys_share_team_model_budget(
+    client: BudgetClient,
+    resources: ResourceManager,
+) -> None:
+    team_id, user_id = _setup_shared_team_model_budget(
+        client,
+        resources,
+        marker_prefix="e2e-team-shared-model-budget",
+    )
 
     human_key_a = client.generate_key(team_id=team_id, user_id=user_id)
     human_key_b = client.generate_key(team_id=team_id, user_id=user_id)
-    sa_key_a = client.generate_key(team_id=team_id, user_id=None)
-    sa_key_b = client.generate_key(team_id=team_id, user_id=None)
     resources.defer(lambda: client.delete_key(human_key_a))
     resources.defer(lambda: client.delete_key(human_key_b))
-    resources.defer(lambda: client.delete_key(sa_key_a))
-    resources.defer(lambda: client.delete_key(sa_key_b))
 
     first_human = _call(client, human_key_a, CAPPED_MODEL)
     require_successful_call(first_human)
@@ -246,6 +258,22 @@ def test_team_model_max_budget_human_shared_and_sa_isolated(
         f"{FREE_MODEL} blocked after {CAPPED_MODEL} cap; per-model team budgets not isolated"
     )
     require_successful_call(free_after_cap)
+
+
+def test_service_account_keys_have_independent_team_model_budgets(
+    client: BudgetClient,
+    resources: ResourceManager,
+) -> None:
+    team_id, _user_id = _setup_shared_team_model_budget(
+        client,
+        resources,
+        marker_prefix="e2e-team-sa-model-budget",
+    )
+
+    sa_key_a = client.generate_key(team_id=team_id, user_id=None)
+    sa_key_b = client.generate_key(team_id=team_id, user_id=None)
+    resources.defer(lambda: client.delete_key(sa_key_a))
+    resources.defer(lambda: client.delete_key(sa_key_b))
 
     sa_first = _call(client, sa_key_a, CAPPED_MODEL)
     require_successful_call(sa_first)

@@ -612,6 +612,92 @@ def _check_permissions_caller_permission(
     )
 
 
+def _model_max_budget_is_nonempty(model_max_budget: Optional[dict]) -> bool:
+    return model_max_budget is not None and len(model_max_budget) > 0
+
+
+def _team_has_model_max_budget(team_table: Optional[LiteLLM_TeamTableCachedObj]) -> bool:
+    return (
+        team_table is not None
+        and team_table.model_max_budget is not None
+        and len(team_table.model_max_budget) > 0
+    )
+
+
+def _caller_can_set_key_model_max_budget(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> bool:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
+    if team_table is not None and _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=team_table,
+    ):
+        return True
+    return False
+
+
+def _enforce_model_max_budget_caller_permission(
+    data: GenerateRequestBase,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    if _caller_can_set_key_model_max_budget(user_api_key_dict, team_table):
+        return
+    if "model_max_budget" in data.model_fields_set:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins or team admins can set `model_max_budget` on a key."},
+        )
+
+
+def _apply_model_max_budget_generation_policy(
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    can_set_key_model_max_budget = _caller_can_set_key_model_max_budget(
+        user_api_key_dict,
+        team_table,
+    )
+    _enforce_model_max_budget_caller_permission(
+        data,
+        user_api_key_dict,
+        team_table,
+    )
+
+    if litellm.default_key_generate_params is not None:
+        for elem in data:
+            key, value = elem
+            if value is None and key in [
+                "max_budget",
+                "user_id",
+                "team_id",
+                "max_parallel_requests",
+                "tpm_limit",
+                "rpm_limit",
+                "budget_duration",
+                "duration",
+            ]:
+                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+            elif key == "models" and value == []:
+                setattr(data, key, litellm.default_key_generate_params.get(key, []))
+            elif key == "metadata" and value == {}:
+                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+            elif key == "model_max_budget" and (value is None or value == {}):
+                if can_set_key_model_max_budget or not _team_has_model_max_budget(team_table):
+                    setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+
+    if not can_set_key_model_max_budget and _team_has_model_max_budget(team_table):
+        data.model_max_budget = {}
+    elif can_set_key_model_max_budget and team_table is not None and team_table.model_max_budget:
+        data.model_max_budget = resolve_effective_model_max_budget(
+            key_model_max_budget=data.model_max_budget,
+            team_model_max_budget=team_table.model_max_budget,
+        )
+
+
 def _check_budget_limits_delegation_ceiling(
     budget_limits: Optional[List[BudgetLimitEntry]],
     delegation_ceiling: Optional[float],
@@ -792,33 +878,11 @@ async def _common_key_generation_helper(
     _requested_max_budget = data.max_budget
     _requested_team_id = data.team_id
 
-    # check if user set default key/generate params on config.yaml
-    if litellm.default_key_generate_params is not None:
-        for elem in data:
-            key, value = elem
-            if value is None and key in [
-                "max_budget",
-                "user_id",
-                "team_id",
-                "max_parallel_requests",
-                "tpm_limit",
-                "rpm_limit",
-                "budget_duration",
-                "duration",
-            ]:
-                setattr(data, key, litellm.default_key_generate_params.get(key, None))
-            elif key == "models" and value == []:
-                setattr(data, key, litellm.default_key_generate_params.get(key, []))
-            elif key == "metadata" and value == {}:
-                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
-            elif key == "model_max_budget" and (value is None or value == {}):
-                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
-
-    if team_table is not None and team_table.model_max_budget:
-        data.model_max_budget = resolve_effective_model_max_budget(
-            key_model_max_budget=data.model_max_budget,
-            team_model_max_budget=team_table.model_max_budget,
-        )
+    _apply_model_max_budget_generation_policy(
+        data,
+        user_api_key_dict,
+        team_table,
+    )
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
@@ -2400,6 +2464,12 @@ async def _validate_update_key_data(
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    _enforce_model_max_budget_caller_permission(
+        data,
+        user_api_key_dict,
+        team_obj,
+    )
 
     TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -4541,6 +4611,19 @@ async def _execute_virtual_key_regeneration(
 
     non_default_values = {}
     if data is not None:
+        regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        if key_in_db.team_id is not None:
+            regenerate_team_table = await get_team_object(
+                team_id=key_in_db.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+        _enforce_model_max_budget_caller_permission(
+            data,
+            user_api_key_dict,
+            regenerate_team_table,
+        )
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values = await prepare_key_update_data(data=data, existing_key_row=key_in_db)

@@ -370,6 +370,8 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/global/activity/cache_hits", "proxy_admin", True),
         # Internal User - allowed read-only routes
         ("/spend/logs/ui", "internal_user", True),
+        ("/key/generate", "internal_user", True),
+        ("/key/info", "internal_user", True),
         ("/global/activity/cache_hits", "internal_user", True),
         ("/health/services", "internal_user", True),
         # Internal User - BLOCKED from admin routes (security fix)

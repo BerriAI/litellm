@@ -13456,6 +13456,235 @@ async def test_info_key_fn_includes_team_default_model_max_budget_usage(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_internal_user_can_view_own_key_model_max_budget_usage(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_internal_user_view"
+    team_model_max_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_user_api_key_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    _install_test_model_max_budget_limiter(
+        monkeypatch,
+        spends={"claude-sonnet-4-6": 4.0},
+    )
+
+    mock_team = MagicMock()
+    mock_team.model_max_budget = team_model_max_budget
+    mock_team.metadata = {}
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=mock_team),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        AsyncMock(return_value=None),
+    )
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-internal"
+    mock_key_info.team_id = "team-systems"
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": {},
+        "user_id": "user-internal",
+        "team_id": "team-systems",
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    mock_prisma_client.db.query_raw = AsyncMock()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-internal",
+        api_key="sk-internal-user-key",
+    )
+
+    result = await info_key_fn(
+        key="sk-internal-user-key",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    usage = result["info"]["model_max_budget_usage"]
+    assert usage["claude-sonnet-4-6"]["current_spend"] == 4.0
+    assert usage["claude-sonnet-4-6"]["scope"] == "team"
+
+
+def test_internal_user_cannot_set_model_max_budget_on_generate():
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_model_max_budget_generation_policy,
+    )
+
+    team_table = MagicMock()
+    team_table.model_max_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    data = GenerateKeyRequest.model_validate(
+        {
+            "team_id": "team-1",
+            "model_max_budget": {
+                "claude-sonnet-4-6": {"budget_limit": 100.0, "time_period": "1d"},
+            },
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_model_max_budget_generation_policy(
+            data,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+            team_table,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_internal_user_cannot_set_model_max_budget_on_update():
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _enforce_model_max_budget_caller_permission,
+    )
+
+    team_table = MagicMock()
+    data = UpdateKeyRequest.model_validate(
+        {
+            "key": "sk-test",
+            "model_max_budget": {
+                "claude-sonnet-4-6": {"budget_limit": 100.0, "time_period": "1d"},
+            },
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_model_max_budget_caller_permission(
+            data,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+            team_table,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_proxy_admin_can_set_model_max_budget_on_generate():
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_model_max_budget_generation_policy,
+    )
+
+    team_table = MagicMock()
+    team_table.model_max_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    data = GenerateKeyRequest.model_validate(
+        {
+            "team_id": "team-1",
+            "model_max_budget": {
+                "claude-sonnet-4-6": {"budget_limit": 5.0, "time_period": "7d"},
+            },
+        }
+    )
+
+    _apply_model_max_budget_generation_policy(
+        data,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        team_table,
+    )
+
+    assert data.model_max_budget["claude-sonnet-4-6"]["budget_limit"] == 5.0
+
+
+def test_team_admin_can_set_model_max_budget_on_generate(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_model_max_budget_generation_policy,
+    )
+
+    team_table = MagicMock()
+    team_table.model_max_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    data = GenerateKeyRequest.model_validate(
+        {
+            "team_id": "team-1",
+            "model_max_budget": {
+                "claude-sonnet-4-6": {"budget_limit": 8.0, "time_period": "7d"},
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin",
+        lambda user_api_key_dict, team_obj: True,
+    )
+
+    _apply_model_max_budget_generation_policy(
+        data,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+        team_table,
+    )
+
+    assert data.model_max_budget["claude-sonnet-4-6"]["budget_limit"] == 8.0
+
+
+def test_generate_with_team_budget_skips_default_key_generate_model_max_budget_for_internal_user(
+    monkeypatch,
+):
+    import litellm
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_model_max_budget_generation_policy,
+    )
+
+    original_defaults = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {
+        "model_max_budget": {
+            "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+        }
+    }
+    try:
+        team_table = MagicMock()
+        team_table.model_max_budget = {
+            "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+        }
+        data = GenerateKeyRequest(team_id="team-1")
+
+        _apply_model_max_budget_generation_policy(
+            data,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+            team_table,
+        )
+
+        assert data.model_max_budget == {}
+    finally:
+        litellm.default_key_generate_params = original_defaults
+
+
+@pytest.mark.asyncio
 async def test_build_model_max_budget_usage_no_cache_returns_empty():
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _build_model_max_budget_usage,
