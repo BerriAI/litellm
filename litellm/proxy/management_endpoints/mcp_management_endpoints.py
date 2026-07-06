@@ -43,7 +43,6 @@ except ImportError:
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
@@ -56,10 +55,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
-)
+
 from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
@@ -113,7 +109,6 @@ if MCP_AVAILABLE:
         approve_mcp_server,
         create_draft_mcp_server,
         create_mcp_server,
-        delete_expired_draft_mcp_servers,
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
