@@ -27,13 +27,21 @@ pytestmark = pytest.mark.e2e
 
 # Verified present and responsive on a live proxy. One per row of the spend
 # surface: key / user / team / org / customer aggregation, model-cost, tags,
-# activity.
+# activity. Most are include_in_schema=False, so keep this list exhaustive by
+# hand; the schema test below only auto-catches the visible minority. Excluded
+# by design: path-param routes (/spend/logs/ui/{request_id}), POST readers
+# (/spend/calculate has its own test, /global/spend/end_users), mutating
+# POSTs (/global/spend/reset, /global/spend/refresh), and /provider/budgets,
+# which 500s whenever router_settings.provider_budget_config is absent, so it
+# is only probeable on a proxy configured with provider budget routing.
 SPEND_ROUTES = (
     "/spend/keys",
     "/spend/users",
     "/spend/tags",
     "/spend/logs",
     "/spend/logs/ui",
+    "/spend/logs/v2",
+    "/spend/logs/session/ui",
     "/global/spend",
     "/global/spend/keys",
     "/global/spend/teams",
@@ -43,9 +51,18 @@ SPEND_ROUTES = (
     "/global/spend/tags",
     "/global/spend/logs",
     "/global/spend/all_tag_names",
+    "/global/all_end_users",
     "/global/activity",
     "/global/activity/model",
     "/global/activity/exceptions",
+    "/global/activity/exceptions/deployment",
+    "/user/daily/activity",
+    "/user/daily/activity/aggregated",
+    "/team/daily/activity",
+    "/organization/daily/activity",
+    "/customer/daily/activity",
+    "/end_user/daily/activity",
+    "/tag/daily/activity",
     "/key/list",
     "/user/list",
     "/team/list",
