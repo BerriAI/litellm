@@ -97,15 +97,11 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     def get_supported_openai_params(self, model: str) -> list:
         base_params = super().get_supported_openai_params(model)
         try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ):
+            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 if "reasoning_effort" not in base_params:
                     base_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug(
-                f"BedrockMantleChatConfig: error checking reasoning support: {e}"
-            )
+            verbose_logger.debug(f"BedrockMantleChatConfig: error checking reasoning support: {e}")
         return base_params
 
     def get_model_response_iterator(
