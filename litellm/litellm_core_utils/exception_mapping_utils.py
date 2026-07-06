@@ -2173,7 +2173,7 @@ def exception_type(  # type: ignore
     litellm_response_headers = _get_response_headers(original_exception=original_exception)
     try:
         error_str = redact_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
-        if model:
+        if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
                     redact_string(str(original_exception.message))
