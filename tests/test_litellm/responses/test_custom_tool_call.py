@@ -232,21 +232,31 @@ class TestTransformationCustomTools:
             )
 
     def test_function_call_input_item_with_empty_arguments_keeps_them_empty(self):
-        """A plain function_call input item with empty `arguments` must not be
-        rewritten into a `{"content": ...}` envelope, even if a stray `input`
-        key is present; that recovery is reserved for custom_tool_call items."""
-        item = {
-            "type": "function_call",
-            "call_id": "call_2",
-            "name": "get_weather",
-            "arguments": "",
-            "input": "stray value",
-        }
-        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
-            function_call=item
-        )
-        tool_call = messages[0]["tool_calls"][0]
-        assert tool_call["function"]["arguments"] == ""
+        """A plain function_call input item with empty or missing `arguments`
+        must produce an empty arguments string, never a `{"content": ...}`
+        envelope (that recovery is reserved for custom_tool_call items) and
+        never the literal string "None"."""
+        for item in (
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "get_weather",
+                "arguments": "",
+                "input": "stray value",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_3",
+                "name": "get_weather",
+            },
+        ):
+            messages = (
+                LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+                    function_call=item
+                )
+            )
+            tool_call = messages[0]["tool_calls"][0]
+            assert tool_call["function"]["arguments"] == ""
 
     def test_transform_regular_function_call_unchanged(self):
         """Test that regular function calls remain as ResponseFunctionToolCall."""

@@ -1096,7 +1096,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=function_call.get("name") or "",
-                arguments=str(raw_arguments),
+                arguments=str(raw_arguments or ""),
             ),
             index=0,
         )
