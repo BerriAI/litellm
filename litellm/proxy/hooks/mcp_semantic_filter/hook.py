@@ -193,6 +193,32 @@ class SemanticToolFilterHook(CustomLogger):
                 f"Semantic tool filter: all {len(native_tools)} tools are native, no MCP filtering applied"
             )
 
+    def _emit_filter_metadata_safe(
+        self,
+        data: dict,
+        mcp_tools: list[object],
+        filtered_mcp_tools: list[object],
+        native_tools: list[object],
+        filtered_tools: list[object],
+    ) -> None:
+        """
+        Emit filter metadata without letting an emission failure abort the
+        already-filtered request.
+        """
+        try:
+            self._emit_filter_metadata(
+                data=data,
+                mcp_tools=mcp_tools,
+                filtered_mcp_tools=filtered_mcp_tools,
+                native_tools=native_tools,
+                filtered_tools=filtered_tools,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to emit semantic filter metadata: {e}",
+                exc_info=True,
+            )
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -233,11 +259,16 @@ class SemanticToolFilterHook(CustomLogger):
                     verbose_proxy_logger.warning("No tools expanded from MCP references")
                     return None
 
+                if not self.filter.enabled:
+                    data["tools"] = native_tools_before_expand + expanded_tools
+                    verbose_proxy_logger.debug("Semantic filter disabled, forwarding expanded MCP tools unfiltered")
+                    return data
+
                 filtered_expanded_tools = await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools)
 
                 combined_tools = native_tools_before_expand + filtered_expanded_tools
                 data["tools"] = combined_tools
-                self._emit_filter_metadata(
+                self._emit_filter_metadata_safe(
                     data=data,
                     mcp_tools=expanded_tools,
                     filtered_mcp_tools=filtered_expanded_tools,
@@ -313,19 +344,13 @@ class SemanticToolFilterHook(CustomLogger):
 
             data["tools"] = filtered_tools
 
-            try:
-                self._emit_filter_metadata(
-                    data=data,
-                    mcp_tools=mcp_tools,
-                    filtered_mcp_tools=filtered_mcp_tools,
-                    native_tools=native_tools,
-                    filtered_tools=filtered_tools,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Failed to emit semantic filter metadata: {e}",
-                    exc_info=True,
-                )
+            self._emit_filter_metadata_safe(
+                data=data,
+                mcp_tools=mcp_tools,
+                filtered_mcp_tools=filtered_mcp_tools,
+                native_tools=native_tools,
+                filtered_tools=filtered_tools,
+            )
 
             return data
 

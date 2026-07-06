@@ -955,6 +955,70 @@ async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
 
 
 @pytest.mark.asyncio
+async def test_semantic_filter_hook_expansion_skips_filter_when_disabled():
+    """
+    When the filter is disabled at runtime (e.g. via the UI toggle), the
+    expansion path must forward all expanded tools and emit NO filter
+    stats, mirroring the generic path's enabled guard.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=False,
+    )
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+    hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+
+    data = {
+        "model": "gpt-4",
+        "input": [{"role": "user", "content": "Send an email", "type": "message"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            }
+        ],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert result is not None, "Hook should still expand MCP references when the filter is disabled"
+    assert len(result["tools"]) == 5, f"All expanded tools must be forwarded when disabled, got {len(result['tools'])}"
+    assert (
+        "litellm_semantic_filter_stats" not in result["metadata"]
+    ), "No filter stats may be emitted when the filter is disabled"
+
+    print("✅ Disabled filter: expansion preserved, no spurious stats")
+
+
+@pytest.mark.asyncio
 async def test_semantic_filter_hook_preserves_tool_order():
     """
     Regression test: tool ordering preservation.
