@@ -17,7 +17,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
+    custom_prompt_merge_messages,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -3085,3 +3087,70 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def test_custom_prompt_merge_messages_merges_string_content():
+    merged_content = custom_prompt_merge_messages("System prompt", "User prompt")
+    assert merged_content == "System prompt User prompt"
+
+
+def test_custom_prompt_merge_messages_normalizes_list_content():
+    merged_content = custom_prompt_merge_messages(
+        [{"type": "text", "text": "System prompt"}],
+        "User prompt",
+    )
+    assert merged_content == [{"type": "text", "text": "System prompt User prompt"}]
+
+
+def test_custom_prompt_merge_messages_merges_list_content_blocks():
+    merged_content = custom_prompt_merge_messages(
+        [{"type": "text", "text": "System prompt"}],
+        [{"type": "text", "text": "User prompt"}],
+    )
+    assert merged_content == [{"type": "text", "text": "System prompt User prompt"}]
+
+
+def test_map_system_message_pt_merges_list_content():
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "Listen here!"}]},
+        {"role": "user", "content": [{"type": "text", "text": "Hello there!"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+    assert new_messages[0]["content"] == [
+        {"type": "text", "text": "Listen here! Hello there!"}
+    ]
+
+
+def test_map_system_message_pt_merges_mixed_string_and_list_content():
+    messages = [
+        {"role": "system", "content": "Listen here!"},
+        {"role": "user", "content": [{"type": "text", "text": "Hello there!"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+    assert new_messages[0]["content"] == [
+        {"type": "text", "text": "Listen here! Hello there!"}
+    ]
+
+
+def test_map_system_message_pt_converts_trailing_system_list_content_to_user_message():
+    messages = [
+        {"role": "user", "content": "Hello there!"},
+        {"role": "system", "content": [{"type": "text", "text": "Listen here!"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 2
+    assert new_messages[0]["role"] == "user"
+    assert new_messages[1] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Listen here!"}],
+    }
