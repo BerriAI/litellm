@@ -5465,12 +5465,8 @@ class TestCheckOauth2UpstreamAuth:
         return MCPServer(**defaults)
 
     @staticmethod
-    def _patches(servers, db_headers, probe_result):
+    def _patches(db_headers, probe_result):
         return (
-            patch(
-                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-                new=AsyncMock(return_value=servers),
-            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
                 new=AsyncMock(return_value=db_headers),
@@ -5479,6 +5475,13 @@ class TestCheckOauth2UpstreamAuth:
                 "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
                 new=AsyncMock(return_value=probe_result),
             ),
+        )
+
+    @staticmethod
+    def _allowed_patch(servers):
+        return patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=servers),
         )
 
     @pytest.mark.asyncio
@@ -5490,17 +5493,14 @@ class TestCheckOauth2UpstreamAuth:
         upstream_www = (
             'Bearer error="invalid_token", resource_metadata="https://upstream/x"'
         )
-        allowed, db, probe = self._patches(
-            [self._oauth2_server()], None, (401, upstream_www)
-        )
-        with allowed, db, probe as mock_probe:
+        db, probe = self._patches(None, (401, upstream_www))
+        with db, probe as mock_probe:
             with pytest.raises(HTTPException) as exc_info:
                 await _check_oauth2_upstream_auth(
                     scope=self._scope(),
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                    mcp_servers=["oauth_test"],
                     oauth2_headers={"Authorization": "Bearer stale-token"},
-                    client_ip=None,
+                    allowed_servers=[self._oauth2_server()],
                 )
 
         assert exc_info.value.status_code == 401
@@ -5513,15 +5513,14 @@ class TestCheckOauth2UpstreamAuth:
             _check_oauth2_upstream_auth,
         )
 
-        allowed, db, probe = self._patches([self._oauth2_server()], None, (401, None))
-        with allowed, db, probe:
+        db, probe = self._patches(None, (401, None))
+        with db, probe:
             with pytest.raises(HTTPException) as exc_info:
                 await _check_oauth2_upstream_auth(
                     scope=self._scope(),
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                    mcp_servers=["oauth_test"],
                     oauth2_headers={"Authorization": "Bearer stale-token"},
-                    client_ip=None,
+                    allowed_servers=[self._oauth2_server()],
                 )
 
         assert exc_info.value.status_code == 401
@@ -5536,14 +5535,13 @@ class TestCheckOauth2UpstreamAuth:
             _check_oauth2_upstream_auth,
         )
 
-        allowed, db, probe = self._patches([self._oauth2_server()], None, (200, None))
-        with allowed, db, probe:
+        db, probe = self._patches(None, (200, None))
+        with db, probe:
             result = await _check_oauth2_upstream_auth(
                 scope=self._scope(),
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                mcp_servers=["oauth_test"],
                 oauth2_headers={"Authorization": "Bearer maybe-valid"},
-                client_ip=None,
+                allowed_servers=[self._oauth2_server()],
             )
 
         assert result is None
@@ -5554,18 +5552,16 @@ class TestCheckOauth2UpstreamAuth:
             _check_oauth2_upstream_auth,
         )
 
-        allowed, db, probe = self._patches(
-            [self._oauth2_server()],
+        db, probe = self._patches(
             {"Authorization": "Bearer db-fresh-token"},
             (200, None),
         )
-        with allowed, db, probe as mock_probe:
+        with db, probe as mock_probe:
             await _check_oauth2_upstream_auth(
                 scope=self._scope(),
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                mcp_servers=["oauth_test"],
                 oauth2_headers={"Authorization": "Bearer client-stale-token"},
-                client_ip=None,
+                allowed_servers=[self._oauth2_server()],
             )
 
         mock_probe.assert_awaited_once_with(self.SERVER_URL, "Bearer db-fresh-token")
@@ -5581,19 +5577,17 @@ class TestCheckOauth2UpstreamAuth:
         upstream_www = (
             'Bearer error="invalid_token", resource_metadata="https://upstream/x"'
         )
-        allowed, db, probe = self._patches(
-            [self._oauth2_server()],
+        db, probe = self._patches(
             {"Authorization": "Bearer stale-db-token"},
             (401, upstream_www),
         )
-        with allowed, db, probe as mock_probe:
+        with db, probe as mock_probe:
             with pytest.raises(HTTPException) as exc_info:
                 await _check_oauth2_upstream_auth(
                     scope=self._scope(),
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                    mcp_servers=["oauth_test"],
                     oauth2_headers={"Authorization": "Bearer client-token"},
-                    client_ip=None,
+                    allowed_servers=[self._oauth2_server()],
                 )
 
         assert exc_info.value.status_code == 401
@@ -5614,14 +5608,13 @@ class TestCheckOauth2UpstreamAuth:
             client_id="client-id",
             client_secret="client-secret",
         )
-        allowed, db, probe = self._patches([m2m_server], None, (401, "Bearer"))
-        with allowed, db, probe as mock_probe:
+        db, probe = self._patches(None, (401, "Bearer"))
+        with db, probe as mock_probe:
             result = await _check_oauth2_upstream_auth(
                 scope=self._scope(),
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                mcp_servers=["m2m_test"],
                 oauth2_headers={"Authorization": "Bearer sk-proxy-key"},
-                client_ip=None,
+                allowed_servers=[m2m_server],
             )
 
         assert result is None
@@ -5633,16 +5626,13 @@ class TestCheckOauth2UpstreamAuth:
             _check_oauth2_upstream_auth,
         )
 
-        allowed, db, probe = self._patches(
-            [self._oauth2_server()], None, (401, "Bearer")
-        )
-        with allowed, db, probe as mock_probe:
+        db, probe = self._patches(None, (401, "Bearer"))
+        with db, probe as mock_probe:
             result = await _check_oauth2_upstream_auth(
                 scope=self._scope(),
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                mcp_servers=["oauth_test"],
                 oauth2_headers=None,
-                client_ip=None,
+                allowed_servers=[self._oauth2_server()],
             )
 
         assert result is None
@@ -5690,10 +5680,6 @@ class TestCheckOauth2UpstreamAuth:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-                new=AsyncMock(return_value=servers),
-            ),
-            patch(
                 "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
                 new=AsyncMock(return_value=None),
             ),
@@ -5709,9 +5695,8 @@ class TestCheckOauth2UpstreamAuth:
                         user_api_key_auth=UserAPIKeyAuth(
                             api_key="sk-test", user_id="u1"
                         ),
-                        mcp_servers=["oauth_one", "oauth_two", "oauth_three"],
                         oauth2_headers={"Authorization": "Bearer stale-token"},
-                        client_ip=None,
+                        allowed_servers=servers,
                     ),
                     timeout=2.0,
                 )
@@ -5728,9 +5713,8 @@ class TestCheckOauth2UpstreamAuth:
         )
 
         upstream_www = 'Bearer error="invalid_token"'
-        allowed, db, probe = self._patches(
-            [self._oauth2_server()], None, (401, upstream_www)
-        )
+        servers = [self._oauth2_server()]
+        db, probe = self._patches(None, (401, upstream_www))
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
@@ -5752,8 +5736,8 @@ class TestCheckOauth2UpstreamAuth:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
                 new=AsyncMock(),
-            ),
-            allowed,
+            ) as mock_passthrough,
+            self._allowed_patch(servers) as mock_allowed,
             db,
             probe,
         ):
@@ -5764,6 +5748,8 @@ class TestCheckOauth2UpstreamAuth:
 
         assert exc_info.value.status_code == 401
         assert exc_info.value.headers["www-authenticate"] == upstream_www
+        mock_allowed.assert_awaited_once()
+        assert mock_passthrough.await_args.args[1] is servers
 
     @pytest.mark.asyncio
     async def test_missing_token_still_raises_proxy_challenge(self):
@@ -5806,15 +5792,14 @@ class TestCheckOauth2UpstreamAuth:
             _check_oauth2_upstream_auth,
         )
 
-        allowed, db, probe = self._patches([self._oauth2_server()], None, (403, None))
-        with allowed, db, probe:
+        db, probe = self._patches(None, (403, None))
+        with db, probe:
             with pytest.raises(HTTPException) as exc_info:
                 await _check_oauth2_upstream_auth(
                     scope=self._scope(),
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                    mcp_servers=["oauth_test"],
                     oauth2_headers={"Authorization": "Bearer valid-but-forbidden"},
-                    client_ip=None,
+                    allowed_servers=[self._oauth2_server()],
                 )
 
         assert exc_info.value.status_code == 403
@@ -5826,17 +5811,14 @@ class TestCheckOauth2UpstreamAuth:
             _check_oauth2_upstream_auth,
         )
 
-        allowed, db, probe = self._patches(
-            [self._oauth2_server(delegate_auth_to_upstream=True)], None, (401, None)
-        )
-        with allowed, db, probe:
+        db, probe = self._patches(None, (401, None))
+        with db, probe:
             with pytest.raises(HTTPException) as exc_info:
                 await _check_oauth2_upstream_auth(
                     scope=self._scope(),
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-                    mcp_servers=["oauth_test"],
                     oauth2_headers={"Authorization": "Bearer stale-token"},
-                    client_ip=None,
+                    allowed_servers=[self._oauth2_server(delegate_auth_to_upstream=True)],
                 )
 
         assert exc_info.value.status_code == 401
@@ -5850,9 +5832,8 @@ class TestCheckOauth2UpstreamAuth:
         from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
 
         upstream_www = 'Bearer error="invalid_token"'
-        allowed, db, probe = self._patches(
-            [self._oauth2_server()], None, (401, upstream_www)
-        )
+        servers = [self._oauth2_server()]
+        db, probe = self._patches(None, (401, upstream_www))
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
@@ -5874,8 +5855,8 @@ class TestCheckOauth2UpstreamAuth:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
                 new=AsyncMock(),
-            ),
-            allowed,
+            ) as mock_passthrough,
+            self._allowed_patch(servers) as mock_allowed,
             db,
             probe,
         ):
@@ -5884,6 +5865,8 @@ class TestCheckOauth2UpstreamAuth:
 
         assert exc_info.value.status_code == 401
         assert exc_info.value.headers["www-authenticate"] == upstream_www
+        mock_allowed.assert_awaited_once()
+        assert mock_passthrough.await_args.args[1] is servers
 
 
 def test_get_forwarded_auth_from_scope_extracts_header():

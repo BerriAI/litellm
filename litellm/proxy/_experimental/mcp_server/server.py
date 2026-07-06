@@ -3600,15 +3600,14 @@ if MCP_AVAILABLE:
 
     async def _check_passthrough_upstream_auth(
         scope: Scope,
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_servers: Optional[List[str]],
-        client_ip: Optional[str],
+        allowed_servers: list[MCPServer],
     ) -> None:
         """Probe pass-through upstream servers in parallel before the MCP session starts.
 
-        Only servers the caller's key is already authorized to reach are probed —
-        the list is derived from _get_allowed_mcp_servers so that a user cannot
-        trigger an upstream probe against a server their key is not permitted for.
+        ``allowed_servers`` must be the caller's authorized server set (from
+        _get_allowed_mcp_servers), not the raw user-supplied names, so that a
+        user cannot trigger an upstream probe against a server their key is not
+        permitted for.
 
         The MCP SDK commits HTTP 200 headers before invoking handlers, so a 401
         can only be returned before that point. This function raises HTTPException(401)
@@ -3619,13 +3618,6 @@ if MCP_AVAILABLE:
         if not forwarded_auth:
             return
 
-        # Use the authorized server set, not the raw user-supplied names, so that
-        # a caller cannot force a probe to a server their key is not allowed to use.
-        allowed_servers = await _get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
-        )
         passthrough_servers = [
             srv
             for srv in allowed_servers
@@ -3672,9 +3664,8 @@ if MCP_AVAILABLE:
     async def _check_oauth2_upstream_auth(
         scope: Scope,
         user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_servers: Optional[list[str]],
         oauth2_headers: Optional[dict[str, str]],
-        client_ip: Optional[str],
+        allowed_servers: list[MCPServer],
         allowed_server_ids: Optional[set[str]] = None,
     ) -> None:
         """Probe gateway-managed per-user OAuth2 upstreams with the token the
@@ -3685,18 +3676,15 @@ if MCP_AVAILABLE:
         non-401 responses and network errors fall through to the MCP session
         manager. M2M (client_credentials) servers are skipped via
         ``needs_user_oauth_token`` so the proxy key is never replayed upstream,
-        and only servers the caller's key is authorized to reach are probed.
+        and ``allowed_servers`` must be the caller's authorized server set
+        (from _get_allowed_mcp_servers) so only servers the caller's key is
+        authorized to reach are probed.
 
         The stored per-user token takes precedence over the caller's
         ``Authorization`` header, mirroring the call path so a stale client
         token (e.g. an editor's cached bearer) cannot trigger a spurious 401
         for a request that would have used the fresh DB token.
         """
-        allowed_servers = await _get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
-        )
         candidate_servers = tuple(
             server
             for server in allowed_servers
@@ -3804,10 +3792,17 @@ if MCP_AVAILABLE:
                 allowed_server_ids=toolset_allowed_server_ids,
             )
 
-            # Pre-flight auth check for pass-through servers.  Must run after
-            # toolset scoping so the probe list is derived from the fully-authorized
-            # server set, not the raw user-supplied names.
-            await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
+            # Pre-flight auth checks below share one authorized-server lookup.
+            # Must run after toolset scoping so the probe list is derived from
+            # the fully-authorized server set, not the raw user-supplied names.
+            preflight_allowed_servers = await _get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=_client_ip,
+            )
+
+            # Pre-flight auth check for pass-through servers.
+            await _check_passthrough_upstream_auth(scope, preflight_allowed_servers)
 
             # Pre-flight auth check for gateway-managed per-user OAuth2 servers so
             # a present-but-stale token surfaces the upstream 401 challenge instead
@@ -3815,9 +3810,8 @@ if MCP_AVAILABLE:
             await _check_oauth2_upstream_auth(
                 scope=scope,
                 user_api_key_auth=user_api_key_auth,
-                mcp_servers=mcp_servers,
                 oauth2_headers=oauth2_headers,
-                client_ip=_client_ip,
+                allowed_servers=preflight_allowed_servers,
                 allowed_server_ids=toolset_allowed_server_ids,
             )
 
@@ -4137,13 +4131,20 @@ if MCP_AVAILABLE:
                 allowed_server_ids=toolset_allowed_server_ids,
             )
 
+            # Pre-flight auth checks below share one authorized-server lookup.
+            # Must run after toolset scoping so the probe list is derived from
+            # the fully-authorized server set, not the raw user-supplied names.
+            preflight_allowed_servers = await _get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=_sse_client_ip,
+            )
+
             # Pre-flight auth check for pass-through servers: surface upstream
             # 401/403 as a proper challenge before the SSE session commits 200
             # headers, so clients can refresh their OAuth token instead of
-            # being stuck with a silently empty tool list. Must run after
-            # toolset scoping so the probe list is derived from the fully-
-            # authorized server set, not the raw user-supplied names.
-            await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _sse_client_ip)
+            # being stuck with a silently empty tool list.
+            await _check_passthrough_upstream_auth(scope, preflight_allowed_servers)
 
             # Pre-flight auth check for gateway-managed per-user OAuth2 servers
             # so a present-but-stale stored token surfaces the upstream 401
@@ -4152,9 +4153,8 @@ if MCP_AVAILABLE:
             await _check_oauth2_upstream_auth(
                 scope=scope,
                 user_api_key_auth=user_api_key_auth,
-                mcp_servers=mcp_servers,
                 oauth2_headers=oauth2_headers,
-                client_ip=_sse_client_ip,
+                allowed_servers=preflight_allowed_servers,
                 allowed_server_ids=toolset_allowed_server_ids,
             )
 
