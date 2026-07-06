@@ -34,6 +34,7 @@ from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
     GetPromptRequestParams,
     GetPromptResult,
+    PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
     TextContent,
@@ -41,7 +42,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_MAX_PAGES
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -487,15 +488,42 @@ class MCPClient:
         """
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
-        async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
+        async def _list_tools_operation(session: ClientSession) -> List[MCPTool]:
+            tools: List[MCPTool] = []
+            cursor: Optional[str] = None
+            pages_fetched = 0
+            seen_cursors: set[str] = set()
+
+            while True:
+                result = (
+                    await session.list_tools()
+                    if cursor is None
+                    else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+                )
+                pages_fetched += 1
+                tools.extend(result.tools)
+
+                next_cursor = getattr(result, "nextCursor", None)
+                if not isinstance(next_cursor, str):
+                    return tools
+                if next_cursor in seen_cursors:
+                    raise RuntimeError(
+                        f"MCP server returned a repeated tools/list cursor while listing tools: {next_cursor}"
+                    )
+                if pages_fetched >= MCP_TOOL_LISTING_MAX_PAGES:
+                    raise RuntimeError(
+                        "MCP server tools/list pagination exceeded the maximum "
+                        f"of {MCP_TOOL_LISTING_MAX_PAGES} pages while listing tools"
+                    )
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
 
         try:
-            result = await self.run_with_session(_list_tools_operation)
-            tool_count = len(result.tools)
-            tool_names = [tool.name for tool in result.tools]
+            tools = await self.run_with_session(_list_tools_operation)
+            tool_count = len(tools)
+            tool_names = [tool.name for tool in tools]
             verbose_logger.info(f"MCP client listed {tool_count} tools from {self.server_url or 'stdio'}: {tool_names}")
-            return result.tools
+            return tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise
