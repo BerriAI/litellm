@@ -31,6 +31,7 @@ from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
 from litellm.types.integrations.custom_logger import (
+    CHAT_COMPLETION_AGENTIC_SURFACE,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
@@ -90,6 +91,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: List[Dict],
         tools: Optional[List[Dict]],
         custom_llm_provider: Optional[str],
+        kwargs: Optional[dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Short-circuit web-search-only requests by executing the search directly.
@@ -119,21 +121,26 @@ class WebSearchInterceptionLogger(CustomLogger):
         if self.enabled_providers is not None and provider_str not in self.enabled_providers:
             return None
 
-        # Only short-circuit for providers without native Anthropic Messages
-        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
-        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
-        # includes a follow-up LLM call to synthesize the answer from search
-        # results.  Short-circuiting those would skip that synthesis step and
-        # return raw search text — a regression for existing users.
+        # Only short-circuit for providers whose Anthropic Messages agentic loop
+        # does not run web_search itself. Providers that have a
+        # BaseAnthropicMessagesConfig which handles web search natively (bedrock,
+        # vertex_ai, azure_ai, anthropic) already perform the search plus a
+        # follow-up LLM synthesis step; short-circuiting those would skip that
+        # synthesis and return raw search text — a regression for existing users.
+        #
+        # github_copilot has a BaseAnthropicMessagesConfig (added for thinking
+        # passthrough) but does not handle web_search natively, so its config
+        # returns handles_web_search_natively() == False and we still short-circuit
+        # web-search-only requests against it.
         try:
             provider_enum = LlmProviders(provider_str)
             anthropic_config = ProviderConfigManager.get_provider_anthropic_messages_config(
                 model=model, provider=provider_enum
             )
-            if anthropic_config is not None:
+            if anthropic_config is not None and anthropic_config.handles_web_search_natively():
                 verbose_logger.debug(
                     f"WebSearchInterception: Skipping short-circuit for {provider_str} "
-                    "(provider has native Anthropic Messages support, using agentic loop)"
+                    "(provider handles web search natively via the agentic loop)"
                 )
                 return None
         except (ValueError, Exception):
@@ -170,7 +177,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Execute search — keep the structured SearchResponse so the native
         # block can carry per-result url/title/page_age.
         try:
-            search_result_text, structured = await self._execute_search(query)
+            if kwargs is None:
+                search_result_text, structured = await self._execute_search(query)
+            else:
+                search_result_text, structured = await self._execute_search(query, kwargs=kwargs)
         except Exception as e:
             verbose_logger.error(f"WebSearchInterception: Short-circuit search failed: {e}")
             search_result_text, structured = f"Search failed: {e}", None
@@ -440,12 +450,16 @@ class WebSearchInterceptionLogger(CustomLogger):
         custom_llm_provider: str,
         kwargs: Dict,
     ) -> Tuple[bool, Dict]:
-        """
-        Check if WebSearch tool interception is needed for Anthropic Messages API.
-
-        This is the legacy method for Anthropic-style responses.
-        For chat completions, use async_should_run_chat_completion_agentic_loop instead.
-        """
+        if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
+            return await self.async_should_run_chat_completion_agentic_loop(
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+            )
 
         verbose_logger.debug(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
         verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
@@ -629,6 +643,18 @@ class WebSearchInterceptionLogger(CustomLogger):
         stream: bool,
         kwargs: Dict,
     ) -> AgenticLoopPlan:
+        if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
+            return await self.async_build_chat_completion_agentic_loop_plan(
+                tools=tools,
+                model=model,
+                messages=messages,
+                response=response,
+                optional_params=anthropic_messages_optional_request_params,
+                logging_obj=logging_obj,
+                stream=stream,
+                kwargs=kwargs,
+            )
+
         tool_calls = tools["tool_calls"]
         thinking_blocks = tools.get("thinking_blocks", [])
         request_patch, structured_results = await self._build_anthropic_request_patch(
@@ -914,7 +940,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             query = tool_call["input"].get("query")
             if query:
                 verbose_logger.debug(f"WebSearchInterception: Queuing search for query='{query}'")
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs))
             else:
                 verbose_logger.debug(f"WebSearchInterception: Tool call {tool_call['id']} has no query")
                 # Add empty result for tools without query
@@ -987,7 +1013,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return patch, structured_results
 
-    async def _execute_search(self, query: str) -> Tuple[str, Optional[SearchResponse]]:
+    async def _execute_search(
+        self, query: str, kwargs: Optional[dict[str, Any]] = None
+    ) -> Tuple[str, Optional[SearchResponse]]:
         """
         Execute a single web search using router's search tools.
 
@@ -1009,36 +1037,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 llm_router = None
 
-            # Determine search provider from router's search_tools
+            search_tool = self._select_search_tool_from_router(llm_router=llm_router)
             search_provider: Optional[str] = None
-            if llm_router is not None and hasattr(llm_router, "search_tools"):
-                if self.search_tool_name:
-                    # Find specific search tool by name
-                    matching_tools = [
-                        tool
-                        for tool in llm_router.search_tools
-                        if tool.get("search_tool_name") == self.search_tool_name
-                    ]
-                    if matching_tools:
-                        search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get("search_provider")
-                        verbose_logger.debug(
-                            f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
-                            f"with provider '{search_provider}'"
-                        )
-                    else:
-                        verbose_logger.debug(
-                            f"WebSearchInterception: Search tool '{self.search_tool_name}' not found in router, "
-                            "falling back to first available or perplexity"
-                        )
-
-                # If no specific tool or not found, use first available
-                if not search_provider and llm_router.search_tools:
-                    first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get("search_provider")
-                    verbose_logger.debug(
-                        f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
-                    )
+            search_litellm_params: dict[str, Any] = {}
+            if search_tool is not None:
+                await self._authorize_search_tool(search_tool=search_tool, kwargs=kwargs)
+                search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
+                search_provider = search_litellm_params.get("search_provider")
 
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
@@ -1051,7 +1056,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            search_kwargs = {
+                key: value
+                for key, value in search_litellm_params.items()
+                if key != "search_provider" and value is not None
+            }
+            result = await litellm.asearch(query=query, search_provider=search_provider, **search_kwargs)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
@@ -1063,6 +1073,107 @@ class WebSearchInterceptionLogger(CustomLogger):
         except Exception as e:
             verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {str(e)}")
             raise
+
+    async def _authorize_search_tool(
+        self,
+        search_tool: dict[str, Any],
+        kwargs: Optional[dict[str, Any]],
+    ) -> None:
+        search_tool_name = search_tool.get("search_tool_name")
+        if not isinstance(search_tool_name, str) or not search_tool_name:
+            return
+
+        user_api_key_auth = self._get_user_api_key_auth_from_kwargs(kwargs)
+        if user_api_key_auth is None:
+            return
+
+        from litellm.proxy.auth.auth_checks import (
+            can_key_call_search_tool,
+            can_team_call_search_tool,
+            get_team_object,
+        )
+
+        await can_key_call_search_tool(
+            search_tool_name=search_tool_name,
+            valid_token=user_api_key_auth,
+        )
+
+        team_id = getattr(user_api_key_auth, "team_id", None)
+        if team_id:
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=getattr(user_api_key_auth, "parent_otel_span", None),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            await can_team_call_search_tool(
+                search_tool_name=search_tool_name,
+                team_object=team_object,
+            )
+
+    @staticmethod
+    def _get_user_api_key_auth_from_kwargs(kwargs: Optional[dict[str, Any]]) -> Any:
+        if not kwargs:
+            return None
+
+        for metadata_key in ("metadata", "litellm_metadata"):
+            metadata = kwargs.get(metadata_key)
+            if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
+                return metadata["user_api_key_auth"]
+
+        litellm_params = kwargs.get("litellm_params")
+        if not isinstance(litellm_params, dict):
+            return None
+
+        for metadata_key in ("metadata", "litellm_metadata"):
+            metadata = litellm_params.get(metadata_key)
+            if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
+                return metadata["user_api_key_auth"]
+
+        return None
+
+    def _select_search_tool_from_router(self, llm_router: Any) -> Optional[dict[str, Any]]:
+        if llm_router is None or not hasattr(llm_router, "search_tools"):
+            return None
+        search_tools = list(getattr(llm_router, "search_tools") or [])
+        return self._select_search_tool_from_list(search_tools=search_tools, source="router")
+
+    def _select_search_tool_from_list(
+        self,
+        search_tools: list[dict[str, Any]],
+        source: str,
+    ) -> Optional[dict[str, Any]]:
+        if self.search_tool_name:
+            matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
+            if matching_tools:
+                search_provider = (matching_tools[0].get("litellm_params", {}) or {}).get("search_provider")
+                verbose_logger.debug(
+                    f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
+                    f"from {source} with provider '{search_provider}'"
+                )
+                return matching_tools[0]
+            verbose_logger.debug(
+                f"WebSearchInterception: Search tool '{self.search_tool_name}' not found in {source}, "
+                "falling back to first available or perplexity"
+            )
+
+        if search_tools:
+            first_tool = search_tools[0]
+            search_provider = (first_tool.get("litellm_params", {}) or {}).get("search_provider")
+            verbose_logger.debug(
+                f"WebSearchInterception: Using first available search tool from {source} "
+                f"with provider '{search_provider}'"
+            )
+            return first_tool
+
+        return None
 
     async def _execute_chat_completion_agentic_loop(
         self,
@@ -1088,6 +1199,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             raise ValueError("WebSearchInterception: missing follow-up messages")
         params = dict(optional_params)
         params.update(request_patch.optional_params)
+        params.pop("tool_choice", None)
         return await litellm.acompletion(
             model=request_patch.model or model,
             messages=request_patch.messages,
@@ -1122,7 +1234,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             if query:
                 verbose_logger.debug(f"WebSearchInterception: Queuing search for query='{query}'")
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs))
             else:
                 verbose_logger.debug(f"WebSearchInterception: Tool call {tool_call.get('id')} has no query")
                 # Add empty result for tools without query
@@ -1203,6 +1315,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             if k
             not in {
                 "tools",
+                "tool_choice",
                 "extra_body",
                 "model_alias_map",
                 "stream_response",

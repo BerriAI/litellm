@@ -122,12 +122,12 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
                 </Tooltip>
                 {paramType === "password" && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-yellow-100 text-yellow-800">
                     Sensitive
                   </span>
                 )}
                 {paramType === "number" && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-yellow-100 text-yellow-800">
                     Number
                   </span>
                 )}
@@ -250,7 +250,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           return (
             <Card
               key={index}
-              className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200"
+              className="border border-gray-200 shadow-xs hover:shadow-md transition-shadow duration-200"
               decoration="top"
               decorationColor="blue"
             >
