@@ -225,7 +225,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             (
                 parsed_url.scheme,  # http, https
                 parsed_url.netloc,  # domain name, port
-                new_path,  # path with response_id added
+                new_path,
                 parsed_url.params,  # parameters
                 parsed_url.query,  # query string
                 parsed_url.fragment,  # fragment
