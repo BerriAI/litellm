@@ -74,6 +74,32 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 
+    @staticmethod
+    def _is_gemini_2_5_model(model: str) -> bool:
+        """
+        Check if the model belongs to the Gemini 2.5 family.
+
+        Gemini 2.5 models include:
+        - gemini-2.5-flash
+        - gemini-2.5-flash-lite
+        - gemini-2.5-pro
+        - gemini-2.5-pro-preview-06-05
+        - Any future Gemini 2.5 models
+        """
+        return "gemini-2.5" in model
+
+    def _supports_penalty_parameters(self, model: str) -> bool:
+        """
+        Gemini 2.5 models do not support frequency_penalty and presence_penalty.
+        """
+        if not super()._supports_penalty_parameters(model):
+            return False
+
+        if self._is_gemini_2_5_model(model):
+            return False
+
+        return True
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
             "temperature",
@@ -88,19 +114,28 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "n",
             "stop",
             "logprobs",
-            "frequency_penalty",
-            "presence_penalty",
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
             "include_server_side_tool_invocations",
             "service_tier",
         ]
+
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(
+                [
+                    "frequency_penalty",
+                    "presence_penalty",
+                ]
+            )
+
         if supports_reasoning(model, custom_llm_provider="gemini"):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+
         if self.is_model_gemini_audio_model(model):
             supported_params.append("audio")
+
         return supported_params
 
     def _transform_messages(
