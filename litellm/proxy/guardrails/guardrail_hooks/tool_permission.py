@@ -24,6 +24,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, keyword_arguments
+from litellm.litellm_core_utils.llm_response_utils.tool_calls import raw_tool_call_groups
 from litellm.litellm_core_utils.tool_fields import (
     BridgedTool,
     declared_function_name,
@@ -1665,7 +1666,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         anthropic_content: Final = (
             None if isinstance(response, ModelResponse) else self._get_anthropic_content_blocks(response)
         )
-        if not isinstance(response, ModelResponse) and anthropic_content is None:
+        if not isinstance(response, (ModelResponse, dict)):
             return response
 
         verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: Checking response")
@@ -1674,11 +1675,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail: Skipping check (not enabled)")
             return response
 
-        # Extract tool_calls from the response
+        raw_groups: Final = tuple(raw_tool_call_groups(response)) if anthropic_content is None else ()
+        raw_calls: Final = chain.from_iterable(group.calls for group in raw_groups)
         tool_calls: Final = (
             self._extract_tool_calls_from_response(response)
             if isinstance(response, ModelResponse)
             else self._extract_tool_calls_from_anthropic_content(anthropic_content or ())
+            if anthropic_content is not None
+            else tuple(call for call in raw_calls if call is not None)
         )
 
         if not tool_calls:
@@ -1693,8 +1697,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
         elif isinstance(response, ModelResponse):
             self._modify_response_with_permission_errors(response, denied_tools)
-        else:
+        elif anthropic_content is not None:
             self._modify_anthropic_content_with_permission_errors(response, anthropic_content or (), denied_tools)
+        else:
+            errors: Final = {
+                call.id: self._create_permission_error_result(call, error).content for call, error in denied_tools
+            }
+            for group in raw_groups:
+                group.rewrite(errors)
 
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return response
