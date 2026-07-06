@@ -204,7 +204,7 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/customer",
     "/tag",
     "/budget",
-    "/model/info",
+    "/model/",
     "/spend",
     "/global",
     "/openapi.json",

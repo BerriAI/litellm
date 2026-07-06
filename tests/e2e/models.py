@@ -367,9 +367,12 @@ class LiteLLMParamsBody(BaseModel):
     output_cost_per_token: float | None = None
 
 
+ModelMode = Literal["batch", "realtime", "image_generation"]
+
+
 class ModelInfoBody(BaseModel):
     id: str
-    mode: Literal["batch", "realtime", "image_generation"] | None = None
+    mode: ModelMode | None = None
 
 
 class ModelNewBody(BaseModel):
