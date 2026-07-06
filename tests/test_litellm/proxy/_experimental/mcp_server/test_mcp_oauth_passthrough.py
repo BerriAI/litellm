@@ -472,3 +472,102 @@ async def test_oauth_protected_resource_gateway_managed_unchanged():
         "https://gateway.example.com/keycloak_whoami"
     ]
     assert result["scopes_supported"] == ["read"]
+
+
+def _make_upstream_metadata_client() -> tuple[dict, MagicMock]:
+    upstream_payload = {
+        "resource": "https://upstream.example.com/mcp",
+        "authorization_servers": ["https://okta.example.com/oauth2/default"],
+        "scopes_supported": ["openid", "profile"],
+        "bearer_methods_supported": ["header"],
+    }
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = upstream_payload
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    return upstream_payload, mock_client
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_oauth_delegate_proxies_upstream_with_gateway_resource():
+    """oauth_delegate discovery must proxy the upstream's authorization_servers
+    (so the client authorizes against the upstream IdP) while rewriting resource
+    to the gateway (so bearers are presented back to LiteLLM). A regression that
+    dropped oauth_delegate from the pass-through predicate would fall through to
+    the gateway-AS branch and advertise LiteLLM as the authorization server."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    delegate_server = MCPServer(
+        server_id="delegate-1",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    global_mcp_server_manager.registry[delegate_server.server_id] = delegate_server
+
+    _, mock_client = _make_upstream_metadata_client()
+    try:
+        with patch.object(
+            discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
+        ):
+            result = await _build_oauth_protected_resource_response(
+                request=_make_request(),
+                mcp_server_name="sample_docs",
+                use_standard_pattern=True,
+            )
+
+        assert result["authorization_servers"] == [
+            "https://okta.example.com/oauth2/default"
+        ]
+        assert result["resource"].endswith("/mcp/sample_docs")
+        assert result["resource"] != "https://upstream.example.com/mcp"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_true_passthrough_returns_upstream_metadata_verbatim():
+    """true_passthrough discovery must return the upstream metadata verbatim,
+    resource included, so the client treats the upstream as the resource and
+    authorizes directly against it. A regression that rewrote resource (the
+    gateway-proxied behavior) would break the transparent-proxy contract."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    true_passthrough_server = MCPServer(
+        server_id="tp-1",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+    )
+    global_mcp_server_manager.registry[true_passthrough_server.server_id] = (
+        true_passthrough_server
+    )
+
+    upstream_payload, mock_client = _make_upstream_metadata_client()
+    try:
+        with patch.object(
+            discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
+        ):
+            result = await _build_oauth_protected_resource_response(
+                request=_make_request(),
+                mcp_server_name="sample_docs",
+                use_standard_pattern=True,
+            )
+
+        assert result == upstream_payload
+        assert result["resource"] == "https://upstream.example.com/mcp"
+    finally:
+        global_mcp_server_manager.registry.clear()

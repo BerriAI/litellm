@@ -3526,6 +3526,29 @@ if MCP_AVAILABLE:
                     headers={"www-authenticate": www_authenticate},
                 )
 
+            if server and server.is_oauth_delegate and _get_forwarded_auth_from_scope(scope) is None:
+                www_authenticate = _get_passthrough_www_authenticate(
+                    scope=scope,
+                    server_name=server_name,
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": www_authenticate},
+                )
+
+            if server and server.is_true_passthrough and not _scope_has_authorization_header(scope):
+                upstream_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", "")
+                if upstream_status == 401 and upstream_www_authenticate:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": upstream_www_authenticate},
+                    )
+
+    def _scope_has_authorization_header(scope: Scope) -> bool:
+        return any(key.lower() == b"authorization" for key, _ in scope.get("headers", []))
+
     def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
         """Return the upstream-bound ``Authorization`` header value, or None.
 
@@ -3553,7 +3576,7 @@ if MCP_AVAILABLE:
         url: str,
         auth_header: str,
         timeout: float = 5.0,
-    ) -> tuple:
+    ) -> tuple[int, Optional[str]]:
         """JSON-RPC initialize-probe the upstream URL to check whether the token is accepted.
 
         Uses POST so StreamableHTTP MCP servers run the same auth path as a
@@ -3583,8 +3606,8 @@ if MCP_AVAILABLE:
             },
         }
         probe_headers = {
-            "Authorization": auth_header,
             "Accept": "application/json, text/event-stream",
+            **({"Authorization": auth_header} if auth_header else {}),
         }
         try:
             resp = await client.post(
