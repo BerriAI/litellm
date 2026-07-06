@@ -1300,16 +1300,15 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the POST request - clean and simple, always use data and files
             response = client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1373,16 +1372,15 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the async POST request - clean and simple, always use data and files
             response = await async_httpx_client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
