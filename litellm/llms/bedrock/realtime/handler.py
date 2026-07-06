@@ -7,13 +7,33 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ..base_aws_llm import BaseAWSLLM
 from .transformation import BedrockRealtimeConfig
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+
+
+class BotoCredentialsResolver:
+    """Resolves AWS credentials for the smithy client from a boto3 credentials object."""
+
+    def __init__(self, credentials: "Credentials"):
+        self._credentials = credentials
+
+    async def get_identity(self, *, properties: Any) -> Any:
+        from smithy_aws_core.identity import AWSCredentialsIdentity
+
+        frozen = self._credentials.get_frozen_credentials()
+        return AWSCredentialsIdentity(
+            access_key_id=frozen.access_key,
+            secret_access_key=frozen.secret_key,
+            session_token=frozen.token,
+        )
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -59,9 +79,6 @@ class BedrockRealtime(BaseAWSLLM):
                 InvokeModelWithBidirectionalStreamOperationInput,
             )
             from aws_sdk_bedrock_runtime.config import Config
-            from smithy_aws_core.identity.environment import (
-                EnvironmentCredentialsResolver,
-            )
         except ImportError:
             raise ImportError("Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime")
 
@@ -82,11 +99,24 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug(f"Bedrock Realtime: Connecting to {endpoint_uri} with model {model}")
 
+        credentials = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+        )
+
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
         config = Config(
             endpoint_uri=endpoint_uri,
             region=aws_region_name,
-            aws_credentials_identity_resolver=EnvironmentCredentialsResolver(),
+            aws_credentials_identity_resolver=BotoCredentialsResolver(credentials),
         )
         bedrock_client = BedrockRuntimeClient(config=config)
 
