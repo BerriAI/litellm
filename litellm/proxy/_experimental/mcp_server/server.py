@@ -48,7 +48,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPToolResultError,
+    MCPUpstreamAuthError,
+)
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -60,7 +63,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
     MCPMissingUserEnvVarsError,
-    MCPToolResultError,
     add_server_prefix_to_name,
     extract_mcp_tool_result_error_message,
     get_server_prefix,

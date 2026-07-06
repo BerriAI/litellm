@@ -6641,7 +6641,7 @@ async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
     from litellm.proxy._experimental.mcp_server.server import (
         _fire_mcp_tool_call_logging,
     )
-    from litellm.proxy._experimental.mcp_server.utils import MCPToolResultError
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPToolResultError
 
     logging_obj = _mock_mcp_logging_obj()
     proxy_logging_mock = MagicMock()

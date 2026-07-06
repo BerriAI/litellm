@@ -409,16 +409,6 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             raise Exception(error_message)
 
 
-class MCPToolResultError(Exception):
-    """An MCP tool call completed with ``isError=True`` in its result.
-
-    Never raised on the wire path: streamable HTTP MCP correctly returns tool
-    failures as HTTP 200 with ``result.isError: true`` per the MCP spec. This
-    exception only drives the standard failure logging (``status="failure"``
-    payload, OTel ERROR span) for such results.
-    """
-
-
 def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
     """The first text content of an ``isError=True`` tool result, or ``None``
     when the result is not an error.
