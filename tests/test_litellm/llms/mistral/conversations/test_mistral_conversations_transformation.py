@@ -249,6 +249,31 @@ def test_transform_response_chunked_content_and_citations():
     assert mr.id == "conv_abc"
 
 
+def _finish_reason_for(request_data: dict) -> str:
+    # CONVERSATIONS_RESPONSE reports completion_tokens == 8
+    mr = MistralConversationsConfig().transform_response(
+        model="mistral-medium-latest",
+        raw_response=_raw(CONVERSATIONS_RESPONSE),
+        model_response=ModelResponse(),
+        logging_obj=_logging_obj(),
+        request_data=request_data,
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+    return mr.choices[0].finish_reason
+
+
+def test_transform_response_finish_reason_length_when_completion_hits_max_tokens():
+    assert _finish_reason_for({"completion_args": {"max_tokens": 8}}) == "length"
+
+
+def test_transform_response_finish_reason_stop_within_budget_or_unbounded():
+    assert _finish_reason_for({"completion_args": {"max_tokens": 100}}) == "stop"
+    assert _finish_reason_for({}) == "stop"
+
+
 def test_transform_response_counts_web_searches_from_connectors():
     mr = _transform(
         {
