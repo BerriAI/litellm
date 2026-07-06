@@ -7760,23 +7760,58 @@ class TestCreateMcpClientV2Graft:
         assert client._resolved_auth.header_name == "Authorization"
         assert client._resolved_auth._header_value.get_secret_value() == f"Basic {encoded}"
 
-    async def test_m2m_client_credentials_defers_to_v1(self):
-        # M2M (oauth2 client_credentials) is not migrated: to_server_spec returns
-        # None, so the graft sets no resolved auth and leaves v1 in charge (v1
-        # performs the client_credentials grant itself - the static
-        # authentication_token is never consumed for oauth2, so it does not flow
-        # to _mcp_auth_value). Per-user oauth2 (authorization_code) is migrated to
-        # v2 and is exercised separately.
+    async def test_m2m_client_credentials_resolves_via_v2(self):
+        # M2M (oauth2 client_credentials) is migrated: to_server_spec owns the server and the
+        # v2 arm mints the token through the injected source; nothing flows to v1's auth_value.
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+            UpstreamCredentialProvider,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+            OAuthToken,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeM2MSource:
+            async def get(self, server_id, config):
+                return Ok(OAuthToken(access_token="m2m-at"))
+
+            async def refetch(self, server_id, config, failed_access_token):
+                return None
+
         client = await MCPServerManager()._create_mcp_client(
             self._http_server(
                 auth_type=MCPAuth.oauth2,
                 oauth2_flow="client_credentials",
-                authentication_token="legacy-token",
-            )
+                client_id="cid",
+                client_secret="csec",
+                token_url="https://idp.example.com/token",
+            ),
+            cred_provider=UpstreamCredentialProvider(client_credentials_source=_FakeM2MSource()),
         )
 
-        assert client._resolved_auth is None
+        assert isinstance(client._resolved_auth, ClientCredentialsBearerAuth)
+        assert client._resolved_auth._access_token.get_secret_value() == "m2m-at"
         assert client._mcp_auth_value is None
+
+    async def test_m2m_client_credentials_incomplete_config_fails_closed(self):
+        # An M2M server missing its grant fields is still owned by v2 and surfaces a 500
+        # misconfigured naming the missing fields, rather than deferring to v1 and connecting
+        # unauthenticated (which masked the upstream 401 as an empty tool list).
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPServerManager()._create_mcp_client(
+                self._http_server(
+                    auth_type=MCPAuth.oauth2,
+                    oauth2_flow="client_credentials",
+                    authentication_token="legacy-token",
+                )
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "misconfigured" in str(exc_info.value.detail)
+        assert "token_url" in str(exc_info.value.detail)
 
     async def test_static_token_missing_defers_to_v1(self):
         client = await MCPServerManager()._create_mcp_client(
