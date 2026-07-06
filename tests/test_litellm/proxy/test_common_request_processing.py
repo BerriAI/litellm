@@ -3342,6 +3342,30 @@ class TestStreamingClientDisconnectLogging:
         )
 
     @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_handles_none_request_data_metadata(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "metadata": None,
+            "litellm_params": {"metadata": None},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert (
+            request_data["litellm_params"]["metadata"]["client_disconnected"] is True
+        )
+
+    @pytest.mark.asyncio
     async def test_apply_client_disconnect_metadata_none_returns_early(self):
         from litellm.proxy.common_request_processing import (
             _apply_client_disconnect_metadata,

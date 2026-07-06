@@ -1068,7 +1068,13 @@ class TestToolTransformation:
         assert web_search_options is None
 
     def test_transform_computer_use_tools(self):
-        """Test that computer_use tools are dropped (no Chat Completions equivalent)"""
+        """Test that computer_use tools are dropped (no Chat Completions equivalent).
+
+        This deliberately reverses the previous pass-through regression guard:
+        forwarding computer_use verbatim made Chat Completions providers reject
+        the whole request with "'function' is a required property", so the
+        bridge now drops such tools (with a warning log) instead.
+        """
         computer_use_tool = {
             "type": "computer_use",
             "display_width_px": 1024,

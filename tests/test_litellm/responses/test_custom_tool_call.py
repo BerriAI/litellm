@@ -20,7 +20,6 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     extract_custom_tool_names,
     is_custom_tool_call,
     unwrap_custom_tool_arguments,
-    build_custom_tool_call_item,
     build_tool_call_item_kwargs,
     convert_custom_tool_to_function_tool,
     _MAX_ARGUMENTS_LEN,
@@ -89,27 +88,6 @@ class TestCustomToolUtilities:
         unwrapped = unwrap_custom_tool_arguments(wrapped)
         assert unwrapped == wrapped
     
-    def test_build_custom_tool_call_item(self):
-        """Test building custom_tool_call output item."""
-        item = build_custom_tool_call_item(
-            call_id="call_abc123",
-            name="apply_patch",
-            input_str="*** Begin Patch\n+hello\n*** End Patch",
-            status="completed"
-        )
-        
-        assert item["type"] == "custom_tool_call"
-        assert item["call_id"] == "call_abc123"
-        assert item["id"] == "call_abc123"
-        assert item["name"] == "apply_patch"
-        assert item["input"] == "*** Begin Patch\n+hello\n*** End Patch"
-        assert item["status"] == "completed"
-
-    def test_build_custom_tool_call_item_missing_call_id(self):
-        """Empty call_id must raise rather than building a call-less item."""
-        with pytest.raises(ValueError, match="call_id is required"):
-            build_custom_tool_call_item(call_id="", name="apply_patch", input_str="x")
-
     def test_build_tool_call_item_kwargs_custom_completed(self):
         """A completed custom tool call unwraps the content into `input`."""
         wrapped = json.dumps({"content": "patch body"})
@@ -234,8 +212,8 @@ class TestTransformationCustomTools:
             responses_api_request=responses_api_request
         )
         
-        # Should return a CustomToolCallOutputItem object; the final responses
-        # builder model_dump()s it downstream for SDK compat.
+        # Should return a CustomToolCallOutputItem object; ResponsesAPIResponse
+        # accepts it directly via its output item union.
         assert len(result) == 1
         item = result[0]
         assert isinstance(item, CustomToolCallOutputItem)

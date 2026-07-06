@@ -16,7 +16,15 @@ logic.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any
+
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
+from litellm.types.llms.openai import (
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
 
 _MAX_ARGUMENTS_LEN = 1_000_000
 
@@ -95,62 +103,61 @@ def build_tool_call_item_kwargs(
     return kwargs
 
 
-def build_custom_tool_call_item(
-    call_id: str,
-    name: str,
-    input_str: str,
-    status: str = "completed",
-) -> dict[str, Any]:
-    """Build a standalone ``custom_tool_call`` output item dict."""
-    if not call_id:
-        raise ValueError("call_id is required for custom_tool_call output item")
-    return {
-        "type": "custom_tool_call",
-        "call_id": call_id,
-        "id": call_id,
-        "name": name,
-        "input": input_str,
-        "status": status,
-    }
+class _CustomToolFormat(BaseModel):
+    syntax: str = ""
+    definition: str = ""
 
 
-def convert_custom_tool_to_function_tool(tool: dict[str, Any]) -> dict[str, Any] | None:
+_ALLOWED_CALLERS_ADAPTER = TypeAdapter(list[str] | None)
+
+
+def _validated_allowed_callers(value: object) -> list[str] | None:
+    try:
+        return _ALLOWED_CALLERS_ADAPTER.validate_python(value, strict=True)
+    except ValidationError as exc:
+        raise ValueError("allowed_callers must be a list of strings") from exc
+
+
+def _grammar_suffix(fmt: object) -> str:
+    try:
+        parsed = _CustomToolFormat.model_validate(fmt)
+    except ValidationError:
+        return ""
+    if not parsed.definition:
+        return ""
+    return f"\n\nFormat:\n```{parsed.syntax}\n{parsed.definition}\n```"
+
+
+def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatCompletionToolParam | None:
     """Convert a Responses API ``custom`` tool to a Chat Completions ``function``
     tool.
 
     The grammar definition is embedded in the description so the model can
     produce correctly-formatted output. Returns ``None`` if the tool is not a
-    valid custom tool.
+    custom tool. Raises ``ValueError`` if ``allowed_callers`` is not a list of
+    strings.
     """
     if tool.get("type") != "custom":
         return None
-    name = tool.get("name", "")
-    desc = tool.get("description", "")
-    fmt = tool.get("format", {})
-    if isinstance(fmt, dict) and fmt.get("definition"):
-        syntax = fmt.get("syntax", "")
-        definition = fmt.get("definition", "")
-        desc = desc + "\n\nFormat:\n```" + syntax + "\n" + definition + "\n```"
-    allowed_callers = tool.get("allowed_callers")
-    if allowed_callers is not None and not (
-        isinstance(allowed_callers, list) and all(isinstance(item, str) for item in allowed_callers)
-    ):
-        raise ValueError("allowed_callers must be a list of strings")
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": desc,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": f"The {name} content following the specified format",
-                    }
-                },
-                "required": ["content"],
+    raw_name = tool.get("name")
+    name = raw_name if isinstance(raw_name, str) else ""
+    raw_description = tool.get("description")
+    description = (raw_description if isinstance(raw_description, str) else "") + _grammar_suffix(tool.get("format"))
+    allowed_callers = _validated_allowed_callers(tool.get("allowed_callers"))
+    function_chunk = ChatCompletionToolParamFunctionChunk(
+        name=name,
+        description=description,
+        parameters={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": f"The {name} content following the specified format",
+                }
             },
+            "required": ["content"],
         },
-        **({"allowed_callers": allowed_callers} if allowed_callers is not None else {}),
-    }
+    )
+    if allowed_callers is None:
+        return ChatCompletionToolParam(type="function", function=function_chunk)
+    return ChatCompletionToolParam(type="function", function=function_chunk, allowed_callers=allowed_callers)

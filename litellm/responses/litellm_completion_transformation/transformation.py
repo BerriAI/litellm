@@ -12,6 +12,7 @@ from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -1301,9 +1302,9 @@ class LiteLLMCompletionResponsesConfig:
                     chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(cast(ChatCompletionToolParam, chat_completion_tool))
             elif tool.get("type") == "custom":
-                converted = convert_custom_tool_to_function_tool(cast(dict[str, Any], tool))
+                converted = convert_custom_tool_to_function_tool(tool)
                 if converted is not None:
-                    chat_completion_tools.append(cast(ChatCompletionToolParam, converted))
+                    chat_completion_tools.append(converted)
             else:
                 _tool_type = tool.get("type")
                 if _tool_type in ("computer_use", "image_generation", "namespace", "shell"):
@@ -1311,6 +1312,11 @@ class LiteLLMCompletionResponsesConfig:
                     # Chat Completions equivalent. Passing them through verbatim
                     # causes providers to reject the request with "'function' is a
                     # required property".
+                    verbose_logger.warning(
+                        "Dropping Responses API tool of type '%s': it has no Chat Completions "
+                        "equivalent and the target provider would reject the request.",
+                        _tool_type,
+                    )
                     continue
                 chat_completion_tools.append(cast(ChatCompletionToolParam | OpenAIMcpServerTool, tool))
         return chat_completion_tools, web_search_options
@@ -1690,7 +1696,7 @@ class LiteLLMCompletionResponsesConfig:
                 for item in responses_output
             ]
 
-        return [item.model_dump() if hasattr(item, "model_dump") else item for item in responses_output]
+        return responses_output
 
     @staticmethod
     def _extract_tool_result_output_items(
