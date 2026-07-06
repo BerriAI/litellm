@@ -28318,6 +28318,12 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Forward Raw Authorization
+             * @description If True, allows raw client Authorization forwarding when forward_headers is also enabled. Defaults to False to avoid forwarding the LiteLLM proxy key upstream; prefer x-pass-authorization for provider credentials.
+             * @default false
+             */
+            forward_raw_authorization: boolean;
+            /**
              * Guardrails
              * @description Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).
              */

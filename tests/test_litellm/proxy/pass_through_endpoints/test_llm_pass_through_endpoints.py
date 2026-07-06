@@ -1874,8 +1874,10 @@ class TestForwardHeaders:
         # User headers that should be forwarded
         user_headers = {
             "x-custom-header": "custom-value",
-            "x-api-key": "user-api-key",
-            "authorization": "Bearer user-token",
+            "x-api-key": "proxy-api-key",
+            "authorization": "Bearer sk-litellm-proxy-token",
+            "x-pass-authorization": "Bearer provider-token",
+            "x-pass-x-api-key": "provider-api-key",
             "user-agent": "test-client/1.0",
             "content-type": "application/json",
             # These should NOT be forwarded
@@ -1950,8 +1952,10 @@ class TestForwardHeaders:
 
             # Verify user headers were forwarded (except content-length and host)
             assert sent_headers["x-custom-header"] == "custom-value"
-            assert sent_headers["x-api-key"] == "user-api-key"
-            assert sent_headers["authorization"] == "Bearer user-token"
+            assert sent_headers["x-api-key"] == "provider-api-key"
+            assert sent_headers["authorization"] == "Bearer provider-token"
+            assert "x-pass-authorization" not in sent_headers
+            assert "x-pass-x-api-key" not in sent_headers
             assert sent_headers["user-agent"] == "test-client/1.0"
             assert sent_headers["content-type"] == "application/json"
 

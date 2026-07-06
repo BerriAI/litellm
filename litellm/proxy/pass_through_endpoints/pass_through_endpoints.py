@@ -698,6 +698,7 @@ async def pass_through_request(
     custom_llm_provider: Optional[str] = None,
     guardrails_config: Optional[dict] = None,
     timeout: Optional[float] = None,
+    forward_raw_authorization: Optional[bool] = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -709,6 +710,7 @@ async def pass_through_request(
         user_api_key_dict: The user API key dictionary
         custom_body: The custom body
         forward_headers: Whether to forward headers
+        forward_raw_authorization: Whether to allow raw Authorization forwarding
         merge_query_params: Whether to merge query params
         query_params: The query params
         default_query_params: The default query params to be applied if not overridden by client
@@ -749,6 +751,7 @@ async def pass_through_request(
             request_headers=_safe_get_request_headers(request).copy(),
             headers=headers,
             forward_headers=forward_headers,
+            forward_raw_authorization=forward_raw_authorization,
         )
 
         # Apply default query parameters if provided, regardless of merge_query_params setting
@@ -1497,6 +1500,7 @@ def create_pass_through_route(
     guardrails: Optional[Dict[str, Any]] = None,
     config_file_path: Optional[str] = None,
     timeout: Optional[float] = None,
+    _forward_raw_authorization: Optional[bool] = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1570,6 +1574,7 @@ def create_pass_through_route(
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": _forward_headers,
+                "forward_raw_authorization": _forward_raw_authorization,
                 "merge_query_params": _merge_query_params,
                 "cost_per_request": cost_per_request,
                 "guardrails": None,
@@ -1583,6 +1588,10 @@ def create_pass_through_route(
             param_target = target_params.get("target") or target
             param_custom_headers = target_params.get("custom_headers", custom_headers)
             param_forward_headers = target_params.get("forward_headers", _forward_headers)
+            param_forward_raw_authorization = target_params.get(
+                "forward_raw_authorization",
+                _forward_raw_authorization,
+            )
             param_merge_query_params = target_params.get("merge_query_params", _merge_query_params)
             param_cost_per_request = target_params.get("cost_per_request", cost_per_request)
             param_guardrails = target_params.get("guardrails", None)
@@ -1624,6 +1633,10 @@ def create_pass_through_route(
                     custom_headers=headers_dict,
                     user_api_key_dict=user_api_key_dict,
                     forward_headers=cast(Optional[bool], param_forward_headers),
+                    forward_raw_authorization=cast(
+                        Optional[bool],
+                        param_forward_raw_authorization,
+                    ),
                     merge_query_params=cast(Optional[bool], param_merge_query_params),
                     query_params=final_query_params,
                     default_query_params=cast(Optional[dict], param_default_query_params),
@@ -2242,6 +2255,7 @@ class InitPassThroughEndpointHelpers:
         config_file_path: Optional[str] = None,
         auth: bool = False,
         timeout: Optional[float] = None,
+        forward_raw_authorization: Optional[bool] = False,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -2283,6 +2297,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                _forward_raw_authorization=forward_raw_authorization,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2299,6 +2314,7 @@ class InitPassThroughEndpointHelpers:
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
+                "forward_raw_authorization": forward_raw_authorization,
                 "merge_query_params": merge_query_params,
                 "default_query_params": default_query_params,
                 "dependencies": dependencies,
@@ -2325,6 +2341,7 @@ class InitPassThroughEndpointHelpers:
         config_file_path: Optional[str] = None,
         auth: bool = False,
         timeout: Optional[float] = None,
+        forward_raw_authorization: Optional[bool] = False,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -2367,6 +2384,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                _forward_raw_authorization=forward_raw_authorization,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2383,6 +2401,7 @@ class InitPassThroughEndpointHelpers:
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
+                "forward_raw_authorization": forward_raw_authorization,
                 "merge_query_params": merge_query_params,
                 "default_query_params": default_query_params,
                 "dependencies": dependencies,
@@ -2541,6 +2560,7 @@ async def _register_pass_through_endpoint(
 
     custom_headers = await set_env_variables_in_header(custom_headers=endpoint_data.get("headers"))
     forward_headers = endpoint_data.get("forward_headers")
+    forward_raw_authorization = endpoint_data.get("forward_raw_authorization", False)
     merge_query_params = endpoint_data.get("merge_query_params")
     default_query_params = endpoint_data.get("default_query_params")
     auth = endpoint_data.get("auth")
@@ -2581,6 +2601,7 @@ async def _register_pass_through_endpoint(
         config_file_path=config_file_path,
         auth=auth_enforced,
         timeout=timeout,
+        forward_raw_authorization=forward_raw_authorization,
     )
 
     methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -2608,6 +2629,7 @@ async def _register_pass_through_endpoint(
             config_file_path=config_file_path,
             auth=auth_enforced,
             timeout=timeout,
+            forward_raw_authorization=forward_raw_authorization,
         )
         visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
