@@ -296,6 +296,26 @@ def _key_generation_required_param_check(data: GenerateKeyRequest, required_para
     return True
 
 
+def _apply_default_team_id_if_configured(
+    *,
+    data: GenerateKeyRequest,
+    caller_user_id: Optional[str],
+    is_proxy_admin: bool,
+) -> None:
+    if is_proxy_admin or data.team_id is not None or litellm.key_generation_settings is None:
+        return
+    personal_key_generation = litellm.key_generation_settings.get("personal_key_generation") or {}
+    default_team_id = personal_key_generation.get("default_team_id")
+    if not isinstance(default_team_id, str) or not default_team_id:
+        return
+    data.team_id = default_team_id
+    verbose_proxy_logger.info(
+        "key/generate: applying default_team_id=%s for caller user_id=%s",
+        default_team_id,
+        caller_user_id,
+    )
+
+
 def _team_key_generation_check(
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1601,6 +1621,12 @@ async def generate_key_fn(
                 "key/generate: auto-assigning user_id=%s for non-admin caller",
                 user_api_key_dict.user_id,
             )
+
+        _apply_default_team_id_if_configured(
+            data=data,
+            caller_user_id=user_api_key_dict.user_id,
+            is_proxy_admin=_is_proxy_admin,
+        )
 
         team_table: Optional[LiteLLM_TeamTableCachedObj] = None
         if data.team_id is not None:

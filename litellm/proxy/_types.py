@@ -2423,9 +2423,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                 attr_name = "team_member_" + key.replace("litellm_team_member_budget_table_", "")
                 current = kwargs.get(attr_name)
                 if current is None or (
-                    attr_name == "team_member_model_max_budget"
-                    and isinstance(current, dict)
-                    and len(current) == 0
+                    attr_name == "team_member_model_max_budget" and isinstance(current, dict) and len(current) == 0
                 ):
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):

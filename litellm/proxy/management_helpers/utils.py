@@ -224,9 +224,7 @@ async def _resolve_member_budget_id(
     with no team default creates a window-only budget. With nothing set the
     member gets no budget.
     """
-    has_explicit_limit = (
-        max_budget_in_team is not None or allowed_models is not None or model_max_budget is not None
-    )
+    has_explicit_limit = max_budget_in_team is not None or allowed_models is not None or model_max_budget is not None
 
     if not has_explicit_limit and default_team_budget_id is not None:
         return await _clone_team_default_budget_for_member(

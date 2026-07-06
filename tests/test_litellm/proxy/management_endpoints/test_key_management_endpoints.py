@@ -9900,6 +9900,54 @@ class TestLIT1884KeyGenerateValidation:
         assert data.user_id == "internal-user-123"
 
     @pytest.mark.asyncio
+    async def test_internal_user_generate_key_applies_default_team_id(self):
+        """
+        When an internal_user calls /key/generate with no team_id, and
+        key_generation_settings.personal_key_generation.default_team_id is set,
+        the request should be treated as a team key for that default team.
+        """
+        data = GenerateKeyRequest(key_alias="test-alias")
+        assert data.team_id is None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        mock_team = MagicMock()
+        mock_team.team_id = "team-default"
+        mock_team.model_max_budget = None
+        mock_team.members_with_roles = [MagicMock(user_id="internal-user-123", role="admin")]
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new_callable=AsyncMock,
+                return_value=mock_team,
+            ) as mock_get_team,
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.key_generation_settings",
+                {"personal_key_generation": {"default_team_id": "team-default"}},
+            ),
+        ):
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+
+        assert data.team_id == "team-default"
+        mock_get_team.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_internal_user_generate_key_invalid_team_id_rejected(self):
         """
         When an internal_user provides a non-existent team_id,

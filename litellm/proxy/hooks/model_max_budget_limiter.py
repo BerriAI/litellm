@@ -54,10 +54,7 @@ def _has_layered_model_budget(
     team_budget: Optional[dict],
     member_budget: Optional[dict],
 ) -> bool:
-    return any(
-        budget is not None and len(budget) > 0
-        for budget in (key_budget, team_budget, member_budget)
-    )
+    return any(budget is not None and len(budget) > 0 for budget in (key_budget, team_budget, member_budget))
 
 
 def _normalize_budget_map(budget_map: Optional[object]) -> Optional[dict]:
@@ -113,9 +110,7 @@ def _compute_spend_cache_key(
     if scope == "key" and virtual_key is not None:
         return f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
     if scope in ("team_member", "team") and team_id is not None and user_id is not None:
-        return (
-            f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{model}:{budget_duration}"
-        )
+        return f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{model}:{budget_duration}"
     if scope in ("team_member", "team") and virtual_key is not None:
         return f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
     if end_user_id is not None:
@@ -131,6 +126,127 @@ class ResolvedModelBudgetMaps:
     resolution_source: ModelMaxBudgetResolutionSource
 
 
+@dataclass(frozen=True, slots=True)
+class ModelMaxBudgetIncrementContext:
+    litellm_call_id: Optional[str]
+    call_type: Optional[str]
+    route: Optional[str]
+    model: str
+    model_group: Optional[str]
+    response_cost: float
+    virtual_key: Optional[str]
+    team_id: Optional[str]
+    user_id: Optional[str]
+    end_user_id: Optional[str]
+
+
+def _should_skip_model_max_budget_increment(
+    *,
+    standard_logging_payload: Optional[StandardLoggingPayload],
+    response_cost: float,
+    cache_hit: bool,
+) -> Optional[str]:
+    if standard_logging_payload is None:
+        return "no_standard_logging"
+    if cache_hit or response_cost == 0:
+        return "zero_cost"
+    model = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+    if model is None:
+        return "no_model"
+    return None
+
+
+def _extract_increment_context_from_kwargs(
+    *,
+    kwargs: dict,
+    response_cost: float,
+    source: ModelMaxBudgetIncrementSource,
+) -> Optional[ModelMaxBudgetIncrementContext]:
+    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+    skip_reason = _should_skip_model_max_budget_increment(
+        standard_logging_payload=standard_logging_payload,
+        response_cost=response_cost,
+        cache_hit=bool(kwargs.get("cache_hit", False)),
+    )
+    litellm_call_id = kwargs.get("litellm_call_id")
+    call_type = kwargs.get("call_type")
+    if skip_reason is not None:
+        _log_model_max_budget_spend_trace(
+            "callback_skipped",
+            litellm_call_id=litellm_call_id,
+            skip_reason=skip_reason,
+            increment_source=source,
+            call_type=call_type,
+            response_cost=response_cost,
+        )
+        return None
+
+    assert standard_logging_payload is not None
+    model = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+    assert isinstance(model, str)
+
+    metadata: dict = get_litellm_metadata_from_kwargs(kwargs)
+    standard_metadata = standard_logging_payload.get("metadata", {}) or {}
+    virtual_key = standard_metadata.get("user_api_key_hash") or metadata.get("user_api_key")
+    end_user_id = standard_logging_payload.get("end_user") or standard_metadata.get("user_api_key_end_user_id")
+    team_id = metadata.get("user_api_key_team_id") or standard_metadata.get("user_api_key_team_id")
+    user_id = metadata.get("user_api_key_user_id") or standard_metadata.get("user_api_key_user_id")
+    route = metadata.get("user_api_key_request_route")
+
+    return ModelMaxBudgetIncrementContext(
+        litellm_call_id=litellm_call_id if isinstance(litellm_call_id, str) else None,
+        call_type=call_type if isinstance(call_type, str) else None,
+        route=route if isinstance(route, str) else None,
+        model=model,
+        model_group=standard_logging_payload.get("model_group"),
+        response_cost=response_cost,
+        virtual_key=virtual_key if isinstance(virtual_key, str) else None,
+        team_id=team_id if isinstance(team_id, str) else None,
+        user_id=user_id if isinstance(user_id, str) else None,
+        end_user_id=end_user_id if isinstance(end_user_id, str) else None,
+    )
+
+
+async def _load_team_member_model_budget_from_db(
+    *,
+    effective_team_id: str,
+    effective_user_id: str,
+    team_table: object,
+) -> Optional[dict]:
+    from litellm.proxy.auth.auth_checks import (
+        get_team_member_default_budget,
+        get_team_membership,
+    )
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None or user_api_key_cache is None:
+        return None
+
+    membership = await get_team_membership(
+        user_id=str(effective_user_id),
+        team_id=str(effective_team_id),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if membership is not None and membership.litellm_budget_table is not None:
+        return _normalize_budget_map(membership.litellm_budget_table.model_max_budget)
+
+    team_metadata = getattr(team_table, "metadata", None)
+    if not isinstance(team_metadata, dict):
+        return None
+    default_budget_id = team_metadata.get("team_member_budget_id")
+    if not isinstance(default_budget_id, str):
+        return None
+    default_budget = await get_team_member_default_budget(
+        budget_id=default_budget_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if default_budget is None:
+        return None
+    return _normalize_budget_map(default_budget.model_max_budget)
+
+
 async def _load_budget_maps_from_db_for_key_hash(
     *,
     api_key_hash: str,
@@ -139,8 +255,6 @@ async def _load_budget_maps_from_db_for_key_hash(
 ) -> ResolvedModelBudgetMaps:
     from litellm.proxy.auth.auth_checks import (
         get_key_object,
-        get_team_member_default_budget,
-        get_team_membership,
         get_team_object,
     )
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -156,7 +270,9 @@ async def _load_budget_maps_from_db_for_key_hash(
             user_api_key_cache=user_api_key_cache,
         )
     except Exception:
-        verbose_proxy_logger.debug("model_max_budget db_fallback: key lookup failed for hash prefix %s", _hash_prefix(api_key_hash))
+        verbose_proxy_logger.debug(
+            "model_max_budget db_fallback: key lookup failed for hash prefix %s", _hash_prefix(api_key_hash)
+        )
         return empty
 
     key_model_max_budget = _normalize_budget_map(key_obj.model_max_budget)
@@ -174,32 +290,12 @@ async def _load_budget_maps_from_db_for_key_hash(
         if team_table is not None:
             team_model_max_budget = _normalize_budget_map(team_table.model_max_budget)
 
-        if effective_user_id is not None:
-            membership = await get_team_membership(
-                user_id=str(effective_user_id),
-                team_id=str(effective_team_id),
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
+        if effective_user_id is not None and team_table is not None:
+            team_member_model_max_budget = await _load_team_member_model_budget_from_db(
+                effective_team_id=str(effective_team_id),
+                effective_user_id=str(effective_user_id),
+                team_table=team_table,
             )
-            if membership is not None and membership.litellm_budget_table is not None:
-                team_member_model_max_budget = _normalize_budget_map(
-                    membership.litellm_budget_table.model_max_budget
-                )
-
-            if team_member_model_max_budget is None and team_table is not None:
-                team_metadata = team_table.metadata
-                if isinstance(team_metadata, dict):
-                    default_budget_id = team_metadata.get("team_member_budget_id")
-                    if isinstance(default_budget_id, str):
-                        default_budget = await get_team_member_default_budget(
-                            budget_id=default_budget_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                        )
-                        if default_budget is not None:
-                            team_member_model_max_budget = _normalize_budget_map(
-                                default_budget.model_max_budget
-                            )
 
     if _has_layered_model_budget(key_model_max_budget, team_model_max_budget, team_member_model_max_budget):
         return ResolvedModelBudgetMaps(
@@ -438,9 +534,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         if use_layered_spend:
             _key_model_max_budget = (
-                key_model_max_budget
-                if key_model_max_budget is not None
-                else user_api_key_dict.model_max_budget
+                key_model_max_budget if key_model_max_budget is not None else user_api_key_dict.model_max_budget
             )
             budget_model, budget_config, scope = self._resolve_model_budget_config_for_scope(
                 model=model,
@@ -449,9 +543,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 team_model_max_budget=team_model_max_budget,
             )
         else:
-            _model_max_budget = (
-                model_max_budget if model_max_budget is not None else user_api_key_dict.model_max_budget
-            )
+            _model_max_budget = model_max_budget if model_max_budget is not None else user_api_key_dict.model_max_budget
             if _model_max_budget is None:
                 return True
             internal_model_max_budget = _to_internal_model_max_budget(_model_max_budget)
@@ -462,9 +554,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             budget_model = self._match_budget_model_key(
                 model=model, internal_model_max_budget=internal_model_max_budget
             )
-            budget_config = (
-                internal_model_max_budget[budget_model] if budget_model is not None else None
-            )
+            budget_config = internal_model_max_budget[budget_model] if budget_model is not None else None
             scope = "key"
 
         if budget_config is None:
@@ -528,12 +618,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             json.dumps(internal_model_max_budget, indent=4, default=str),
         )
 
-        budget_model = self._match_budget_model_key(
-            model=model, internal_model_max_budget=internal_model_max_budget
-        )
-        _current_model_budget_info = (
-            internal_model_max_budget[budget_model] if budget_model is not None else None
-        )
+        budget_model = self._match_budget_model_key(model=model, internal_model_max_budget=internal_model_max_budget)
+        _current_model_budget_info = internal_model_max_budget[budget_model] if budget_model is not None else None
         if _current_model_budget_info is None:
             verbose_proxy_logger.debug(f"Model {model} not found in end_user_model_max_budget")
             return True
@@ -585,9 +671,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
-        team_member_model_spend_cache_key = (
-            f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{model}:{key_budget_config.budget_duration}"
-        )
+        team_member_model_spend_cache_key = f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{model}:{key_budget_config.budget_duration}"
         current_spend = await self.dual_cache.async_get_cache(
             key=team_member_model_spend_cache_key,
         )
@@ -630,16 +714,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     def _get_request_model_budget_config(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
     ) -> Optional[BudgetConfig]:
-        budget_model = self._match_budget_model_key(
-            model=model, internal_model_max_budget=internal_model_max_budget
-        )
+        budget_model = self._match_budget_model_key(model=model, internal_model_max_budget=internal_model_max_budget)
         if budget_model is None:
             return None
         return internal_model_max_budget[budget_model]
 
-    def _match_budget_model_key(
-        self, model: str, internal_model_max_budget: GenericBudgetConfigType
-    ) -> Optional[str]:
+    def _match_budget_model_key(self, model: str, internal_model_max_budget: GenericBudgetConfigType) -> Optional[str]:
         if model in internal_model_max_budget:
             return model
 
@@ -825,6 +905,72 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 budget_duration=budget_config.budget_duration,
             )
 
+    async def _increment_layered_budget_from_maps(
+        self,
+        *,
+        ctx: ModelMaxBudgetIncrementContext,
+        resolved_maps: ResolvedModelBudgetMaps,
+        increment_source: ModelMaxBudgetIncrementSource,
+    ) -> bool:
+        budget_model, budget_config, scope = self._resolve_model_budget_config_for_scope(
+            model=ctx.model,
+            key_model_max_budget=resolved_maps.key_model_max_budget,
+            team_member_model_max_budget=resolved_maps.team_member_model_max_budget,
+            team_model_max_budget=resolved_maps.team_model_max_budget,
+        )
+        if budget_config is None or scope is None:
+            _log_model_max_budget_spend_trace(
+                "callback_skipped",
+                litellm_call_id=ctx.litellm_call_id,
+                skip_reason="no_model_match",
+                increment_source=increment_source,
+                model=ctx.model,
+            )
+            return False
+
+        await self._increment_model_budget_spend(
+            response_cost=ctx.response_cost,
+            model=budget_model or ctx.model,
+            budget_config=budget_config,
+            scope=scope,
+            virtual_key=ctx.virtual_key,
+            team_id=ctx.team_id,
+            user_id=ctx.user_id,
+            end_user_id=ctx.end_user_id,
+            litellm_call_id=ctx.litellm_call_id,
+        )
+        return True
+
+    async def _increment_end_user_budget_if_needed(
+        self,
+        *,
+        ctx: ModelMaxBudgetIncrementContext,
+        end_user_budget: Optional[dict],
+    ) -> bool:
+        if ctx.end_user_id is None or end_user_budget is None:
+            return False
+        internal_model_max_budget = _to_internal_model_max_budget(end_user_budget)
+        budget_model = self._match_budget_model_key(
+            model=ctx.model, internal_model_max_budget=internal_model_max_budget
+        )
+        key_budget_config = internal_model_max_budget[budget_model] if budget_model is not None else None
+        if key_budget_config is None or not key_budget_config.budget_duration:
+            return False
+
+        cache_model = budget_model or ctx.model
+        end_user_spend_key = (
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{ctx.end_user_id}:{cache_model}:{key_budget_config.budget_duration}"
+        )
+        end_user_start_time_key = f"end_user_budget_start_time:{ctx.end_user_id}"
+        await self._increment_spend_for_key_with_trace(
+            budget_config=key_budget_config,
+            spend_key=end_user_spend_key,
+            start_time_key=end_user_start_time_key,
+            response_cost=ctx.response_cost,
+            litellm_call_id=ctx.litellm_call_id,
+        )
+        return True
+
     async def increment_model_max_budget_from_success(
         self,
         kwargs: dict,
@@ -832,78 +978,43 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         response_cost: float,
         source: ModelMaxBudgetIncrementSource = "callback",
     ) -> None:
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
-        litellm_call_id = kwargs.get("litellm_call_id")
-        call_type = kwargs.get("call_type")
-        litellm_params = kwargs.get("litellm_params", {}) or {}
+        ctx = _extract_increment_context_from_kwargs(kwargs=kwargs, response_cost=response_cost, source=source)
+        if ctx is None:
+            return
 
-        if isinstance(litellm_call_id, str) and litellm_call_id:
-            dedupe_key = f"model_max_budget_incremented:{litellm_call_id}"
+        if ctx.litellm_call_id is not None:
+            dedupe_key = f"model_max_budget_incremented:{ctx.litellm_call_id}"
             if await self.dual_cache.async_get_cache(key=dedupe_key) is not None:
                 _log_model_max_budget_spend_trace(
                     "callback_skipped",
-                    litellm_call_id=litellm_call_id,
+                    litellm_call_id=ctx.litellm_call_id,
                     skip_reason="already_incremented",
                     increment_source=source,
                 )
                 return
 
-        if standard_logging_payload is None:
-            _log_model_max_budget_spend_trace(
-                "callback_skipped",
-                litellm_call_id=litellm_call_id,
-                skip_reason="no_standard_logging",
-                increment_source=source,
-                call_type=call_type,
-            )
-            return
-
-        if kwargs.get("cache_hit", False) is True or response_cost == 0:
-            _log_model_max_budget_spend_trace(
-                "callback_skipped",
-                litellm_call_id=litellm_call_id,
-                skip_reason="zero_cost",
-                increment_source=source,
-                response_cost=response_cost,
-            )
-            return
-
-        _metadata: dict = get_litellm_metadata_from_kwargs(kwargs)
-        standard_metadata = standard_logging_payload.get("metadata", {}) or {}
-        virtual_key = standard_metadata.get("user_api_key_hash") or _metadata.get("user_api_key")
-        end_user_id = standard_logging_payload.get("end_user") or standard_metadata.get(
-            "user_api_key_end_user_id"
-        )
-        team_id = _metadata.get("user_api_key_team_id") or standard_metadata.get("user_api_key_team_id")
-        user_id = _metadata.get("user_api_key_user_id") or standard_metadata.get("user_api_key_user_id")
-        route = _metadata.get("user_api_key_request_route")
-        model = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
-        model_group = standard_logging_payload.get("model_group")
-
         _log_model_max_budget_spend_trace(
             "callback_entered",
-            litellm_call_id=litellm_call_id,
+            litellm_call_id=ctx.litellm_call_id,
             increment_source=source,
-            call_type=call_type,
+            call_type=ctx.call_type,
             has_standard_logging=True,
-            has_litellm_params=bool(litellm_params),
-            route=route,
-            model=model,
-            model_group=model_group,
-            virtual_key=_hash_prefix(virtual_key if isinstance(virtual_key, str) else None),
+            has_litellm_params=bool(kwargs.get("litellm_params", {}) or {}),
+            route=ctx.route,
+            model=ctx.model,
+            model_group=ctx.model_group,
+            virtual_key=_hash_prefix(ctx.virtual_key),
         )
 
+        metadata = get_litellm_metadata_from_kwargs(kwargs)
         resolved_maps = await resolve_budget_maps_for_increment(
-            metadata=_metadata,
+            metadata=metadata,
             kwargs=kwargs,
-            virtual_key=virtual_key if isinstance(virtual_key, str) else None,
-            team_id=team_id if isinstance(team_id, str) else None,
-            user_id=user_id if isinstance(user_id, str) else None,
+            virtual_key=ctx.virtual_key,
+            team_id=ctx.team_id,
+            user_id=ctx.user_id,
         )
-
-        user_api_key_end_user_model_max_budget: Optional[dict] = _normalize_budget_map(
-            _metadata.get("user_api_key_end_user_model_max_budget")
-        )
+        end_user_budget = _normalize_budget_map(metadata.get("user_api_key_end_user_model_max_budget"))
         has_layered_budget = _has_layered_model_budget(
             resolved_maps.key_model_max_budget,
             resolved_maps.team_model_max_budget,
@@ -912,7 +1023,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         _log_model_max_budget_spend_trace(
             "metadata_resolved",
-            litellm_call_id=litellm_call_id,
+            litellm_call_id=ctx.litellm_call_id,
             increment_source=source,
             metadata_source=_get_metadata_source_from_kwargs(kwargs),
             resolution_source=resolved_maps.resolution_source,
@@ -927,94 +1038,41 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
-        if not has_layered_budget and user_api_key_end_user_model_max_budget is None:
+        if not has_layered_budget and end_user_budget is None:
             _log_model_max_budget_spend_trace(
                 "callback_skipped",
-                litellm_call_id=litellm_call_id,
+                litellm_call_id=ctx.litellm_call_id,
                 skip_reason="no_budget_maps",
                 increment_source=source,
                 resolution_source=resolved_maps.resolution_source,
             )
             return
 
-        if model is None:
-            _log_model_max_budget_spend_trace(
-                "callback_skipped",
-                litellm_call_id=litellm_call_id,
-                skip_reason="no_model",
-                increment_source=source,
-            )
-            return
-
-        did_increment = False
-
-        if has_layered_budget:
-            budget_model, budget_config, scope = self._resolve_model_budget_config_for_scope(
-                model=model,
-                key_model_max_budget=resolved_maps.key_model_max_budget,
-                team_member_model_max_budget=resolved_maps.team_member_model_max_budget,
-                team_model_max_budget=resolved_maps.team_model_max_budget,
-            )
-            if budget_config is None or scope is None:
-                _log_model_max_budget_spend_trace(
-                    "callback_skipped",
-                    litellm_call_id=litellm_call_id,
-                    skip_reason="no_model_match",
-                    increment_source=source,
-                    model=model,
+        did_increment = (
+            (
+                await self._increment_layered_budget_from_maps(
+                    ctx=ctx, resolved_maps=resolved_maps, increment_source=source
                 )
-            elif budget_config is not None and scope is not None:
-                await self._increment_model_budget_spend(
-                    response_cost=response_cost,
-                    model=budget_model or model,
-                    budget_config=budget_config,
-                    scope=scope,
-                    virtual_key=virtual_key if isinstance(virtual_key, str) else None,
-                    team_id=team_id if isinstance(team_id, str) else None,
-                    user_id=user_id if isinstance(user_id, str) else None,
-                    end_user_id=end_user_id if isinstance(end_user_id, str) else None,
-                    litellm_call_id=litellm_call_id if isinstance(litellm_call_id, str) else None,
-                )
-                did_increment = True
-
-        if (
-            end_user_id is not None
-            and user_api_key_end_user_model_max_budget is not None
-        ):
-            internal_model_max_budget = _to_internal_model_max_budget(user_api_key_end_user_model_max_budget)
-            budget_model = self._match_budget_model_key(
-                model=model, internal_model_max_budget=internal_model_max_budget
             )
-            key_budget_config = (
-                internal_model_max_budget[budget_model] if budget_model is not None else None
-            )
-            if key_budget_config is not None and key_budget_config.budget_duration:
-                cache_model = budget_model or model
-                end_user_spend_key = (
-                    f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{cache_model}:{key_budget_config.budget_duration}"
-                )
-                end_user_start_time_key = f"end_user_budget_start_time:{end_user_id}"
-                await self._increment_spend_for_key_with_trace(
-                    budget_config=key_budget_config,
-                    spend_key=end_user_spend_key,
-                    start_time_key=end_user_start_time_key,
-                    response_cost=response_cost,
-                    litellm_call_id=litellm_call_id if isinstance(litellm_call_id, str) else None,
-                )
-                did_increment = True
+            if has_layered_budget
+            else False
+        )
+        did_increment = (
+            await self._increment_end_user_budget_if_needed(ctx=ctx, end_user_budget=end_user_budget)
+        ) or did_increment
 
         if did_increment and self.dual_cache.redis_cache is not None:
             await self._push_in_memory_increments_to_redis()
             _log_model_max_budget_spend_trace(
                 "redis_push",
-                litellm_call_id=litellm_call_id,
+                litellm_call_id=ctx.litellm_call_id,
                 increment_source=source,
                 queue_size=len(self.redis_increment_operation_queue),
             )
 
-        if did_increment and isinstance(litellm_call_id, str) and litellm_call_id:
+        if did_increment and ctx.litellm_call_id is not None:
             await self.dual_cache.async_set_cache(
-                key=f"model_max_budget_incremented:{litellm_call_id}",
+                key=f"model_max_budget_incremented:{ctx.litellm_call_id}",
                 value=True,
                 ttl=300,
             )
