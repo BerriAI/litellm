@@ -1812,6 +1812,82 @@ async def _prepare_vertex_auth_headers(
     )
 
 
+def _encode_interaction_response(
+    received_value: object,
+    vertex_project: str | None,
+    vertex_location: str | None,
+) -> object:
+    from starlette.responses import Response as StarletteResponse
+
+    from litellm.llms.vertex_ai.interactions_passthrough.routing import (
+        encode_interaction_response_id,
+    )
+
+    if not isinstance(received_value, StarletteResponse):
+        return received_value
+    body_bytes: Final = getattr(received_value, "body", None)
+    if not isinstance(body_bytes, (bytes, bytearray)):
+        return received_value
+    try:
+        payload: Final = cast(object, json.loads(bytes(body_bytes)))  # cast-ok: json.loads is Any
+    except (ValueError, UnicodeDecodeError):
+        return received_value
+    if not isinstance(payload, dict):
+        return received_value
+    typed_payload: Final = cast("dict[str, object]", payload)  # cast-ok: isinstance dict above
+    new_payload: Final = encode_interaction_response_id(typed_payload, vertex_project, vertex_location)
+    if new_payload is payload:
+        return received_value
+    preserved_headers: Final = MappingProxyType(
+        {key: value for key, value in received_value.headers.items() if key.lower() != "content-length"}
+    )
+    return StarletteResponse(
+        content=json.dumps(new_payload),
+        status_code=received_value.status_code,
+        media_type="application/json",
+        headers=preserved_headers,
+    )
+
+
+async def _resolve_interactions_input_routing(
+    endpoint: str,
+    request: Request,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    llm_router: litellm.Router | None,
+) -> tuple[str, str | None, str | None]:
+    from litellm.llms.vertex_ai.common_utils import get_vertex_interaction_id_from_url
+    from litellm.llms.vertex_ai.interactions_passthrough.routing import (
+        resolve_create_project_location,
+        rewrite_interaction_input,
+    )
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    )
+
+    if get_vertex_interaction_id_from_url(endpoint) is not None:
+        rewrite: Final = rewrite_interaction_input(endpoint, vertex_project, vertex_location)
+        return rewrite.endpoint, rewrite.project, rewrite.location
+
+    if request.method == "POST":
+        try:
+            body: Final = cast(object, await request.json())  # cast-ok: request.json() is Any
+        except Exception:  # noqa: BLE001 - unreadable/invalid body falls back to URL values without modifying the body
+            return endpoint, vertex_project, vertex_location
+        if isinstance(body, dict):
+            typed_body: Final = cast("dict[str, object]", body)  # cast-ok: isinstance dict above
+            resolved: Final = resolve_create_project_location(
+                body=typed_body,
+                url_project=vertex_project,
+                url_location=vertex_location,
+                llm_router=llm_router,
+            )
+            setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, resolved.body)
+            return endpoint, resolved.project, resolved.location
+
+    return endpoint, vertex_project, vertex_location
+
+
 async def _base_vertex_proxy_route(
     endpoint: str,
     request: Request,
@@ -1840,6 +1916,7 @@ async def _base_vertex_proxy_route(
         get_vertex_location_from_url,
         get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
+        is_vertex_interactions_route,
     )
     from litellm.proxy.proxy_server import llm_router
 
@@ -1893,12 +1970,32 @@ async def _base_vertex_proxy_route(
                 vertex_location=vertex_location,
             )
 
+    from litellm.proxy.proxy_server import general_settings as _general_settings
+
+    _general_settings_typed: Final = cast("dict[str, object]", _general_settings)  # cast-ok: untyped config dict
+    interactions_auto_routing: Final = bool(
+        _general_settings_typed.get("vertex_interactions_passthrough_auto_routing", False)
+    ) and is_vertex_interactions_route(endpoint)
+
+    routed_endpoint, routed_project, routed_location = (
+        await _resolve_interactions_input_routing(
+            endpoint=endpoint,
+            request=request,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            llm_router=llm_router,
+        )
+        if interactions_auto_routing
+        else (endpoint, vertex_project, vertex_location)
+    )
+    routed_encoded_endpoint: Final = httpx.URL(routed_endpoint).path if interactions_auto_routing else encoded_endpoint
+
     vertex_credentials: Final = passthrough_endpoint_router.get_vertex_credentials(
-        project_id=vertex_project,
-        location=vertex_location,
+        project_id=routed_project,
+        location=routed_location,
     )
 
-    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(vertex_location)
+    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(routed_location)
 
     # Prepare authentication headers
     (
@@ -1911,8 +2008,8 @@ async def _base_vertex_proxy_route(
         request=request,
         vertex_credentials=vertex_credentials,
         router_credentials=router_credentials,
-        vertex_project=vertex_project,
-        vertex_location=vertex_location,
+        vertex_project=routed_project,
+        vertex_location=routed_location,
         base_target_url=base_target_url,
         get_vertex_pass_through_handler=get_vertex_pass_through_handler,
     )
@@ -1920,17 +2017,18 @@ async def _base_vertex_proxy_route(
     if base_target_url is None:
         base_target_url = get_vertex_base_url(vertex_location)
 
-    request_route: Final = encoded_endpoint
+    request_route: Final = routed_encoded_endpoint
     verbose_proxy_logger.debug("request_route %s", request_route)
 
     # Ensure endpoint starts with '/' for proper URL construction
-    if not encoded_endpoint.startswith("/"):
-        encoded_endpoint = "/" + encoded_endpoint
+    normalized_encoded_endpoint: Final = (
+        routed_encoded_endpoint if routed_encoded_endpoint.startswith("/") else "/" + routed_encoded_endpoint
+    )
 
     # Construct the full target URL using httpx
     updated_url: Final = construct_target_url(
         base_url=base_target_url,
-        requested_route=encoded_endpoint,
+        requested_route=normalized_encoded_endpoint,
         vertex_location=vertex_location,
         vertex_project=vertex_project,
     )
@@ -1948,7 +2046,7 @@ async def _base_vertex_proxy_route(
 
     ## CREATE PASS-THROUGH
     endpoint_func: Final = create_pass_through_route(
-        endpoint=endpoint,
+        endpoint=routed_endpoint,
         target=target,
         custom_headers=headers,
         is_streaming_request=is_streaming_request,
@@ -1964,6 +2062,9 @@ async def _base_vertex_proxy_route(
         if headers_passed_through:
             e.message = f"No credentials found on proxy for project_name={vertex_project} + location={vertex_location}, check `/model/info` for allowed project + region combinations with `use_in_pass_through: true`. Headers were passed through directly but request failed with error: {e.message}"
         raise e
+
+    if interactions_auto_routing and not is_streaming_request:
+        return _encode_interaction_response(received_value, vertex_project, vertex_location)
 
     return received_value
 
