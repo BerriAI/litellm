@@ -716,11 +716,8 @@ if MCP_AVAILABLE:
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
         host_token = getattr(host_ctx.meta, "progressToken", None)
-        if (
-        host_token is None 
-        or not hasattr(host_ctx, "session") 
-        or not host_ctx.session): 
-                                    return None
+        if host_token is None or not hasattr(host_ctx, "session") or not host_ctx.session:
+            return None
         host_session = host_ctx.session
 
         async def forward_progress(progress: float, total: Optional[float]):
