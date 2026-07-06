@@ -91,6 +91,11 @@ service:
 # Probes for LiteLLM gateway container
 livenessProbe:
   path: /health/liveliness
+  # Scheme for the probe request: HTTP (default) or HTTPS. Set to HTTPS when the
+  # proxy terminates TLS on the container port (ssl_keyfile_path/ssl_certfile_path),
+  # otherwise the kubelet's plain-HTTP probe fails the TLS handshake.
+  # Case-insensitive — the value is upper-cased before rendering.
+  scheme: HTTP
   initialDelaySeconds: 0
   periodSeconds: 15
   timeoutSeconds: 5
@@ -99,6 +104,8 @@ livenessProbe:
 
 readinessProbe:
   path: /health/readiness
+  # See livenessProbe.scheme. HTTP (default) or HTTPS.
+  scheme: HTTP
   initialDelaySeconds: 0
   periodSeconds: 10
   timeoutSeconds: 5
@@ -107,6 +114,8 @@ readinessProbe:
 
 startupProbe:
   path: /health/readiness
+  # See livenessProbe.scheme. HTTP (default) or HTTPS.
+  scheme: HTTP
   initialDelaySeconds: 0
   periodSeconds: 10
   timeoutSeconds: 5

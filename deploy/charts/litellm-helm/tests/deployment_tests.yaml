@@ -402,3 +402,51 @@ tests:
       - equal:
           path: spec.template.metadata.annotations["example.com/literal"]
           value: "plain-string-value"
+  - it: should default probe httpGet scheme to HTTP
+    template: deployment.yaml
+    set:
+      image.tag: test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTP
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTP
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
+          value: HTTP
+  - it: should set probe httpGet scheme to HTTPS when configured
+    template: deployment.yaml
+    set:
+      image.tag: test
+      livenessProbe.scheme: HTTPS
+      readinessProbe.scheme: HTTPS
+      startupProbe.scheme: HTTPS
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
+          value: HTTPS
+  - it: should upper-case a lowercase probe scheme
+    template: deployment.yaml
+    set:
+      image.tag: test
+      livenessProbe.scheme: https
+      readinessProbe.scheme: https
+      startupProbe.scheme: https
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
+          value: HTTPS
