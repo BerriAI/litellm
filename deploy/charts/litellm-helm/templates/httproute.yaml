@@ -1,0 +1,59 @@
+{{- if .Values.httpRoute.enabled -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - name: {{ required "httpRoute.gatewayName is required when httpRoute.enabled is true" .Values.httpRoute.gatewayName }}
+      {{- with .Values.httpRoute.gatewayNamespace }}
+      namespace: {{ . }}
+      {{- end }}
+      {{- with .Values.httpRoute.gatewayGroup }}
+      group: {{ . }}
+      {{- end }}
+      {{- with .Values.httpRoute.gatewayKind }}
+      kind: {{ . }}
+      {{- end }}
+      {{- with .Values.httpRoute.gatewaySectionName }}
+      sectionName: {{ . }}
+      {{- end }}
+  {{- if .Values.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml .Values.httpRoute.hostnames | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- if .Values.httpRoute.rules }}
+    {{- range .Values.httpRoute.rules }}
+    - matches:
+        {{- if .matches }}
+        {{- toYaml .matches | nindent 8 }}
+        {{- else }}
+        - path:
+            type: PathPrefix
+            value: /
+        {{- end }}
+      backendRefs:
+        {{- if .backendRefs }}
+        {{- toYaml .backendRefs | nindent 8 }}
+        {{- else }}
+        - name: {{ include "litellm.fullname" $ }}
+          port: {{ $.Values.service.port }}
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "litellm.fullname" . }}
+          port: {{ .Values.service.port }}
+    {{- end }}
+{{- end }}
