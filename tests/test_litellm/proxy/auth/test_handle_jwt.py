@@ -4718,7 +4718,12 @@ async def test_resolve_db_team_fallback_skips_team_without_model_access():
     async def fake_can_access(model, team_object, llm_router, team_model_aliases=None):
         if model in (team_object.models or []):
             return True
-        raise Exception("model access denied")
+        raise ProxyException(
+            message="team not allowed to access model",
+            type=ProxyErrorTypes.team_model_access_denied,
+            param="model",
+            code=403,
+        )
 
     with (
         patch(
@@ -4899,8 +4904,9 @@ async def test_resolve_db_team_fallback_loads_team_membership():
 @pytest.mark.asyncio
 async def test_resolve_db_team_fallback_survives_membership_lookup_error():
     """A transient membership-lookup failure must not deny an otherwise-authorized
-    request: the resolved team is still returned with a None membership (budget
-    enforcement degrades gracefully) instead of the error propagating as a 403."""
+    request. get_team_membership swallows DB errors internally and returns None, so
+    the fallback must return the resolved team with a None membership (budget
+    enforcement degrades gracefully) instead of treating it as a denial."""
     user_object = LiteLLM_UserTable(
         user_id="u_flaky",
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -4910,8 +4916,8 @@ async def test_resolve_db_team_fallback_survives_membership_lookup_error():
     async def fake_get_team(team_id, **kwargs):
         return LiteLLM_TeamTable(team_id=team_id)
 
-    async def boom_get_membership(user_id, team_id, **kwargs):
-        raise Exception("transient DB error")
+    async def none_on_db_error_membership(user_id, team_id, **kwargs):
+        return None
 
     with (
         patch(
@@ -4922,7 +4928,7 @@ async def test_resolve_db_team_fallback_survives_membership_lookup_error():
         patch(
             "litellm.proxy.auth.handle_jwt.get_team_membership",
             new_callable=AsyncMock,
-            side_effect=boom_get_membership,
+            side_effect=none_on_db_error_membership,
         ),
     ):
         (
@@ -5048,7 +5054,12 @@ async def test_resolve_db_team_fallback_distinguishes_no_membership_vs_model_den
         return LiteLLM_TeamTable(team_id=team_id, models=["other"])
 
     async def fake_can_access(model, team_object, llm_router, team_model_aliases=None):
-        raise Exception("model access denied")
+        raise ProxyException(
+            message="team not allowed to access model",
+            type=ProxyErrorTypes.team_model_access_denied,
+            param="model",
+            code=403,
+        )
 
     with (
         patch(

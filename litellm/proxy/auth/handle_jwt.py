@@ -1897,7 +1897,7 @@ class JWTAuthManager:
                     proxy_logging_obj=proxy_logging_obj,
                     team_id_upsert=team_id_upsert,
                 )
-            except Exception:
+            except HTTPException:
                 continue
             if not team_object:
                 continue
@@ -1910,7 +1910,7 @@ class JWTAuthManager:
                         llm_router=llm_router,
                         team_model_aliases=None,
                     )
-                except Exception:
+                except ProxyException:
                     continue
             if not team_route_allowed:
                 continue
@@ -1919,26 +1919,18 @@ class JWTAuthManager:
                 candidate_team_id,
             )
             if user_id:
-                try:
-                    return (
-                        candidate_team_id,
-                        team_object,
-                        await get_team_membership(
-                            user_id=user_id,
-                            team_id=candidate_team_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            parent_otel_span=parent_otel_span,
-                            proxy_logging_obj=proxy_logging_obj,
-                        ),
-                    )
-                except Exception:
-                    verbose_proxy_logger.warning(
-                        "JWT DB team fallback: membership lookup failed for team_id=%s; "
-                        "proceeding without per-team membership budget enforcement",
-                        candidate_team_id,
-                        exc_info=True,
-                    )
+                return (
+                    candidate_team_id,
+                    team_object,
+                    await get_team_membership(
+                        user_id=user_id,
+                        team_id=candidate_team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ),
+                )
             return candidate_team_id, team_object, None
 
         if enforce_team_based_model_access:
