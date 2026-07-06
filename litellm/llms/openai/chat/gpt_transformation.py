@@ -2,6 +2,7 @@
 Support for gpt model family
 """
 
+import json
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -795,7 +796,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         message = error.get("message")
         code = error.get("code")
         status_code = code if isinstance(code, int) and 400 <= code < 600 else 500
-        return (message if isinstance(message, str) else str(error)), status_code
+        return (message if isinstance(message, str) else json.dumps(error)), status_code
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:

@@ -235,6 +235,11 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert excinfo.value.status_code == 500
         assert "plain string error" in excinfo.value.message
 
+        with pytest.raises(OpenAIError) as excinfo:
+            handler.chunk_parser({"error": {"type": "overloaded", "code": 503}})
+        assert excinfo.value.status_code == 503
+        assert excinfo.value.message == '{"type": "overloaded", "code": 503}'
+
     def test_chunk_parser_tolerates_null_error_field(self):
         """A chunk that carries "error": null alongside real data must parse
         normally, not raise."""
