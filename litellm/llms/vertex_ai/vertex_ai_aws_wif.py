@@ -12,8 +12,7 @@ AwsSecurityCredentialsSupplier for google-auth.
 from typing import Dict
 
 GOOGLE_IMPORT_ERROR_MESSAGE = (
-    "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' "
-    "or pip install google-cloud-aiplatform"
+    "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )
 
 # AWS params recognized in WIF credential JSON for explicit auth.
@@ -107,9 +106,7 @@ class VertexAIAwsWifAuth:
             token_url=json_obj.get("token_url"),
             credential_source=None,  # Not using metadata endpoints
             aws_security_credentials_supplier=supplier,
-            service_account_impersonation_url=json_obj.get(
-                "service_account_impersonation_url"
-            ),
+            service_account_impersonation_url=json_obj.get("service_account_impersonation_url"),
         )
         # Forward universe_domain if present (defaults to googleapis.com)
         if "universe_domain" in json_obj:

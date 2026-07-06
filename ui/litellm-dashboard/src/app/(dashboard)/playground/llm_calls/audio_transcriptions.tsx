@@ -20,7 +20,6 @@ export async function makeOpenAIAudioTranscriptionRequest(
   if (isLocal !== true) {
     console.log = function () {};
   }
-  console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
 
   const client = new openai.OpenAI({
@@ -31,8 +30,6 @@ export async function makeOpenAIAudioTranscriptionRequest(
   });
 
   try {
-    console.log("Processing audio file for transcription:", audioFile.name);
-
     const response = await client.audio.transcriptions.create(
       {
         model: selectedModel,
@@ -45,8 +42,6 @@ export async function makeOpenAIAudioTranscriptionRequest(
       { signal },
     );
 
-    console.log("Transcription response:", response);
-
     // The response is a transcription object with a text field
     if (response && response.text) {
       updateUI(response.text, selectedModel);
@@ -58,7 +53,6 @@ export async function makeOpenAIAudioTranscriptionRequest(
     console.error("Error making audio transcription request:", error);
 
     if (signal?.aborted) {
-      console.log("Audio transcription request was cancelled");
     } else {
       let errorMessage = "Failed to transcribe audio";
 
