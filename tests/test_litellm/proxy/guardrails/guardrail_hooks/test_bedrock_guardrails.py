@@ -2767,3 +2767,286 @@ async def test_grounding_output_blocked_raises_400():
             )
 
     assert exc_info.value.status_code == 400
+
+
+###############################################################################
+# LIT-4186: disable_exception_on_block regression tests
+#
+# Before the fix, a Bedrock block with disable_exception_on_block=True raised
+# GuardrailInterventionNormalStringError, which no proxy code handled: the
+# unified pre_call path re-raised it, so the client saw HTTP 500 with the block
+# message; the native during_call hook swallowed it and set data["mock_response"],
+# which was dead code because route_request already unpacked kwargs.
+#
+# The fix converts blocks to ModifyResponseException at the raise site inside
+# make_bedrock_api_request. That exception is already the industry-standard
+# proxy contract (caught in proxy_server.py, anthropic_endpoints, etc.) and
+# turns into a 200 response whose content is the block message.
+###############################################################################
+
+
+def _blocked_bedrock_httpx_response() -> MagicMock:
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [{"name": "Denied", "type": "DENY", "action": "BLOCKED"}]
+                }
+            }
+        ],
+    }
+    return response
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_block_raises_modify_response_when_flag_set():
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {"model": "bedrock-nova-micro"}
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "My name is John Doe"}],
+                request_data=request_data,
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+    assert exc_info.value.model == "bedrock-nova-micro"
+    assert exc_info.value.guardrail_name == "test-bedrock-guard"
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_block_raises_http_400_when_flag_unset():
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=False,
+    )
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hi"}],
+                request_data={"model": "bedrock-nova-micro"},
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_hook_propagates_modify_response_on_block():
+    """pre_call: block with disable_exception_on_block=True must raise
+    ModifyResponseException so the endpoint handler returns 200 with the block
+    message. Before LIT-4186 the exception was swallowed and only data
+    ["mock_response"] was mutated, which the unified pre_call path never read
+    (surfaced as HTTP 500)."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "My name is John Doe"}],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=request_data,
+                call_type="acompletion",
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+    # No `mock_response` mutation: the old broken contract must be gone
+    # (route_request unpacks kwargs before this hook runs, so `mock_response`
+    # would never reach the LLM call anyway).
+    assert "mock_response" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_async_moderation_hook_propagates_modify_response_on_block():
+    """during_call: block must raise ModifyResponseException from the moderation
+    task so the surrounding asyncio.gather cancels the LLM call, instead of
+    the old behavior of swallowing the block and letting the model call proceed
+    (LIT-4186 symptom 2: silent bypass, model billed)."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "My name is John Doe"}],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="acompletion",
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_attaches_original_response_on_block():
+    """post_call: block must raise ModifyResponseException and attach the LLM
+    response to `original_response` so the synthetic block reply reports the
+    upstream call's real token usage instead of zero."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    llm_response = _model_response("Hello John Doe! The capital of France is Paris.")
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=llm_response,
+            )
+
+    assert exc_info.value.original_response is llm_response
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_propagates_modify_response_on_block():
+    """apply_guardrail (unified path used by pre_call / /apply_guardrail
+    endpoint) must let ModifyResponseException propagate as-is so the endpoint
+    handler catches it and returns a 200."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, the model cannot answer this question.",
+            model="bedrock-nova-micro",
+            request_data={},
+            guardrail_name="test-bedrock-guard",
+        )
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["My name is John Doe"]},
+                request_data={"model": "bedrock-nova-micro"},
+                input_type="request",
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
