@@ -1,4 +1,5 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen, within } from "../../../tests/test-utils";
+import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ComplexityRouterConfig from "./ComplexityRouterConfig";
 
@@ -48,5 +49,42 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Score 0.15 - 0.35/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.35 - 0.60/)).toBeInTheDocument();
     expect(screen.getByText(/Score > 0.60/)).toBeInTheDocument();
+  });
+
+  it("should render the custom technical keywords field", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultTiers} onChange={vi.fn()} />);
+    expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
+  });
+
+  it("should display existing custom technical keywords as tags", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={defaultTiers}
+        onChange={vi.fn()}
+        customTechnicalKeywords={["udp", "kafka"]}
+        onCustomTechnicalKeywordsChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("udp")).toBeInTheDocument();
+    expect(screen.getByText("kafka")).toBeInTheDocument();
+  });
+
+  it("should call onCustomTechnicalKeywordsChange when a keyword is entered", async () => {
+    const user = userEvent.setup();
+    const onCustomTechnicalKeywordsChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={defaultTiers}
+        onChange={vi.fn()}
+        customTechnicalKeywords={[]}
+        onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
+      />,
+    );
+    const keywordsCard = screen.getByText("Custom Technical Keywords").closest(".ant-card") as HTMLElement;
+    const input = within(keywordsCard).getByRole("combobox");
+    await user.type(input, "udp,");
+    expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
   });
 });
