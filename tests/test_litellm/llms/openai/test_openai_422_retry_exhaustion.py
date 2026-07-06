@@ -94,3 +94,27 @@ def test_completion_raises_after_422_retry_exhaustion(enable_drop_params):
 
     assert mock_create.call_count == 2
     assert getattr(exc_info.value, "status_code", None) == 422
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_raises_after_422_retry_exhaustion(
+    enable_drop_params,
+):
+    """Same as above for the async streaming path (async_streaming retry loop)."""
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response,
+        "create",
+        side_effect=_make_unprocessable_entity_error(),
+    ) as mock_create:
+        with pytest.raises(Exception) as exc_info:
+            await litellm.acompletion(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+                client=client,
+            )
+
+    assert mock_create.call_count == 2
+    assert getattr(exc_info.value, "status_code", None) == 422
