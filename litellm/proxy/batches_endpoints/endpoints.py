@@ -647,7 +647,7 @@ async def list_batches(
                 operation_context="batch listing",
             )
 
-            data.update(credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials)
 
             response = await litellm.alist_batches(
                 custom_llm_provider=credentials["custom_llm_provider"],
@@ -867,9 +867,10 @@ async def cancel_batch(
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
+            body_custom_llm_provider = data.pop("custom_llm_provider", None)
             custom_llm_provider = (
                 provider
-                or data.pop("custom_llm_provider", None)
+                or body_custom_llm_provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"

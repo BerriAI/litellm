@@ -1410,26 +1410,14 @@ async def test_list__managed_files_beats_model_param(list_harness):
 
 
 # --------------------------------------------------------------------------- #
-# Branch 2 - model from body/query/header. CURRENTLY BROKEN: the endpoint
-# forwards custom_llm_provider both explicitly and via **data (it calls
-# data.update(credentials) but never pops custom_llm_provider the way
-# create/retrieve do through prepare_data_with_credentials), so every call
-# raises "multiple values for keyword argument 'custom_llm_provider'".
-#
-# The strict xfail below encodes the INTENDED contract (litellm seam fires,
-# creds resolved for the body model, response ids encoded). It xfails today on
-# the duplicate-kwarg TypeError; the day that branch is fixed it will XPASS and
-# strict-mode turns the green into a failure, forcing whoever fixes it to drop
-# the marker and adopt this as a live regression test.
+# Branch 2 - model from body/query/header. The endpoint resolves credentials
+# for the body model, forwards custom_llm_provider once (it pops it from data
+# via prepare_data_with_credentials the way create/retrieve do), and encodes
+# the response ids. Regression guard for the duplicate-kwarg
+# "multiple values for keyword argument 'custom_llm_provider'" bug.
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ProxyException,
-    reason="list_batches model branch passes custom_llm_provider twice "
-    "(explicit kwarg + **data after data.update(credentials)); remove when fixed",
-)
 @pytest.mark.asyncio
 async def test_list__model_from_body_routes_and_encodes(list_harness):
     list_harness.litellm_alist.return_value = FakeListPage(
@@ -1910,19 +1898,11 @@ async def test_cancel__fallback_provider_from_query(cancel_harness):
     assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "azure"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ProxyException,
-    reason="cancel SCENARIO 3: `provider or data.pop('custom_llm_provider')` "
-    "short-circuits when provider (path param) is set, so a body "
-    "custom_llm_provider is left in data and forwarded twice -> duplicate-kwarg "
-    "TypeError. Intended: path param wins cleanly. Remove marker when fixed.",
-)
 @pytest.mark.asyncio
 async def test_cancel__fallback_provider_precedence_path_over_body(cancel_harness):
     """Intended contract: provider path param beats a body custom_llm_provider.
-    CURRENTLY raises because the `or` short-circuit skips the data.pop, leaving
-    the body value to collide with the explicit kwarg."""
+    Regression guard: the body value is popped from data before the fallback
+    chain, so it never collides with the explicit kwarg."""
     await call_cancel(
         cancel_harness,
         "batch-raw-xyz",
