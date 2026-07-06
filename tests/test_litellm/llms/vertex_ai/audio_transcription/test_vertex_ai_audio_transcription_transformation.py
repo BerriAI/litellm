@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import sys
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ import litellm
 from litellm.llms.vertex_ai.audio_transcription.transformation import (
     VertexAIAudioTranscriptionConfig,
 )
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_optional_params_transcription
 
@@ -61,6 +63,75 @@ class TestGetCompleteUrl:
             litellm_params={"vertex_project": "test-project"},
         )
         assert url == "http://localhost:8080/v2/projects/test-project/locations/us/recognizers/_:recognize"
+
+    @pytest.mark.parametrize(
+        "location,expected_netloc",
+        [
+            ("us", "us-speech.googleapis.com"),
+            ("us-central1", "us-central1-speech.googleapis.com"),
+            ("eu", "eu-speech.googleapis.com"),
+            ("global", "speech.googleapis.com"),
+        ],
+    )
+    def test_valid_location_netloc_always_google(self, config, location, expected_netloc):
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="chirp_3",
+            optional_params={},
+            litellm_params={"vertex_project": "test-project", "vertex_location": location},
+        )
+        netloc = urlparse(url).netloc
+        assert netloc == expected_netloc
+        assert netloc.endswith("speech.googleapis.com")
+
+    @pytest.mark.parametrize(
+        "malicious_location",
+        [
+            "attacker.example/",
+            "evil.com#",
+            "us.attacker.example",
+            "us/../..",
+            "US",
+            "us_central1",
+            "us central1",
+            "attacker.example:443",
+            "-us",
+        ],
+    )
+    def test_malicious_location_is_rejected(self, config, malicious_location):
+        """SSRF/credential-exfil guard: vertex_location is client-controllable on
+        the proxy, so a host-injecting value must raise rather than steer the
+        request (and its admin-minted Google bearer token) at another host."""
+        with pytest.raises(VertexAIError):
+            config.get_complete_url(
+                api_base=None,
+                api_key=None,
+                model="chirp_3",
+                optional_params={},
+                litellm_params={"vertex_project": "test-project", "vertex_location": malicious_location},
+            )
+
+    @pytest.mark.parametrize(
+        "malicious_project",
+        [
+            "proj/../../locations",
+            "proj/evil",
+            "proj#frag",
+            "proj?a=b",
+            "proj:evil",
+            "proj space",
+        ],
+    )
+    def test_malicious_project_is_rejected(self, config, malicious_project):
+        with pytest.raises(VertexAIError):
+            config.get_complete_url(
+                api_base=None,
+                api_key=None,
+                model="chirp_3",
+                optional_params={},
+                litellm_params={"vertex_project": malicious_project, "vertex_location": "us"},
+            )
 
 
 class TestTransformRequest:
