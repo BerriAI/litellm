@@ -4541,6 +4541,16 @@ class ProxyConfig:
                     RoleBasedPermissions(**role_permission) for role_permission in rbac_role_permissions
                 ]
 
+            ### SSRF URL VALIDATION SETTINGS ###
+            if "user_url_allowed_hosts" in general_settings:
+                litellm.user_url_allowed_hosts = general_settings["user_url_allowed_hosts"]
+            if "user_url_validation" in general_settings:
+                litellm.user_url_validation = general_settings["user_url_validation"]
+            if "provider_url_destination_allowed_hosts" in general_settings:
+                litellm.provider_url_destination_allowed_hosts = general_settings[
+                    "provider_url_destination_allowed_hosts"
+                ]
+
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
                 raise ValueError("Trying to use `enforced_params`" + CommonProxyErrors.not_premium_user.value)

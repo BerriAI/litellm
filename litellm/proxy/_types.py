@@ -2322,6 +2322,28 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    user_url_validation: Optional[bool] = Field(
+        None,
+        description=(
+            "Master switch for the SSRF guard applied to user-supplied URLs "
+            "(image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. "
+            "Set to False to disable DNS/IP validation entirely (not recommended)."
+        ),
+    )
+    user_url_allowed_hosts: Optional[List[str]] = Field(
+        None,
+        description=(
+            "SSRF allowlist for user-supplied URLs. Entries are `hostname` or "
+            "`hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted "
+            "hosts skip the blocked-network check in validate_url() but still "
+            "resolve DNS. Use this to permit legitimate internal targets, e.g. "
+            "an internal OpenAPI/MCP server."
+        ),
+    )
+    provider_url_destination_allowed_hosts: Optional[List[str]] = Field(
+        None,
+        description="Allowlist of hosts a request may redirect a provider call's destination URL to.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
