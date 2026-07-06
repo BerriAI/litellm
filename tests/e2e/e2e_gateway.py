@@ -9,6 +9,7 @@ Gateway's key/customer methods for cleanup. Read-backs are eventually consistent
 from __future__ import annotations
 
 import time
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -18,6 +19,7 @@ from e2e_http import (
     Result,
     StreamingResponse,
     Success,
+    is_ok,
     unwrap,
 )
 from models import (
@@ -32,8 +34,16 @@ from models import (
     KeyInfo,
     KeyInfoParams,
     KeyInfoResponse,
+    LiteLLMParamsBody,
+    ModelDeleteBody,
+    ModelInfoBody,
     ModelInfoEntry,
     ModelInfoResponse,
+    ModelMode,
+    ModelNewBody,
+    ModelNewResponse,
+    OcrBody,
+    OcrResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsParams,
@@ -109,6 +119,38 @@ class Gateway:
             )
         ).data
 
+    def create_model(
+        self,
+        model_name: str,
+        litellm_params: LiteLLMParamsBody,
+        mode: ModelMode | None = None,
+    ) -> str:
+        """Register a deployment under `model_name` (id == model_name) and return the
+        model_id. add_deployment runs synchronously in /model/new, so the model is
+        callable as soon as this returns."""
+        return unwrap(
+            self.transport.post(
+                "/model/new",
+                headers=self.transport.master,
+                json=ModelNewBody(
+                    model_name=model_name,
+                    litellm_params=litellm_params,
+                    model_info=ModelInfoBody(id=model_name, mode=mode),
+                ),
+                response_type=ModelNewResponse,
+            )
+        ).model_id
+
+    def delete_model(self, model_id: str) -> None:
+        result = self.transport.post(
+            "/model/delete",
+            headers=self.transport.master,
+            json=ModelDeleteBody(id=model_id),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
+
     # ---- LLM calls ------------------------------------------------------
 
     def chat(self, key: str, body: ChatBody) -> Result[ChatResponse]:
@@ -120,9 +162,7 @@ class Gateway:
         )
 
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
-        return self.transport.stream(
-            "/chat/completions", headers=self.transport.bearer(key), json=body
-        )
+        return self.transport.stream("/chat/completions", headers=self.transport.bearer(key), json=body)
 
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(
@@ -130,6 +170,14 @@ class Gateway:
             headers=self.transport.bearer(key),
             json=body,
             response_type=EmbedResponse,
+        )
+
+    def ocr(self, key: str, body: OcrBody) -> Result[OcrResponse]:
+        return self.transport.post(
+            "/v1/ocr",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=OcrResponse,
         )
 
     # ---- spend read-back ------------------------------------------------
@@ -150,9 +198,7 @@ class Gateway:
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
-        return self._poll(
-            lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate
-        )
+        return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
 
     def poll_logs_for_request_id(
         self,

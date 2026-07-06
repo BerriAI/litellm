@@ -218,6 +218,8 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+
 const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
@@ -384,9 +386,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
 
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
-  console.log(`Provider key: ${providerKey}`);
   let custom_llm_provider = provider_map[providerKey];
-  console.log(`Provider mapped to: ${custom_llm_provider}`);
 
   let providerModels: Array<string> = [];
 
@@ -394,11 +394,13 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     Object.entries(modelMap).forEach(([key, value]) => {
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
+        const isPrefixVariant =
+          typeof litellmProvider === "string" &&
+          (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+            litellmProvider.startsWith(`${custom_llm_provider}-`));
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" &&
-            (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
-              litellmProvider.startsWith(`${custom_llm_provider}-`)))
+          (isPrefixVariant && !standaloneSubproviderSlugs.has(litellmProvider))
         ) {
           providerModels.push(key);
         }
@@ -407,7 +409,6 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     // Special case for cohere
     // we need both cohere_chat and cohere models to show on dropdown
     if (providerKey == Providers.Cohere) {
-      console.log("Adding cohere chat models");
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
           value !== null &&
@@ -423,7 +424,6 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     // Special case for sagemaker
     // we need both sagemaker and sagemaker_chat models to show on dropdown
     if (providerKey == Providers.SageMaker) {
-      console.log("Adding sagemaker chat models");
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
           value !== null &&

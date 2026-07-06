@@ -19,13 +19,9 @@ class LiteLLMProxyImageEditConfig(OpenAIImageEditConfig):
         headers.update({"Authorization": f"Bearer {api_key}"})
         return headers
 
-    def get_complete_url(
-        self, model: str, api_base: Optional[str], litellm_params: dict
-    ) -> str:
+    def get_complete_url(self, model: str, api_base: Optional[str], litellm_params: dict) -> str:
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
         if api_base is None:
-            raise ValueError(
-                "api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`"
-            )
+            raise ValueError("api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`")
         api_base = api_base.rstrip("/")
         return f"{api_base}/images/edits"

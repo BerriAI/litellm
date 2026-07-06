@@ -41,8 +41,7 @@ class AlertingHangingRequestCheck:
         # stay cached for at least 1.5x the threshold to guarantee a check
         # happens after they cross it
         self.hanging_request_cache_ttl = int(
-            self.slack_alerting_object.alerting_threshold * 1.5
-            + HANGING_ALERT_BUFFER_TIME_SECONDS
+            self.slack_alerting_object.alerting_threshold * 1.5 + HANGING_ALERT_BUFFER_TIME_SECONDS
         )
         self.hanging_request_cache = InMemoryCache(
             default_ttl=self.hanging_request_cache_ttl,
@@ -62,9 +61,7 @@ class AlertingHangingRequestCheck:
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
-        if request_data.get("deployment", None) is not None and isinstance(
-            request_data["deployment"], dict
-        ):
+        if request_data.get("deployment", None) is not None and isinstance(request_data["deployment"], dict):
             api_base = litellm.get_api_base(
                 model=model,
                 optional_params=request_data["deployment"].get("litellm_params", {}),
@@ -104,9 +101,7 @@ class AlertingHangingRequestCheck:
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[
-                HangingRequestData
-            ] = await self.hanging_request_cache.async_get_cache(
+            hanging_request_data: Optional[HangingRequestData] = await self.hanging_request_cache.async_get_cache(
                 key=request_id,
             )
 
@@ -116,12 +111,10 @@ class AlertingHangingRequestCheck:
             if hanging_request_data.alerted:
                 continue
 
-            request_status = (
-                await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(hanging_request_data.request_id),
-                    litellm_parent_otel_span=None,
-                    local_only=True,
-                )
+            request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                key="request_status:{}".format(hanging_request_data.request_id),
+                litellm_parent_otel_span=None,
+                local_only=True,
             )
             # this means the request status was either success or fail
             # and is not hanging
@@ -141,9 +134,7 @@ class AlertingHangingRequestCheck:
             ################
             # Send the Alert on Slack
             ################
-            await self.send_hanging_request_alert(
-                hanging_request_data=hanging_request_data
-            )
+            await self.send_hanging_request_alert(hanging_request_data=hanging_request_data)
             # flag so the entry is skipped on later ticks; one alert per hang,
             # with the existing TTL still handling cleanup
             hanging_request_data.alerted = True

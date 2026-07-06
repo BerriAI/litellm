@@ -54,9 +54,7 @@ def _extract_text_content(content: Any) -> str:
         return content
     if isinstance(content, list):
         return "".join(
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
+            item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"
         )
     return str(content)
 
@@ -88,9 +86,7 @@ def adapt_messages_to_cohere_standard(
                 tc_id = tc.get("id", "")
                 raw_args: Any = tc.get("function", {}).get("arguments", "{}")
                 try:
-                    params: Dict[str, Any] = (
-                        json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    )
+                    params: Dict[str, Any] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
                     params = {}
                 tool_call_lookup[tc_id] = CohereToolCall(
@@ -99,17 +95,11 @@ def adapt_messages_to_cohere_standard(
                 )
 
     last_user_index = next(
-        (
-            i
-            for i in range(len(messages) - 1, -1, -1)
-            if messages[i].get("role") == "user"
-        ),
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"),
         None,
     )
     history_source = (
-        messages
-        if last_user_index is None
-        else [m for i, m in enumerate(messages) if i != last_user_index]
+        messages if last_user_index is None else [m for i, m in enumerate(messages) if i != last_user_index]
     )
 
     chat_history: List[CohereMessage] = []
@@ -120,7 +110,7 @@ def adapt_messages_to_cohere_standard(
         tool_calls: Optional[List[CohereToolCall]] = None
         if role == "assistant" and msg.get("tool_calls"):  # type: ignore[union-attr,typeddict-item]
             tool_calls = []
-            for tc in msg["tool_calls"]:  # type: ignore[union-attr,typeddict-item]
+            for tc in msg["tool_calls"]:  # pyright: ignore[reportOptionalIterable]  # truthiness check above rules out None
                 raw_arguments: Any = tc.get("function", {}).get("arguments", {})
                 if isinstance(raw_arguments, str):
                     try:
@@ -139,14 +129,10 @@ def adapt_messages_to_cohere_standard(
         if role == "user":
             chat_history.append(CohereMessage(role="USER", message=content))
         elif role == "assistant":
-            chat_history.append(
-                CohereMessage(role="CHATBOT", message=content, toolCalls=tool_calls)
-            )
+            chat_history.append(CohereMessage(role="CHATBOT", message=content, toolCalls=tool_calls))
         elif role == "tool":
             tool_call_id = str(msg.get("tool_call_id", "") or "")
-            cohere_call = tool_call_lookup.get(
-                tool_call_id, CohereToolCall(name="", parameters={})
-            )
+            cohere_call = tool_call_lookup.get(tool_call_id, CohereToolCall(name="", parameters={}))
             tool_result = CohereToolResult(
                 call=cohere_call,
                 outputs=[{"output": content}],
@@ -179,9 +165,7 @@ def adapt_tool_definitions_to_cohere_standard(
         function_def = tool.get("function", {})
         raw_params = function_def.get("parameters", {})
 
-        resolved = sanitize_oci_schema(
-            resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params))
-        )
+        resolved = sanitize_oci_schema(resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params)))
         properties = resolved.get("properties", {})
         required = resolved.get("required", [])
 
@@ -190,9 +174,7 @@ def adapt_tool_definitions_to_cohere_standard(
             json_type = param_schema.get("type", "string")
             python_type = OCI_JSON_TO_PYTHON_TYPES.get(json_type, json_type)
             parameter_definitions[param_name] = CohereParameterDefinition(
-                description=enrich_cohere_param_description(
-                    param_schema.get("description", ""), param_schema
-                ),
+                description=enrich_cohere_param_description(param_schema.get("description", ""), param_schema),
                 type=python_type,
                 isRequired=param_name in required,
             )
@@ -227,17 +209,13 @@ def handle_cohere_response(
     model_response.created = int(datetime.datetime.now().timestamp())
 
     response_text = cohere_response.chatResponse.text
-    finish_reason = _normalize_oci_finish_reason(
-        cohere_response.chatResponse.finishReason
-    )
+    finish_reason = _normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
 
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if cohere_response.chatResponse.toolCalls:
         tool_calls = [
             {
-                "id": _synthesize_oci_tool_call_id(
-                    i, tc.name, json.dumps(tc.parameters, sort_keys=True)
-                ),
+                "id": _synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
                 "type": "function",
                 "function": {
                     "name": tc.name,
@@ -274,9 +252,7 @@ def handle_cohere_response(
             total_tokens=usage_info.totalTokens,
         )
     else:
-        model_response.usage = Usage(
-            prompt_tokens=0, completion_tokens=0, total_tokens=0
-        )  # type: ignore[attr-defined]
+        model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)  # type: ignore[attr-defined]
 
     return model_response
 
@@ -319,9 +295,7 @@ def handle_cohere_stream_chunk(
     # already-streamed deltas. We require both signals to be present so that a
     # future API change which adds `chatHistory` to intermediate chunks (or a
     # rare early-populated case) doesn't silently drop legitimate token deltas.
-    is_terminal_consolidation = (
-        typed_chunk.chatHistory is not None and typed_chunk.finishReason is not None
-    )
+    is_terminal_consolidation = typed_chunk.chatHistory is not None and typed_chunk.finishReason is not None
     # On non-terminal text-free chunks (e.g. tool-call-only or keep-alive
     # chunks) emit ``content=None`` rather than ``content=""`` so downstream
     # stream-mergers that distinguish "no text in this delta" from "an
@@ -331,9 +305,7 @@ def handle_cohere_stream_chunk(
     # confirmed that text deltas were already emitted earlier — otherwise
     # (e.g. a degenerate stream that delivers the whole response in a
     # single SSE event), passing it through is the only chance to surface it.
-    text: Optional[str] = (
-        None if (is_terminal_consolidation and prior_text_emitted) else typed_chunk.text
-    )
+    text: Optional[str] = None if (is_terminal_consolidation and prior_text_emitted) else typed_chunk.text
 
     # Tool calls on the terminal consolidation chunk (whether from
     # `typed_chunk.toolCalls` or from `chatHistory`) typically restate what
@@ -343,11 +315,7 @@ def handle_cohere_stream_chunk(
     # tool calls were already emitted earlier — otherwise (e.g. a short
     # response that delivers tool calls exclusively on the terminal chunk),
     # passing them through is the only chance to surface them.
-    cohere_tool_calls = (
-        None
-        if (is_terminal_consolidation and prior_tool_calls_emitted)
-        else typed_chunk.toolCalls
-    )
+    cohere_tool_calls = None if (is_terminal_consolidation and prior_tool_calls_emitted) else typed_chunk.toolCalls
 
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if cohere_tool_calls:
@@ -357,9 +325,7 @@ def handle_cohere_stream_chunk(
                 # deterministically from the call's content/position. A random
                 # uuid4 per chunk would cause downstream stream-mergers to
                 # treat each chunk as a distinct tool call.
-                "id": _synthesize_oci_tool_call_id(
-                    i, tc.name, json.dumps(tc.parameters, sort_keys=True)
-                ),
+                "id": _synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
                 "type": "function",
                 "function": {
                     "name": tc.name,

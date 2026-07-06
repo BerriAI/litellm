@@ -24,9 +24,7 @@ class TokenBreakdown:
 def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     """Extract token counts from usage, handling cached and reasoning tokens."""
     cached_tokens = 0
-    if usage.prompt_tokens_details and hasattr(
-        usage.prompt_tokens_details, "cached_tokens"
-    ):
+    if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "cached_tokens"):
         cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
 
     text_tokens = usage.prompt_tokens - cached_tokens
@@ -41,9 +39,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 
     completion_tokens = (usage.completion_tokens or 0) - reasoning_tokens
 
-    return TokenBreakdown(
-        text_tokens, cached_tokens, completion_tokens, reasoning_tokens
-    )
+    return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
 
 
 def _calculate_tiered_cost(
@@ -181,9 +177,7 @@ def _calculate_completion_cost(
     else:
         reasoning_cost = float(reasoning_cost_val)
 
-    return (breakdown.completion_tokens * output_cost) + (
-        breakdown.reasoning_tokens * reasoning_cost
-    )
+    return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
@@ -201,15 +195,9 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     model_info = get_model_info(model=model, custom_llm_provider="dashscope")
     breakdown = _extract_token_breakdown(usage)
-    tiered_pricing = (
-        model_info.get("tiered_pricing")
-        if isinstance(model_info.get("tiered_pricing"), list)
-        else None
-    )
+    tiered_pricing = model_info.get("tiered_pricing") if isinstance(model_info.get("tiered_pricing"), list) else None
 
-    prompt_cost = _calculate_prompt_cost(
-        breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
-    )
+    prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing)
     completion_cost = _calculate_completion_cost(
         breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
     )
