@@ -25,6 +25,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             GuardrailEventHooks.post_call.value,
         ],
         default_on=litellm_params.default_on,
+        fail_on_error=litellm_params.fail_on_error,
     )
     litellm.logging_callback_manager.add_litellm_callback(_crowdstrike_aidr_callback)
 

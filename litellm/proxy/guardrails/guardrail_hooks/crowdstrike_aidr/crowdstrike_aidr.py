@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Literal, Optional, Type, Union, cas
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Any, override
 
+import httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -120,6 +121,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         guardrail_name: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        fail_on_error: Optional[bool] = True,
         **kwargs,
     ):
         """
@@ -129,9 +131,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             guardrail_name (str): The name of the guardrail instance.
             api_key (Optional[str]): The CrowdStrike AIDR API key. Reads from CS_AIDR_TOKEN env var if None.
             api_base (Optional[str]): The CrowdStrike AIDR API base URL. Reads from CS_AIDR_BASE_URL env var if None.
+            fail_on_error (Optional[bool]): When False, transport errors from the AIDR guard API (e.g. a 4xx/5xx
+                rejecting malformed input, as opposed to a policy block) fail open and the request proceeds
+                unmodified. Defaults to True (fail closed).
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.fail_on_error: bool = True if fail_on_error is None else fail_on_error
 
         self.api_key = api_key or os.environ.get("CS_AIDR_TOKEN")
         if not self.api_key:
@@ -201,6 +207,37 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         )
 
         return result
+
+    async def _guard_or_fail_open(self, payload: dict[str, Any], hook_name: str) -> Optional[dict[str, Any]]:
+        """
+        Calls the AIDR guard, applying the fail-open policy on transport failures.
+
+        Policy blocks (HTTPException from the guard result) always propagate. Client
+        errors (4xx) always fail closed, since they are caller-controlled and a bypass
+        would let malformed input skip scanning. Only server errors (5xx) and
+        connectivity failures honor ``fail_on_error=False``, returning None so the
+        caller proceeds with the original inputs unscanned.
+        """
+        try:
+            return await self._call_crowdstrike_aidr_guard(payload, hook_name)
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as e:
+            if self.fail_on_error or e.response.status_code < 500:
+                raise
+            verbose_proxy_logger.error(
+                f"CrowdStrike AIDR Guardrail ({hook_name}): guard API returned {e.response.status_code}, failing open: {e}",
+                exc_info=True,
+            )
+            return None
+        except Exception as e:
+            if self.fail_on_error:
+                raise
+            verbose_proxy_logger.error(
+                f"CrowdStrike AIDR Guardrail ({hook_name}): guard API call failed, failing open: {e}",
+                exc_info=True,
+            )
+            return None
 
     def _build_guard_input_for_request(self, inputs: GenericGuardrailAPIInputs) -> Optional[_GuardInput]:
         guard_input = _GuardInput(messages=[], tools=[])
@@ -307,10 +344,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 extra_info["user_name"] = user_email
             ai_guard_payload["extra_info"] = extra_info
 
-        ai_guard_response = await self._call_crowdstrike_aidr_guard(ai_guard_payload, hook_name)
+        ai_guard_response = await self._guard_or_fail_open(ai_guard_payload, hook_name)
 
         if "body" in request_data or "messages" in request_data:
             add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+
+        if ai_guard_response is None:
+            return inputs
 
         result = ai_guard_response.get("result", {})
         if not result.get("transformed"):
