@@ -24,9 +24,7 @@ async def test_get_llm_provider_for_deployment_dict_does_not_require_litellm_par
 ):
     class RaiseOnInit:
         def __init__(self, *args, **kwargs):
-            raise AssertionError(
-                "LiteLLM_Params should not be instantiated in hot path"
-            )
+            raise AssertionError("LiteLLM_Params should not be instantiated in hot path")
 
     monkeypatch.setattr(
         "litellm.router_strategy.budget_limiter.LiteLLM_Params",
@@ -93,9 +91,7 @@ async def test_get_llm_provider_for_deployment_dict_view_supports_mapping_and_at
 
 
 @pytest.mark.asyncio
-async def test_async_filter_deployments_resolves_provider_once_per_deployment(
-    disable_budget_sync, monkeypatch
-):
+async def test_async_filter_deployments_resolves_provider_once_per_deployment(disable_budget_sync, monkeypatch):
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={
@@ -196,14 +192,103 @@ async def test_async_filter_deployments_does_not_recompute_provider_when_resolve
     assert provider_resolution_calls == len(healthy_deployments)
 
 
+@pytest.mark.asyncio
+async def test_async_log_success_event_derives_provider_from_litellm_params_model(disable_budget_sync, monkeypatch):
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={
+            "openai": BudgetConfig(budget_duration="1d", max_budget=100.0),
+        },
+    )
+
+    increment_calls = []
+
+    async def _record_increment(**kwargs):
+        increment_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        provider_budget,
+        "_increment_spend_for_key",
+        _record_increment,
+    )
+
+    await provider_budget.async_log_success_event(
+        kwargs={
+            "litellm_params": {"model": "openai/text-embedding-3-small"},
+            "standard_logging_object": {
+                "response_cost": 0.25,
+                "model_id": "embedding-deployment-id",
+            },
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert len(increment_calls) == 1
+    assert increment_calls[0]["spend_key"] == "provider_spend:openai:1d"
+    assert increment_calls[0]["start_time_key"] == "provider_budget_start_time:openai"
+    assert increment_calls[0]["response_cost"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_missing_provider_does_not_block_deployment_budget(
+    disable_budget_sync, monkeypatch
+):
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={
+            "openai": BudgetConfig(budget_duration="1d", max_budget=100.0),
+        },
+        model_list=[
+            {
+                "model_name": "embedding-model",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "max_budget": 100.0,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": "embedding-deployment-id"},
+            }
+        ],
+    )
+
+    increment_calls = []
+
+    async def _record_increment(**kwargs):
+        increment_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        provider_budget,
+        "_increment_spend_for_key",
+        _record_increment,
+    )
+
+    await provider_budget.async_log_success_event(
+        kwargs={
+            "litellm_params": {},
+            "standard_logging_object": {
+                "response_cost": 0.25,
+                "model_id": "embedding-deployment-id",
+            },
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert len(increment_calls) == 1
+    assert increment_calls[0]["spend_key"] == "deployment_spend:embedding-deployment-id:1d"
+    assert increment_calls[0]["start_time_key"] == "deployment_budget_start_time:embedding-deployment-id"
+    assert increment_calls[0]["response_cost"] == 0.25
+
+
 def _legacy_provider_resolution(deployment):
     """
     Reference implementation used before hot-path optimization.
     """
     try:
-        _litellm_params = LiteLLM_Params(
-            **deployment.get("litellm_params", {"model": ""})
-        )
+        _litellm_params = LiteLLM_Params(**deployment.get("litellm_params", {"model": ""}))
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=_litellm_params.model,
             litellm_params=_litellm_params,
@@ -222,9 +307,7 @@ def _legacy_provider_resolution(deployment):
     ],
 )
 @pytest.mark.asyncio
-async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
-    disable_budget_sync, deployment
-):
+async def test_get_llm_provider_for_deployment_matches_legacy_behavior(disable_budget_sync, deployment):
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={},
@@ -236,9 +319,7 @@ async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
     assert current_provider == legacy_provider
 
 
-def test_register_deployment_budget_for_runtime_added_deployment(
-    disable_budget_sync, monkeypatch
-):
+def test_register_deployment_budget_for_runtime_added_deployment(disable_budget_sync, monkeypatch):
     import asyncio
 
     monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
@@ -268,9 +349,7 @@ def test_register_deployment_budget_for_runtime_added_deployment(
     assert budget_limiter._get_budget_config_for_deployment(model_id) is None
 
 
-def test_router_add_deployment_registers_deployment_budget(
-    disable_budget_sync, monkeypatch
-):
+def test_router_add_deployment_registers_deployment_budget(disable_budget_sync, monkeypatch):
     import asyncio
 
     from litellm import Router
@@ -298,8 +377,6 @@ def test_router_add_deployment_registers_deployment_budget(
 
     budget_limiter = router._get_router_deployment_budget_limiter()
     assert budget_limiter is not None
-    config = budget_limiter._get_budget_config_for_deployment(
-        "runtime-budget-deployment"
-    )
+    config = budget_limiter._get_budget_config_for_deployment("runtime-budget-deployment")
     assert config is not None
     assert config.max_budget == 0.000000000001
