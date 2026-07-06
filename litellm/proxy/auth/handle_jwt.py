@@ -12,7 +12,7 @@ import fnmatch
 import hashlib
 import os
 import re
-from typing import Any, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, List, Literal, NoReturn, Optional, Set, Tuple, Union, cast
 
 import jwt
 from cryptography import x509
@@ -1899,8 +1899,6 @@ class JWTAuthManager:
                 )
             except HTTPException:
                 continue
-            if not team_object:
-                continue
             any_team_resolved = True
             if requested_model:
                 try:
@@ -1970,6 +1968,18 @@ class JWTAuthManager:
         )
 
     @staticmethod
+    def _raise_header_team_membership_denial(team_id: str) -> NoReturn:
+        """
+        The single denial shape for a provisional x-litellm-team-id header,
+        raised identically for nonexistent teams and for teams the user is not
+        a member of, so the response does not reveal whether a team id exists.
+        """
+        raise HTTPException(
+            status_code=403,
+            detail=(f"Team '{team_id}' (from x-litellm-team-id header) is not in your team memberships."),
+        )
+
+    @staticmethod
     def _validate_header_team_in_db_membership(
         team_id: str,
         user_object: LiteLLM_UserTable | None,
@@ -1982,10 +1992,7 @@ class JWTAuthManager:
         user_team_ids = user_object.teams if user_object else []
         if team_id in user_team_ids:
             return
-        raise HTTPException(
-            status_code=403,
-            detail=(f"Team '{team_id}' (from x-litellm-team-id header) is not in your team memberships."),
-        )
+        JWTAuthManager._raise_header_team_membership_denial(team_id)
 
     @staticmethod
     async def auth_builder(
@@ -2109,14 +2116,19 @@ class JWTAuthManager:
             # upsert it here or an attacker-supplied x-litellm-team-id would create
             # an orphaned team row before that check runs. A genuine membership team
             # already exists, so suppressing the upsert in that case costs nothing.
-            team_object = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=(jwt_handler.litellm_jwtauth.team_id_upsert and not db_team_fallback),
-            )
+            try:
+                team_object = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=(jwt_handler.litellm_jwtauth.team_id_upsert and not db_team_fallback),
+                )
+            except HTTPException:
+                if not db_team_fallback:
+                    raise
+                JWTAuthManager._raise_header_team_membership_denial(team_id)
         elif not team_id and not db_team_fallback:
             ## SPECIFIC TEAM ID
             (
