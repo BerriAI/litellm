@@ -2838,9 +2838,10 @@ def test_upsert_deployment_clears_stale_budget_config(monkeypatch):
 def test_update_router_config_accepts_retry_policy():
     """GH#31308: UpdateRouterConfig must accept retry_policy so
     it is not silently dropped when set via UI or /config/update."""
-    from litellm.types.router import UpdateRouterConfig
+    from litellm.types.router import UpdateRouterConfig, RetryPolicy
 
     config = UpdateRouterConfig(
         retry_policy={"RateLimitErrorRetries": 3}
     )
-    assert config.retry_policy == {"RateLimitErrorRetries": 3}
+    assert isinstance(config.retry_policy, RetryPolicy)
+    assert config.retry_policy.RateLimitErrorRetries == 3
