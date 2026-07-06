@@ -1,3 +1,5 @@
+import { resolveLogoSrc } from "@/lib/assetPaths";
+
 // Legacy enum - keeping for backward compatibility
 export enum GuardrailProviders {
   PresidioPII = "Presidio PII",
@@ -53,6 +55,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
   QostodianNexus: "qostodian_nexus",
+  Repelloai: "repelloai",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -112,7 +115,7 @@ export const shouldRenderLLMJudgeFields = (provider: string | null) => {
   return guardrail_provider_map[provider] === "llm_as_a_judge";
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
   "Zscaler AI Guard": `${asset_logos_folder}zscaler.svg`,
@@ -142,6 +145,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
   Akto: `${asset_logos_folder}akto.svg`,
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
+  "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
@@ -161,9 +165,9 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string;
   // Get the display name from current GuardrailProviders and logo from map
   const currentProviders = getGuardrailProviders();
   const displayName = currentProviders[enumKey as keyof typeof currentProviders];
-  const logo = guardrailLogoMap[displayName as keyof typeof guardrailLogoMap];
+  const logo = resolveLogoSrc(guardrailLogoMap[displayName as keyof typeof guardrailLogoMap]) ?? "";
 
-  return { logo: logo || "", displayName: displayName || guardrailValue };
+  return { logo, displayName: displayName || guardrailValue };
 };
 
 /** Tri-state UI value for `litellm_params.skip_system_message_in_guardrail` (inherit = use global). */

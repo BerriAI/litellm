@@ -321,6 +321,29 @@ class TestNativeFinishReason:
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
 
 
+def test_parallel_request_limiter_internal_fields_in_all_litellm_params():
+    """
+    Regression test: internal fields written by parallel_request_limiter_v3 must
+    be in all_litellm_params so they are stripped before forwarding to upstream
+    providers.  If missing, they are sent as extra body parameters and providers
+    like OpenAI reject the request with a 400 invalid_request_error.
+    """
+    from litellm.types.utils import all_litellm_params
+
+    internal_fields = [
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
+    ]
+    for field in internal_fields:
+        assert field in all_litellm_params, (
+            f"{field!r} is not in all_litellm_params. "
+            "It will be forwarded to upstream providers and cause 400 errors."
+        )
+
+
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.
@@ -348,3 +371,48 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_message_accepts_thinking_block_with_null_signature():
+    """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
+    without an Anthropic-style signature. Message must accept signature=None so the
+    success-logging handler can build the StandardLoggingObject instead of silently
+    dropping the log record. Regression for LIT-4007.
+    """
+    from litellm.types.utils import Choices, Message
+
+    thinking_blocks = [
+        {"type": "thinking", "thinking": "step by step reasoning", "signature": None}
+    ]
+
+    message = Message(
+        content="the answer is 4", role="assistant", thinking_blocks=thinking_blocks
+    )
+    assert message.thinking_blocks is not None
+    assert message.thinking_blocks[0]["signature"] is None
+    assert message.thinking_blocks[0]["thinking"] == "step by step reasoning"
+
+    validated = Message.model_validate(
+        {
+            "role": "assistant",
+            "content": "the answer is 4",
+            "thinking_blocks": thinking_blocks,
+        }
+    )
+    dumped = validated.model_dump()
+    assert dumped["thinking_blocks"][0]["signature"] is None
+    assert dumped["thinking_blocks"][0]["thinking"] == "step by step reasoning"
+
+    choice = Choices.model_validate(
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "the answer is 4",
+                "thinking_blocks": thinking_blocks,
+            },
+        }
+    )
+    assert choice.message.thinking_blocks is not None
+    assert choice.message.thinking_blocks[0]["signature"] is None
