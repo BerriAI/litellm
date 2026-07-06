@@ -216,6 +216,25 @@ class SpendLogsParams(BaseModel):
     api_key: str | None = None
 
 
+class SpendLogsPageParams(BaseModel):
+    """Query for /spend/logs/v2, which requires an explicit date window and
+    serves pages of at most 100 rows."""
+
+    start_date: str
+    end_date: str
+    page: int
+    page_size: int
+    api_key: str | None = None
+
+
+class SpendLogsPage(BaseModel):
+    data: list[SpendLogRow] = []
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 # ---------- spend calculate ----------
 
 
@@ -430,6 +449,9 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     tpm: int | None = None
+
+
+ModelMode = Literal["batch", "realtime", "image_generation"]
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
