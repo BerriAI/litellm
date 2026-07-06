@@ -23,6 +23,10 @@ from transport import is_control_plane_path
         "/key/generate",
         "/budget/new",
         "/spend/logs",
+        "/end_user/daily/activity",
+        "/user/daily/activity",
+        "/team/daily/activity",
+        "/tag/daily/activity",
     ],
 )
 def test_management_routes_go_to_the_control_plane(path: str) -> None:
