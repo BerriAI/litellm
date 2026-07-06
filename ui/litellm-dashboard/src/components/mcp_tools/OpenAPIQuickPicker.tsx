@@ -76,7 +76,7 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
               className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border transition-all cursor-pointer
                 ${
                   isSelected
-                    ? "border-blue-500 bg-blue-50 shadow-sm"
+                    ? "border-blue-500 bg-blue-50 shadow-xs"
                     : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
                 }`}
             >

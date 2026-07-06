@@ -27,6 +27,7 @@ interface MCPToolConfigurationProps {
   externalTools?: any[];
   externalIsLoading?: boolean;
   externalError?: string | null;
+  externalErrorStatus?: number | null;
   externalCanFetch?: boolean;
   /** When true, do not auto-select all tools for servers with no stored allowlist. */
   isEditMode?: boolean;
@@ -156,6 +157,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   externalTools,
   externalIsLoading,
   externalError,
+  externalErrorStatus = null,
   externalCanFetch,
   isEditMode = false,
 }) => {
@@ -165,6 +167,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   const hasInitializedRef = useRef(false);
   const previousSuggestedToolNamesRef = useRef<string>("");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const isPreviewForbidden = externalErrorStatus === 403;
 
   // Tool list is fetched by the parent (create/edit flow) and passed in. This
   // component renders that state; it never fetches on its own, so there is a
@@ -429,7 +432,13 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
 
         {/* Error state */}
-        {toolsError && !isLoadingTools && (
+        {toolsError && !isLoadingTools && isPreviewForbidden && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <Text className="text-sm text-blue-800">{toolsError}</Text>
+          </div>
+        )}
+
+        {toolsError && !isLoadingTools && !isPreviewForbidden && (
           <div className="text-center py-6 text-red-500 border rounded-lg border-dashed border-red-300 bg-red-50">
             <ToolOutlined className="text-2xl mb-2" />
             <Text className="text-red-600 font-medium">Unable to load tools</Text>

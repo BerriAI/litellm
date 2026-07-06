@@ -60,6 +60,9 @@ from litellm._lazy_imports import (
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.fallback_generalizations import (
+    match_fallback_generalization,
+)
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -3494,6 +3497,17 @@ def filter_out_litellm_params(kwargs: dict) -> dict:
     return {key: value for key, value in kwargs.items() if key not in all_litellm_params}
 
 
+def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
+        return True
+    try:
+        provider = LlmProviders(custom_llm_provider)
+    except ValueError:
+        return False
+    provider_config = ProviderConfigManager.get_provider_chat_config(model="", provider=provider)
+    return bool(getattr(provider_config, "supports_vertex_params", False))
+
+
 class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
@@ -3515,11 +3529,7 @@ class PreProcessNonDefaultParams:
                 continue
             elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
                 continue
-            elif (
-                k.startswith("vertex_")
-                and custom_llm_provider != "vertex_ai"
-                and custom_llm_provider != "vertex_ai_beta"
-            ):  # allow dynamically setting vertex ai init logic
+            elif k.startswith("vertex_") and not _provider_supports_vertex_params(custom_llm_provider):
                 continue
             passed_params[k] = v
 
@@ -4189,6 +4199,13 @@ def get_optional_params(
         )
     elif custom_llm_provider == "deepseek":
         optional_params = litellm.DeepSeekChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+        )
+    elif custom_llm_provider == "tencent":
+        optional_params = litellm.TencentChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5020,6 +5037,34 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     custom_llm_provider: str
 
 
+def _get_model_info_from_generalization(
+    model: str,
+    potential_model_names: PotentialModelNamesAndCustomLLMProvider,
+    custom_llm_provider: Optional[str],
+) -> Optional[tuple[str, dict]]:
+    """Resolve an unmapped model via a declarative fallback-generalization rule.
+
+    Tries the same name candidates as the exact lookups, in the same order, and
+    returns ``(matched_name, model_info)`` for the first candidate whose rule also
+    satisfies the provider constraint. O(number of rules); only call after the
+    exact lookups have missed.
+    """
+    candidates = [
+        potential_model_names["combined_model_name"],
+        model,
+        potential_model_names["combined_stripped_model_name"],
+        potential_model_names["stripped_model_name"],
+        potential_model_names["split_model"],
+    ]
+    for candidate in candidates:
+        generalized_info = match_fallback_generalization(candidate)
+        if generalized_info is not None and _check_provider_match(
+            model_info=generalized_info, custom_llm_provider=custom_llm_provider
+        ):
+            return candidate, generalized_info
+    return None
+
+
 def _get_potential_model_names(
     model: str, custom_llm_provider: Optional[str]
 ) -> PotentialModelNamesAndCustomLLMProvider:
@@ -5275,6 +5320,15 @@ def _get_model_info_helper(
                     ):
                         _model_info = None
 
+            if _model_info is None:
+                generalization = _get_model_info_from_generalization(
+                    model=model,
+                    potential_model_names=potential_model_names,
+                    custom_llm_provider=custom_llm_provider,
+                )
+                if generalization is not None:
+                    key, _model_info = generalization
+
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -5418,6 +5472,7 @@ def _get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
+                bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
@@ -5969,6 +6024,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("DEEPSEEK_API_KEY")
+        elif custom_llm_provider == "tencent":
+            if "TENCENT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("TENCENT_API_KEY")
         elif custom_llm_provider == "mistral":
             if "MISTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7510,6 +7570,7 @@ class ProviderConfigManager:
             ),
             # Simple provider mappings (no model parameter needed)
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
+            LlmProviders.TENCENT: (lambda: litellm.TencentChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
             LlmProviders.BEDROCK_MANTLE: (
                 lambda: litellm.BedrockMantleChatConfig(),
@@ -7632,6 +7693,10 @@ class ProviderConfigManager:
             ),
             LlmProviders.LANGFLOW: (
                 lambda: ProviderConfigManager._get_langflow_config(),
+                False,
+            ),
+            LlmProviders.GDC: (
+                lambda: litellm.GDCGeminiConfig(),
                 False,
             ),
         }
@@ -7944,6 +8009,19 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.TENCENT == provider:
+            from litellm.llms.tencent.messages.transformation import (
+                TencentAnthropicMessagesConfig,
+            )
+
+            return TencentAnthropicMessagesConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            if "claude" in model_lower:
+                from litellm.llms.github_copilot.messages.transformation import (
+                    GithubCopilotAnthropicMessagesConfig,
+                )
+
+                return GithubCopilotAnthropicMessagesConfig()
         return None
 
     @staticmethod

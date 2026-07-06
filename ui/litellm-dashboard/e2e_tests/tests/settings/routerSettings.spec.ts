@@ -3,6 +3,14 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { Role, users } from "../../fixtures/users";
+// Type-only import of the OpenAPI-generated backend schema, erased at runtime by
+// esbuild. It types the round-trips below so mistakes surface in the editor; the live
+// test against the real proxy is what actually enforces the contract.
+import type { components } from "../../../src/lib/http/schema";
+
+// These tests mutate the proxy's shared router_settings, and the Loadbalancing save
+// echoes the whole settings object, so they must not run concurrently.
+test.describe.configure({ mode: "serial" });
 
 const PRIMARY = "fake-openai-gpt-4";
 const FALLBACK = "fake-anthropic-claude";
@@ -97,5 +105,86 @@ test.describe("Router Settings - Fallbacks", () => {
 
     const newRow = page.locator("table tbody tr").filter({ hasText: PRIMARY }).filter({ hasText: FALLBACK });
     await expect(newRow).toHaveCount(1, { timeout: 10_000 });
+  });
+});
+
+type ConfigYAML = components["schemas"]["ConfigYAML"];
+type RouterSettingsResponse = components["schemas"]["RouterSettingsResponse"];
+
+const BASE_URL = "http://localhost:4000";
+const ADMIN_AUTH = { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` };
+
+/**
+ * Apply a router_settings patch through the typed /config/update contract. The
+ * server merges it over existing settings (request wins), so only the passed keys
+ * change. Fails loudly if the write is rejected instead of leaving a silent bad seed.
+ */
+async function patchRouterSettings(
+  request: import("@playwright/test").APIRequestContext,
+  patch: Partial<NonNullable<ConfigYAML["router_settings"]>>,
+) {
+  const res = await request.post(`${BASE_URL}/config/update`, {
+    headers: ADMIN_AUTH,
+    data: { router_settings: patch },
+  });
+  expect(res.ok(), `seed /config/update failed: ${res.status()} ${await res.text()}`).toBeTruthy();
+}
+
+test.describe("Router Settings - Loadbalancing", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  // Pin num_retries and an empty routing_groups so the assertions are deterministic.
+  // Empty already reproduces LIT-4057: the old tab serialized [] to the string "[]"
+  // and the save 422'd.
+  test.beforeEach(async ({ request }) => {
+    await patchRouterSettings(request, { num_retries: 3, routing_groups: [] });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await patchRouterSettings(request, { num_retries: 3 });
+  });
+
+  test("saves the Loadbalancing tab without a 422 when routing_groups is present, and persists", async ({
+    page,
+    request,
+  }) => {
+    await navigateToPage(page, Page.RouterSettings);
+    await page.getByRole("tab", { name: "Loadbalancing" }).click();
+
+    const numRetries = page.locator('input[name="num_retries"]');
+    await expect(numRetries).toHaveValue("3", { timeout: 15_000 });
+    // routing_groups belongs to its own tab and must not leak into this form.
+    await expect(page.locator('input[name="routing_groups"]')).toHaveCount(0);
+
+    await numRetries.fill("5");
+
+    // LIT-4057: the tab used to serialize routing_groups as the string "[]",
+    // which the backend rejects with 422 while the UI still claimed success.
+    // Assert the save actually succeeds at the network level.
+    const saveResponse = page.waitForResponse(
+      (res) => res.url().includes("/config/update") && res.request().method() === "POST",
+      { timeout: 15_000 },
+    );
+    await page.getByRole("button", { name: /save changes/i }).click();
+    expect((await saveResponse).status()).toBe(200);
+
+    await expect(page.getByText(/router settings updated successfully/i).first()).toBeVisible({ timeout: 10_000 });
+
+    // The ticket's core symptom was that a refresh showed the old value.
+    await navigateToPage(page, Page.RouterSettings);
+    await page.getByRole("tab", { name: "Loadbalancing" }).click();
+    await expect(page.locator('input[name="num_retries"]')).toHaveValue("5", { timeout: 15_000 });
+
+    // The typed backend read agrees the change persisted.
+    await expect
+      .poll(
+        async () => {
+          const res = await request.get(`${BASE_URL}/router/settings`, { headers: ADMIN_AUTH });
+          const data = (await res.json()) as RouterSettingsResponse;
+          return data.current_values?.num_retries;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(5);
   });
 });
