@@ -260,6 +260,18 @@ class MistralConversationsConfig(MistralConfig):
             setattr(usage_obj, "web_search_premium_requests", web_search_premium_requests)
         return usage_obj
 
+    @staticmethod
+    def _finish_reason(request_data: dict, usage: Optional[MistralConversationUsage]) -> str:
+        """The Conversations API returns no finish/stop reason, so infer truncation
+        from the token budget: ``length`` when the completion filled the requested
+        ``max_tokens``, otherwise ``stop``."""
+        args = STR_OBJ_DICT.validate_python(request_data.get("completion_args") or {})
+        max_tokens = args.get("max_tokens")
+        completion_tokens = usage.completion_tokens if usage else None
+        if isinstance(max_tokens, int) and isinstance(completion_tokens, int) and completion_tokens >= max_tokens:
+            return "length"
+        return "stop"
+
     def transform_response(
         self,
         model: str,
@@ -286,7 +298,9 @@ class MistralConversationsConfig(MistralConfig):
             content=text or None,
             annotations=annotations or None,
         )
-        model_response.choices = [Choices(index=0, message=message, finish_reason="stop")]
+        model_response.choices = [
+            Choices(index=0, message=message, finish_reason=self._finish_reason(request_data, parsed.usage))
+        ]
         model_response.model = model
         if parsed.conversation_id:
             model_response.id = parsed.conversation_id
