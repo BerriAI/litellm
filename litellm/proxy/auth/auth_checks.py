@@ -603,15 +603,6 @@ async def common_checks(
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
-        if proxy_logging_obj.slack_alerting_instance is not None:
-            asyncio.create_task(
-                _team_max_budget_alert_check(
-                    team_object=team_object,
-                    valid_token=valid_token,
-                    proxy_logging_obj=proxy_logging_obj,
-                    thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.team_budget_alert_thresholds,
-                )
-            )
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -634,21 +625,20 @@ async def common_checks(
             ):
                 from litellm.proxy.proxy_server import get_current_spend
 
-                if proxy_logging_obj.slack_alerting_instance is not None:
-                    asyncio.create_task(
-                        _user_max_budget_alert_check(
-                            user_object=user_object,
-                            valid_token=valid_token,
-                            proxy_logging_obj=proxy_logging_obj,
-                            thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.user_budget_alert_thresholds,
-                        )
-                    )
                 user_budget = user_object.max_budget
                 user_spend = await get_current_spend(
                     counter_key=f"spend:user:{user_object.user_id}",
                     fallback_spend=user_object.spend or 0.0,
                     max_budget=user_budget,
                 )
+                if proxy_logging_obj.slack_alerting_instance is not None:
+                    await _user_max_budget_alert_check(
+                        user_object=user_object,
+                        valid_token=valid_token,
+                        proxy_logging_obj=proxy_logging_obj,
+                        spend=user_spend,
+                        thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.user_budget_alert_thresholds,
+                    )
                 if math.isfinite(user_budget) and user_spend >= user_budget:
                     raise litellm.BudgetExceededError(
                         current_cost=user_spend,
@@ -3635,7 +3625,7 @@ async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
     user_obj: Optional[LiteLLM_UserTable] = None,
-    thresholds: Optional[List[float]] = None,
+    thresholds: Optional[list[float]] = None,
 ):
     """
     Fires a non-blocking budget alert for each configured threshold the key has crossed
@@ -3648,7 +3638,7 @@ async def _virtual_key_max_budget_alert_check(
         return
 
     owner_email = user_obj.user_email if user_obj else None
-    alert_email_config: Optional[Dict[str, List[str]]] = _merge_budget_alert_email_configs(
+    alert_email_config: Optional[dict[str, list[str]]] = _merge_budget_alert_email_configs(
         global_cfg=litellm.default_key_max_budget_alert_emails,
         per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
     )
@@ -3722,7 +3712,7 @@ async def _virtual_key_max_budget_alert_check(
             )
 
 
-def _sanitize_alert_thresholds(thresholds: List[float]) -> List[float]:
+def _sanitize_alert_thresholds(thresholds: list[float]) -> list[float]:
     return list(
         dict.fromkeys(t for t in thresholds[:10] if isinstance(t, float) and math.isfinite(t) and 0.0 < t < 1.0)
     )
@@ -3732,11 +3722,15 @@ async def _team_max_budget_alert_check(
     team_object: Optional[LiteLLM_TeamTable],
     valid_token: Optional[UserAPIKeyAuth],
     proxy_logging_obj: ProxyLogging,
-    thresholds: Optional[List[float]] = None,
+    spend: float,
+    thresholds: Optional[list[float]] = None,
 ) -> None:
     """
     Fires a non-blocking budget alert for each configured threshold the team has crossed
     but not yet exceeded. Mirrors _virtual_key_max_budget_alert_check for teams.
+
+    Runs off the spend already read by _team_max_budget_check so the alert path adds no
+    extra spend read on the hot request path.
     """
     if (
         team_object is None
@@ -3745,14 +3739,6 @@ async def _team_max_budget_alert_check(
         or not math.isfinite(team_object.max_budget)
     ):
         return
-
-    from litellm.proxy.proxy_server import get_current_spend
-
-    spend = await get_current_spend(
-        counter_key=f"spend:team:{team_object.team_id}",
-        fallback_spend=team_object.spend or 0.0,
-        max_budget=team_object.max_budget,
-    )
 
     raw_thresholds = (
         (team_object.metadata.get("budget_alert_thresholds") if isinstance(team_object.metadata, dict) else None)
@@ -3794,11 +3780,15 @@ async def _user_max_budget_alert_check(
     user_object: Optional[LiteLLM_UserTable],
     valid_token: Optional[UserAPIKeyAuth],
     proxy_logging_obj: ProxyLogging,
-    thresholds: Optional[List[float]] = None,
+    spend: float,
+    thresholds: Optional[list[float]] = None,
 ) -> None:
     """
     Fires a non-blocking budget alert for each configured threshold the user has crossed
     but not yet exceeded. Mirrors _virtual_key_max_budget_alert_check for users.
+
+    Runs off the spend already read by the personal-budget check so the alert path adds no
+    extra spend read on the hot request path.
     """
     if (
         user_object is None
@@ -3807,14 +3797,6 @@ async def _user_max_budget_alert_check(
         or not math.isfinite(user_object.max_budget)
     ):
         return
-
-    from litellm.proxy.proxy_server import get_current_spend
-
-    spend = await get_current_spend(
-        counter_key=f"spend:user:{user_object.user_id}",
-        fallback_spend=user_object.spend or 0.0,
-        max_budget=user_object.max_budget,
-    )
 
     raw_thresholds = (
         (user_object.metadata.get("budget_alert_thresholds") if isinstance(user_object.metadata, dict) else None)
@@ -3992,6 +3974,15 @@ async def _team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
+
+        if proxy_logging_obj.slack_alerting_instance is not None:
+            await _team_max_budget_alert_check(
+                team_object=team_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=spend,
+                thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.team_budget_alert_thresholds,
+            )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
             if valid_token:

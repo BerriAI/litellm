@@ -1051,7 +1051,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
-    budget_alert_thresholds: Optional[List[float]] = Field(
+    budget_alert_thresholds: Optional[list[float]] = Field(
         default=None,
         description="Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.",
     )
@@ -1734,7 +1734,7 @@ class NewTeamRequest(TeamBase):
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
-    budget_alert_thresholds: Optional[List[float]] = Field(
+    budget_alert_thresholds: Optional[list[float]] = Field(
         default=None,
         description="Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.",
     )
@@ -1801,7 +1801,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None  # multiple concurrent budget windows
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
-    budget_alert_thresholds: Optional[List[float]] = Field(
+    budget_alert_thresholds: Optional[list[float]] = Field(
         default=None,
         description="Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.",
     )

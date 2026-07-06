@@ -388,6 +388,7 @@ async def new_user(
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - budget_alert_thresholds: Optional[List[float]] - Per-user budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -1388,6 +1389,7 @@ async def user_update(
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+        - budget_alert_thresholds: Optional[List[float]] - Per-user budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
 
     """
     try:

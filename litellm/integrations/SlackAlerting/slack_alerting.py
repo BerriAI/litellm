@@ -1092,7 +1092,7 @@ Model Info:
         Returns True if at least one POST succeeded.
         Raises Exception if no URL is configured.
         """
-        urls: List[str] = []
+        urls: list[str] = []
         if self.alert_to_webhook_url:
             configured = self.alert_to_webhook_url.get(AlertType.budget_alerts)
             if configured:

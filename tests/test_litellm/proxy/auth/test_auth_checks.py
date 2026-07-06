@@ -4094,6 +4094,57 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
     assert "User=u1" in str(over.value)
 
 
+@pytest.mark.asyncio
+async def test_common_checks_team_threshold_alert_fires_off_enforcement_read():
+    """The team threshold alert must fire through common_checks without a second spend read.
+
+    _team_max_budget_check reads team spend once for enforcement and reuses that value to
+    fire threshold alerts. This asserts the alert reaches proxy_logging_obj.budget_alerts and
+    fails if the folded-in alert call is dropped from the enforcement path.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team = LiteLLM_TeamTable(team_id="t1", team_alias="Eng", spend=0.0, max_budget=100.0)
+    token = UserAPIKeyAuth(token="k1", team_id="t1")
+
+    reads: List[str] = []
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        reads.append(counter_key)
+        return 87.0 if counter_key == "spend:team:t1" else 0.0
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.slack_alerting_instance.alerting_args.team_budget_alert_thresholds = [0.8, 0.85, 0.95]
+    proxy_logging_obj.slack_alerting_instance.alerting_args.user_budget_alert_thresholds = [0.8]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ):
+        await common_checks(
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+            team_object=team,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=token,
+            request=MagicMock(spec=Request),
+        )
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    assert reads.count("spend:team:t1") == 1
+    thresholds_fired = {c.kwargs["user_info"].budget_percentage_used for c in proxy_logging_obj.budget_alerts.call_args_list}
+    assert thresholds_fired == {0.8, 0.85}
+    assert all(c.kwargs["type"] == "team_budget" for c in proxy_logging_obj.budget_alerts.call_args_list)
+
+
 # =====================================================================
 # Budget threshold alert check tests (team + user)
 # =====================================================================
@@ -4116,16 +4167,13 @@ async def test_team_budget_alert_fires_at_each_crossed_threshold():
     proxy_logging_obj.budget_alerts = AsyncMock()
 
     # spend at 87% — should cross both the 0.8 and 0.85 thresholds
-    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 87.0
-
-    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
-        await _team_max_budget_alert_check(
-            team_object=team_object,
-            valid_token=valid_token,
-            proxy_logging_obj=proxy_logging_obj,
-            thresholds=[0.8, 0.85, 0.95],
-        )
+    await _team_max_budget_alert_check(
+        team_object=team_object,
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=87.0,
+        thresholds=[0.8, 0.85, 0.95],
+    )
 
     assert proxy_logging_obj.budget_alerts.call_count == 2
     call_args_list = proxy_logging_obj.budget_alerts.call_args_list
@@ -4151,16 +4199,13 @@ async def test_team_budget_alert_silent_below_lowest_threshold():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 70.0  # 70% — below 80% threshold
-
-    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
-        await _team_max_budget_alert_check(
-            team_object=team_object,
-            valid_token=None,
-            proxy_logging_obj=proxy_logging_obj,
-            thresholds=[0.8, 0.85, 0.95],
-        )
+    await _team_max_budget_alert_check(
+        team_object=team_object,
+        valid_token=None,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=70.0,  # 70% — below 80% threshold
+        thresholds=[0.8, 0.85, 0.95],
+    )
 
     proxy_logging_obj.budget_alerts.assert_not_called()
 
@@ -4179,6 +4224,7 @@ async def test_team_budget_alert_silent_when_no_max_budget():
         team_object=team_object,
         valid_token=None,
         proxy_logging_obj=proxy_logging_obj,
+        spend=50.0,
         thresholds=[0.8],
     )
 
@@ -4199,16 +4245,13 @@ async def test_team_budget_alert_silent_when_budget_fully_exceeded():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 105.0  # over budget
-
-    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
-        await _team_max_budget_alert_check(
-            team_object=team_object,
-            valid_token=None,
-            proxy_logging_obj=proxy_logging_obj,
-            thresholds=[0.8, 0.85, 0.95],
-        )
+    await _team_max_budget_alert_check(
+        team_object=team_object,
+        valid_token=None,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=105.0,  # over budget
+        thresholds=[0.8, 0.85, 0.95],
+    )
 
     proxy_logging_obj.budget_alerts.assert_not_called()
 
@@ -4228,17 +4271,14 @@ async def test_user_budget_alert_fires_at_each_crossed_threshold():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    # spend at 90% — crosses 0.8 and 0.85 but not 0.95
-    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 45.0  # 90% of 50
-
-    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
-        await _user_max_budget_alert_check(
-            user_object=user_object,
-            valid_token=valid_token,
-            proxy_logging_obj=proxy_logging_obj,
-            thresholds=[0.8, 0.85, 0.95],
-        )
+    # spend at 90% of 50 — crosses 0.8 and 0.85 but not 0.95
+    await _user_max_budget_alert_check(
+        user_object=user_object,
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=45.0,
+        thresholds=[0.8, 0.85, 0.95],
+    )
 
     assert proxy_logging_obj.budget_alerts.call_count == 2
     call_args_list = proxy_logging_obj.budget_alerts.call_args_list
@@ -4260,16 +4300,13 @@ async def test_user_budget_alert_silent_below_threshold():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 30.0  # 60% — below 80%
-
-    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
-        await _user_max_budget_alert_check(
-            user_object=user_object,
-            valid_token=None,
-            proxy_logging_obj=proxy_logging_obj,
-            thresholds=[0.8, 0.85, 0.95],
-        )
+    await _user_max_budget_alert_check(
+        user_object=user_object,
+        valid_token=None,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=30.0,  # 60% — below 80%
+        thresholds=[0.8, 0.85, 0.95],
+    )
 
     proxy_logging_obj.budget_alerts.assert_not_called()
 
@@ -4288,6 +4325,7 @@ async def test_user_budget_alert_silent_when_no_max_budget():
         user_object=user_object,
         valid_token=None,
         proxy_logging_obj=proxy_logging_obj,
+        spend=100.0,
         thresholds=[0.8],
     )
 
