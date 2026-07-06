@@ -515,11 +515,11 @@ class MCPServerManager:
     def _explicit_oauth2_flow(
         oauth2_flow: Optional[str],
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
-        """DB rows persist their flow (write-time stamps plus the startup backfill), so
-        the DB build reads the column verbatim: unknown or null values resolve to None,
-        which ``needs_user_oauth_token`` already treats as interactive. Field-shape
-        inference survives only for config-loaded servers (rebuilt from yaml each boot,
-        nothing to backfill) and the request-time security backstop in
+        """DB rows persist their flow (write-time stamps plus the startup backfill) and
+        config servers must declare it (validated at load), so both builds read the
+        value verbatim: unknown or null resolves to None, which
+        ``needs_user_oauth_token`` already treats as interactive. Field-shape inference
+        survives only in the request-time security backstop in
         ``_get_allowed_mcp_servers``.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
@@ -538,12 +538,13 @@ class MCPServerManager:
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
         """Infer oauth2_flow from field shape when the value is omitted.
 
-        Serves two callers: config.yaml-loaded servers, which are rebuilt from the
-        config on every boot and have no persisted row to backfill, and the
-        request-time security backstop in ``_get_allowed_mcp_servers``, which keeps a
-        not-yet-backfilled M2M row blocking caller Authorization forwarding. DB rows
-        are otherwise stamped at write time and by the startup backfill, and the DB
-        build reads the column verbatim via ``_explicit_oauth2_flow``.
+        Sole remaining caller is the request-time security backstop in
+        ``_get_allowed_mcp_servers``, which keeps a not-yet-backfilled M2M row blocking
+        caller Authorization forwarding and logs a warning when it fires. DB rows are
+        stamped at write time and by the startup backfill, config servers must declare
+        oauth2_flow (validated at load), and both builds read the value verbatim via
+        ``_explicit_oauth2_flow``. Delete this once the backstop warning stays silent
+        in production.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
             return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
@@ -790,21 +791,18 @@ class MCPServerManager:
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )
 
-            resolved_config_oauth2_flow = self._resolve_oauth2_flow(
-                auth_type=auth_type,
-                oauth2_flow=server_config.get("oauth2_flow", None),
-                token_url=resolved_token_url,
-                authorization_url=resolved_authorization_url,
-                client_id=server_config.get("client_id", None),
-                client_secret=server_config.get("client_secret", None),
-            )
-            if resolved_config_oauth2_flow == "client_credentials" and not server_config.get("oauth2_flow"):
-                verbose_logger.warning(
-                    "MCP server %s: oauth2_flow inferred as client_credentials from its credential "
-                    "shape (token_url + client_id + client_secret, no authorization_url). Declare "
-                    "oauth2_flow: client_credentials explicitly in config.yaml; this inference is "
-                    "deprecated and will become a config validation error in a future release.",
-                    server_name or server_id,
+            config_oauth2_flow = server_config.get("oauth2_flow", None)
+            if auth_type == MCPAuth.oauth2 and config_oauth2_flow not in (
+                "client_credentials",
+                "authorization_code",
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': auth_type oauth2 "
+                    f"requires an explicit oauth2_flow (got {config_oauth2_flow!r}). Set "
+                    "oauth2_flow: client_credentials for machine-to-machine servers (the proxy mints "
+                    "a shared token at token_url using client_id/client_secret, no user interaction) "
+                    "or oauth2_flow: authorization_code for interactive servers (per-user tokens via "
+                    "browser sign-in, including delegate_auth_to_upstream)."
                 )
 
             new_server = MCPServer(
@@ -820,7 +818,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=resolved_config_oauth2_flow,
+                oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,

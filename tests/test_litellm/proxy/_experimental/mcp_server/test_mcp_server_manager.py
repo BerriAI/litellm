@@ -293,60 +293,85 @@ class TestMCPServerManager:
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
 
+    def _oauth2_config(self, **overrides):
+        base = {
+            "url": "https://example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.oauth2,
+            "token_url": "https://idp.example.com/token",
+            "client_id": "cid",
+            "client_secret": "csec",
+        }
+        base.update(overrides)
+        return {"m2mserver": base}
+
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_warns_on_inferred_m2m(self, caplog):
-        """Config-level M2M inference is deprecated: when the credential shape decides
-        client_credentials but the config never declared oauth2_flow, the load must warn
-        so the admin makes it explicit before inference becomes a validation error."""
+    async def test_load_servers_from_config_requires_oauth2_flow(self):
+        """auth_type oauth2 without an explicit oauth2_flow is a config error: the
+        credential shape is ambiguous (a DCR interactive server looks identical to M2M),
+        so the config must assert the flow instead of the proxy guessing it."""
 
         manager = MCPServerManager()
-        config = {
-            "m2mserver": {
-                "url": "https://example.com/mcp",
-                "transport": MCPTransport.http,
-                "auth_type": MCPAuth.oauth2,
-                "token_url": "https://idp.example.com/token",
-                "client_id": "cid",
-                "client_secret": "csec",
-            }
-        }
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises(ValueError) as exc_info,
         ):
-            await manager.load_servers_from_config(config)
+            await manager.load_servers_from_config(self._oauth2_config())
 
-        assert any("oauth2_flow inferred as client_credentials" in message for message in caplog.messages)
-        server = next(iter(manager.config_mcp_servers.values()))
-        assert server.oauth2_flow == "client_credentials"
+        assert "oauth2_flow: client_credentials" in str(exc_info.value)
+        assert "oauth2_flow: authorization_code" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_no_warning_for_explicit_oauth2_flow(self, caplog):
-        """An explicit oauth2_flow in config is the documented path and must load silently."""
-
+    async def test_load_servers_from_config_rejects_unknown_oauth2_flow(self):
         manager = MCPServerManager()
-        config = {
-            "m2mserver": {
-                "url": "https://example.com/mcp",
-                "transport": MCPTransport.http,
-                "auth_type": MCPAuth.oauth2,
-                "oauth2_flow": "client_credentials",
-                "token_url": "https://idp.example.com/token",
-                "client_id": "cid",
-                "client_secret": "csec",
-            }
-        }
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises(ValueError) as exc_info,
         ):
-            await manager.load_servers_from_config(config)
+            await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="m2m"))
 
-        assert all("oauth2_flow inferred" not in message for message in caplog.messages)
+        assert "got 'm2m'" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_explicit_client_credentials(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="client_credentials"))
+
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.oauth2_flow == "client_credentials"
+        assert server.has_client_credentials is True
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_explicit_authorization_code(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="authorization_code"))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow == "authorization_code"
+        assert server.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_non_oauth2_needs_no_flow(self):
+        manager = MCPServerManager()
+        config = {
+            "apiserver": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.api_key,
+                "auth_value": "sk-upstream",
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow is None
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_coerces_cost_string_to_float(self):
@@ -1692,6 +1717,7 @@ class TestMCPServerManager:
                 "url": "https://example.com/mcp",
                 "transport": MCPTransport.http,
                 "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
                 "scopes": ["config"],
                 "authorization_url": "https://config.example.com/auth",
             }
@@ -1755,6 +1781,7 @@ class TestMCPServerManager:
                 "url": "https://example.com/mcp",
                 "transport": MCPTransport.http,
                 "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
                 "scopes": ["config"],
                 "authorization_url": "https://config.example.com/auth",
             }
