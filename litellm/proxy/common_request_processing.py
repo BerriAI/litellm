@@ -52,6 +52,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
@@ -600,7 +601,7 @@ def _override_openai_response_model(
     if not requested_model:
         return
 
-    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    hidden_params = get_hidden_params_dict(response_obj)
     if isinstance(hidden_params, dict):
         # Check if a fallback occurred - if so, preserve the actual model used
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
@@ -900,7 +901,7 @@ class ProxyBaseLLMRequestProcessing:
         (e.g. Google native :generateContent) instead of base_process_llm_request.
         """
         if isinstance(response, dict):
-            hidden_params = response.get("_hidden_params") or {}
+            hidden_params = get_hidden_params_dict(response)
         else:
             hidden_params = getattr(response, "_hidden_params", None) or {}
         if not isinstance(hidden_params, dict):
@@ -1433,7 +1434,7 @@ class ProxyBaseLLMRequestProcessing:
 
         _exception_raised = False
         try:
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            hidden_params = get_hidden_params_dict(response)
             model_id = self._get_model_id_from_response(hidden_params, self.data)
 
             cache_key, api_base, response_cost = (
@@ -1708,7 +1709,7 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}  # get any updated response headers
+        hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         recover_response_cost = not response_cost and hidden_params.get("response_cost") is None
@@ -1735,6 +1736,9 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
         )
+
+        if isinstance(response, dict):
+            response.pop("_hidden_params", None)
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
