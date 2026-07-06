@@ -8679,17 +8679,17 @@ class Router:
             if _deployment_rpm is None:
                 _deployment_rpm = model_info_dict.get("rpm", None)  # type: ignore
 
-            _deployment_itpm: Optional[int] = model.get("itpm")  # type: ignore
+            _deployment_itpm: Optional[int] = model.get("itpm")
             if _deployment_itpm is None:
-                _deployment_itpm = model_litellm_params.get("itpm", None)  # type: ignore
+                _deployment_itpm = model_litellm_params.get("itpm", None)
             if _deployment_itpm is None:
-                _deployment_itpm = model_info_dict.get("itpm", None)  # type: ignore
+                _deployment_itpm = model_info_dict.get("itpm", None)
 
-            _deployment_otpm: Optional[int] = model.get("otpm")  # type: ignore
+            _deployment_otpm: Optional[int] = model.get("otpm")
             if _deployment_otpm is None:
-                _deployment_otpm = model_litellm_params.get("otpm", None)  # type: ignore
+                _deployment_otpm = model_litellm_params.get("otpm", None)
             if _deployment_otpm is None:
-                _deployment_otpm = model_info_dict.get("otpm", None)  # type: ignore
+                _deployment_otpm = model_info_dict.get("otpm", None)
 
             # get model info
             try:
@@ -8835,12 +8835,12 @@ class Router:
             if _deployment_itpm is not None:
                 if total_itpm is None:
                     total_itpm = 0
-                total_itpm += _deployment_itpm  # type: ignore
+                total_itpm += _deployment_itpm
 
             if _deployment_otpm is not None:
                 if total_otpm is None:
                     total_otpm = 0
-                total_otpm += _deployment_otpm  # type: ignore
+                total_otpm += _deployment_otpm
         if model_group_info is not None:
             ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
             if total_tpm is not None:
@@ -8971,7 +8971,7 @@ class Router:
             return None, None
 
         for model in model_list:
-            model_id: Optional[str] = model.get("model_info", {}).get("id")  # type: ignore
+            model_id: Optional[str] = model.get("model_info", {}).get("id")
             litellm_model: Optional[str] = model["litellm_params"].get("model")
             if model_id is None or litellm_model is None:
                 continue
