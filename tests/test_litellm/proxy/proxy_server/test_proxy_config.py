@@ -1175,6 +1175,12 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
             "BEDROCK_RUNTIME_ENDPOINT",
             "https://bedrock-runtime.us-east-1.amazonaws.com",
         ),
+        "aws_bedrock_project_id": ("BEDROCK_PROJECT_ID", "resolved-project-id"),
+        "aws_batch_role_arn": (
+            "BEDROCK_BATCH_ROLE_ARN",
+            "arn:aws:iam::123456789012:role/batch",
+        ),
+        "aws_workspace_id": ("BEDROCK_WORKSPACE_ID", "resolved-workspace-id"),
     }
     for _, (env_name, env_value) in aws_env.items():
         monkeypatch.setenv(env_name, env_value)
