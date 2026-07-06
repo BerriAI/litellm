@@ -446,6 +446,9 @@ from litellm.proxy.middleware.request_size_limit_middleware import (
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
 )
+from litellm.proxy.middleware.gateway_usage_middleware import (
+    GatewayUsageMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -1053,8 +1056,18 @@ async def proxy_startup_event(app: FastAPI):
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## Start gateway usage reporter (request-based billing)
+    from litellm.proxy.usage_reporting.gateway_usage_reporter import (
+        gateway_usage_reporter_loop,
+    )
+
+    _usage_reporter_task = asyncio.create_task(gateway_usage_reporter_loop())
+
     # End of startup event
     yield
+
+    # Shutdown event - cancel usage reporter background task
+    _usage_reporter_task.cancel()
 
     # Shutdown event - drain in-flight requests before tearing down dependencies
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
@@ -1804,6 +1817,7 @@ app.add_middleware(
 
 app.add_middleware(PrometheusAuthMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
+app.add_middleware(GatewayUsageMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 
