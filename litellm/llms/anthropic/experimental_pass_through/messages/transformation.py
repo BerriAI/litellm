@@ -100,7 +100,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _as_system_content_blocks(value: Any) -> list:
-        """Convert system content to a list of content blocks."""
+        """Convert system content to a list of content blocks.
+
+        A bare ``dict`` (e.g. ``{"type": "text", "text": "..."}``) is treated as
+        a single content block shorthand and wrapped as-is — Anthropic's API
+        accepts this shape directly. Any other non-``None``/``str``/``list``/
+        ``dict`` value (e.g. an int) is also passed through unchanged; callers
+        are expected to have already validated ``content`` against the
+        Anthropic message schema upstream of this normalization step.
+        """
         if value is None:
             return []
         if isinstance(value, list):
