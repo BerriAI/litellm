@@ -28,7 +28,7 @@ class BotoCredentialsResolver:
     async def get_identity(self, *, properties: Any) -> Any:
         from smithy_aws_core.identity import AWSCredentialsIdentity
 
-        frozen = self._credentials.get_frozen_credentials()
+        frozen = await asyncio.get_running_loop().run_in_executor(None, self._credentials.get_frozen_credentials)
         return AWSCredentialsIdentity(
             access_key_id=frozen.access_key,
             secret_access_key=frozen.secret_key,
