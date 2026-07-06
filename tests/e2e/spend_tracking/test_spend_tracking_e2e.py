@@ -21,9 +21,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from e2e_http import Success
+from e2e_http import Result, Success
 from lifecycle import ResourceManager
-from models import SpendLogs, SpendLogsParams
+from models import ChatResponse, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -212,18 +212,17 @@ def test_burst_of_concurrent_calls_loses_no_spend(
     the concurrent increment path (parallel writers racing on one key's counter),
     where a lost update can never be reproduced by sequential calls."""
     burst = 6
-    with ThreadPoolExecutor(max_workers=burst) as pool:
-        results = tuple(
-            pool.map(
-                lambda idx: client.chat(
-                    scoped_key,
-                    "gemini-2.5-flash",
-                    f"burst call {idx} {unique_marker()}",
-                    max_tokens=16,
-                ),
-                range(burst),
-            )
+
+    def call(idx: int) -> Result[ChatResponse]:
+        return client.chat(
+            scoped_key,
+            "gemini-2.5-flash",
+            f"burst call {idx} {unique_marker()}",
+            max_tokens=16,
         )
+
+    with ThreadPoolExecutor(max_workers=burst) as pool:
+        results = tuple(pool.map(call, range(burst)))
     failed = [r for r in results if not is_ok(r)]
     assert not failed, f"{len(failed)}/{burst} burst calls failed; first: {failed[0]}"
 
