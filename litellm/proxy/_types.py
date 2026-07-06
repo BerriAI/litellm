@@ -2330,7 +2330,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Set to False to disable DNS/IP validation entirely (not recommended)."
         ),
     )
-    user_url_allowed_hosts: Optional[List[str]] = Field(
+    user_url_allowed_hosts: Optional[list[str]] = Field(
         None,
         description=(
             "SSRF allowlist for user-supplied URLs. Entries are `hostname` or "
@@ -2340,7 +2340,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "an internal OpenAPI/MCP server."
         ),
     )
-    provider_url_destination_allowed_hosts: Optional[List[str]] = Field(
+    provider_url_destination_allowed_hosts: Optional[list[str]] = Field(
         None,
         description="Allowlist of hosts a request may redirect a provider call's destination URL to.",
     )

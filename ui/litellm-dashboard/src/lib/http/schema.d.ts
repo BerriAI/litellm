@@ -22509,6 +22509,11 @@ export interface components {
              */
             plugins?: components["schemas"]["PluginConfig"][] | null;
             /**
+             * Provider Url Destination Allowed Hosts
+             * @description Allowlist of hosts a request may redirect a provider call's destination URL to.
+             */
+            provider_url_destination_allowed_hosts?: string[] | null;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -22566,6 +22571,16 @@ export interface components {
              * @description Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.
              */
             user_mcp_management_mode?: ("restricted" | "view_all") | null;
+            /**
+             * User Url Allowed Hosts
+             * @description SSRF allowlist for user-supplied URLs. Entries are `hostname` or `hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted hosts skip the blocked-network check in validate_url() but still resolve DNS. Use this to permit legitimate internal targets, e.g. an internal OpenAPI/MCP server.
+             */
+            user_url_allowed_hosts?: string[] | null;
+            /**
+             * User Url Validation
+             * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
+             */
+            user_url_validation?: boolean | null;
         };
         /** ConfigList */
         ConfigList: {
