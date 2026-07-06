@@ -266,6 +266,7 @@ from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.common_utils import IBMWatsonXMixin
 from .types.llms.anthropic import AnthropicThinkingParam
+from .types.llms.deepseek import DeepSeekThinkingParam
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -336,6 +337,7 @@ ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
+ThinkingParam = Union[AnthropicThinkingParam, DeepSeekThinkingParam]
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -442,7 +444,7 @@ async def acompletion(
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
-    thinking: Optional[AnthropicThinkingParam] = None,
+    thinking: Optional[ThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     include_server_side_tool_invocations: Optional[bool] = None,
     # Session management
@@ -4788,7 +4790,7 @@ def completion(  # type: ignore
     api_key: Optional[str] = None,
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
-    thinking: Optional[AnthropicThinkingParam] = None,
+    thinking: Optional[ThinkingParam] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
