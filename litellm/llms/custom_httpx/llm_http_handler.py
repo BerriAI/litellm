@@ -2912,6 +2912,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=data)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -2983,7 +2984,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=data)
-
+            response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error retrieving response: {e}")
             raise self._handle_error(
@@ -3076,6 +3077,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -3149,6 +3151,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 

@@ -1745,3 +1745,79 @@ def test_sync_retrieve_file_content_raises_on_http_error():
         )
 
     assert exc_info.value.status_code == 404
+
+
+_UPSTREAM_NOT_FOUND_BODY = {
+    "error": {
+        "message": "Response with id 'resp_abc' not found.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": None,
+    }
+}
+
+
+def _async_handler_returning(status_code: int, body: dict) -> AsyncHTTPHandler:
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=body))
+    )
+    return handler
+
+
+def _sync_handler_returning(status_code: int, body: dict) -> HTTPHandler:
+    handler = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=body)))
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_aget_responses_surfaces_upstream_error_status_instead_of_500():
+    client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        await litellm.aget_responses(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+def test_get_responses_surfaces_upstream_error_status_instead_of_500():
+    client = _sync_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        litellm.get_responses(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_alist_input_items_surfaces_upstream_error_status():
+    client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        await litellm.alist_input_items(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
