@@ -234,13 +234,13 @@ class TestMCPClientUnitTests:
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
     @patch.object(mcp_client_module, "ClientSession")
-    async def test_list_tools_raises_when_pagination_exceeds_page_cap(
+    async def test_list_tools_stops_when_pagination_reaches_page_cap(
         self,
         mock_session_class,
         mock_transport,
         monkeypatch,
     ):
-        """Test listing tools fails if an upstream keeps returning new cursors."""
+        """Test listing tools returns accumulated tools if an upstream keeps returning new cursors."""
         monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_MAX_PAGES", 2, raising=False)
 
         mock_transport_ctx = AsyncMock()
@@ -268,9 +268,9 @@ class TestMCPClientUnitTests:
         ]
 
         client = MCPClient("http://example.com")
-        with pytest.raises(RuntimeError, match="exceeded the maximum of 2 pages"):
-            await client.list_tools(raise_on_error=True)
+        result = await client.list_tools(raise_on_error=True)
 
+        assert [tool.name for tool in result] == ["tool_0", "tool_1"]
         assert mock_session_instance.list_tools.call_count == 2
 
     @pytest.mark.asyncio

@@ -488,8 +488,8 @@ class MCPClient:
         """
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
-        async def _list_tools_operation(session: ClientSession) -> List[MCPTool]:
-            tools: List[MCPTool] = []
+        async def _list_tools_operation(session: ClientSession) -> list[MCPTool]:
+            tools: list[MCPTool] = []
             cursor: Optional[str] = None
             pages_fetched = 0
             seen_cursors: set[str] = set()
@@ -511,10 +511,12 @@ class MCPClient:
                         f"MCP server returned a repeated tools/list cursor while listing tools: {next_cursor}"
                     )
                 if pages_fetched >= MCP_TOOL_LISTING_MAX_PAGES:
-                    raise RuntimeError(
+                    verbose_logger.warning(
                         "MCP server tools/list pagination exceeded the maximum "
-                        f"of {MCP_TOOL_LISTING_MAX_PAGES} pages while listing tools"
+                        f"of {MCP_TOOL_LISTING_MAX_PAGES} pages while listing tools; "
+                        f"returning {len(tools)} tools collected so far"
                     )
+                    return tools
                 seen_cursors.add(next_cursor)
                 cursor = next_cursor
 

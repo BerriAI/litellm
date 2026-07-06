@@ -118,9 +118,9 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(os.getenv("MCP_PER_USER_TOKEN_EXP
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
-MCP_TOOL_LISTING_MAX_PAGES = max(1, int(os.getenv("LITELLM_MCP_TOOL_LISTING_MAX_PAGES", "1000")))
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_TOOL_LISTING_MAX_PAGES = 1000
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
