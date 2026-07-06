@@ -781,6 +781,7 @@ openai_compatible_providers: List = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "tenzro",
 ]
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",
