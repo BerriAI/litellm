@@ -13,8 +13,10 @@ sys.path.insert(
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
     convert_anyof_null_to_nullable,
+    get_vertex_interaction_id_from_url,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    is_vertex_interactions_route,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -1591,3 +1593,64 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+
+class TestVertexInteractionsUrlClassification:
+    def test_is_interactions_route_create(self):
+        url = "/vertex_ai/v1beta1/projects/p/locations/global/interactions"
+        assert is_vertex_interactions_route(url) is True
+
+    def test_is_interactions_route_get(self):
+        url = "/vertex_ai/v1beta1/projects/p/locations/global/interactions/video-abc"
+        assert is_vertex_interactions_route(url) is True
+
+    def test_is_interactions_route_cancel(self):
+        url = "/vertex_ai/v1beta1/projects/p/locations/global/interactions/video-abc:cancel"
+        assert is_vertex_interactions_route(url) is True
+
+    def test_is_interactions_route_false_for_generate_content(self):
+        url = "/vertex_ai/v1/projects/p/locations/us/publishers/google/models/gemini-2.5-flash:generateContent"
+        assert is_vertex_interactions_route(url) is False
+
+    def test_get_interaction_id_from_get_url(self):
+        url = "/vertex_ai/v1beta1/projects/p/locations/global/interactions/video-abc"
+        assert get_vertex_interaction_id_from_url(url) == "video-abc"
+
+    def test_get_interaction_id_from_cancel_url(self):
+        url = "/vertex_ai/v1beta1/projects/p/locations/global/interactions/video-abc:cancel"
+        assert get_vertex_interaction_id_from_url(url) == "video-abc"
+
+    def test_get_interaction_id_none_for_create(self):
+        url = "/vertex_ai/v1beta1/projects/p/locations/global/interactions"
+        assert get_vertex_interaction_id_from_url(url) is None
+
+    def test_is_interactions_route_false_for_project_named_interactions(self):
+        url = "/vertex_ai/v1beta1/projects/interactions/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+        assert is_vertex_interactions_route(url) is False
+
+    def test_get_interaction_id_none_for_project_named_interactions(self):
+        url = "/vertex_ai/v1beta1/projects/interactions/locations/global/publishers/google/models/m:generateContent"
+        assert get_vertex_interaction_id_from_url(url) is None
+
+    # Short form (no projects/locations in the URL, like generateContent);
+    # litellm fills project/location in from the resolved deployment.
+    def test_is_interactions_route_short_form_create(self):
+        assert is_vertex_interactions_route("v1beta1/interactions") is True
+
+    def test_is_interactions_route_short_form_get(self):
+        assert is_vertex_interactions_route("v1beta1/interactions/video-abc") is True
+
+    def test_is_interactions_route_short_form_cancel(self):
+        assert is_vertex_interactions_route("v1beta1/interactions/video-abc:cancel") is True
+
+    def test_is_interactions_route_short_form_with_query(self):
+        assert is_vertex_interactions_route("v1beta1/interactions?alt=sse") is True
+
+    def test_get_interaction_id_short_form_get(self):
+        assert get_vertex_interaction_id_from_url("v1beta1/interactions/video-abc") == "video-abc"
+
+    def test_get_interaction_id_short_form_cancel(self):
+        assert get_vertex_interaction_id_from_url("v1beta1/interactions/video-abc:cancel") == "video-abc"
+
+    def test_get_interaction_id_none_for_short_form_create(self):
+        assert get_vertex_interaction_id_from_url("v1beta1/interactions") is None

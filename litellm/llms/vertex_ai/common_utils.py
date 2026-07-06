@@ -968,6 +968,17 @@ def get_vertex_model_id_from_url(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def is_vertex_interactions_route(url: str) -> bool:
+    return re.search(r"/interactions(?:/[^/]+)?(?::[^/]+)?(?:\?.*)?$", url) is not None
+
+
+def get_vertex_interaction_id_from_url(url: str) -> Optional[str]:
+    match = re.search(r"/interactions/([^/?:]+)(?::[^/]+)?(?:\?.*)?$", url)
+    if not match:
+        return None
+    return match.group(1)
+
+
 def replace_project_and_location_in_route(requested_route: str, vertex_project: str, vertex_location: str) -> str:
     """
     Replace project and location values in the route with the provided values

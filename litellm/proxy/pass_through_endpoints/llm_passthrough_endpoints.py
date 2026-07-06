@@ -1628,6 +1628,80 @@ async def _prepare_vertex_auth_headers(
     )
 
 
+def _encode_interaction_response(
+    received_value: object,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+) -> object:
+    from starlette.responses import Response as StarletteResponse
+
+    from litellm.llms.vertex_ai.interactions_passthrough.routing import (
+        encode_interaction_response_id,
+    )
+
+    if not isinstance(received_value, StarletteResponse):
+        return received_value
+    body_bytes = getattr(received_value, "body", None)
+    if not isinstance(body_bytes, (bytes, bytearray)):
+        return received_value
+    try:
+        payload = cast(object, json.loads(bytes(body_bytes)))  # cast-ok: json.loads is Any
+    except (ValueError, UnicodeDecodeError):
+        return received_value
+    if not isinstance(payload, dict):
+        return received_value
+    typed_payload = cast("dict[str, object]", payload)  # cast-ok: isinstance dict above
+    new_payload = encode_interaction_response_id(typed_payload, vertex_project, vertex_location)
+    if new_payload is payload:
+        return received_value
+    preserved_headers = {key: value for key, value in received_value.headers.items() if key.lower() != "content-length"}
+    return StarletteResponse(
+        content=json.dumps(new_payload),
+        status_code=received_value.status_code,
+        media_type="application/json",
+        headers=preserved_headers,
+    )
+
+
+async def _resolve_interactions_input_routing(
+    endpoint: str,
+    request: Request,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    llm_router: "Optional[litellm.Router]",
+) -> tuple[str, Optional[str], Optional[str]]:
+    from litellm.llms.vertex_ai.common_utils import get_vertex_interaction_id_from_url
+    from litellm.llms.vertex_ai.interactions_passthrough.routing import (
+        resolve_create_project_location,
+        rewrite_interaction_input,
+    )
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    )
+
+    if get_vertex_interaction_id_from_url(endpoint) is not None:
+        rewrite = rewrite_interaction_input(endpoint, vertex_project, vertex_location)
+        return rewrite.endpoint, rewrite.project, rewrite.location
+
+    if request.method == "POST":
+        try:
+            body = cast(object, await request.json())  # cast-ok: request.json() is Any
+        except Exception:  # noqa: BLE001 - unreadable/invalid body is treated as empty; routing falls back to URL values
+            body = {}
+        if isinstance(body, dict):
+            typed_body = cast("dict[str, object]", body)  # cast-ok: isinstance dict above
+            resolved = resolve_create_project_location(
+                body=typed_body,
+                url_project=vertex_project,
+                url_location=vertex_location,
+                llm_router=llm_router,
+            )
+            setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, resolved.body)
+            return endpoint, resolved.project, resolved.location
+
+    return endpoint, vertex_project, vertex_location
+
+
 async def _base_vertex_proxy_route(
     endpoint: str,
     request: Request,
@@ -1656,6 +1730,7 @@ async def _base_vertex_proxy_route(
         get_vertex_location_from_url,
         get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
+        is_vertex_interactions_route,
     )
     from litellm.proxy.proxy_server import llm_router
 
@@ -1708,6 +1783,23 @@ async def _base_vertex_proxy_route(
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
             )
+
+    from litellm.proxy.proxy_server import general_settings as _general_settings
+
+    _general_settings_typed = cast("dict[str, object]", _general_settings)  # cast-ok: untyped config dict
+    interactions_auto_routing = bool(
+        _general_settings_typed.get("vertex_interactions_passthrough_auto_routing", False)
+    ) and is_vertex_interactions_route(endpoint)
+
+    if interactions_auto_routing:
+        endpoint, vertex_project, vertex_location = await _resolve_interactions_input_routing(
+            endpoint=endpoint,
+            request=request,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            llm_router=llm_router,
+        )
+        encoded_endpoint = httpx.URL(endpoint).path
 
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
@@ -1778,6 +1870,9 @@ async def _base_vertex_proxy_route(
         if headers_passed_through:
             e.message = f"No credentials found on proxy for project_name={vertex_project} + location={vertex_location}, check `/model/info` for allowed project + region combinations with `use_in_pass_through: true`. Headers were passed through directly but request failed with error: {e.message}"
         raise e
+
+    if interactions_auto_routing and not is_streaming_request:
+        received_value = _encode_interaction_response(received_value, vertex_project, vertex_location)
 
     return received_value
 
