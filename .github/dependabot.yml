@@ -1,0 +1,67 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pip"
+    directory: "/cookbook/litellm-ollama-docker-image"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pip"
+    directory: "/cookbook/livekit_agent_sdk"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pip"
+    directory: "/cookbook/anthropic_agent_sdk"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "npm"
+    directory: "/tests/pass_through_tests"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "npm"
+    directory: "/tests/proxy_admin_ui_tests/ui_unit_tests"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "npm"
+    directory: "/ui/litellm-dashboard"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "cargo"
+    directory: "/litellm-rust"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
