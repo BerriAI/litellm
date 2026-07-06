@@ -30,9 +30,7 @@ from litellm.types.utils import (
 )
 
 
-def _build_fake_stream(
-    content: str, finish_reason: str = "stop"
-) -> MockResponseIterator:
+def _build_fake_stream(content: str, finish_reason: str = "stop") -> MockResponseIterator:
     """Mimic a Vertex Gemma `:predict` fake stream: one collapsed chunk."""
     model_response = ModelResponse()
     model_response.choices = [
@@ -132,9 +130,7 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
     wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="gpt-4o")
     events = list(wrapper)
 
-    message_delta = next(
-        event for event in events if event.get("type") == "message_delta"
-    )
+    message_delta = next(event for event in events if event.get("type") == "message_delta")
 
     assert message_delta["usage"]["input_tokens"] == 70
     assert message_delta["usage"]["output_tokens"] == 5
@@ -144,13 +140,7 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
 
 def test_splitter_passes_through_non_combined_chunks():
     """A chunk with content but no finish_reason is not split."""
-    chunk = ModelResponseStream(
-        choices=[
-            StreamingChoices(
-                index=0, delta=Delta(content="partial"), finish_reason=None
-            )
-        ]
-    )
+    chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="partial"), finish_reason=None)])
     chunks = list(_CombinedChunkSplitter(iter([chunk])))
     assert len(chunks) == 1
     assert chunks[0].choices[0].delta.content == "partial"
@@ -158,11 +148,7 @@ def test_splitter_passes_through_non_combined_chunks():
 
 def test_splitter_splits_combined_chunk_into_content_then_finish():
     """A chunk with both content and finish_reason becomes two chunks."""
-    chunk = ModelResponseStream(
-        choices=[
-            StreamingChoices(index=0, delta=Delta(content="done"), finish_reason="stop")
-        ]
-    )
+    chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="done"), finish_reason="stop")])
     content_chunk, finish_chunk = list(_CombinedChunkSplitter(iter([chunk])))
 
     assert content_chunk.choices[0].delta.content == "done"
@@ -197,9 +183,7 @@ def test_split_separates_reasoning_content_and_finish():
         reasoning_content="some reasoning",
         thinking_blocks=[{"type": "thinking"}],
     )
-    chunk = SimpleNamespace(
-        choices=[SimpleNamespace(finish_reason="stop", delta=delta)]
-    )
+    chunk = SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", delta=delta)])
 
     reasoning_chunk, content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
 
@@ -221,9 +205,7 @@ def test_split_separates_reasoning_content_and_finish():
 def _open_block_type_by_index(events):
     """Map content-block index -> the type it was opened with."""
     return {
-        event["index"]: event["content_block"]["type"]
-        for event in events
-        if event.get("type") == "content_block_start"
+        event["index"]: event["content_block"]["type"] for event in events if event.get("type") == "content_block_start"
     }
 
 
@@ -238,13 +220,9 @@ def _assert_no_delta_block_mismatch(events):
         delta_type = event["delta"]["type"]
         block_type = open_types.get(event["index"])
         if delta_type in ("thinking_delta", "signature_delta"):
-            assert block_type == "thinking", (
-                f"{delta_type} emitted into a {block_type!r} block: {event}"
-            )
+            assert block_type == "thinking", f"{delta_type} emitted into a {block_type!r} block: {event}"
         elif delta_type == "text_delta":
-            assert block_type == "text", (
-                f"text_delta emitted into a {block_type!r} block: {event}"
-            )
+            assert block_type == "text", f"text_delta emitted into a {block_type!r} block: {event}"
 
 
 def _reasoning_then_answer_chunks():
@@ -253,11 +231,7 @@ def _reasoning_then_answer_chunks():
     hosted_vllm/qwen)."""
     return [
         ModelResponseStream(
-            choices=[
-                StreamingChoices(
-                    index=0, delta=Delta(reasoning_content="Let me think."), finish_reason=None
-                )
-            ]
+            choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="Let me think."), finish_reason=None)]
         ),
         ModelResponseStream(
             choices=[
@@ -268,9 +242,7 @@ def _reasoning_then_answer_chunks():
                 )
             ]
         ),
-        ModelResponseStream(
-            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]
-        ),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
     ]
 
 
@@ -278,8 +250,7 @@ def _text_deltas(events):
     return [
         event["delta"]["text"]
         for event in events
-        if event.get("type") == "content_block_delta"
-        and event["delta"].get("type") == "text_delta"
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta"
     ]
 
 
@@ -287,17 +258,14 @@ def _thinking_deltas(events):
     return [
         event["delta"]["thinking"]
         for event in events
-        if event.get("type") == "content_block_delta"
-        and event["delta"].get("type") == "thinking_delta"
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "thinking_delta"
     ]
 
 
 def test_boundary_reasoning_content_chunk_sync():
     """Sync: a boundary chunk with reasoning+content must not emit a
     thinking_delta into a text block, and must not drop the answer text."""
-    wrapper = AnthropicStreamWrapper(
-        completion_stream=iter(_reasoning_then_answer_chunks()), model="qwen"
-    )
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(_reasoning_then_answer_chunks()), model="qwen")
     events = [event for event in wrapper if isinstance(event, dict)]
 
     _assert_no_delta_block_mismatch(events)
@@ -322,9 +290,7 @@ def test_boundary_reasoning_content_chunk_async():
                 raise StopAsyncIteration
 
     async def _run():
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=_AsyncStream(_reasoning_then_answer_chunks()), model="qwen"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(_reasoning_then_answer_chunks()), model="qwen")
         return [event async for event in wrapper if isinstance(event, dict)]
 
     events = asyncio.run(_run())
