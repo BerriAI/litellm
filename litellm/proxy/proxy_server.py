@@ -2779,21 +2779,6 @@ async def update_cache(
             )
             # set cooldown on alert
 
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_spend", None) is not None:
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_member_spend", None) is not None:
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = existing_team_member_spend + response_cost
-
-        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
-        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
-
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
