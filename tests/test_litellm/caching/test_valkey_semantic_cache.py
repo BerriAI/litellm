@@ -317,6 +317,60 @@ async def test_async_get_cache_misses_below_threshold():
     assert metadata["semantic-similarity"] == pytest.approx(0.6)
 
 
+@pytest.mark.asyncio
+async def test_async_embedding_called_with_metadata_only():
+    """
+    Regression test: async_set_cache / async_get_cache must call
+    _get_async_embedding(prompt, metadata=...) and NOT forward the full
+    request kwargs (messages, model, etc.).
+
+    The inherited _get_async_embedding signature only accepts (prompt, metadata),
+    so passing **kwargs raised TypeError, which the broad except swallowed --
+    silently caching nothing on every async request. The existing tests missed
+    this because they replaced _get_async_embedding with a permissive AsyncMock
+    that accepts any kwargs. This stub mirrors the real signature so a
+    regression fails loudly instead of silently.
+    """
+    captured = {}
+
+    async def strict_embedding(prompt, metadata=None):
+        captured["prompt"] = prompt
+        captured["metadata"] = metadata
+        return [0.1, 0.2, 0.3]
+
+    # --- set path ---
+    set_client = AsyncMock()
+    set_client.ft = _async_ft(0.05)
+    set_cache = _make_cache(async_client=set_client, similarity_threshold=0.8)
+    set_cache._get_async_embedding = strict_embedding
+
+    await set_cache.async_set_cache(
+        key="cache-key",
+        value={"content": "Paris"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-123"},
+    )
+    # If the full kwargs leaked in, strict_embedding would TypeError, the except
+    # would swallow it, and hset would never run.
+    set_client.hset.assert_awaited_once()
+    assert captured["prompt"] == "What is the capital of France?"
+    assert captured["metadata"] == {"user_api_key": "sk-123"}
+
+    # --- get path ---
+    get_client = AsyncMock()
+    get_client.ft = _async_ft(0.05)
+    get_cache = _make_cache(async_client=get_client, similarity_threshold=0.8)
+    get_cache._get_async_embedding = strict_embedding
+
+    result = await get_cache.async_get_cache(
+        key="cache-key",
+        messages=[{"role": "user", "content": "capital city of France"}],
+        metadata={},
+    )
+    get_client.ft.return_value.search.assert_awaited_once()
+    assert result == {"content": "Paris"}
+
+
 def test_ensure_index_swallows_already_exists():
     sync_client = MagicMock()
     sync_client.ft.return_value.create_index.side_effect = Exception(
