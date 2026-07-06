@@ -1088,7 +1088,7 @@ class LiteLLMCompletionResponsesConfig:
         # store their payload in "input" (raw string) rather than
         # "arguments" (JSON string), so normalize to arguments here.
         raw_arguments = function_call.get("arguments")
-        if raw_arguments is None:
+        if not raw_arguments:
             raw_input = function_call.get("input") or ""
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
         tool_call = ChatCompletionToolCallChunk(
