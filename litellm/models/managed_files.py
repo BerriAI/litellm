@@ -51,12 +51,12 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
     vector_store_id: str
     custom_llm_provider: str
-    vector_store_name: Optional[str]
-    vector_store_description: Optional[str]
-    vector_store_metadata: Optional[Dict[str, Any]]
-    created_at: Optional[datetime]
-    updated_at: Optional[datetime]
-    litellm_credential_name: Optional[str]
-    litellm_params: Optional[Dict[str, Any]]
-    team_id: Optional[str]
-    user_id: Optional[str]
+    vector_store_name: Optional[str] = None
+    vector_store_description: Optional[str] = None
+    vector_store_metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    litellm_credential_name: Optional[str] = None
+    litellm_params: Optional[Dict[str, Any]] = None
+    team_id: Optional[str] = None
+    user_id: Optional[str] = None
