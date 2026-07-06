@@ -284,11 +284,12 @@ class BaseResponsesAPIStreamingIterator:
         end_time = datetime.now()
         if is_async:
             asyncio.create_task(
-                self.logging_obj.async_success_handler(
-                    result=logging_response,
+                self.logging_obj.dispatch_success_handlers(
+                    logging_response,
                     start_time=self.start_time,
                     end_time=end_time,
                     cache_hit=self._completed_response_cache_hit,
+                    prefer_async_handlers=True,
                 )
             )
         else:
@@ -299,14 +300,13 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
                 cache_hit=self._completed_response_cache_hit,
             )
-
-        executor.submit(
-            self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=self._completed_response_cache_hit,
-            start_time=self.start_time,
-            end_time=end_time,
-        )
+            executor.submit(
+                self.logging_obj.success_handler,
+                result=logging_response,
+                cache_hit=self._completed_response_cache_hit,
+                start_time=self.start_time,
+                end_time=end_time,
+            )
         self._run_post_success_hooks(end_time=end_time)
 
     def _handle_logging_completed_response(self):
@@ -1133,7 +1133,6 @@ def _build_synthetic_response_events(
 # ---------------------------------------------------------------------------
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
 
 RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.created",
@@ -1248,8 +1247,7 @@ class ResponsesWebSocketStreaming:
         if self.input_messages:
             self.logging_obj.model_call_details["messages"] = self.input_messages
         if self.messages:
-            asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
-            _ws_executor.submit(self.logging_obj.success_handler, self.messages)
+            asyncio.create_task(self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True))
 
     async def backend_to_client(self) -> None:
         """Forward events from backend WebSocket to the client."""
