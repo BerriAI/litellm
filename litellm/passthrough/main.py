@@ -171,7 +171,6 @@ def llm_passthrough_route(
     api_key: Optional[str] = None,
     request_query_params: Optional[dict] = None,
     request_headers: Optional[dict] = None,
-    allm_passthrough_route: bool = False,
     content: Optional[Any] = None,
     data: Optional[dict] = None,
     files: Optional[RequestFiles] = None,
@@ -198,7 +197,7 @@ def llm_passthrough_route(
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    _is_async = allm_passthrough_route
+    _is_async = bool(kwargs.get("allm_passthrough_route", False))
 
     litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
