@@ -100,17 +100,14 @@ class TestPostUsage:
             pod_id="test-pod",
         )
 
-        mock_response = AsyncMock()
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=None)
 
         await _post_usage(mock_client, "https://billing.example.com/usage", payload)
 
         mock_client.post.assert_called_once()
         call_kwargs = mock_client.post.call_args
-        assert call_kwargs.args[0] == "https://billing.example.com/usage"
+        assert call_kwargs.kwargs["url"] == "https://billing.example.com/usage"
         posted_json = call_kwargs.kwargs["json"]
         assert posted_json["total_requests"] == 5
         assert posted_json["successful_requests"] == 4
@@ -128,13 +125,8 @@ class TestGatewayUsageReporterLoop:
 
     @pytest.mark.asyncio
     async def test_loop_posts_accumulated_counts(self):
-        mock_response = AsyncMock()
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=None)
 
         record_request(succeeded=True)
         record_request(succeeded=True)
@@ -148,7 +140,8 @@ class TestGatewayUsageReporterLoop:
             },
         ):
             with patch(
-                "litellm.proxy.usage_reporting.gateway_usage_reporter.httpx.AsyncClient", return_value=mock_client
+                "litellm.proxy.usage_reporting.gateway_usage_reporter.get_async_httpx_client",
+                return_value=mock_client,
             ):
 
                 async def cancel_after_one_iteration():
@@ -169,9 +162,8 @@ class TestGatewayUsageReporterLoop:
 
     @pytest.mark.asyncio
     async def test_loop_skips_post_when_no_requests(self):
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=None)
 
         with patch.dict(
             os.environ,
@@ -181,7 +173,8 @@ class TestGatewayUsageReporterLoop:
             },
         ):
             with patch(
-                "litellm.proxy.usage_reporting.gateway_usage_reporter.httpx.AsyncClient", return_value=mock_client
+                "litellm.proxy.usage_reporting.gateway_usage_reporter.get_async_httpx_client",
+                return_value=mock_client,
             ):
 
                 async def cancel_after_one_iteration():
@@ -198,16 +191,14 @@ class TestGatewayUsageReporterLoop:
 
     @pytest.mark.asyncio
     async def test_loop_survives_http_error(self):
-        def _raise_503():
-            raise httpx.HTTPStatusError("503", request=httpx.Request("POST", "http://x"), response=httpx.Response(503))
-
-        mock_response = AsyncMock()
-        mock_response.raise_for_status = _raise_503
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "503",
+                request=httpx.Request("POST", "http://x"),
+                response=httpx.Response(503),
+            )
+        )
 
         record_request(succeeded=True)
 
@@ -219,7 +210,8 @@ class TestGatewayUsageReporterLoop:
             },
         ):
             with patch(
-                "litellm.proxy.usage_reporting.gateway_usage_reporter.httpx.AsyncClient", return_value=mock_client
+                "litellm.proxy.usage_reporting.gateway_usage_reporter.get_async_httpx_client",
+                return_value=mock_client,
             ):
 
                 async def cancel_after_one_iteration():

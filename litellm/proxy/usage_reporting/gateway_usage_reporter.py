@@ -20,7 +20,8 @@ import os
 import socket
 from dataclasses import dataclass
 
-import httpx
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 logger = logging.getLogger("litellm.proxy")
 
@@ -79,16 +80,15 @@ def _build_payload(snapshot: _Counters) -> UsageReportPayload:
 
 
 async def _post_usage(
-    client: httpx.AsyncClient,
+    client: AsyncHTTPHandler,
     endpoint: str,
     payload: UsageReportPayload,
 ) -> None:
-    response = await client.post(
-        endpoint,
+    await client.post(
+        url=endpoint,
         json=dataclasses.asdict(payload),
         timeout=_HTTP_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
 
 
 async def gateway_usage_reporter_loop() -> None:
@@ -104,22 +104,22 @@ async def gateway_usage_reporter_loop() -> None:
         flush_interval,
     )
 
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                await asyncio.sleep(flush_interval)
-                snapshot = await _drain_counters()
-                if snapshot.total_requests == 0:
-                    continue
-                payload = _build_payload(snapshot)
-                await _post_usage(client, endpoint, payload)
-                logger.debug(
-                    "gateway_usage_report_sent total=%d successful=%d failed=%d",
-                    payload.total_requests,
-                    payload.successful_requests,
-                    payload.failed_requests,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("gateway_usage_reporter iteration failed")
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+    while True:
+        try:
+            await asyncio.sleep(flush_interval)
+            snapshot = await _drain_counters()
+            if snapshot.total_requests == 0:
+                continue
+            payload = _build_payload(snapshot)
+            await _post_usage(client, endpoint, payload)
+            logger.debug(
+                "gateway_usage_report_sent total=%d successful=%d failed=%d",
+                payload.total_requests,
+                payload.successful_requests,
+                payload.failed_requests,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("gateway_usage_reporter iteration failed")
