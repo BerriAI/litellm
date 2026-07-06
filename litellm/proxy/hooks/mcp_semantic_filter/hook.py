@@ -117,6 +117,27 @@ class SemanticToolFilterHook(CustomLogger):
 
         return openai_tools_as_dicts
 
+    async def _filter_expanded_tools(
+        self,
+        data: dict,
+        expanded_tools: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Apply the semantic filter to expanded MCP tool definitions.
+
+        Expanded tools are flat OpenAI function dicts with a top-level
+        "name" (see transform_mcp_tool_to_openai_responses_api_tool), so
+        filter_tools can name-match them against the semantic router.
+        """
+        raw_messages = data.get("messages") or data.get("input") or []
+        messages = [{"role": "user", "content": raw_messages}] if isinstance(raw_messages, str) else raw_messages
+        user_query = self.filter.extract_user_query(messages)
+        if not user_query:
+            verbose_proxy_logger.debug("No user query found, skipping semantic filter on expanded MCP tools")
+            return expanded_tools
+
+        return await self.filter.filter_tools(query=user_query, available_tools=expanded_tools)
+
     def _is_mcp_tool(self, tool: object) -> bool:
         """
         Check whether *tool* is registered in the MCP semantic router.
@@ -194,9 +215,6 @@ class SemanticToolFilterHook(CustomLogger):
             verbose_proxy_logger.debug("No tools in request, skipping semantic filter")
             return None
 
-        # Expanded MCP tools are in OpenAI nested format which
-        # filter_tools/_extract_tool_info cannot name-match, so we skip
-        # semantic filtering and return early.
         if self._should_expand_mcp_tools(tools):
             verbose_proxy_logger.debug("Detected litellm_proxy MCP references, expanding before semantic filtering")
 
@@ -215,11 +233,21 @@ class SemanticToolFilterHook(CustomLogger):
                     verbose_proxy_logger.warning("No tools expanded from MCP references")
                     return None
 
-                data["tools"] = native_tools_before_expand + expanded_tools
+                filtered_expanded_tools = await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools)
+
+                combined_tools = native_tools_before_expand + filtered_expanded_tools
+                data["tools"] = combined_tools
+                self._emit_filter_metadata(
+                    data=data,
+                    mcp_tools=expanded_tools,
+                    filtered_mcp_tools=filtered_expanded_tools,
+                    native_tools=native_tools_before_expand,
+                    filtered_tools=combined_tools,
+                )
                 verbose_proxy_logger.info(
                     f"Expanded MCP references to {len(expanded_tools)} tools "
                     f"({len(native_tools_before_expand)} native preserved), "
-                    f"skipping semantic filter (OpenAI nested format)"
+                    f"semantic filter selected {len(filtered_expanded_tools)}"
                 )
                 return data
 

@@ -774,6 +774,187 @@ async def test_semantic_filter_hook_responses_api_name_collision():
 
 
 @pytest.mark.asyncio
+async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
+    """
+    Regression test (LIT-4214): litellm_proxy MCP references must be
+    semantically filtered after expansion, with real filter stats.
+
+    Given: A /v1/responses-style request whose tools are a single
+           {"type": "mcp", "server_url": "litellm_proxy"} reference that
+           expands to 5 flat OpenAI function dicts
+    When:  The hook processes the request
+    Then:  The expanded tools go through the semantic filter (top_k=2)
+           and litellm_semantic_filter_stats reports pre/post counts, so
+           the x-litellm-semantic-filter header shows how many tools
+           were filtered out instead of silently forwarding all tools
+           with no stats.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(registry_tools)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+    hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+
+    data = {
+        "model": "gpt-4",
+        "input": [{"role": "user", "content": "Send an email", "type": "message"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            }
+        ],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    assert len(filtered) <= 2, f"Expanded tools should be filtered to top_k=2, got {len(filtered)}"
+    assert len(filtered) < len(expanded_tools), (
+        f"Hook must not forward all {len(expanded_tools)} expanded tools unfiltered, got {len(filtered)}"
+    )
+    for tool in filtered:
+        assert tool in expanded_tools, "Filtered tools must be the original expanded tool dicts"
+
+    assert (
+        "litellm_semantic_filter_stats" in result["metadata"]
+    ), "Filter stats must be emitted for the litellm_proxy expansion path"
+    stats = result["metadata"]["litellm_semantic_filter_stats"]
+    total, selected = stats.split("->")
+    assert int(total) == 5, f"Stats 'from' should be pre-filter expanded count (5), got {total}"
+    assert int(selected) == len(filtered), f"Stats 'to' should match post-filter count, got {selected}"
+
+    print(f"✅ Expanded litellm_proxy tools filtered: {len(expanded_tools)} -> {len(filtered)}, stats={stats}")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
+    """
+    Responses API requests may pass ``input`` as a plain string; the
+    expanded-tool filtering must treat it as the user query instead of
+    crashing (which would silently disable MCP expansion).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(registry_tools)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    filtered = await hook._filter_expanded_tools(
+        data={"input": "Send an email"},
+        expanded_tools=expanded_tools,
+    )
+
+    assert len(filtered) <= 2, f"String input must still drive semantic filtering, got {len(filtered)} tools"
+
+    print(f"✅ String input filtered expanded tools: {len(expanded_tools)} -> {len(filtered)}")
+
+
+@pytest.mark.asyncio
 async def test_semantic_filter_hook_preserves_tool_order():
     """
     Regression test: tool ordering preservation.

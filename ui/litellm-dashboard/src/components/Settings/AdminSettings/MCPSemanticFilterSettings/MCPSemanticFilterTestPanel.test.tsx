@@ -90,7 +90,7 @@ describe("MCPSemanticFilterTestPanel", () => {
     expect(screen.queryByText("Semantic filtering is disabled")).not.toBeInTheDocument();
   });
 
-  it("should display test results when testResult is provided", () => {
+  it("should display selected and filtered-out counts when testResult is provided", () => {
     const testResult: TestResult = {
       totalTools: 10,
       selectedTools: 3,
@@ -98,11 +98,23 @@ describe("MCPSemanticFilterTestPanel", () => {
     };
     render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
 
-    expect(screen.getByText("3 tools selected")).toBeInTheDocument();
-    expect(screen.getByText("Filtered from 10 available tools")).toBeInTheDocument();
+    expect(screen.getByText("3 of 10 tools selected")).toBeInTheDocument();
+    expect(screen.getByText("7 tools filtered out")).toBeInTheDocument();
     expect(screen.getByText("wiki-fetch")).toBeInTheDocument();
     expect(screen.getByText("github-search")).toBeInTheDocument();
     expect(screen.getByText("slack-post")).toBeInTheDocument();
+  });
+
+  it("should surface a zero filtered-out count when the filter selected every tool", () => {
+    const testResult: TestResult = {
+      totalTools: 207,
+      selectedTools: 207,
+      tools: ["tool-a", "tool-b"],
+    };
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
+
+    expect(screen.getByText("207 of 207 tools selected")).toBeInTheDocument();
+    expect(screen.getByText("0 tools filtered out")).toBeInTheDocument();
   });
 
   it("should not render the results section when testResult is null", () => {
