@@ -22,7 +22,12 @@ from e2e_http import (
     StreamingResponse,
     Success,
 )
-from models import LiteLLMParamsBody, ModelDeleteBody, ModelNewBody
+from models import (
+    LiteLLMParamsBody,
+    ModelDeleteBody,
+    ModelNewBody,
+    ModelNewResponse,
+)
 
 
 @dataclass
@@ -36,7 +41,10 @@ class _RecordingTransport:
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
         self.posts.append((path, json))
-        return Success(data=response_type.model_validate({"model_id": "registered-id"}))
+        payload = (
+            {"model_id": "registered-id"} if response_type is ModelNewResponse else {}
+        )
+        return Success(data=response_type.model_validate(payload))
 
     def stream(
         self, path: str, *, headers: BaseModel, json: BaseModel
