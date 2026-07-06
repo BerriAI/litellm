@@ -101,7 +101,7 @@ class _CombinedChunkSplitter:
         return has_reasoning and has_content
 
     @staticmethod
-    def _split_finish(chunk: Any) -> List[Any]:
+    def _split_finish(chunk: Any) -> list[Any]:
         """Split a content + ``finish_reason`` chunk into content then finish."""
         if not _CombinedChunkSplitter._is_combined(chunk):
             return [chunk]
@@ -123,7 +123,7 @@ class _CombinedChunkSplitter:
         return [content_chunk, finish_chunk]
 
     @staticmethod
-    def _split(chunk: Any) -> List[Any]:
+    def _split(chunk: Any) -> list[Any]:
         """Split a chunk that packs multiple blocks into ordered sub-chunks.
 
         Reasoning is peeled off first (Anthropic requires the thinking block before
