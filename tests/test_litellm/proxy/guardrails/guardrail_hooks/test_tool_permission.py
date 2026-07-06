@@ -67,9 +67,7 @@ class TestToolPermissionGuardrail:
         assert len(self.guardrail.rules) == 5
         assert self.guardrail.default_action == "deny"
         assert self.guardrail.on_disallowed_action == "block"
-        assert GuardrailEventHooks.post_call in (
-            self.guardrail.supported_event_hooks or []
-        )
+        assert GuardrailEventHooks.post_call in (self.guardrail.supported_event_hooks or [])
 
     def test_matches_regex_helper(self):
         pattern = re.compile(r"^Read$")
@@ -162,9 +160,7 @@ class TestToolPermissionGuardrail:
         assert rule_id == "allow_bash"
         assert "allowed" in (msg or "")
 
-        is_allowed, rule_id, _ = self.guardrail._check_tool_permission(
-            "mcp__github_add_issue_comment"
-        )
+        is_allowed, rule_id, _ = self.guardrail._check_tool_permission("mcp__github_add_issue_comment")
         assert is_allowed is True
         assert rule_id == "allow_github"
 
@@ -427,6 +423,246 @@ class TestToolPermissionGuardrail:
         assert "berri" in choice.message.content
 
     @pytest.mark.asyncio
+    async def test_async_post_call_blocks_raw_anthropic_tool_use(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[
+                {
+                    "id": "allow_safe_bash",
+                    "tool_name": r"^Bash$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {
+                        "command": r"^(?!.*(rm\s+-rf|terraform\s+destroy|kubectl\s+delete)).*$",
+                    },
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+        response = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-x",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Bash",
+                    "input": {"command": "rm -rf /"},
+                }
+            ],
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await guardrail.async_post_call_success_hook(
+                    data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    response=response,
+                )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_rewrites_raw_anthropic_tool_use(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+        )
+        response = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-x",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Read",
+                    "input": {"file": "/etc/passwd"},
+                }
+            ],
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        assert result is response
+        assert response["content"] == [
+            {
+                "type": "text",
+                "text": "Permission denied: Tool 'Read' denied by rule 'deny_read' (Rule: deny_read)",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_rewrites_raw_openai_tool_call(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_delete", "tool_name": r"^delete_file$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "I should remove it.",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "delete_file",
+                                    "arguments": {"path": "/tmp/report.txt"},
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        message = response["choices"][0]["message"]
+        assert result is response
+        assert message["tool_calls"] is None
+        assert "I should remove it." in message["content"]
+        assert "Permission denied: Tool 'delete_file' denied by rule 'deny_delete'" in message["content"]
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_rewrites_raw_gemini_function_call(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_delete", "tool_name": r"^delete_file$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+        )
+        response = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "delete_file",
+                                    "args": {"path": "/tmp/report.txt"},
+                                }
+                            },
+                            {"text": "done"},
+                        ]
+                    }
+                }
+            ]
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        parts = response["candidates"][0]["content"]["parts"]
+        assert result is response
+        assert parts == [
+            {"text": "done"},
+            {
+                "text": "Permission denied: Tool 'delete_file' denied by rule 'deny_delete' (Rule: deny_delete)",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_blocks_raw_bedrock_converse_tool_use(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_shell", "tool_name": r"^shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="block",
+        )
+        response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_1",
+                                "name": "shell",
+                                "input": {"command": "rm -rf /"},
+                            }
+                        }
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await guardrail.async_post_call_success_hook(
+                    data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    response=response,
+                )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_rewrites_raw_bedrock_converse_tool_use(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_shell", "tool_name": r"^shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+        )
+        response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_1",
+                                "name": "shell",
+                                "input": {"command": "rm -rf /"},
+                            }
+                        },
+                        {"text": "after"},
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        content = response["output"]["message"]["content"]
+        assert result is response
+        assert content == [
+            {"text": "after"},
+            {
+                "text": "Permission denied: Tool 'shell' denied by rule 'deny_shell' (Rule: deny_shell)",
+            },
+        ]
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):
@@ -468,9 +704,7 @@ class TestToolPermissionGuardrail:
             '["owner@berri.ai"]',
         ],
     )
-    async def test_async_post_call_success_hook_malformed_arguments_blocks_param_rule(
-        self, arguments
-    ):
+    async def test_async_post_call_success_hook_malformed_arguments_blocks_param_rule(self, arguments):
         guardrail = ToolPermissionGuardrail(
             guardrail_name="mail-guardrail",
             rules=[
@@ -699,9 +933,7 @@ class TestToolPermissionGuardrail:
         async def _fake_stream():
             yield text_chunk
 
-        assembled = ModelResponse(
-            choices=[Choices(message={"content": "Hello, world!"})]
-        )
+        assembled = ModelResponse(choices=[Choices(message={"content": "Hello, world!"})])
 
         with patch("litellm.main.stream_chunk_builder", return_value=assembled):
             chunks = []
@@ -713,22 +945,16 @@ class TestToolPermissionGuardrail:
                 chunks.append(chunk)
 
         assert len(chunks) >= 1, (
-            "Hook must yield at least one chunk for plain-text responses; "
-            "got none — bare return bug"
+            "Hook must yield at least one chunk for plain-text responses; got none — bare return bug"
         )
         assert chunks[0].choices[0].delta.content == "Hello, world!", (
-            "Hook must preserve the original response content; "
-            f"got: {chunks[0].choices[0].delta.content!r}"
+            f"Hook must preserve the original response content; got: {chunks[0].choices[0].delta.content!r}"
         )
 
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
-        tool_call = ChatCompletionMessageToolCall(
-            function={"name": "Read", "arguments": "{}"}, id="call_123"
-        )
-        response = ModelResponse(
-            choices=[Choices(message={"tool_calls": [tool_call], "content": ""})]
-        )
+        tool_call = ChatCompletionMessageToolCall(function={"name": "Read", "arguments": "{}"}, id="call_123")
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call], "content": ""})])
 
         # Denied tools tuple of (tool_call, PermissionError)
         denied_tools = [
@@ -916,10 +1142,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
             on_disallowed_action="block",
         )
         # No pattern yet: any Bash command is allowed.
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
-            is True
-        )
+        assert guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0] is True
 
         guardrail.update_in_memory_litellm_params(
             LitellmParams(
@@ -932,9 +1155,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
                         "id": "native-bash",
                         "tool_name": r"^Bash$",
                         "decision": "allow",
-                        "allowed_param_patterns": {
-                            "command": r"^(?!(echo blockme)$).*$"
-                        },
+                        "allowed_param_patterns": {"command": r"^(?!(echo blockme)$).*$"},
                     }
                 ],
             )
@@ -942,13 +1163,8 @@ class TestToolPermissionGuardrailInMemoryUpdate:
 
         # The compiled map must be rebuilt, and enforcement must reflect it.
         assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
-            is False
-        )
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo hello"))[0] is True
-        )
+        assert guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0] is False
+        assert guardrail._get_permission_for_tool_call(self._bash("echo hello"))[0] is True
 
     def test_update_in_memory_recompiles_tool_name_target(self):
         guardrail = ToolPermissionGuardrail(
@@ -1003,10 +1219,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
 
         assert len(guardrail.rules) == 1
         assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
-            is False
-        )
+        assert guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0] is False
 
     def test_update_in_memory_rejects_invalid_regex_and_keeps_previous_rules(self):
         """Regression: a live update whose rules contain an invalid regex must be
