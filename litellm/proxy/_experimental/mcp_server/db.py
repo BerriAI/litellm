@@ -46,6 +46,18 @@ from litellm.types.mcp import MCPCredentials
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+_AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
+    {
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+    }
+)
+
 
 def _is_global_env_var_scope(scope: Any) -> bool:
     """``scope="user"`` entries are placeholders the user fills in; everything
@@ -606,15 +618,16 @@ async def update_mcp_server(
     if data.auth_type or has_credentials:
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
+    auth_type_changed = bool(
+        data.auth_type and existing and existing.auth_type is not None and existing.auth_type != data.auth_type
+    )
+
     # Clear stale credentials when auth_type changes but no new credentials provided
-    if (
-        data.auth_type
-        and "credentials" not in data_dict
-        and existing
-        and existing.auth_type is not None
-        and existing.auth_type != data.auth_type
-    ):
+    if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
+
+    if auth_type_changed:
+        data_dict.update({field: None for field in _AUTH_FLOW_SCOPED_FIELDS if field not in data_dict})
 
     # Merge credentials: preserve existing fields not present in the update.
     # Without this, a partial credential update (e.g. changing only region)

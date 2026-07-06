@@ -646,6 +646,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Remove UI-only fields
         stdio_config: undefined,
         env_json: undefined,
+        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
+          ? { authorization_url: null, token_url: null, registration_url: null }
+          : {}),
+        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
+        restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
+          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null }
+          : {}),
         server_id: mcpServer.server_id,
         mcp_info: {
           ...(mcpServer.mcp_info ?? {}),

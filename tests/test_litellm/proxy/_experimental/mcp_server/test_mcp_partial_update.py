@@ -178,6 +178,92 @@ async def test_partial_update_can_explicitly_clear_alias():
     assert data_dict["alias"] is None
 
 
+async def _run_update_with_existing(data: UpdateMCPServerRequest, existing_auth_type: str) -> dict:
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = existing_auth_type
+    existing.credentials = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    await update_mcp_server(mock_prisma, data, "test-user")
+    return mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_clears_stale_flow_scoped_fields():
+    """
+    Switching oauth2 -> oauth2_token_exchange must clear the previous flow's
+    endpoint config: a stale token_url would otherwise be picked up as the
+    token-exchange endpoint and suppress RFC 9728/8414 discovery.
+    """
+    data = UpdateMCPServerRequest(server_id="my-test-server", auth_type="oauth2_token_exchange")
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
+
+    for stale_field in (
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+    ):
+        assert data_dict[stale_field] is None, f"{stale_field} must be cleared on auth_type switch"
+    assert data_dict["credentials"] is None
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_keeps_explicitly_provided_flow_fields():
+    """Fields explicitly provided alongside the auth_type switch must survive it."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        auth_type="oauth2_token_exchange",
+        token_exchange_endpoint="https://idp.example.com/oauth2/token",
+    )
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
+
+    assert data_dict["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
+    assert data_dict["token_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_back_to_oauth2_clears_token_exchange_fields():
+    """The reverse switch must not leave token-exchange settings behind to
+    silently reactivate if the server is later switched back."""
+    data = UpdateMCPServerRequest(server_id="my-test-server", auth_type="oauth2")
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2_token_exchange")
+
+    assert data_dict["token_exchange_endpoint"] is None
+    assert data_dict["audience"] is None
+    assert data_dict["subject_token_type"] is None
+
+
+@pytest.mark.asyncio
+async def test_unchanged_auth_type_does_not_clear_flow_fields():
+    """An update that keeps the auth_type must not touch flow-scoped fields, so a
+    legacy OBO server using token_url as its exchange endpoint keeps working."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        auth_type="oauth2_token_exchange",
+        allowed_tools=["foo"],
+    )
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2_token_exchange")
+
+    for flow_field in (
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+    ):
+        assert flow_field not in data_dict
+
+
 @pytest.mark.asyncio
 async def test_create_still_writes_defaults():
     """
