@@ -2,7 +2,10 @@ import base64
 
 from httpx import Headers, Response
 
-from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.audio_utils.utils import (
+    normalize_transcription_language_to_bcp47,
+    process_audio_file,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -107,7 +110,11 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
     ) -> AudioTranscriptionRequestData:
         processed_audio = process_audio_file(audio_file)
         language = optional_params.get("language")
-        language_codes = [language] if isinstance(language, str) and language else [AUTO_LANGUAGE_CODE]
+        language_codes = (
+            [normalize_transcription_language_to_bcp47(language)]
+            if isinstance(language, str) and language
+            else [AUTO_LANGUAGE_CODE]
+        )
         request_body = VertexSpeechToTextRecognizeRequest(
             config=VertexSpeechToTextRecognitionConfig(
                 model=model.removeprefix("vertex_ai/"),
@@ -125,7 +132,7 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
     ) -> TranscriptionResponse:
         try:
             response_json = raw_response.json()
-        except Exception:
+        except ValueError:
             raise VertexAIError(
                 status_code=raw_response.status_code,
                 message=f"Received non-JSON response from Google Speech-to-Text: {raw_response.text}",

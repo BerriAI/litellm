@@ -83,14 +83,24 @@ class TestTransformRequest:
             "content": base64.b64encode(audio_bytes).decode("utf-8"),
         }
 
-    def test_language_param_maps_to_language_codes(self, config):
+    @pytest.mark.parametrize(
+        "language,expected_language_codes",
+        [
+            ("en", ["en-US"]),
+            ("en-US", ["en-US"]),
+            ("es-ES", ["es-ES"]),
+            ("fr", ["fr-FR"]),
+            (None, ["auto"]),
+        ],
+    )
+    def test_language_param_maps_to_language_codes(self, config, language, expected_language_codes):
         request_data = config.transform_audio_transcription_request(
             model="chirp_3",
             audio_file=b"fake-audio-bytes",
-            optional_params={"language": "es-ES"},
+            optional_params={"language": language} if language is not None else {},
             litellm_params={},
         )
-        assert request_data.data["config"]["languageCodes"] == ["es-ES"]
+        assert request_data.data["config"]["languageCodes"] == expected_language_codes
 
     def test_model_prefix_is_stripped(self, config):
         request_data = config.transform_audio_transcription_request(
