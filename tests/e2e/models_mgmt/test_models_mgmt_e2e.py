@@ -104,8 +104,11 @@ class TestModelManagementRoutes:
     ) -> None:
         model = _provision(client, resources, tpm=CREATED_TPM)
 
-        entry = client.find_deployment(model)
-        assert entry is not None, f"{model} absent from /model/info right after /model/new"
+        entry = _poll(
+            client,
+            lambda: client.find_deployment(model),
+            f"{model} never appeared in /model/info after /model/new",
+        )
         assert entry.litellm_params.model == BACKEND_MODEL, (
             f"/model/info reports backend {entry.litellm_params.model!r}, "
             f"configured {BACKEND_MODEL!r}"
