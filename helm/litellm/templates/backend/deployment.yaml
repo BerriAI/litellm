@@ -45,11 +45,16 @@ spec:
               value: /app/config/config.yaml
             {{- end }}
           {{- include "litellm.envFrom" .Values.backend | nindent 10 }}
-          {{- if .Values.gateway.config.create }}
+          {{- if or .Values.gateway.config.create .Values.backend.volumeMounts }}
           volumeMounts:
+            {{- if .Values.gateway.config.create }}
             - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
+            {{- end }}
+            {{- with .Values.backend.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.backend.livenessProbe }}
           livenessProbe:
@@ -61,11 +66,16 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
-      {{- if .Values.gateway.config.create }}
+      {{- if or .Values.gateway.config.create .Values.backend.volumes }}
       volumes:
+        {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
             name: {{ include "litellm.gateway.fullname" . }}-config
+        {{- end }}
+        {{- with .Values.backend.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
