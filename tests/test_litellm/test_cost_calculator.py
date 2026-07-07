@@ -347,6 +347,30 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_vertex_chirp_3_transcription_cost_from_duration():
+    """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
+    and cost_per_second prefers output_cost_per_second whenever it is not None, so
+    every transcription priced to $0.00 instead of using input_cost_per_second."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 18.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/chirp_3",
+        custom_llm_provider="vertex_ai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 18.0 * 0.00026667
+    assert cost > 0
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
