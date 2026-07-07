@@ -1072,6 +1072,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 return True
         return False
 
+    @staticmethod
+    def _model_info_lookup_names(model: str) -> Tuple[str, ...]:
+        if "/" not in model:
+            return (model,)
+        model_without_provider = model.split("/", 1)[1]
+        if not model_without_provider:
+            return (model,)
+        return (model, model_without_provider)
+
+    @staticmethod
+    def _should_strip_custom_tool_type(model: str) -> bool:
+        for lookup_model in AnthropicConfig._model_info_lookup_names(model):
+            if lookup_model not in litellm.model_cost:
+                continue
+            strip_custom_tool_type = litellm.get_model_info(model=lookup_model).get("strip_custom_tool_type")
+            if isinstance(strip_custom_tool_type, bool):
+                return strip_custom_tool_type
+        return False
+
+    @staticmethod
+    def _strip_custom_tool_type(model: str, optional_params: Dict[str, Any]) -> None:
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list):
+            return
+        updated_tools = tuple(
+            {key: value for key, value in tool.items() if key != "type"}
+            if isinstance(tool, dict) and tool.get("type") == "custom"
+            else tool
+            for tool in tools
+        )
+        if tuple(tools) == updated_tools or not AnthropicConfig._should_strip_custom_tool_type(model):
+            return
+        optional_params["tools"] = list(updated_tools)
+
     def _separate_deferred_tools(self, tools: List) -> Tuple[List, List]:
         """
         Separate tools into deferred and non-deferred lists.
@@ -1884,6 +1918,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=litellm_params.get("drop_params") is True,
                 output_key="top_k",
             )
+
+        self._strip_custom_tool_type(model=model, optional_params=optional_params)
 
         data = {
             "model": model,

@@ -855,6 +855,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
+                "strip_custom_tool_type": {"type": "boolean"},
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
@@ -4667,5 +4668,3 @@ class TestValidateEnvironmentTencent:
 
         assert result["keys_in_environment"] is False
         assert "TENCENT_API_KEY" in result["missing_keys"]
-
-

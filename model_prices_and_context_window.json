@@ -11862,7 +11862,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "strip_custom_tool_type": true
     },
     "deepseek-reasoner": {
         "cache_read_input_token_cost": 2.8e-08,
@@ -14392,7 +14393,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "strip_custom_tool_type": true
     },
     "deepseek/deepseek-coder": {
         "input_cost_per_token": 1.4e-07,
@@ -44112,6 +44114,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "strip_custom_tool_type": true,
         "supports_vision": false
     },
     "deepseek-v4-pro": {
@@ -44137,6 +44140,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "strip_custom_tool_type": true,
         "supports_vision": false
     },
     "deepseek/deepseek-v4-flash": {
@@ -44162,6 +44166,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "strip_custom_tool_type": true,
         "supports_vision": false
     },
     "deepseek/deepseek-v4-pro": {
@@ -44187,6 +44192,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "strip_custom_tool_type": true,
         "supports_vision": false
     },
     "tencent/deepseek-v4-pro": {
