@@ -70,6 +70,28 @@ def test_prepare_payload_includes_dynamic_metadata(
     assert payload["metadata"] == dynamic_body["metadata"]
 
 
+def test_prepare_payload_forwards_only_scan_id_header(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "proxy_server_request": {
+            "headers": {
+                "shade_scan_id": "scan-123",
+                "authorization": "Bearer secret",
+            }
+        },
+        "litellm_metadata": {"request_id": "request-123"},
+    }
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert payload["litellm_metadata"] == {
+        "request_id": "request-123",
+        "headers": {"shade_scan_id": "scan-123"},
+    }
+
+
 def test_process_response_does_not_block_under_threshold(
     grayswan_guardrail: GraySwanGuardrail,
 ) -> None:
