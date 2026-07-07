@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
+import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import {
@@ -78,6 +78,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
+  // Watch reflects a live toggle when the delegate switch is mounted; fall back to
+  // the stored value otherwise (useWatch returns undefined for an unmounted field,
+  // the same trap the oauth_flow_type field originally hit).
+  const delegateAuthWatched = Form.useWatch("delegate_auth_to_upstream", form) as boolean | undefined;
+  const isDelegateAuth = delegateAuthWatched ?? Boolean(mcpServer.delegate_auth_to_upstream);
 
   // Watch form fields that affect tool fetching
   const currentUrl = Form.useWatch("url", form);
@@ -953,6 +958,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     <Select.Option value={OAUTH_FLOW.INTERACTIVE}>Interactive (PKCE)</Select.Option>
                   </Select>
                 </Form.Item>
+                {!oauthFlowTypeValue && !isDelegateAuth && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    className="mb-4 rounded-lg"
+                    message="This server has no OAuth flow set"
+                    description="Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
+                  />
+                )}
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">

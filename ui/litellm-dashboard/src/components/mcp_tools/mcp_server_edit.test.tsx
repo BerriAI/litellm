@@ -1158,3 +1158,75 @@ describe("MCPServerEdit oauth2_flow selector", () => {
     expect(payload.oauth2_flow).toBe("authorization_code");
   });
 });
+
+describe("MCPServerEdit OAuth flow prefill display", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function renderEdit(server: Record<string, unknown>) {
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+  }
+
+  it("shows the placeholder and preselects nothing for a null-flow server (prompts the user to define it)", () => {
+    renderEdit({ oauth2_flow: null, token_url: "https://idp.example.com/oauth/token" });
+
+    // The select renders its placeholder (undefined value), not a guessed option.
+    expect(screen.getByText("Select OAuth flow")).toBeInTheDocument();
+    // Neither flow is preselected as the current value.
+    expect(screen.queryByText("Machine-to-Machine (M2M)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Interactive (PKCE)")).not.toBeInTheDocument();
+  });
+
+  it("prefills Machine-to-Machine (M2M) for a stored client_credentials server", () => {
+    renderEdit({ oauth2_flow: "client_credentials" });
+
+    expect(screen.getByText("Machine-to-Machine (M2M)")).toBeInTheDocument();
+    expect(screen.queryByText("Select OAuth flow")).not.toBeInTheDocument();
+  });
+
+  it("prefills Interactive (PKCE) for a stored authorization_code server", () => {
+    renderEdit({ oauth2_flow: "authorization_code" });
+
+    expect(screen.getByText("Interactive (PKCE)")).toBeInTheDocument();
+    expect(screen.queryByText("Select OAuth flow")).not.toBeInTheDocument();
+  });
+
+  it("warns when a server has no OAuth flow set", () => {
+    renderEdit({ oauth2_flow: null, token_url: "https://idp.example.com/oauth/token" });
+
+    expect(screen.getByText("This server has no OAuth flow set")).toBeInTheDocument();
+  });
+
+  it("does not warn when the flow is already set", () => {
+    renderEdit({ oauth2_flow: "client_credentials" });
+
+    expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
+  });
+
+  it("does not warn for a delegate (PKCE passthrough) server even with no flow set", () => {
+    renderEdit({ oauth2_flow: null, delegate_auth_to_upstream: true });
+
+    expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
+  });
+
+  it("clears the warning once the admin selects a flow", async () => {
+    renderEdit({ oauth2_flow: null, token_url: "https://idp.example.com/oauth/token" });
+
+    expect(screen.getByText("This server has no OAuth flow set")).toBeInTheDocument();
+
+    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+
+    await waitFor(() => {
+      expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
+    });
+  });
+});
