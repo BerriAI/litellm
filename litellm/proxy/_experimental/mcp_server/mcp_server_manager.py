@@ -608,12 +608,15 @@ class MCPServerManager:
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
         """Infer oauth2_flow from field shape when the value is omitted.
 
-        Not called directly by security sites; they go through ``effective_oauth2_flow``
-        (boolean/enum decisions) or ``resolve_oauth2_flow_for_request`` (the egress object
-        backstop), which are the single choke points for request-time resolution. DB rows
+        SECURITY-SENSITIVE: this is the shape-inference engine both request-time security
+        helpers delegate to, so it is what decides M2M-vs-interactive for an unstamped row.
+        Always access it through ``effective_oauth2_flow`` (boolean/enum decisions) or
+        ``resolve_oauth2_flow_for_request`` (the egress object backstop), which are the single
+        choke points for request-time resolution; do not call it directly from security sites
+        and do not weaken its M2M-shape branch without accounting for those callers. DB rows
         are stamped at write time and by the startup backfill, config servers must declare
         oauth2_flow (validated at load), and both builds read the value verbatim via
-        ``_explicit_oauth2_flow``. Delete this whole request-time layer once the backstop
+        ``_explicit_oauth2_flow``. Delete this whole request-time layer only once the backstop
         warning stays silent in production.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
@@ -4626,6 +4629,7 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=server.oauth2_flow,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
@@ -4729,6 +4733,7 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=server.oauth2_flow,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
