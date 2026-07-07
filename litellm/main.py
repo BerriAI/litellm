@@ -5279,6 +5279,14 @@ def completion(  # type: ignore
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
             aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
         )
+        # get_litellm_params() only extracts OPTIONAL_KWARGS_KEYS from its own
+        # **kwargs, which is not forwarded above. Merge them back so provider auth
+        # kwargs (e.g. AWS SigV4 aws_region_name / aws_access_key_id /
+        # aws_secret_access_key) reach litellm_params — otherwise the
+        # chat->responses bridge signs Bedrock Mantle requests with empty creds.
+        for _param, _value in _supplemental_provider_params.items():
+            if litellm_params.get(_param) is None:
+                litellm_params[_param] = _value
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,

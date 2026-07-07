@@ -151,3 +151,44 @@ async def test_async_completion_forwards_aws_region_name():
         except Exception:
             pass
         assert _fake_aresponses.kwargs.get("aws_region_name") == "us-east-2"
+
+
+def test_completion_forwards_aws_creds_into_bridge_litellm_params():
+    """Regression test for https://github.com/BerriAI/litellm/issues/32336 -
+    litellm.completion() dropped aws_region_name / aws_access_key_id /
+    aws_secret_access_key before dispatching the chat->responses bridge for
+    bedrock_mantle gpt-5.* (Responses-only) models, so SigV4 signed with empty
+    creds and Bedrock Mantle rejected the request.
+
+    get_litellm_params() only extracts OPTIONAL_KWARGS_KEYS from its own
+    **kwargs, which completion() does not forward; the fix merges the
+    supplemental provider params back into litellm_params. This pins that the
+    AWS credentials survive into the litellm_params the bridge receives — the
+    handler-level tests above only cover forwarding once the params are already
+    present.
+    """
+    import litellm
+
+    captured = {}
+
+    def _fake_bridge_completion(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(spec=[])
+
+    with patch(
+        "litellm.completion_extras.responses_api_bridge.completion",
+        _fake_bridge_completion,
+    ):
+        litellm.completion(
+            model="bedrock_mantle/openai.gpt-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://bedrock-mantle.us-east-2.api.aws/v1",
+            aws_region_name="us-east-2",
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secretexample",
+        )
+
+    litellm_params = captured.get("litellm_params") or {}
+    assert litellm_params.get("aws_region_name") == "us-east-2"
+    assert litellm_params.get("aws_access_key_id") == "AKIAEXAMPLE"
+    assert litellm_params.get("aws_secret_access_key") == "secretexample"
