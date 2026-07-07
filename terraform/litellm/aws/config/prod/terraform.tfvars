@@ -51,11 +51,12 @@ proxy_config = {
     },
   ]
   general_settings = {
-    master_key         = "os.environ/LITELLM_MASTER_KEY"
-    database_url       = "os.environ/DATABASE_URL"
-    alerting           = ["email", "slack_budget_alerts", "slack"]
-    alert_types        = ["budget_alerts", "spend_reports"]
-    alerting_threshold = 300
+    master_key                        = "os.environ/LITELLM_MASTER_KEY"
+    database_url                      = "os.environ/DATABASE_URL"
+    enforce_email_prefix_on_key_alias = true
+    alerting                          = ["email", "slack_budget_alerts", "slack"]
+    alert_types                       = ["budget_alerts", "spend_reports"]
+    alerting_threshold                = 300
     alerting_args = {
       daily_report_frequency       = 43200 # 12 hours in seconds
       report_check_interval        = 3600  # 1 hour in seconds
