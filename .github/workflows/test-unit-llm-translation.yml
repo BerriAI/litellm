@@ -1,0 +1,152 @@
+name: "Unit Tests: LLM Translation (Provider Transformations)"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Bedrock has ~12 test files — run them in a dedicated job
+  bedrock:
+    name: Bedrock Transformations
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/llm_translation/test_bedrock_agentcore.py
+        tests/llm_translation/test_bedrock_agents.py
+        tests/llm_translation/test_bedrock_anthropic_regression.py
+        tests/llm_translation/test_bedrock_common_utils.py
+        tests/llm_translation/test_bedrock_completion.py
+        tests/llm_translation/test_bedrock_dynamic_auth_params_unit_tests.py
+        tests/llm_translation/test_bedrock_embedding.py
+        tests/llm_translation/test_bedrock_govcloud.py
+        tests/llm_translation/test_bedrock_gpt_oss.py
+        tests/llm_translation/test_bedrock_invoke_tests.py
+        tests/llm_translation/test_bedrock_llama.py
+        tests/llm_translation/test_bedrock_moonshot.py
+        tests/llm_translation/test_bedrock_nova_embedding.py
+        tests/llm_translation/test_bedrock_nova_json.py
+        tests/llm_translation/test_unit_test_bedrock_invoke.py
+      workers: 2
+      reruns: 2
+      timeout-minutes: 25
+      artifact-name: llm-translation-bedrock
+
+  # Azure variants (OpenAI-compatible, O-series, Agents, AI)
+  azure-and-openai:
+    name: Azure & OpenAI Transformations
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/llm_translation/test_azure_agents.py
+        tests/llm_translation/test_azure_ai.py
+        tests/llm_translation/test_azure_o_series.py
+        tests/llm_translation/test_azure_openai.py
+        tests/llm_translation/test_openai.py
+        tests/llm_translation/test_openai_o1.py
+        tests/llm_translation/test_anthropic_completion.py
+        tests/llm_translation/test_gemini.py
+        tests/llm_translation/test_gemini_image_usage.py
+        tests/llm_translation/test_gpt4o_audio.py
+        tests/llm_translation/test_prompt_caching.py
+        tests/llm_translation/test_prompt_factory.py
+        tests/llm_translation/test_text_completion.py
+        tests/llm_translation/test_text_completion_unit_tests.py
+        tests/llm_translation/test_optional_params.py
+      workers: 2
+      reruns: 2
+      timeout-minutes: 25
+      artifact-name: llm-translation-azure-openai
+
+  # A–M providers (alphabetical split to keep job times balanced)
+  providers-a-m:
+    name: Provider Transformations (A–M)
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/llm_translation/test_a2a.py
+        tests/llm_translation/test_aws_base_llm.py
+        tests/llm_translation/test_cloudflare.py
+        tests/llm_translation/test_cohere.py
+        tests/llm_translation/test_containers_api.py
+        tests/llm_translation/test_convert_dict_to_image.py
+        tests/llm_translation/test_databricks.py
+        tests/llm_translation/test_deepgram.py
+        tests/llm_translation/test_deepseek_completion.py
+        tests/llm_translation/test_elevenlabs.py
+        tests/llm_translation/test_evals_api.py
+        tests/llm_translation/test_fireworks_ai_translation.py
+        tests/llm_translation/test_gigachat.py
+        tests/llm_translation/test_groq.py
+        tests/llm_translation/test_hosted_vllm_embedding_e2e.py
+        tests/llm_translation/test_huggingface_chat_completion.py
+        tests/llm_translation/test_hyperbolic.py
+        tests/llm_translation/test_infinity.py
+        tests/llm_translation/test_jina_ai.py
+        tests/llm_translation/test_lambda_ai.py
+        tests/llm_translation/test_langgraph.py
+        tests/llm_translation/test_litellm_proxy_provider.py
+        tests/llm_translation/test_llm_response_utils
+        tests/llm_translation/test_minimax_tts.py
+        tests/llm_translation/test_mistral_api.py
+        tests/llm_translation/test_model_cost_map_resilience.py
+        tests/llm_translation/test_morph.py
+      workers: 2
+      reruns: 2
+      timeout-minutes: 25
+      artifact-name: llm-translation-providers-a-m
+
+  # N–Z providers
+  providers-n-z:
+    name: Provider Transformations (N–Z)
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/llm_translation/test_nvidia_nim.py
+        tests/llm_translation/test_openrouter.py
+        tests/llm_translation/test_perplexity_reasoning.py
+        tests/llm_translation/test_replicate.py
+        tests/llm_translation/test_rerank.py
+        tests/llm_translation/test_router_llm_translation_tests.py
+        tests/llm_translation/test_sambanova_chat_transformation.py
+        tests/llm_translation/test_skills_api.py
+        tests/llm_translation/test_skills_e2e.py
+        tests/llm_translation/test_snowflake.py
+        tests/llm_translation/test_together_ai.py
+        tests/llm_translation/test_triton.py
+        tests/llm_translation/test_v0.py
+        tests/llm_translation/test_voyage_ai.py
+        tests/llm_translation/test_watsonx.py
+        tests/llm_translation/test_xai.py
+      workers: 2
+      reruns: 2
+      timeout-minutes: 25
+      artifact-name: llm-translation-providers-n-z

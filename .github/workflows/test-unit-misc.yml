@@ -30,7 +30,9 @@ jobs:
         tests/test_litellm/experimental_mcp_client
         tests/test_litellm/images
         tests/test_litellm/interactions
+        tests/test_litellm/ocr
         tests/test_litellm/passthrough
+        tests/test_litellm/test_router
         tests/test_litellm/vector_stores
         tests/test_litellm/test_*.py
       workers: 2
