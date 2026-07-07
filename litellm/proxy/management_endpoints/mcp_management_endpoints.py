@@ -539,6 +539,7 @@ if MCP_AVAILABLE:
         sanitized.registration_url = None
         sanitized.token_exchange_endpoint = None
         sanitized.audience = None
+        sanitized.subject_token_type = None
         # Drop env vars entirely rather than only blanking global values: the
         # names alone (DB_PASSWORD, GITHUB_API_KEY, ...) leak what secrets the
         # admin configured. Non-admins get the per-user vars they must fill in
@@ -582,6 +583,7 @@ if MCP_AVAILABLE:
         sanitized.registration_url = None
         sanitized.token_exchange_endpoint = None
         sanitized.audience = None
+        sanitized.subject_token_type = None
 
         sanitized.health_check_error = None
         sanitized.last_health_check = None
