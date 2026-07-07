@@ -65,11 +65,19 @@ vi.mock("./mcp_tool_configuration", () => ({
       <button
         type="button"
         onClick={() => {
-          onToolNameToDisplayNameChange({ read_user: "Read User" });
+          onToolNameToDisplayNameChange({ read_user: "ReadUser" });
           onToolNameToDescriptionChange({ read_user: "Reads users" });
         }}
       >
         Set tool overrides
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onToolNameToDisplayNameChange({ read_user: "Read User" });
+        }}
+      >
+        Set invalid tool override
       </button>
     </div>
   ),
@@ -382,7 +390,7 @@ describe("MCPServerEdit (tool allowlist)", () => {
   it("saves tool overrides for legacy unrestricted servers", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...interactiveOAuthServer,
-      tool_name_to_display_name: { read_user: "Read User" },
+      tool_name_to_display_name: { read_user: "ReadUser" },
       tool_name_to_description: { read_user: "Reads users" },
     });
 
@@ -416,8 +424,35 @@ describe("MCPServerEdit (tool allowlist)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.mcp_info.tool_allowlist_enforced).toBe(false);
     expect(payload.allowed_tools).toBeUndefined();
-    expect(payload.tool_name_to_display_name).toEqual({ read_user: "Read User" });
+    expect(payload.tool_name_to_display_name).toEqual({ read_user: "ReadUser" });
     expect(payload.tool_name_to_description).toEqual({ read_user: "Reads users" });
+  });
+
+  it("blocks save and does not call the API when a tool display name contains a space", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          allowed_tools: [],
+          mcp_info: { server_name: "OAuthServer" },
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Set invalid tool override" }));
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
   });
 });
 

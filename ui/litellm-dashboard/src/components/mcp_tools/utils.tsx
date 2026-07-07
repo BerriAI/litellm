@@ -54,6 +54,14 @@ export const validateMCPServerName = (value: string) => {
     : Promise.resolve();
 };
 
+export const TOOL_DISPLAY_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export const validateToolDisplayName = (value: string) => {
+  return value && !TOOL_DISPLAY_NAME_PATTERN.test(value)
+    ? Promise.reject("Only letters, digits, underscores, and hyphens are allowed (no spaces).")
+    : Promise.resolve();
+};
+
 // Normalize the env_vars form list into the payload shape the backend expects.
 // Drops empty rows, invalid identifiers, and duplicate names; user-scoped entries never carry a value.
 export const normalizeEnvVars = (list: unknown): MCPEnvVar[] => {

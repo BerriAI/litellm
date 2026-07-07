@@ -21,7 +21,13 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars, normalizeToolOverrideMap } from "./utils";
+import {
+  validateMCPServerUrl,
+  validateMCPServerName,
+  normalizeEnvVars,
+  normalizeToolOverrideMap,
+  TOOL_DISPLAY_NAME_PATTERN,
+} from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -449,6 +455,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
+    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
+      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+    );
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
+      );
+      return;
+    }
     try {
       // Ensure access groups is always a string array
       const {
