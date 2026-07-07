@@ -2279,12 +2279,23 @@ async def _relay_passthrough_response_bytes(
     Yield upstream bytes to the client without accumulating them, then fire the
     passthrough success handler with response_body=None (uninspected body). The
     finally block also runs on client disconnect (GeneratorExit) so partial
-    downloads still produce a spend-log row, mirroring chunk_processor.
+    downloads still produce a spend-log row, mirroring chunk_processor; a
+    disconnect additionally logs a warning with the number of bytes relayed so
+    partial deliveries are distinguishable from complete ones in proxy logs.
     """
+    bytes_relayed = 0
+    upstream_fully_relayed = False
     try:
         async for chunk in response.aiter_bytes():
+            bytes_relayed += len(chunk)
             yield chunk
+        upstream_fully_relayed = True
     finally:
+        if not upstream_fully_relayed:
+            verbose_proxy_logger.warning(
+                f"Passthrough stream for {url_route} ended before upstream body was fully relayed; "
+                f"{bytes_relayed} bytes were sent to the client"
+            )
         await response.aclose()
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
