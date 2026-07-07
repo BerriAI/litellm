@@ -31,9 +31,9 @@ async function expectRendered(page: Page) {
 async function clickSidebar(page: Page, segment: string) {
   const link = page.locator(`a[href$="/ui/${segment}"]`).first();
   for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
-    const closedCollapsible = page.locator('[data-state="closed"] > button[role="menuitem"]').first();
-    if (await closedCollapsible.isVisible().catch(() => false)) {
-      await closedCollapsible.click();
+    const closedTrigger = page.locator('button[role="menuitem"]:not([data-panel-open])').first();
+    if (await closedTrigger.isVisible().catch(() => false)) {
+      await closedTrigger.click();
       await page.waitForTimeout(250);
       continue;
     }

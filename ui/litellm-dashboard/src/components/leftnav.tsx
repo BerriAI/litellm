@@ -453,7 +453,7 @@ function NavItem({
     const tooltipLabel = typeof item.label === "string" ? item.label : item.page;
     return (
       <Tooltip>
-        <TooltipTrigger asChild>{content}</TooltipTrigger>
+        <TooltipTrigger render={content} />
         <TooltipContent side="right">{tooltipLabel}</TooltipContent>
       </Tooltip>
     );
@@ -480,15 +480,17 @@ function CollapsibleNavItem({
     const tooltipLabel = typeof item.label === "string" ? item.label : item.page;
     return (
       <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            className="flex items-center justify-center h-8 py-1.5 px-2 rounded-md text-[13px] text-sidebar-foreground/70 hover:bg-sidebar-accent transition-colors w-full"
-          >
-            <span className="shrink-0">{item.icon}</span>
-          </button>
-        </TooltipTrigger>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={() => setOpen((o) => !o)}
+              className="flex items-center justify-center h-8 py-1.5 px-2 rounded-md text-[13px] text-sidebar-foreground/70 hover:bg-sidebar-accent transition-colors w-full"
+            >
+              <span className="shrink-0">{item.icon}</span>
+            </button>
+          }
+        />
         <TooltipContent side="right">{tooltipLabel}</TooltipContent>
       </Tooltip>
     );
@@ -496,19 +498,16 @@ function CollapsibleNavItem({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          role="menuitem"
-          className={cn(
-            "flex items-center gap-2 h-8 py-1.5 px-2 rounded-md text-[13px] transition-colors w-full",
-            "hover:bg-sidebar-accent text-sidebar-foreground/70",
-          )}
-        >
-          <span className="shrink-0">{item.icon}</span>
-          <span className="truncate flex-1 text-left">{item.label}</span>
-          <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", open && "rotate-90")} />
-        </button>
+      <CollapsibleTrigger
+        role="menuitem"
+        className={cn(
+          "flex items-center gap-2 h-8 py-1.5 px-2 rounded-md text-[13px] transition-colors w-full",
+          "hover:bg-sidebar-accent text-sidebar-foreground/70",
+        )}
+      >
+        <span className="shrink-0">{item.icon}</span>
+        <span className="truncate flex-1 text-left">{item.label}</span>
+        <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", open && "rotate-90")} />
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-4 border-l border-sidebar-border pl-2 mt-0.5 flex flex-col gap-0.5">
