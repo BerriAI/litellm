@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -1509,6 +1510,158 @@ async def test_new_user_default_teams_flow(mocker):
         # Restore original default params (always assign, never delattr — the attribute
         # is defined in litellm/__init__.py and delattr-ing it breaks parallel tests)
         litellm.default_internal_user_params = original_default_params
+
+
+@pytest.mark.asyncio
+async def test_new_user_applies_email_prefix_to_auto_created_key(mocker):
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mocker.AsyncMock(return_value=None),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mocker.AsyncMock(return_value=None),
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    mock_generate_key_helper_fn = mocker.AsyncMock(
+        return_value={
+            "user_id": "test-user-123",
+            "token": "sk-test-token-123",
+            "expires": None,
+            "max_budget": 100,
+        }
+    )
+    mock_user_created_hook = mocker.AsyncMock()
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mock_user_created_hook,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._enforce_email_prefix_on_key_alias",
+        mocker.AsyncMock(return_value="owner.user-test-key-name"),
+    )
+
+    response = await new_user(
+        data=NewUserRequest(
+            user_email="owner.user@example.com",
+            user_role="internal_user",
+            key_alias="TestKey Name",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="test_admin", user_email="caller@example.com"),
+    )
+
+    call_kwargs = mock_generate_key_helper_fn.call_args.kwargs
+    assert call_kwargs["key_alias"] == "owner.user-test-key-name"
+    assert response.user_id == "test-user-123"
+
+
+@pytest.mark.asyncio
+async def test_new_user_rejects_alias_without_resolvable_email(mocker):
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mocker.AsyncMock(return_value=None),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mocker.AsyncMock(return_value=None),
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._enforce_email_prefix_on_key_alias",
+        mocker.AsyncMock(side_effect=HTTPException(status_code=400, detail={"error": "missing email"})),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(
+            data=NewUserRequest(user_email=None, user_role="internal_user", key_alias="Needs Alias"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="test_admin", user_email=None),
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "missing email" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_user_without_alias_skips_email_prefix_enforcement(mocker):
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mocker.AsyncMock(return_value=None),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mocker.AsyncMock(return_value=None),
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    mock_generate_key_helper_fn = mocker.AsyncMock(
+        return_value={
+            "user_id": "test-user-123",
+            "token": "sk-test-token-123",
+            "expires": None,
+            "max_budget": 100,
+        }
+    )
+    enforce_mock = mocker.AsyncMock(return_value=None)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mocker.AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._enforce_email_prefix_on_key_alias",
+        enforce_mock,
+    )
+
+    await new_user(
+        data=NewUserRequest(user_email="owner.user@example.com", user_role="internal_user"),
+        user_api_key_dict=UserAPIKeyAuth(user_id="test_admin", user_email="caller@example.com"),
+    )
+
+    call_kwargs = mock_generate_key_helper_fn.call_args.kwargs
+    assert call_kwargs.get("key_alias") is None
+    enforce_mock.assert_awaited_once()
+    assert enforce_mock.await_args.kwargs["key_alias"] is None
 
 
 def test_update_internal_new_user_params_proxy_admin_role():

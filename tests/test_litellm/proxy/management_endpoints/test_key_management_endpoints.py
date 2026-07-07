@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
+    _enforce_email_prefix_on_key_alias,
     _enforce_upperbound_key_params,
     _get_and_validate_existing_key,
     _list_key_helper,
@@ -3480,7 +3481,7 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
     )
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
@@ -3491,6 +3492,10 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_search_tools_against_team",
             new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+            new=AsyncMock(return_value=None),
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
@@ -3562,10 +3567,14 @@ async def test_generate_key_foreign_org_without_team_still_enforces_membership()
     )
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+            new=AsyncMock(return_value=None),
+        ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
             mock_validate_org,
@@ -3632,7 +3641,7 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
     )
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
@@ -3647,6 +3656,10 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
         patch(
             "litellm_enterprise.proxy.management_endpoints.key_management_endpoints.apply_enterprise_key_management_params",
             side_effect=lambda data, team_table: data,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+            new=AsyncMock(return_value=None),
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
@@ -7891,7 +7904,11 @@ async def test_default_key_generate_params_object_permission_applied_when_absent
             team_table=None,
         )
 
-        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        created_data = (
+            mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+                "data"
+            ]
+        )
         assert created_data["vector_stores"] == ["default-vs"]
     finally:
         litellm.default_key_generate_params = original_value
@@ -7956,7 +7973,11 @@ async def test_default_key_generate_params_object_permission_merges_partial(
             team_table=None,
         )
 
-        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        created_data = (
+            mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+                "data"
+            ]
+        )
         assert created_data["agents"] == ["agent-1"]
         assert created_data["vector_stores"] == ["default-vs"]
     finally:
@@ -8023,7 +8044,11 @@ async def test_default_key_generate_params_object_permission_does_not_override_e
             team_table=None,
         )
 
-        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        created_data = (
+            mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+                "data"
+            ]
+        )
         assert created_data["vector_stores"] == ["explicit-vs"]
     finally:
         litellm.default_key_generate_params = original_value
@@ -8068,6 +8093,10 @@ async def test_default_key_generate_params_object_permission_not_rejected_for_no
     )
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+        AsyncMock(return_value=None),
+    )
 
     original_value = litellm.default_key_generate_params
     litellm.default_key_generate_params = {
@@ -8088,7 +8117,11 @@ async def test_default_key_generate_params_object_permission_not_rejected_for_no
         )
 
         assert response is not None
-        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        created_data = (
+            mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+                "data"
+            ]
+        )
         assert created_data["vector_stores"] == ["default-vs"]
     finally:
         litellm.default_key_generate_params = original_value
@@ -9520,7 +9553,9 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     mock_updated_key.key_alias = "my-alias"
 
     mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
-    mock_prisma_client.update_data = AsyncMock(return_value=mock_updated_key)
+    mock_prisma_client.update_data = AsyncMock(
+        return_value={"data": {"key_alias": "my-alias"}}
+    )
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=mock_existing_key
     )
@@ -9535,11 +9570,20 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.store_audit_logs", False)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
 
     def mock_hash_token(token):
         return test_hashed_token
 
     monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", mock_hash_token)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_update", None)
 
     async def mock_delete_cache_key_object(**kwargs):
         pass
@@ -9758,7 +9802,9 @@ async def test_update_key_team_member_with_permission_can_update_non_budget(
 
     mock_prisma_client = AsyncMock()
     mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
-    mock_prisma_client.update_data = AsyncMock(return_value=mock_updated_key)
+    mock_prisma_client.update_data = AsyncMock(
+        return_value={"data": {"key_alias": "renamed-by-member"}}
+    )
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=mock_existing_key
     )
@@ -9795,7 +9841,15 @@ async def test_update_key_team_member_with_permission_can_update_non_budget(
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.store_audit_logs", False)
     monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
         "litellm.proxy.proxy_server.hash_token", lambda t: test_hashed_token
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+        AsyncMock(return_value=None),
     )
 
     mock_request = MagicMock()
@@ -11276,7 +11330,9 @@ class TestAllowedRoutesCallerPermission:
         assert "allowed_routes" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
-    async def test_non_admin_regenerate_key_explicit_empty_allowed_routes_rejected(self):
+    async def test_non_admin_regenerate_key_explicit_empty_allowed_routes_rejected(
+        self,
+    ):
         """`regenerate_key_fn` rejects a non-admin when `allowed_routes` is
         present as `[]` in the request body."""
         from litellm.proxy._types import RegenerateKeyRequest
@@ -11303,7 +11359,9 @@ class TestAllowedRoutesCallerPermission:
         assert "allowed_routes" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
-    async def test_non_admin_regenerate_key_allowed_routes_rejected_before_enterprise_gate(self):
+    async def test_non_admin_regenerate_key_allowed_routes_rejected_before_enterprise_gate(
+        self,
+    ):
         """`regenerate_key_fn` runs `_check_allowed_routes_caller_permission`
         before the `premium_user` check, so a non-premium proxy still returns
         the allowed_routes rejection (403) rather than the enterprise-license
@@ -13743,7 +13801,9 @@ async def test_budget_limits_admin_unrestricted(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_non_admin(monkeypatch, non_finite):
+async def test_budget_limits_window_non_finite_rejected_for_non_admin(
+    monkeypatch, non_finite
+):
     """A non-admin caller submitting a non-finite `budget_limits` window
     gets 400. The finite-number invariant applies before role / ceiling
     checks."""
@@ -13773,7 +13833,9 @@ async def test_budget_limits_window_non_finite_rejected_for_non_admin(monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_admin(monkeypatch, non_finite):
+async def test_budget_limits_window_non_finite_rejected_for_admin(
+    monkeypatch, non_finite
+):
     """The finite-number invariant applies to every caller including
     proxy admin."""
     monkeypatch.setattr(
@@ -13862,7 +13924,9 @@ async def test_budget_limits_session_token_team_key_uses_team_ceiling(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_budget_limits_session_token_team_key_over_team_budget_rejected(monkeypatch):
+async def test_budget_limits_session_token_team_key_over_team_budget_rejected(
+    monkeypatch,
+):
     """Same shape, but window exceeds the team's `max_budget`."""
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
@@ -14006,7 +14070,9 @@ async def test_permissions_admin_can_set_any(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_permissions_explicit_empty_rejected_for_non_admin_on_generate(monkeypatch):
+async def test_permissions_explicit_empty_rejected_for_non_admin_on_generate(
+    monkeypatch,
+):
     """`_common_key_generation_helper` rejects a non-admin when
     `permissions` is present in the request body, even as `{}`. Omit-default
     stays allowed; that carve-out lives in
@@ -14218,7 +14284,9 @@ async def test_regenerate_key_non_admin_permissions_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_regenerate_key_non_admin_permissions_explicit_empty_rejected(monkeypatch):
+async def test_regenerate_key_non_admin_permissions_explicit_empty_rejected(
+    monkeypatch,
+):
     """`regenerate_key_fn` rejects a non-admin when `permissions` is
     present as `{}` in the request body."""
     from litellm.proxy._types import RegenerateKeyRequest
@@ -14243,7 +14311,9 @@ async def test_regenerate_key_non_admin_permissions_explicit_empty_rejected(monk
 
 
 @pytest.mark.asyncio
-async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_gate(monkeypatch):
+async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_gate(
+    monkeypatch,
+):
     """`regenerate_key_fn` runs `_check_permissions_caller_permission`
     before the `premium_user` check, so a non-premium proxy still returns
     the permissions rejection (403) rather than the enterprise-license
@@ -14270,3 +14340,446 @@ async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_g
     assert int(exc.value.code) == 403
     assert "permissions" in str(exc.value.message)
     assert "Enterprise" not in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_enforce_email_prefix_on_key_alias_prefers_owner_email(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await _enforce_email_prefix_on_key_alias(
+        prisma_client=None,
+        key_alias="TestKey Name",
+        owner_email="owner.user@example.com",
+        fallback_email="caller@example.com",
+    )
+
+    assert result == "owner.user-test-key-name"
+
+
+@pytest.mark.asyncio
+async def test_enforce_email_prefix_on_key_alias_leaves_alias_unchanged_when_flag_off(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    result = await _enforce_email_prefix_on_key_alias(
+        prisma_client=None,
+        key_alias="TestKey Name",
+        owner_email="owner.user@example.com",
+        fallback_email="caller@example.com",
+    )
+
+    assert result == "TestKey Name"
+
+
+@pytest.mark.asyncio
+async def test_enforce_email_prefix_on_key_alias_uses_caller_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await _enforce_email_prefix_on_key_alias(
+        prisma_client=None,
+        key_alias="testKey Name",
+        owner_email=None,
+        fallback_email="caller.user@example.com",
+    )
+
+    assert result == "caller.user-test-key-name"
+
+
+@pytest.mark.asyncio
+async def test_enforce_email_prefix_on_key_alias_avoids_double_prefix(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await _enforce_email_prefix_on_key_alias(
+        prisma_client=None,
+        key_alias="owner.user-TestKey Name",
+        owner_email="owner.user@example.com",
+        fallback_email="caller@example.com",
+    )
+
+    assert result == "owner.user-test-key-name"
+
+
+@pytest.mark.asyncio
+async def test_enforce_email_prefix_on_key_alias_rejects_without_email(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _enforce_email_prefix_on_key_alias(
+            prisma_client=None,
+            key_alias="test-key",
+            owner_email=None,
+            fallback_email=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "resolvable owner or caller email" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_common_key_generation_helper_applies_owner_email_prefix(monkeypatch):
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-1",
+        user_email="caller@example.com",
+    )
+    captured_kwargs = {}
+
+    async def mock_generate_key_helper_fn(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"key": "sk-test", "expires": None, "user_id": kwargs.get("user_id")}
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+        AsyncMock(return_value="owner.user@example.com"),
+    )
+
+    result = await _common_key_generation_helper(
+        data=GenerateKeyRequest(
+            key_alias="TestKey Name",
+            user_id="user-1",
+        ),
+        user_api_key_dict=caller,
+        litellm_changed_by=None,
+        team_table=None,
+    )
+
+    assert result is not None
+    assert captured_kwargs["key_alias"] == "owner.user-test-key-name"
+
+
+@pytest.mark.asyncio
+async def test_common_key_generation_helper_uses_caller_email_for_service_account_alias(
+    monkeypatch,
+):
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-1",
+        user_email="caller.user@example.com",
+    )
+    captured_kwargs = {}
+
+    async def mock_generate_key_helper_fn(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"key": "sk-test", "expires": None, "user_id": kwargs.get("user_id")}
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await _common_key_generation_helper(
+        data=GenerateKeyRequest(key_alias="Service Account Key"),
+        user_api_key_dict=caller,
+        litellm_changed_by=None,
+        team_table=None,
+    )
+
+    assert result is not None
+    assert captured_kwargs["key_alias"] == "caller.user-service-account-key"
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_applies_email_prefix_on_changed_user_id(
+    monkeypatch,
+):
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed-token",
+        key_alias="old-alias",
+        user_id="old-user",
+        user_email="old.user@example.com",
+        metadata={},
+        aliases={},
+        config={},
+        permissions={},
+        model_max_budget={},
+        budget_duration=None,
+        models=[],
+        spend=0.0,
+        max_budget=None,
+        team_id=None,
+    )
+    prisma_client = MagicMock()
+    mock_user_repository = MagicMock()
+    mock_user_repository.find_by_id = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="new-user", user_email="new.owner@example.com"
+        )
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.UserRepository",
+        lambda _: mock_user_repository,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await prepare_key_update_data(
+        data=UpdateKeyRequest(
+            key="hashed-token", user_id="new-user", key_alias="TestKey Name"
+        ),
+        existing_key_row=existing_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="caller", user_email="caller@example.com"
+        ),
+        prisma_client=prisma_client,
+    )
+
+    assert result["key_alias"] == "new.owner-test-key-name"
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_falls_back_to_caller_email(monkeypatch):
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed-token",
+        key_alias="old-alias",
+        user_id=None,
+        user_email=None,
+        metadata={},
+        aliases={},
+        config={},
+        permissions={},
+        model_max_budget={},
+        budget_duration=None,
+        models=[],
+        spend=0.0,
+        max_budget=None,
+        team_id=None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="hashed-token", key_alias="Renamed Alias"),
+        existing_key_row=existing_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="caller", user_email="caller.user@example.com"
+        ),
+        prisma_client=None,
+    )
+
+    assert result["key_alias"] == "caller.user-renamed-alias"
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_without_alias_leaves_key_alias_unchanged(
+    monkeypatch,
+):
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed-token",
+        key_alias="old-alias",
+        user_id="old-user",
+        user_email="old.user@example.com",
+        metadata={},
+        aliases={},
+        config={},
+        permissions={},
+        model_max_budget={},
+        budget_duration=None,
+        models=[],
+        spend=0.0,
+        max_budget=None,
+        team_id=None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    result = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="hashed-token", models=["gpt-4"]),
+        existing_key_row=existing_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="caller", user_email="caller.user@example.com"
+        ),
+        prisma_client=None,
+    )
+
+    assert "key_alias" not in result
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_budget_fields_apply_email_prefix(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = (
+        "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    )
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.user_email = "owner.user@example.com"
+    mock_existing_key.created_by = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = None
+    mock_existing_key.models = []
+    mock_existing_key.metadata = {}
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    captured_update = {}
+
+    async def mock_update_data(*args, **kwargs):
+        captured_update.update(kwargs["data"])
+        return {"data": kwargs["data"]}
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.update_data = AsyncMock(side_effect=mock_update_data)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._enforce_unique_key_alias",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._get_user_email_by_id",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_update", None)
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+        user_email="caller@example.com",
+    )
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=test_hashed_token, key_alias="My TestKey"),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+    assert captured_update["key_alias"] == "owner.user-my-test-key"
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_budget_fields_reject_empty_normalized_alias(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    test_hashed_token = (
+        "c1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    )
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.user_email = "owner.user@example.com"
+    mock_existing_key.created_by = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = None
+    mock_existing_key.models = []
+    mock_existing_key.metadata = {}
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"enforce_email_prefix_on_key_alias": True}),
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+        user_email="caller@example.com",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=test_hashed_token, key_alias="---"),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert str(exc_info.value.code) == "400"
