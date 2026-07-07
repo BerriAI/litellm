@@ -90,7 +90,17 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
 }
 
 
-def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> None:
+def _apply_client_disconnect_metadata(
+    target_metadata: Optional[dict[str, object]],
+) -> None:
+    # `litellm_params.setdefault("metadata", {})` returns None when the
+    # "metadata" key exists with value None (dict.setdefault does not
+    # overwrite an existing key), which previously raised
+    # `TypeError: 'NoneType' object does not support item assignment`
+    # during streaming disconnect cleanup. Guard instead of assigning into
+    # None. See #20428 for the same None-metadata pattern fixed in utils.py.
+    if target_metadata is None:
+        return
     target_metadata["client_disconnected"] = True
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 

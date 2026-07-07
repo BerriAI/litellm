@@ -3288,6 +3288,41 @@ class TestStreamingClientDisconnectLogging:
         )
 
     @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_metadata_none_no_raise(self):
+        """Regression: `litellm_params["metadata"] = None` must not crash cleanup.
+
+        `dict.setdefault("metadata", {})` returns the existing None (setdefault
+        does not overwrite an existing key), so `_apply_client_disconnect_metadata`
+        received None and raised
+        `TypeError: 'NoneType' object does not support item assignment` during
+        streaming disconnect cleanup. See #20428 for the same None-metadata
+        pattern fixed in utils.py.
+        """
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "litellm_params": {"metadata": None},
+            "metadata": None,
+        }
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "litellm_logging_obj": mock_logging_obj,
+            "metadata": None,
+            "litellm_params": {"metadata": None},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+
+    @pytest.mark.asyncio
     async def test_record_streaming_client_disconnect_no_op_when_connected(self):
         from litellm.proxy.common_request_processing import (
             _record_streaming_client_disconnect_if_needed,
