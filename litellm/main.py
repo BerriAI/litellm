@@ -582,6 +582,7 @@ async def acompletion(
         "api_key": api_key,
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
+        "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
         "extra_headers": extra_headers,
@@ -5193,6 +5194,7 @@ def completion(  # type: ignore
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
             "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
@@ -8304,26 +8306,6 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]
     logprobs = chunks[-1]["choices"][0]["logprobs"]
 
-    response = {
-        "id": id,
-        "object": object,
-        "created": created,
-        "model": model,
-        "system_fingerprint": system_fingerprint,
-        "choices": [
-            {
-                "text": None,
-                "index": 0,
-                "logprobs": logprobs,
-                "finish_reason": finish_reason,
-            }
-        ],
-        "usage": {
-            "prompt_tokens": None,
-            "completion_tokens": None,
-            "total_tokens": None,
-        },
-    }
     content_list = []
     for chunk in chunks:
         choices = chunk["choices"]
@@ -8335,25 +8317,37 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     # Combine the "content" strings into a single string || combine the 'function' strings into a single string
     combined_content = "".join(content_list)
 
-    # Update the "content" field within the response dictionary
-    response["choices"][0]["text"] = combined_content
-
-    if len(combined_content) > 0:
-        pass
-    else:
-        pass
-    # # Update usage information if needed
     try:
-        response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
+        prompt_tokens = token_counter(model=model, messages=messages)
     except Exception:  # don't allow this failing to block a complete streaming response from being returned
         print_verbose("token_counter failed, assuming prompt tokens is 0")
-        response["usage"]["prompt_tokens"] = 0
-    response["usage"]["completion_tokens"] = token_counter(
+        prompt_tokens = 0
+    completion_tokens = token_counter(
         model=model,
         text=combined_content,
         count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
     )
-    response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
+
+    response = {
+        "id": id,
+        "object": object,
+        "created": created,
+        "model": model,
+        "system_fingerprint": system_fingerprint,
+        "choices": [
+            {
+                "text": combined_content,
+                "index": 0,
+                "logprobs": logprobs,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
     return TextCompletionResponse(**response)
 
 

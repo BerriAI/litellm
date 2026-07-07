@@ -54,7 +54,6 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for fallbacks:", uniqueModels);
         setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info for fallbacks:", error);

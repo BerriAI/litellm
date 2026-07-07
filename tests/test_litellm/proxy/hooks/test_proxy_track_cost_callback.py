@@ -1104,3 +1104,76 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
         mock_update_database.assert_called_once()
         assert mock_update_database.call_args[1]["response_cost"] == 3.5e-05
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
+    """MCP tool calls may only carry user_api_key; user/team rollups still need user_id."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger = _ProxyDBLogger()
+    key_obj = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="mcp-user@example.com",
+        team_id="team-123",
+        org_id="org-456",
+        key_alias="mcp-key",
+    )
+
+    kwargs = {
+        "call_type": "call_mcp_tool",
+        "model": "MCP: echo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 10.0,
+            "request_tags": [],
+            "metadata": {},
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=key_obj,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ) as mock_increment,
+        patch(
+            "litellm.proxy.proxy_server.update_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "mcp-call-1"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_increment.assert_awaited_once()
+        assert mock_increment.call_args.kwargs["user_id"] == "mcp-user@example.com"
+        assert mock_increment.call_args.kwargs["team_id"] == "team-123"
+        assert mock_increment.call_args.kwargs["org_id"] == "org-456"
+
+        update_kwargs = (
+            mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
+        )
+        assert update_kwargs["user_id"] == "mcp-user@example.com"
+        assert update_kwargs["team_id"] == "team-123"
+        assert (
+            kwargs["litellm_params"]["metadata"]["user_api_key_user_id"]
+            == "mcp-user@example.com"
+        )

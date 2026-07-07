@@ -212,7 +212,7 @@ export function UserDataTable({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow">
+    <div className="bg-white rounded-lg shadow-sm">
       {/* Filter Section */}
       <div className="border-b px-6 py-4">
         <div className="flex flex-col space-y-4">

@@ -1165,12 +1165,18 @@ class ModifyResponseException(Exception):
         request_data: Dict[str, Any],
         guardrail_name: Optional[str] = None,
         detection_info: Optional[Dict[str, Any]] = None,
+        original_response: Optional[Any] = None,
     ):
         self.message = message
         self.model = model
         self.request_data = request_data
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        # The LLM response that was blocked (post-call). Carries the real token
+        # usage the upstream call consumed, so the synthetic block response can
+        # report it instead of discarding it. None for pre-call blocks (the LLM
+        # was never invoked).
+        self.original_response = original_response
         super().__init__(message)
 
 
