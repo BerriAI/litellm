@@ -15,6 +15,7 @@ sys.path.insert(
 import litellm
 from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
 def run_sync(coro):
@@ -1024,6 +1025,78 @@ class TestVertexBase:
         )
 
         assert result_url == "https://10.96.32.8/v1/projects/test-project/locations/us-central1/endpoints/1234567890:predict"
+
+    @pytest.mark.parametrize(
+        "custom_api_base, stream, expected_url",
+        [
+            (
+                "https://aiplatform-myendpoint.p.googleapis.com",
+                False,
+                "https://aiplatform-myendpoint.p.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+            (
+                "https://aiplatform-myendpoint.p.googleapis.com",
+                True,
+                "https://aiplatform-myendpoint.p.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+            (
+                "https://gateway.example.com/vertex-proxy",
+                False,
+                "https://gateway.example.com/vertex-proxy/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+        ],
+        ids=["psc-host", "psc-host-streaming", "api-base-with-path"],
+    )
+    def test_get_complete_vertex_url_openai_path_partner_custom_api_base(
+        self, custom_api_base, stream, expected_url
+    ):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base=custom_api_base,
+            vertex_location="global",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.llama,
+            stream=stream,
+            model="minimaxai/minimax-m2-maas",
+        )
+
+        assert result == expected_url
+        assert result.count("://") == 1
+
+    def test_get_complete_vertex_url_openai_path_partner_default_api_base(self):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base=None,
+            vertex_location="us-central1",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.llama,
+            stream=True,
+            model="meta/llama-3.1-405b-instruct-maas",
+        )
+
+        assert (
+            result
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/endpoints/openapi/chat/completions"
+        )
+
+    def test_get_complete_vertex_url_rawpredict_partner_custom_api_base_keeps_endpoint_format(self):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base="https://gateway.example.com/vertex-proxy",
+            vertex_location="us-central1",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.mistralai,
+            stream=False,
+            model="mistral-large-2411",
+        )
+
+        assert result == "https://gateway.example.com/vertex-proxy:rawPredict"
 
     @pytest.mark.parametrize(
         "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
