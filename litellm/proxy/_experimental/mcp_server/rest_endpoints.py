@@ -624,10 +624,15 @@ if MCP_AVAILABLE:
             if server_id is None:
                 server_id = mcp_server_name
 
-            if apply_tool_filters and getattr(
-                getattr(user_api_key_dict, "object_permission", None),
-                "mcp_tool_search_enabled",
-                False,
+            if (
+                apply_tool_filters
+                and server_id is None
+                and toolset_name is None
+                and getattr(
+                    getattr(user_api_key_dict, "object_permission", None),
+                    "mcp_tool_search_enabled",
+                    False,
+                )
             ):
                 from litellm.proxy._experimental.mcp_server.tool_search import (
                     get_virtual_tool_definitions,
@@ -755,6 +760,8 @@ if MCP_AVAILABLE:
                 request_path=request.scope.get("_original_path") or request.url.path,
             )
         except HTTPException as http_exc:
+            if http_exc.status_code == status.HTTP_404_NOT_FOUND:
+                raise
             # Internal access/IP 403s keep the legacy error-dict response shape
             # so the existing contract stays intact.
             verbose_logger.exception("HTTPException in list_tool_rest_api: %s", str(http_exc))

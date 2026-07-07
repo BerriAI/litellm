@@ -321,6 +321,14 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
 @pytest.mark.asyncio
 async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    colliding_server = types.SimpleNamespace(
+        alias=None,
+        server_name="other_mcp",
+        server_id="other-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name={"search": "search_docs"},
+    )
     fake_server = types.SimpleNamespace(
         alias=None,
         server_name="deepwiki_mcp",
@@ -331,7 +339,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
     )
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
 
-    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(return_value=None)
+    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(return_value=colliding_server)
     _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=fake_server)
 
     tool_name = "browse_repo_docs"
