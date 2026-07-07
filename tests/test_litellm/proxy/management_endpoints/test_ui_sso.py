@@ -7131,3 +7131,116 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
     assert response.status_code == 200
     assert "Default Credentials" not in body
     assert "MASTER_KEY" not in body
+
+
+# ── #32249 regression: SSO auth cookie scoped to SERVER_ROOT_PATH ────────────
+
+
+class TestSSOTokenCookiePathScopedToRootPath:
+    """Issue #32249: under ``SERVER_ROOT_PATH`` the SSO ``token`` cookie set on
+    the post-login redirect must be scoped to the path prefix.  Otherwise a
+    browser logged into both a root deployment (``a.com``) and a prefixed one
+    (``a.com/<prefix>``) collides on a single ``"/"``-scoped ``token`` cookie
+    and one session silently clobbers the other.  The fix sets
+    ``path=get_server_root_path() or "/"`` on ``set_cookie`` in
+    ``SSOAuthenticationHandler.get_redirect_response_from_openid``."""
+
+    @staticmethod
+    async def _run_redirect_flow():
+        """Drive the real ``get_redirect_response_from_openid`` all the way to
+        its final ``set_cookie`` line, stubbing only the DB / key-generation
+        side effects (prisma, ``generate_key_helper_fn``,
+        ``get_user_info_from_db``) so no live database or LLM is touched.
+        Everything on the cookie code path — the ``RedirectResponse``
+        construction and ``path=get_server_root_path() or "/"`` — runs for
+        real, so the returned response carries the actual ``Set-Cookie``
+        header the fix produces."""
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://testserver/"
+
+        sso_result = CustomOpenID(
+            id="sso-user-123",
+            email="sso-user@example.com",
+            display_name="sso-user",
+            provider="generic",
+            team_ids=[],
+        )
+        mock_user_info = LiteLLM_UserTable(
+            user_id="sso-user-123",
+            user_role="internal_user",
+            teams=[],
+            models=[],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                new=AsyncMock(return_value=mock_user_info),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.proxy_server.generate_key_helper_fn",
+                new=AsyncMock(
+                    return_value={
+                        "token": "sk-ui-session-token",
+                        "user_id": "sso-user-123",
+                    }
+                ),
+            ),
+        ):
+            return await SSOAuthenticationHandler.get_redirect_response_from_openid(
+                result=sso_result,
+                request=mock_request,
+            )
+
+    @staticmethod
+    def _token_cookie(response):
+        """Return ``(parsed_path, raw_set_cookie_header)`` for the ``token``
+        cookie on the redirect response, failing loudly if it is absent."""
+        from http.cookies import SimpleCookie
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        token_header = next((c for c in cookie_headers if c.startswith("token=")), None)
+        assert (
+            token_header is not None
+        ), f"`token` cookie not set on redirect; got: {cookie_headers}"
+        jar = SimpleCookie()
+        jar.load(token_header)
+        return jar["token"]["path"], token_header
+
+    @pytest.mark.asyncio
+    async def test_token_cookie_scoped_to_server_root_path(self, monkeypatch):
+        """With ``SERVER_ROOT_PATH=/litellm`` the ``token`` cookie must carry
+        ``Path=/litellm`` so it is namespaced to the prefixed deployment and
+        cannot collide with a root-scoped session in the same browser."""
+        monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
+
+        response = await self._run_redirect_flow()
+
+        cookie_path, raw_header = self._token_cookie(response)
+        assert cookie_path == "/litellm", raw_header
+        assert "Path=/litellm" in raw_header, raw_header
+
+    @pytest.mark.asyncio
+    async def test_token_cookie_defaults_to_root_path_when_unset(self, monkeypatch):
+        """Regression guard (the important one): with ``SERVER_ROOT_PATH``
+        unset the cookie falls back to ``Path=/`` — ``get_server_root_path()``
+        returns ``""`` which ``or "/"`` coerces to ``"/"`` — so a plain root
+        deployment behaves exactly as before the fix."""
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
+        response = await self._run_redirect_flow()
+
+        cookie_path, raw_header = self._token_cookie(response)
+        assert cookie_path == "/", raw_header
+        assert "Path=/" in raw_header, raw_header

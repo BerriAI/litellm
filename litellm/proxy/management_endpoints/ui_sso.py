@@ -3208,7 +3208,15 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        # Scope the auth cookie to SERVER_ROOT_PATH so a browser logged into both
+        # a root deployment (a.com) and a prefixed one (a.com/<root_path>) does not
+        # collide on a single "/"-scoped `token` cookie. Falls back to "/" when
+        # SERVER_ROOT_PATH is unset (get_server_root_path() returns "").
+        redirect_response.set_cookie(
+            key="token",
+            value=jwt_token,
+            path=get_server_root_path() or "/",
+        )
         return redirect_response
 
     @staticmethod
