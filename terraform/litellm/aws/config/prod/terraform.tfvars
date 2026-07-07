@@ -71,7 +71,6 @@ proxy_config = {
   litellm_settings = {
     callbacks = ["smtp_email"]
     mcp_semantic_tool_filter = {
-
       enabled              = true
       embedding_model      = "text-embedding-3-small"
       top_k                = 5

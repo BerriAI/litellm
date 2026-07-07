@@ -145,6 +145,74 @@ def _is_team_key(data: Union[GenerateKeyRequest, LiteLLM_VerificationToken]):
     return data.team_id is not None
 
 
+def _get_email_local_part(email: str) -> str:
+    return email.split("@", maxsplit=1)[0].strip().lower()
+
+
+def _normalize_key_alias_segment(value: str) -> str:
+    camel_spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value)
+    normalized = re.sub(r"[^a-z0-9]+", "-", camel_spaced.lower())
+    return normalized.strip("-")
+
+
+async def _get_user_email_by_id(prisma_client: Optional[PrismaClient], user_id: Optional[str]) -> Optional[str]:
+    if prisma_client is None or user_id is None:
+        return None
+    user = await UserRepository(prisma_client).find_by_id(user_id)
+    if user is None:
+        return None
+    user_email = user.user_email
+    if user_email is None:
+        return None
+    stripped_email = user_email.strip()
+    return stripped_email or None
+
+
+async def _enforce_email_prefix_on_key_alias(
+    *,
+    prisma_client: Optional[PrismaClient],
+    key_alias: Optional[str],
+    owner_email: Optional[str],
+    fallback_email: Optional[str],
+) -> Optional[str]:
+    if key_alias is None:
+        return None
+    ui_settings = await get_ui_settings_cached()
+    if ui_settings.get("enforce_email_prefix_on_key_alias") is not True:
+        return key_alias
+    resolved_email = next(
+        (email.strip() for email in (owner_email, fallback_email) if email is not None and email.strip()),
+        None,
+    )
+    if resolved_email is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "key_alias requires a resolvable owner or caller email when enforce_email_prefix_on_key_alias is enabled."
+            },
+        )
+    prefix = _get_email_local_part(resolved_email)
+    if not prefix:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "key_alias requires a resolvable owner or caller email when enforce_email_prefix_on_key_alias is enabled."
+            },
+        )
+    normalized_alias = key_alias.strip()
+    prefix_with_dash = f"{prefix}-"
+    alias_suffix = (
+        normalized_alias[len(prefix_with_dash) :] if normalized_alias.startswith(prefix_with_dash) else normalized_alias
+    )
+    normalized_suffix = _normalize_key_alias_segment(alias_suffix)
+    if not normalized_suffix:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "key_alias must contain at least one alphanumeric character after normalization."},
+        )
+    return f"{prefix}-{normalized_suffix}"
+
+
 def _get_user_in_team(team_table: LiteLLM_TeamTableCachedObj, user_id: Optional[str]) -> Optional[Member]:
     if user_id is None:
         return None
@@ -992,6 +1060,17 @@ async def _common_key_generation_helper(
     data_json = await _set_object_permission(
         data_json=data_json,
         prisma_client=prisma_client,
+    )
+
+    owner_email = await _get_user_email_by_id(
+        prisma_client=prisma_client,
+        user_id=data_json.get("user_id"),
+    )
+    data_json["key_alias"] = await _enforce_email_prefix_on_key_alias(
+        prisma_client=prisma_client,
+        key_alias=data_json.get("key_alias", None),
+        owner_email=data_json.get("user_email") or owner_email,
+        fallback_email=user_api_key_dict.user_email,
     )
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
@@ -1859,6 +1938,8 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    prisma_client: Optional[PrismaClient] = None,
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -1945,6 +2026,20 @@ async def prepare_key_update_data(
     non_default_values = prepare_metadata_fields(
         data=data, non_default_values=non_default_values, existing_metadata=_metadata
     )
+
+    if "key_alias" in non_default_values:
+        non_default_values["key_alias"] = await _enforce_email_prefix_on_key_alias(
+            prisma_client=prisma_client,
+            key_alias=cast(Optional[str], non_default_values.get("key_alias")),
+            owner_email=(
+                await _get_user_email_by_id(
+                    prisma_client=prisma_client,
+                    user_id=cast(Optional[str], non_default_values.get("user_id", existing_key_row.user_id)),
+                )
+            )
+            or getattr(existing_key_row, "user_email", None),
+            fallback_email=user_api_key_dict.user_email if user_api_key_dict is not None else None,
+        )
 
     return non_default_values
 
@@ -2146,7 +2241,12 @@ async def _process_single_key_update(
         )
 
     # Prepare update data
-    non_default_values = await prepare_key_update_data(data=update_key_request, existing_key_row=existing_key_row)
+    non_default_values = await prepare_key_update_data(
+        data=update_key_request,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
     # Update key in database
     if prisma_client is None:
@@ -2588,7 +2688,12 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        non_default_values = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
+        non_default_values = await prepare_key_update_data(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         # Only validate key_alias format if it's actually being changed
         new_key_alias = non_default_values.get("key_alias", None)
@@ -4444,7 +4549,12 @@ async def _execute_virtual_key_regeneration(
     if data is not None:
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        non_default_values = await prepare_key_update_data(data=data, existing_key_row=key_in_db)
+        non_default_values = await prepare_key_update_data(
+            data=data,
+            existing_key_row=key_in_db,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
         # Only validate key_alias format if it's actually being changed
         new_key_alias = non_default_values.get("key_alias")
         if new_key_alias != key_in_db.key_alias:
