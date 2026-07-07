@@ -1089,11 +1089,7 @@ if MCP_AVAILABLE:
                         )
                     )
                 )
-                if (
-                    server_model.auth_type == MCPAuth.oauth2
-                    and forwarded_authorization is not None
-                    and to_server_spec(server_model) is not None
-                )
+                if is_interactive_authz_code
                 else None
             )
 

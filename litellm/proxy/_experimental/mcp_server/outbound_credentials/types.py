@@ -110,14 +110,7 @@ class CredError:
         body: Mapping[str, str] | None = None,
         claims: str | None = None,
     ) -> CredError:
-        return CredError(
-            unauthorized=Unauthorized(
-                detail=detail,
-                www_authenticate=www_authenticate,
-                body=body,
-                claims=claims,
-            )
-        )
+        return CredError(unauthorized=Unauthorized(detail=detail, www_authenticate=www_authenticate, body=body))
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:

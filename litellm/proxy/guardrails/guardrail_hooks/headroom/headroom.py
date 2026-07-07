@@ -282,7 +282,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
-    ) -> tuple[list[dict[str, object]], bool, dict[str, object]]:
+    ) -> tuple[list[dict[str, object]], bool]:
         payload: dict[str, object] = {"messages": messages}
         if model:
             payload["model"] = model
@@ -373,15 +373,11 @@ class HeadroomGuardrail(CustomGuardrail):
 
         filtered = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            return (
-                self._handle_compress_failure(
-                    messages,
-                    "Headroom compression service returned empty message list",
-                    {"body": response.text},
-                ),
-                False,
-                {},
-            )
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned empty message list",
+                {"body": response.text},
+            ), False
 
         verbose_proxy_logger.debug(
             "Headroom: compressed %s tokens -> %s tokens (ratio %.2f)",
@@ -389,19 +385,7 @@ class HeadroomGuardrail(CustomGuardrail):
             body.get("tokens_after", "?"),
             body.get("compression_ratio", 0),
         )
-
-        stats = {
-            key: body[key]
-            for key in (
-                "tokens_before",
-                "tokens_after",
-                "tokens_saved",
-                "compression_ratio",
-                "transforms_applied",
-            )
-            if key in body
-        }
-        return filtered, True, stats
+        return filtered, True
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
         params: dict[str, str] = {}
@@ -465,8 +449,7 @@ class HeadroomGuardrail(CustomGuardrail):
             return inputs
 
         model = self.headroom_model or request_data.get("model")
-        start_time = time.time()
-        compressed, compression_succeeded, stats = await self._call_compress(
+        compressed, compression_succeeded = await self._call_compress(
             messages=messages,
             model=model if isinstance(model, str) else None,
         )
