@@ -14,6 +14,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
@@ -22,13 +23,13 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
-_UrlEncodableParams = TypeAdapter(dict[str, str | int | bool])
+_UrlEncodableParams = TypeAdapter(dict[str, str | int | float | bool])
 _StrList = TypeAdapter(list[str])
 _StrFrozenSet = TypeAdapter(frozenset[str])
 
 _TINYFISH_PARAMS_KEY = "_tinyfish_params"
 _TINYFISH_DOCS_URL = "https://docs.tinyfish.ai/search-api"
-_TINYFISH_RESULT_CAP = 10  # TinyFish's natural per-page SERP ceiling
+_TINYFISH_RESULT_CAP = 10  # Client-side truncation cap for max_results
 
 
 class TinyfishSearchConfig(BaseSearchConfig):
@@ -94,16 +95,16 @@ class TinyfishSearchConfig(BaseSearchConfig):
         TinyFish equivalents:
         - ``query`` (str or list[str]) → ``query`` (list joined by spaces)
         - ``country`` → ``location``
-        - ``search_domain_filter`` (list[str]) → folded into the query as
-          ``(<query>) (site:a OR site:b ...)`` (TinyFish has no first-class
-          field today; see ML-2084 for the planned ``include_domains``)
+        - ``search_domain_filter`` (list[str]) → folded into the query using
+          search operators
         - ``max_results`` → not sent on the wire; stashed on
           ``self._caller_max_results`` for client-side response truncation
           (TinyFish doesn't honor it server-side)
         - ``max_tokens_per_page`` → silently dropped (no TinyFish equivalent)
 
         Any other ``optional_params`` keys are forwarded to TinyFish as-is.
-        dict/list values are JSON-encoded so they survive ``urlencode``.
+        dict and list values are JSON-encoded so structured payloads survive
+        ``urlencode``.
 
         Returns:
             ``{_TINYFISH_PARAMS_KEY: <dict of querystring entries>}``.
@@ -144,14 +145,12 @@ class TinyfishSearchConfig(BaseSearchConfig):
         supported_perplexity = _StrFrozenSet.validate_python(raw_supported)
         for param, value in optional_params.items():
             if param not in supported_perplexity and param not in request_data:
-                # `fetch` expects a JSON-encoded object on the wire; accept the
-                # natural Python dict form and serialize here so callers don't
-                # have to pre-stringify.
-                if isinstance(value, dict):
+                # Serialize dicts/lists as JSON so structured params survive urlencode.
+                if isinstance(value, (dict, list)):
                     value = json.dumps(value, separators=(",", ":"))
                 # `urlencode` would render Python bool as "True"/"False"
-                # (capitalized). ux-labs validators require lowercase
-                # "true"/"false" (e.g. `include_thumbnail`); normalize here.
+                # (capitalized). TinyFish Search's bool params require lowercase
+                # "true"/"false" strings on the wire; normalize here.
                 elif isinstance(value, bool):
                     value = "true" if value else "false"
                 request_data[param] = value
@@ -167,17 +166,35 @@ class TinyfishSearchConfig(BaseSearchConfig):
         """
         Transform a TinyFish response to LiteLLM's unified ``SearchResponse``.
 
-        Mappings (per-result):
-        - ``title`` → ``SearchResult.title`` (defaults to ``""`` if missing/null)
-        - ``url`` → ``SearchResult.url`` (defaults to ``""``)
-        - ``snippet`` → ``SearchResult.snippet`` (defaults to ``""``)
-        - all other per-result fields (``position``, ``site_name``,
-          ``thumbnail_url``, ``fetch``, ``fetch_error``, ...) ride through as
-          extras on ``SearchResult`` via its ``extra="allow"`` config.
+        Per-result field handling:
+        - ``title``, ``url``, ``snippet`` are declared on ``SearchResult`` and
+          populated by ``SearchResponse.model_validate`` when present. Missing
+          or ``None`` values are defaulted to ``""`` beforehand by
+          ``_default_missing_result_fields`` so a degraded result flows through
+          instead of failing the whole call.
+        - All undeclared per-result fields (``position``, ``site_name``, and
+          any others TinyFish returns) ride through as extras via
+          ``SearchResult``'s ``extra="allow"`` config — accessible as
+          attributes on the result object or enumerable via
+          ``result.model_extra``.
 
-        Top-level ``parameter_warnings`` (see ML-2085) is read when present and
-        each entry is re-fired via ``verbose_logger.warning``. Absent or
-        malformed entries are silently skipped — never throws.
+        Top-level ``parameter_warnings`` is read when present and each entry
+        is re-fired via ``verbose_logger.warning``. Absent or malformed
+        entries are silently skipped — never throws.
+
+        Top-level extras (``query``, ``total_results``, ``page``, and any
+        future TinyFish additions) ride through via
+        ``SearchResponse.extra="allow"``. The validated response is returned
+        in place after truncating ``results`` to the caller's ``max_results``,
+        so every field pydantic populated survives regardless of which
+        storage bucket (declared attribute or ``__pydantic_extra__``) holds it.
+
+        TinyFish response headers (e.g. ``x-request-id``, ``retry-after``,
+        ``x-ratelimit-limit`` — httpx normalizes header names to lowercase)
+        are stashed on ``response._hidden_params["headers"]`` (raw) and
+        ``response._hidden_params["additional_headers"]`` (sanitized via
+        ``process_response_headers``) so callers can correlate a search with
+        server-side logs.
 
         Error paths routed through ``self._wrap_error`` for uniform
         ``"TinyFish Search: <msg>. See <docs> for details."`` wrapping:
@@ -223,7 +240,12 @@ class TinyfishSearchConfig(BaseSearchConfig):
         _emit_parameter_warnings(parsed)
 
         max_results = self._caller_max_results or _TINYFISH_RESULT_CAP
-        return SearchResponse(results=list(parsed.results[:max_results]))
+        # Truncate in place so all pydantic-populated fields survive — declared and extras.
+        parsed.results = list(parsed.results[:max_results])
+        raw_headers = dict(raw_response.headers)
+        parsed._hidden_params["headers"] = raw_headers
+        parsed._hidden_params["additional_headers"] = process_response_headers(raw_headers)
+        return parsed
 
     def _wrap_error(
         self,
@@ -243,9 +265,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         carry the ``TinyFish Search:`` prefix — the bare error already names
         the host in the URL, so attribution is implicit there.
         """
-        # ux-labs frontend wraps every error body as {"error": {"code", "message", "details"?}}.
+        # TinyFish Search wraps every error body as {"error": {"code", "message", "details"?}}.
         # Best-effort unwrap to surface the inner message; fall back to the raw body
-        # for non-ux-labs responses (CDN HTML pages, other JSON envelopes, plain text).
+        # for other envelope shapes (CDN HTML pages, other JSON envelopes, plain text).
         inner_message = error_message
         try:
             body: object = json.loads(error_message)  # any-ok: json.loads -> Any
@@ -290,7 +312,7 @@ def _default_missing_result_fields(raw_json: object) -> None:
 
 
 def _emit_parameter_warnings(parsed: SearchResponse) -> None:
-    """Re-fire TinyFish-side ``parameter_warnings`` (see ML-2085) as warnings.
+    """Re-fire TinyFish-side ``parameter_warnings`` as warnings.
 
     Defensive: skip silently on any shape we don't recognize so a malformed
     entry (or an early/partial rollout of the field) never throws.
