@@ -1496,6 +1496,57 @@ async def test_generate_service_account_works_with_team_id():
 
 
 @pytest.mark.asyncio
+async def test_generate_key_throttle_rejected_for_non_admin():
+    """Security regression: a non-admin creating a key must not be able to set
+    throttle_on_budget_exceeded=true, which would let the new key keep spending
+    past an admin-imposed per-key budget ceiling instead of hard-blocking. The
+    /key/update gate does not cover generate, so generate needs its own admin
+    check. Only the enable value is gated, so this must 403."""
+    mock_prisma_client = AsyncMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(throttle_on_budget_exceeded=True),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can enable throttle_on_budget_exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_throttle_allowed_for_admin():
+    """A proxy admin may create a key with throttle_on_budget_exceeded=true; the
+    generate admin gate must let the admin through to key creation."""
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+        ) as mock_generate_key,
+    ):
+        mock_generate_key.return_value = {
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "admin",
+            "team_id": None,
+        }
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(throttle_on_budget_exceeded=True),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert mock_generate_key.called
+
+
+@pytest.mark.asyncio
 async def test_update_service_account_requires_team_id():
     data = UpdateKeyRequest(key="sk-1", metadata={"service_account_id": "sa"})
     existing_key = LiteLLM_VerificationToken(token="hashed", team_id=None)
@@ -9570,6 +9621,165 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     result = await update_key_fn(
         request=mock_request,
         data=UpdateKeyRequest(key=test_hashed_token, key_alias="my-alias"),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_throttle_on_budget_exceeded_rejected_for_internal_user(
+    monkeypatch,
+):
+    """Security regression: throttle_on_budget_exceeded turns an admin-imposed
+    hard budget block into a soft throttle that keeps spending past max_budget,
+    so it is a budget-enforcement change. A non-admin key owner (same setup that
+    is allowed to change non-budget fields via the caller_is_creator shortcut)
+    must NOT be able to self-opt-in to it; it has to route through the admin-only
+    _check_key_admin_access and return 403. Without treating the flag as a budget
+    change this update would succeed, letting the owner bypass their own cap."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+    # Owner of the key (created_by == user_id) so caller_is_creator is True.
+    # This is exactly the setup that is allowed to change non-budget fields;
+    # the throttle flag must still be rejected.
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.created_by = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = None
+    mock_existing_key.models = []
+    mock_existing_key.metadata = {}
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_existing_key)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(
+                key=test_hashed_token,
+                throttle_on_budget_exceeded=True,
+            ),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can enable throttle_on_budget_exceeded" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_key_throttle_unchanged_allows_non_budget_edit_for_internal_user(
+    monkeypatch,
+):
+    """A non-admin owner editing a non-budget field must not be blocked just
+    because the UI resends throttle_on_budget_exceeded unchanged (the edit form
+    always includes it). Only the transition to enabled is admin-gated, so an
+    unchanged False here leaves the key owner's non-budget edit working."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.created_by = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = None
+    mock_existing_key.models = []
+    mock_existing_key.metadata = {"throttle_on_budget_exceeded": False}
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_updated_key = MagicMock()
+    mock_updated_key.token = test_hashed_token
+    mock_updated_key.key_alias = "my-alias"
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.update_data = AsyncMock(return_value=mock_updated_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_existing_key)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", lambda token: test_hashed_token)
+
+    async def _noop(**kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        _noop,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._enforce_unique_key_alias",
+        _noop,
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+    )
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(
+            key=test_hashed_token,
+            key_alias="my-alias",
+            throttle_on_budget_exceeded=False,
+        ),
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=None,
     )

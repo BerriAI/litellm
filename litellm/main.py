@@ -582,6 +582,7 @@ async def acompletion(
         "api_key": api_key,
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
+        "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
         "extra_headers": extra_headers,
@@ -1079,6 +1080,54 @@ def _build_custom_pricing_entry(
                 entry.setdefault(key, model_info[key])
 
     return entry
+
+
+def _get_router_deployment_id(kwargs: dict) -> Optional[str]:
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = kwargs.get(metadata_key) or {}
+        if not isinstance(metadata, dict):
+            continue
+        deployment_model_info = metadata.get("model_info") or {}
+        if not isinstance(deployment_model_info, dict):
+            continue
+        deployment_id = deployment_model_info.get("id")
+        if deployment_id is not None:
+            return str(deployment_id)
+    return None
+
+
+def _register_custom_pricing_for_request(
+    model: str,
+    custom_llm_provider: str,
+    kwargs: dict,
+    model_info: Optional[dict],
+) -> None:
+    """Register per-request custom pricing in litellm.model_cost.
+
+    Router-originated requests (identified by the deployment id the router puts
+    in metadata) get their full pricing registered under that unique id only;
+    the shared ``{provider}/{model}`` key receives the entry with pricing fields
+    stripped, mirroring Router._create_deployment. This keeps one deployment's
+    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
+    pricing used by sibling deployments of the same backend model. Direct SDK
+    calls keep the legacy behavior of registering the shared key with pricing.
+    """
+    entry = _build_custom_pricing_entry(
+        custom_llm_provider=custom_llm_provider,
+        kwargs=kwargs,
+        model_info=model_info,
+    )
+    shared_key = f"{custom_llm_provider}/{model}"
+    deployment_id = _get_router_deployment_id(kwargs)
+    if deployment_id is None:
+        litellm.register_model({shared_key: entry})
+        return
+    litellm.register_model(
+        {
+            deployment_id: entry,
+            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
+        }
+    )
 
 
 def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -5107,14 +5156,11 @@ def completion(  # type: ignore
         if (
             input_cost_per_token is not None and output_cost_per_token is not None
         ) or input_cost_per_second is not None:
-            litellm.register_model(
-                {
-                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
-                        model_info=model_info,
-                    )
-                }
+            _register_custom_pricing_for_request(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+                model_info=model_info,
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}  # type: ignore
@@ -5193,6 +5239,7 @@ def completion(  # type: ignore
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
             "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
@@ -5957,14 +6004,11 @@ def embedding(
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if (input_cost_per_token is not None and output_cost_per_token is not None) or input_cost_per_second is not None:
-        litellm.register_model(
-            {
-                f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
-                    model_info=kwargs.get("model_info"),
-                )
-            }
+        _register_custom_pricing_for_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+            model_info=kwargs.get("model_info"),
         )
 
     litellm_params_dict = get_litellm_params(**kwargs)

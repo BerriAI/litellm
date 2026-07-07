@@ -5761,6 +5761,76 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/us/gpt-5.4": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "cache_read_input_token_cost_priority": 5.5e-07,
+        "input_cost_per_token": 2.75e-06,
+        "input_cost_per_token_priority": 5.5e-06,
+        "output_cost_per_token": 1.65e-05,
+        "output_cost_per_token_priority": 3.3e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure/eu/gpt-5.4": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "cache_read_input_token_cost_priority": 5.5e-07,
+        "input_cost_per_token": 2.75e-06,
+        "input_cost_per_token_priority": 5.5e-06,
+        "output_cost_per_token": 1.65e-05,
+        "output_cost_per_token_priority": 3.3e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure/gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
@@ -5779,6 +5849,76 @@
         "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "output_cost_per_token_priority": 3e-05,
         "output_cost_per_token_above_272k_tokens_priority": 4.5e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure/us/gpt-5.4-2026-03-05": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "cache_read_input_token_cost_priority": 5.5e-07,
+        "input_cost_per_token": 2.75e-06,
+        "input_cost_per_token_priority": 5.5e-06,
+        "output_cost_per_token": 1.65e-05,
+        "output_cost_per_token_priority": 3.3e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure/eu/gpt-5.4-2026-03-05": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "cache_read_input_token_cost_priority": 5.5e-07,
+        "input_cost_per_token": 2.75e-06,
+        "input_cost_per_token_priority": 5.5e-06,
+        "output_cost_per_token": 1.65e-05,
+        "output_cost_per_token_priority": 3.3e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5917,6 +6057,90 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
+    "azure/us/gpt-5.5": {
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_priority": 1.38e-06,
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens": 1.1e-05,
+        "input_cost_per_token_priority": 1.375e-05,
+        "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.95e-05,
+        "output_cost_per_token_priority": 8.25e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
+    },
+    "azure/eu/gpt-5.5": {
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_priority": 1.38e-06,
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens": 1.1e-05,
+        "input_cost_per_token_priority": 1.375e-05,
+        "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.95e-05,
+        "output_cost_per_token_priority": 8.25e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
+    },
     "azure/gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
@@ -5935,6 +6159,84 @@
         "output_cost_per_token_above_272k_tokens": 4.5e-05,
         "output_cost_per_token_priority": 6e-05,
         "output_cost_per_token_above_272k_tokens_priority": 9e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "azure/us/gpt-5.5-2026-04-23": {
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_priority": 1.38e-06,
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens": 1.1e-05,
+        "input_cost_per_token_priority": 1.375e-05,
+        "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.95e-05,
+        "output_cost_per_token_priority": 8.25e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "azure/eu/gpt-5.5-2026-04-23": {
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_priority": 1.38e-06,
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens": 1.1e-05,
+        "input_cost_per_token_priority": 1.375e-05,
+        "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.95e-05,
+        "output_cost_per_token_priority": 8.25e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -34827,6 +35129,19 @@
         "source": "https://cloud.google.com/text-to-speech/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
+        ]
+    },
+    "vertex_ai/chirp_3": {
+        "input_cost_per_second": 0.00026667,
+        "litellm_provider": "vertex_ai",
+        "metadata": {
+            "calculation": "$0.016/60 seconds = $0.00026667 per second",
+            "original_pricing_per_minute": 0.016
+        },
+        "mode": "audio_transcription",
+        "source": "https://cloud.google.com/speech-to-text/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
         ]
     },
     "vertex_ai/claude-3-5-haiku": {

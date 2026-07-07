@@ -2146,6 +2146,104 @@ class TestMCPDelegateAuthToUpstream:
             assert exc_info.value.status_code == 401
             mock_auth.assert_called_once()
 
+    async def test_delegate_ignored_for_unstamped_m2m_shaped_server(self):
+        """
+        oauth2 + delegate + oauth2_flow=None but the M2M credential shape
+        (client_id/secret + token_url, no authorization_url) → bypass must NOT
+        fire. A legacy row that was never stamped still resolves to
+        client_credentials by shape, and reading the bare column here would
+        reopen the anonymous bypass to a server that runs upstream as LiteLLM's
+        service account. Fails closed like the client_credentials case above.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/legacy_m2m_server",
+            "headers": [],
+        }
+
+        legacy_m2m_server = MCPServer(
+            server_id="legacy-m2m-id",
+            name="legacy_m2m_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        assert legacy_m2m_server.has_client_credentials is False
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = legacy_m2m_server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            mock_auth.assert_called_once()
+
+    async def test_delegate_bypass_for_pure_pkce_server(self):
+        """
+        oauth2 + delegate + oauth2_flow=None and NO stored client credentials
+        (pure PKCE, the common delegate case) → bypass must still fire. The
+        shape resolves to a non-M2M flow, so the security gate leaves it alone;
+        the fail-closed rule targets the M2M shape specifically, not every
+        unstamped row.
+        """
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/pkce_server",
+            "headers": [],
+        }
+
+        pkce_server = MCPServer(
+            server_id="pkce-server-id",
+            name="pkce_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow=None,
+        )
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = pkce_server
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+            mock_auth.assert_not_called()
+            assert auth.api_key is None
+
     async def test_delegate_bypass_for_internal_server(self):
         """
         Delegate + oauth2 interactive servers bypass LiteLLM auth even when
@@ -2233,6 +2331,56 @@ class TestMCPDelegateAuthToUpstream:
 
         assert "pkce-server" in result
         assert "m2m-server" not in result
+
+    async def test_get_allowed_servers_excludes_unstamped_m2m_shape_delegate(self):
+        """
+        The anonymous allow-list must also exclude an M2M-shape delegate server whose
+        oauth2_flow was never stamped (null column, verbatim-read as non-M2M). Reading
+        the bare has_client_credentials here would surface it to anonymous callers; the
+        resolved-flow check fails closed on the shape, matching the auth gate.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        pkce_server = MCPServer(
+            server_id="pkce-server",
+            name="pkce_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=True,
+        )
+        unstamped_m2m = MCPServer(
+            server_id="unstamped-m2m",
+            name="unstamped_m2m",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        assert unstamped_m2m.has_client_credentials is False
+        manager.registry = {
+            pkce_server.server_id: pkce_server,
+            unstamped_m2m.server_id: unstamped_m2m,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert "pkce-server" in result
+        assert "unstamped-m2m" not in result
 
     async def test_get_allowed_servers_includes_internal_delegate(self):
         """
@@ -3103,6 +3251,106 @@ async def test_get_team_object_permission_with_core_auth_auto_loading():
 
             # Verify get_team_object was called
             mock_get_team.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_permission_ui_session_team_skips_db_lookup():
+    """
+    UI session tokens carry the virtual team_id "litellm-dashboard" (UI_TEAM_ID),
+    which is never persisted. The lookup must short-circuit to None without
+    calling get_team_object; otherwise every MCP tools listing from the
+    dashboard logs a "Team doesn't exist in db" warning per server.
+    """
+    from litellm.proxy._types import UI_TEAM_ID
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=UI_TEAM_ID,
+    )
+
+    mock_prisma = MagicMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+            result = await MCPRequestHandler._get_team_object_permission(
+                mock_user_auth
+            )
+
+            assert result is None
+            mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "helper_name,expected",
+    [
+        ("_get_allowed_mcp_servers_for_team", []),
+        ("_get_mcp_access_groups_for_team", []),
+    ],
+)
+async def test_team_mcp_helpers_ui_session_team_skip_db_lookup(helper_name, expected):
+    """
+    The server-permission and access-group helpers hit get_team_object with the
+    session's team_id too; for the virtual UI team each used to 404 into its
+    own swallowed warning per MCP listing. They must short-circuit without a
+    DB lookup.
+    """
+    from litellm.proxy._types import UI_TEAM_ID
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=UI_TEAM_ID,
+    )
+
+    mock_prisma = MagicMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+            helper = getattr(MCPRequestHandler, helper_name)
+            result = await helper(mock_user_auth)
+
+            assert result == expected
+            mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_tools_for_server_ui_session_team_keeps_key_restrictions():
+    """
+    Regression: the 404 raised by get_team_object for the virtual UI team used
+    to escape into get_allowed_tools_for_server's blanket except, dropping
+    key-level tool restrictions (fail-open) and logging a warning. With the
+    short-circuit, key restrictions still apply for UI sessions.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UI_TEAM_ID
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=UI_TEAM_ID,
+    )
+    key_perm = MagicMock()
+    key_perm.mcp_tool_permissions = {"server_1": ["tool_a"]}
+
+    mock_prisma = MagicMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            side_effect=HTTPException(
+                status_code=404,
+                detail={"error": "Team doesn't exist in db. Team=litellm-dashboard."},
+            ),
+        ):
+            with patch.object(
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+            ):
+                result = await MCPRequestHandler.get_allowed_tools_for_server(
+                    server_id="server_1",
+                    user_api_key_auth=user_api_key_auth,
+                )
+
+                assert result == ["tool_a"]
 
 
 @pytest.mark.asyncio
