@@ -1,7 +1,7 @@
 """Client for the management-routes e2e suite: the shared Gateway plus the
-key/team/user/organization writes, the info/list read-backs the tests assert,
-and the raw-status calls judged by HTTP outcome (chat under a scoped key, an
-llm-only key hitting a management route).
+key/team/user/organization/model-deployment writes, the info/list read-backs
+the tests assert, and the raw-status calls judged by HTTP outcome (chat under a
+scoped key, an llm-only key hitting a management route).
 """
 
 from __future__ import annotations
@@ -18,6 +18,13 @@ from models import (
     KeyListParams,
     KeyListResponse,
     KeyUpdateBody,
+    LiteLLMParamsBody,
+    ModelDeleteBody,
+    ModelInfoBody,
+    ModelInfoEntry,
+    ModelNewBody,
+    ModelUpdateBody,
+    ModelUpdateParams,
     OrgDeleteBody,
     OrgInfoParams,
     OrgInfoResponse,
@@ -43,6 +50,18 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+UNKNOWN_MODEL_MARKER = "Invalid model name passed in model="
+NO_DEPLOYMENTS_MARKER = "There are no healthy deployments"
+
+
+def is_deleted_model_rejection(outcome: StreamingResponse, model: str) -> bool:
+    """True if the gateway refused the call because `model` is gone: a 400 naming
+    the model, either the proxy's unknown-model shape (the data plane never knew
+    the group) or the router's no-healthy-deployments shape (the group name
+    outlives its last deployment in the router until restart)."""
+    if outcome.status_code != 400 or model not in outcome.body:
+        return False
+    return UNKNOWN_MODEL_MARKER in outcome.body or NO_DEPLOYMENTS_MARKER in outcome.body
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +102,50 @@ class ManagementClient:
                 response_type=KeyListResponse,
             )
         ).total_count
+
+    def find_deployment(self, model_name: str) -> ModelInfoEntry | None:
+        return next(
+            (entry for entry in self.gateway.model_info() if entry.model_name == model_name),
+            None,
+        )
+
+    def update_model_tpm(self, model_id: str, tpm: int) -> None:
+        _ = unwrap(
+            self.gateway.transport.post(
+                "/model/update",
+                headers=self.gateway.transport.master,
+                json=ModelUpdateBody(
+                    litellm_params=ModelUpdateParams(tpm=tpm),
+                    model_info=ModelInfoBody(id=model_id),
+                ),
+                response_type=NoBody,
+            )
+        )
+
+    def delete_model_strict(self, model_id: str) -> None:
+        """Strict delete for the act phase of a test: a failed delete is a hard
+        failure, unlike the warn-only Gateway.delete_model used at teardown."""
+        _ = unwrap(
+            self.gateway.transport.post(
+                "/model/delete",
+                headers=self.gateway.transport.master,
+                json=ModelDeleteBody(id=model_id),
+                response_type=NoBody,
+            )
+        )
+
+    def create_model_status(
+        self, key: str, model_name: str, litellm_params: LiteLLMParamsBody
+    ) -> StreamingResponse:
+        return self.gateway.transport.send(
+            "/model/new",
+            headers=self.gateway.transport.bearer(key),
+            json=ModelNewBody(
+                model_name=model_name,
+                litellm_params=litellm_params,
+                model_info=ModelInfoBody(id=model_name),
+            ),
+        )
 
     def create_team(self, body: TeamNewBody) -> str:
         return unwrap(
