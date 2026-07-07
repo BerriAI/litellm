@@ -2325,9 +2325,7 @@ def _complete_custom_openai(
         resolve_client_credentials_token,
     )
 
-    oauth_api_key = resolve_client_credentials_token(
-        cast("dict[str, object]", litellm_params)
-    )
+    oauth_api_key = resolve_client_credentials_token(cast("dict[str, object]", litellm_params))
     if oauth_api_key is not None:
         api_key = oauth_api_key
 
