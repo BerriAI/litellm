@@ -26,11 +26,6 @@ from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
 
 pytestmark = pytest.mark.e2e
 
-ALLOWED_MODEL = "gemini-2.5-flash"
-DISALLOWED_MODEL = "gpt-5.5"
-KEY_TPM_LIMIT = 424_242
-
-
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
     deadline = time.monotonic() + client.gateway.poll_timeout
     while time.monotonic() < deadline:
@@ -116,42 +111,42 @@ class TestKeyRoutes:
         key = _generate_key(
             client,
             resources,
-            KeyGenerateBody(models=[ALLOWED_MODEL], key_alias=alias, tpm_limit=KEY_TPM_LIMIT),
+            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424_242),
         )
 
         info = client.gateway.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
-        assert info.models == [ALLOWED_MODEL], (
-            f"/key/info reports models {info.models}, configured [{ALLOWED_MODEL!r}]"
+        assert info.models == ["gemini-2.5-flash"], (
+            f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
-        assert info.tpm_limit == KEY_TPM_LIMIT, (
-            f"/key/info reports tpm_limit {info.tpm_limit}, configured {KEY_TPM_LIMIT}"
+        assert info.tpm_limit == 424_242, (
+            f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
         )
 
-        _poll_chat_ok(client, key, ALLOWED_MODEL)
+        _poll_chat_ok(client, key, "gemini-2.5-flash")
         _assert_model_denied(
-            client.chat_status(key, DISALLOWED_MODEL, f"say hi {unique_marker()}"), DISALLOWED_MODEL
+            client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5"
         )
 
     @pytest.mark.covers("mgmt.key.update.persists")
     def test_update_models_persists_and_flips_enforcement(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        key = _generate_key(client, resources, KeyGenerateBody(models=[ALLOWED_MODEL]))
-        _poll_chat_ok(client, key, ALLOWED_MODEL)
+        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
+        _poll_chat_ok(client, key, "gemini-2.5-flash")
         _assert_model_denied(
-            client.chat_status(key, DISALLOWED_MODEL, f"say hi {unique_marker()}"), DISALLOWED_MODEL
+            client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5"
         )
 
-        client.update_key_models(key, [DISALLOWED_MODEL])
+        client.update_key_models(key, ["gpt-5.5"])
 
         info = client.gateway.key_info(key)
-        assert info.models == [DISALLOWED_MODEL], (
-            f"/key/info reports models {info.models} after /key/update to [{DISALLOWED_MODEL!r}]"
+        assert info.models == ["gpt-5.5"], (
+            f"/key/info reports models {info.models} after /key/update to ['gpt-5.5']"
         )
 
-        _poll_model_access_granted(client, key, DISALLOWED_MODEL)
-        _poll_chat_denied(client, key, ALLOWED_MODEL)
+        _poll_model_access_granted(client, key, "gpt-5.5")
+        _poll_chat_denied(client, key, "gemini-2.5-flash")
 
     @pytest.mark.covers("mgmt.key.delete.persists")
     def test_delete_revokes_the_key_on_chat(self, client: ManagementClient, resources: ResourceManager) -> None:
@@ -159,13 +154,13 @@ class TestKeyRoutes:
         design: the deferred cleanup must survive this test failing before the
         in-body delete, and a repeat /key/delete is a cheap no-op the warn-only
         teardown absorbs."""
-        key = _generate_key(client, resources, KeyGenerateBody(models=[ALLOWED_MODEL]))
-        _poll_chat_ok(client, key, ALLOWED_MODEL)
+        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
+        _poll_chat_ok(client, key, "gemini-2.5-flash")
 
         client.delete_key_strict(key)
 
         def rejected() -> bool | None:
-            outcome = client.chat_status(key, ALLOWED_MODEL, f"say hi {unique_marker()}")
+            outcome = client.chat_status(key, "gemini-2.5-flash", f"say hi {unique_marker()}")
             return True if outcome.status_code == 401 else None
 
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
@@ -177,12 +172,12 @@ class TestTeamRoutes:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-mgmt-team-{unique_marker()}"
-        team_id = _create_team(client, resources, alias, [ALLOWED_MODEL])
+        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
 
         info = client.team_info(team_id)
         assert info.team_alias == alias, f"/team/info reports team_alias {info.team_alias!r}, configured {alias!r}"
-        assert info.models == [ALLOWED_MODEL], (
-            f"/team/info reports models {info.models}, configured [{ALLOWED_MODEL!r}]"
+        assert info.models == ["gemini-2.5-flash"], (
+            f"/team/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
 
         key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
@@ -200,7 +195,7 @@ class TestTeamRoutes:
             resources,
             UserNewBody(user_email=f"e2e-mgmt-{unique_marker()}@example.com", user_role="internal_user"),
         )
-        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [ALLOWED_MODEL])
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gemini-2.5-flash"])
 
         client.add_team_member(team_id, user_id)
         member = next(
@@ -235,15 +230,15 @@ class TestOrganizationRoutes:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-mgmt-org-{unique_marker()}"
-        org_id = client.create_org(OrgNewBody(organization_alias=alias, models=[ALLOWED_MODEL]))
+        org_id = client.create_org(OrgNewBody(organization_alias=alias, models=["gemini-2.5-flash"]))
         resources.defer(lambda: client.delete_org(org_id))
 
         info = client.org_info(org_id)
         assert info.organization_alias == alias, (
             f"/organization/info reports alias {info.organization_alias!r}, configured {alias!r}"
         )
-        assert info.models == [ALLOWED_MODEL], (
-            f"/organization/info reports models {info.models}, configured [{ALLOWED_MODEL!r}]"
+        assert info.models == ["gemini-2.5-flash"], (
+            f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
 
 
