@@ -35,9 +35,14 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
         if isinstance(obj, dict):
             result = {}
             for k, v in obj.items():
-                if isinstance(k, (str)):
+                if isinstance(k, str):
                     clean_k = k.replace("\x00", "") if "\x00" in k else k
-                    result[clean_k] = _serialize(v, seen, depth + 1)
+                else:
+                    # JSON only allows string keys; convert non-str keys (e.g. tuples
+                    # used by the OTel integration as dedup keys) rather than dropping
+                    # them silently, which caused data loss in spend-log payloads.
+                    clean_k = str(k)
+                result[clean_k] = _serialize(v, seen, depth + 1)
             seen.remove(id(obj))
             return result
         elif isinstance(obj, list):

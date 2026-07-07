@@ -128,7 +128,7 @@ def test_non_standard_dict_keys_complex():
         assert result[0]["test"] == "test"
         assert result[1] == "GCCollector"
         assert result[2]["bad_key"] == "bad_value"
-        assert result[3] == {}
+        assert result[3] == {"GCCollector": "value"}  # non-str key is now stringified, not dropped
         assert result[4]["bad_key"] == "GCCollector"
         assert result[5][0] == "GCCollector"
         assert result[5][1] == "GCCollector"
@@ -230,3 +230,50 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+def test_tuple_dict_keys_are_stringified_not_dropped():
+    """
+    Regression for #32250.
+
+    The OTel integration stores dedup markers in
+    metadata["_otel_internal"]["spans_logged"] using tuple keys:
+
+        spans_logged[("OpenTelemetry", id(self), *scope)] = True
+
+    Previously safe_dumps silently dropped all non-str dict keys, turning
+    spans_logged into {} in the serialized spend-log payload and causing
+    unbounded growth of the in-memory spend_log_transactions queue.
+
+    Non-str keys must now be converted via str() rather than discarded.
+    """
+    spans_logged = {
+        ("OpenTelemetry", 12345, "success"): True,
+        ("OpenTelemetry", 12346, "failure"): False,
+    }
+    metadata = {
+        "_otel_internal": {
+            "spans_logged": spans_logged,
+        }
+    }
+
+    result = json.loads(safe_dumps({"metadata": metadata}))
+    serialized_spans = result["metadata"]["_otel_internal"]["spans_logged"]
+
+    # Keys must be preserved as their string representation, not silently dropped.
+    assert serialized_spans != {}, "tuple keys must not be silently dropped"
+    assert len(serialized_spans) == 2
+
+    # Values must be preserved correctly.
+    values = list(serialized_spans.values())
+    assert True in values
+    assert False in values
+
+
+def test_integer_dict_keys_are_stringified():
+    """Integer keys are valid JSON only as strings; safe_dumps must stringify them."""
+    data = {1: "one", 2: "two", "three": 3}
+    result = json.loads(safe_dumps(data))
+    assert result["1"] == "one"
+    assert result["2"] == "two"
+    assert result["three"] == 3
