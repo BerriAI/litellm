@@ -10,7 +10,7 @@ only the endpoint URL and authentication.
 
 Auth: Bearer token (BEDROCK_MANTLE_API_KEY or the standard
 AWS_BEARER_TOKEN_BEDROCK, or litellm_params.api_key) when present; otherwise
-AWS SigV4 (service name "bedrock") using the standard credential chain (IAM
+AWS SigV4 (service name "bedrock-mantle") using the standard credential chain (IAM
 role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """

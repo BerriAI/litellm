@@ -46,35 +46,18 @@ def _capture_request(url: str, headers: dict, data) -> dict:
 
 
 def test_get_bedrock_route_mantle():
-    assert (
-        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview") == "mantle"
 
 
 def test_get_bedrock_route_mantle_does_not_match_other_routes():
-    assert (
-        BedrockModelInfo.get_bedrock_route("anthropic.claude-3-sonnet-20240229-v1:0")
-        != "mantle"
-    )
-    assert (
-        BedrockModelInfo.get_bedrock_route("converse/anthropic.claude-3-sonnet")
-        != "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("anthropic.claude-3-sonnet-20240229-v1:0") != "mantle"
+    assert BedrockModelInfo.get_bedrock_route("converse/anthropic.claude-3-sonnet") != "mantle"
 
 
 def test_explicit_mantle_route_flag():
-    assert (
-        BedrockModelInfo._explicit_mantle_route(
-            "mantle/anthropic.claude-mythos-preview"
-        )
-        is True
-    )
+    assert BedrockModelInfo._explicit_mantle_route("mantle/anthropic.claude-mythos-preview") is True
     assert BedrockModelInfo._explicit_mantle_route("anthropic.claude-3-sonnet") is False
-    assert (
-        BedrockModelInfo._explicit_mantle_route("converse/anthropic.claude-3-sonnet")
-        is False
-    )
+    assert BedrockModelInfo._explicit_mantle_route("converse/anthropic.claude-3-sonnet") is False
 
 
 def test_mantle_url_construction():
@@ -107,9 +90,7 @@ def test_get_bedrock_chat_config_returns_mantle_config():
 
 
 def test_get_bedrock_provider_config_for_messages_api_mantle():
-    config = BedrockModelInfo.get_bedrock_provider_config_for_messages_api(
-        "mantle/anthropic.claude-mythos-preview"
-    )
+    config = BedrockModelInfo.get_bedrock_provider_config_for_messages_api("mantle/anthropic.claude-mythos-preview")
     assert isinstance(config, AmazonMantleMessagesConfig)
 
 
@@ -347,3 +328,88 @@ async def test_mantle_anthropic_messages_routes_to_vpc_api_base():
     assert len(urls) == 1
     assert urls[0] == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
     assert "api.aws" not in urls[0]
+
+
+def test_mantle_chat_config_signs_with_bedrock_mantle_service():
+    """The bedrock/mantle/ chat route must SigV4-sign with service 'bedrock-mantle'."""
+    config = AmazonMantleConfig()
+    signed_service = None
+
+    def capture_sign(self, *, service_name, **kwargs):
+        nonlocal signed_service
+        signed_service = service_name
+        return {"Authorization": "AWS4-HMAC-SHA256 ..."}, b"{}"
+
+    with patch(
+        "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM._sign_request",
+        capture_sign,
+    ):
+        config.sign_request(
+            headers={"Content-Type": "application/json"},
+            optional_params={
+                "aws_access_key_id": "fake",
+                "aws_secret_access_key": "fake",
+                "aws_region_name": "us-east-1",
+            },
+            request_data={"model": "anthropic.claude-opus-4-8", "messages": []},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages",
+        )
+
+    assert signed_service == "bedrock-mantle"
+
+
+def test_mantle_messages_config_signs_with_bedrock_mantle_service():
+    """The bedrock/mantle/ messages route must SigV4-sign with service 'bedrock-mantle'."""
+    config = AmazonMantleMessagesConfig()
+    signed_service = None
+
+    def capture_sign(self, *, service_name, **kwargs):
+        nonlocal signed_service
+        signed_service = service_name
+        return {"Authorization": "AWS4-HMAC-SHA256 ..."}, b"{}"
+
+    with patch(
+        "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM._sign_request",
+        capture_sign,
+    ):
+        config.sign_request(
+            headers={"Content-Type": "application/json"},
+            optional_params={
+                "aws_access_key_id": "fake",
+                "aws_secret_access_key": "fake",
+                "aws_region_name": "us-east-1",
+            },
+            request_data={"model": "anthropic.claude-opus-4-8", "messages": []},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages",
+        )
+
+    assert signed_service == "bedrock-mantle"
+
+
+def test_mantle_configs_sign_real_sigv4_scope_is_bedrock_mantle(monkeypatch):
+    """Both bedrock/mantle/ configs must produce a *real* SigV4 signature whose
+    credential scope names service 'bedrock-mantle' (not 'bedrock').
+
+    Unlike the two tests above this does NOT mock _sign_request: it drives the
+    real botocore SigV4Auth with fake static creds (offline, no network), so a
+    regression in the signed service name would change the credential scope and
+    fail here. Cred setup mirrors test_no_bearer_signs_with_sigv4 in
+    tests/test_litellm/llms/bedrock_mantle/test_bedrock_mantle_transformation.py.
+    """
+    # No Bearer token -> _sign_request must take the SigV4 path, not Bearer auth.
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+    for config in (AmazonMantleConfig(), AmazonMantleMessagesConfig()):
+        headers, _ = config.sign_request(
+            headers={"Content-Type": "application/json"},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_region_name": "us-east-1",
+            },
+            request_data={"model": "anthropic.claude-opus-4-8", "messages": []},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages",
+        )
+
+        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "/us-east-1/bedrock-mantle/aws4_request" in headers["Authorization"]
