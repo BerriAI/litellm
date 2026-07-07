@@ -14,9 +14,12 @@ function getUiCookiePath(): string {
   if (typeof window === "undefined") return "/ui";
   // Match "/ui" only as a full path segment (followed by "/" or end of string)
   // to avoid false matches like "/my-ui-tool/login" → "/my-ui".
-  const match = window.location.pathname.match(/\/ui(?=\/|$)/);
-  if (match && match.index !== undefined) {
-    return window.location.pathname.substring(0, match.index + 3);
+  // The UI mounts at the last "/ui" segment (SERVER_ROOT_PATH + "/ui"), so use the
+  // last match to stay correct when the root path itself contains a "/ui" segment.
+  const matches = [...window.location.pathname.matchAll(/\/ui(?=\/|$)/g)];
+  const lastMatch = matches[matches.length - 1];
+  if (lastMatch && lastMatch.index !== undefined) {
+    return window.location.pathname.substring(0, lastMatch.index + 3);
   }
   return "/ui";
 }
