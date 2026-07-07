@@ -350,6 +350,30 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toBeUndefined();
     });
 
+    it("shows the token-exchange fields only for the OAuth Token Exchange (OBO) auth type", async () => {
+      await selectHttpTransport();
+
+      // Plain OAuth must not render the token-exchange section.
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.getByText("Token Exchange Endpoint (optional)")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Subject Token Type (optional)")).toBeInTheDocument();
+
+      // Switching away hides the section again.
+      await selectAntOption("Authentication", "API Key");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+    });
+
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
       await selectHttpTransport();
 
