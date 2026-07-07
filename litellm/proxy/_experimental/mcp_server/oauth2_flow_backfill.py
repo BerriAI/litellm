@@ -8,9 +8,11 @@ never had, and persists the result so the read path never has to infer again.
 
 Signal order, strongest first:
 
-1. Per-user token rows exist for the server (``LiteLLM_MCPUserCredentials``): only the
-   interactive flow mints per-user tokens, so this is definitive and immune to the
-   discovery trap.
+1. Per-user OAuth token rows exist for the server: only the interactive flow mints
+   per-user tokens, so this is definitive and immune to the discovery trap. BYOK API
+   keys share the same table (``LiteLLM_MCPUserCredentials``), so only rows whose
+   payload decodes as a ``type: oauth2`` token count as proof; bare keys and
+   undecodable rows prove nothing about the flow.
 2. ``authorization_url`` persisted: interactive needs a user-facing authorization
    endpoint; M2M (RFC 6749 section 4.4) never has one.
 3. ``registration_url`` persisted: dynamic client registration (RFC 7591) exists to mint
@@ -37,7 +39,7 @@ from collections import Counter
 from typing import Any, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.db import decrypt_credentials
+from litellm.proxy._experimental.mcp_server.db import _decode_oauth_payload, decrypt_credentials
 from litellm.proxy.utils import PrismaClient
 from litellm.types.mcp import MCPCredentials
 
@@ -100,13 +102,15 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
     token_rows: list[Any] = await prisma_client.db.litellm_mcpusercredentials.find_many(
         where={"server_id": {"in": server_ids}},
     )
-    server_ids_with_tokens: set[str] = {token_row.server_id for token_row in token_rows}
+    server_ids_with_oauth_tokens: set[str] = {
+        token_row.server_id for token_row in token_rows if _decode_oauth_payload(token_row.credential_b64) is not None
+    }
 
     classified = tuple(
         (
             row,
             classify_null_flow_row(
-                has_per_user_tokens=row.server_id in server_ids_with_tokens,
+                has_per_user_tokens=row.server_id in server_ids_with_oauth_tokens,
                 authorization_url=row.authorization_url,
                 registration_url=row.registration_url,
                 token_url=row.token_url,
@@ -138,7 +142,7 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
     for stamped_flow in stamped_flows:
         server_ids_for_flow = [row.server_id for row, (row_flow, _) in classified if row_flow == stamped_flow]
         await prisma_client.db.litellm_mcpservertable.update_many(
-            where={"server_id": {"in": server_ids_for_flow}},
+            where={"server_id": {"in": server_ids_for_flow}, "oauth2_flow": None},
             data={"oauth2_flow": stamped_flow, "updated_by": _BACKFILL_AUDIT_ACTOR},
         )
 

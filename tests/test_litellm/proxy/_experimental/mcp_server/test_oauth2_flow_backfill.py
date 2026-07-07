@@ -10,6 +10,8 @@ endpoint lives only in discovery, so ambiguous rows are left unstamped for a
 human to assert rather than being permanently mislabeled M2M.
 """
 
+import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -112,6 +114,23 @@ def _row(server_id, *, authorization_url=None, registration_url=None, token_url=
     )
 
 
+def _oauth_token_row(server_id):
+    payload = json.dumps({"type": "oauth2", "access_token": "tok", "connected_at": "2026-07-01T00:00:00Z"})
+    return SimpleNamespace(
+        server_id=server_id,
+        user_id="u1",
+        credential_b64=base64.urlsafe_b64encode(payload.encode()).decode(),
+    )
+
+
+def _byok_key_row(server_id):
+    return SimpleNamespace(
+        server_id=server_id,
+        user_id="u1",
+        credential_b64=base64.urlsafe_b64encode(b"sk-user-supplied-upstream-key").decode(),
+    )
+
+
 def _mock_prisma(null_rows, token_rows):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=null_rows)
@@ -151,7 +170,7 @@ async def test_backfill_stamps_rows_and_reports_rule_counts():
 
     mock_prisma = _mock_prisma(
         [dcr_trap_row, m2m_row, interactive_row],
-        [SimpleNamespace(server_id="signed_in_dcr", user_id="u1")],
+        [_oauth_token_row("signed_in_dcr")],
     )
 
     counts = await backfill_null_oauth2_flows(mock_prisma)
@@ -161,6 +180,7 @@ async def test_backfill_stamps_rows_and_reports_rule_counts():
     mock_prisma.db.litellm_mcpservertable.update_many.assert_awaited_once()
     call = mock_prisma.db.litellm_mcpservertable.update_many.await_args
     assert sorted(call.kwargs["where"]["server_id"]["in"]) == ["legacy_interactive", "signed_in_dcr"]
+    assert "oauth2_flow" in call.kwargs["where"] and call.kwargs["where"]["oauth2_flow"] is None
     assert call.kwargs["data"] == {"oauth2_flow": "authorization_code", "updated_by": "oauth2_flow_backfill"}
 
 
@@ -193,3 +213,22 @@ async def test_backfill_treats_undecodable_credentials_as_absent():
     counts = await backfill_null_oauth2_flows(mock_prisma)
 
     assert counts == {"interactive_default": 1}
+
+
+@pytest.mark.asyncio
+async def test_backfill_byok_key_rows_are_not_sign_in_proof():
+    """BYOK API keys live in the same table as per-user OAuth tokens; a bare key row
+    must not satisfy the per_user_tokens rule, or a BYOK-flavored M2M-shaped server
+    would be permanently stamped authorization_code. Only rows whose payload decodes
+    as a type oauth2 token count."""
+    byok_shaped_row = _row(
+        "byok_m2m_shape",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mock_prisma = _mock_prisma([byok_shaped_row], [_byok_key_row("byok_m2m_shape")])
+
+    counts = await backfill_null_oauth2_flows(mock_prisma)
+
+    assert counts == {"ambiguous_m2m_shape": 1}
+    mock_prisma.db.litellm_mcpservertable.update_many.assert_not_awaited()
