@@ -1027,6 +1027,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
             verbose_logger.info(f"MCP list_prompts - Successfully returned {len(prompts)} prompts")
             return prompts
@@ -1081,6 +1082,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
         finally:
             if _session_reset_token is not None:
@@ -1119,6 +1121,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
             verbose_logger.info(f"MCP list_resources - Successfully returned {len(resources)} resources")
             return resources
@@ -1162,6 +1165,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
             verbose_logger.info(
                 f"MCP list_resource_templates - Successfully returned {len(resource_templates)} resource templates"
@@ -1202,6 +1206,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
 
             return _normalize_resource_contents(read_resource_result.contents)
@@ -1946,6 +1951,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[Prompt]:
         """
         Helper method to fetch prompt from MCP servers based on server filtering criteria.
@@ -1966,6 +1972,7 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            client_ip=client_ip,
         )
 
         # Get prompts from each allowed server
@@ -2010,6 +2017,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[Resource]:
         """Fetch resources from allowed MCP servers."""
 
@@ -2019,6 +2027,7 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            client_ip=client_ip,
         )
 
         all_resources: List[Resource] = []
@@ -2060,6 +2069,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[ResourceTemplate]:
         """Fetch resource templates from allowed MCP servers."""
 
@@ -2069,6 +2079,7 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            client_ip=client_ip,
         )
 
         all_resource_templates: List[ResourceTemplate] = []
@@ -2235,6 +2246,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[Prompt]:
         """
         List all available MCP prompts.
@@ -2260,6 +2272,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_prompts)} prompts from managed MCP servers")
         except Exception as e:
@@ -2275,6 +2288,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[Resource]:
         """List all available MCP resources."""
 
@@ -2290,6 +2304,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_resources)} resources from managed MCP servers")
         except Exception as e:
@@ -2304,6 +2319,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[ResourceTemplate]:
         """List all available MCP resource templates."""
 
@@ -2319,6 +2335,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             verbose_logger.debug(
                 "Successfully fetched %s resource templates from managed MCP servers",
@@ -2852,6 +2869,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> GetPromptResult:
         """
         Fetch a specific MCP prompt, handling both prefixed and unprefixed names.
@@ -2859,6 +2877,7 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            client_ip=client_ip,
         )
 
         if not allowed_mcp_servers:
@@ -2903,12 +2922,14 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> ReadResourceResult:
         """Read resource contents from upstream MCP servers."""
 
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            client_ip=client_ip,
         )
 
         if not allowed_mcp_servers:

@@ -455,12 +455,74 @@ async def test_get_prompts_from_mcp_servers_success():
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
         )
 
     mock_allowed.assert_awaited_once()
+    assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
     assert mock_headers.call_count == 2
     assert mock_manager.get_prompts_from_server.await_count == 2
     assert {prompt.name for prompt in prompts} == {"hello", "howdy"}
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_prompts_forwards_client_ip_for_ip_filtering():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _list_mcp_prompts
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_prompts_from_mcp_servers",
+        AsyncMock(return_value=[]),
+    ) as mock_get_prompts:
+        prompts = await _list_mcp_prompts(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
+        )
+
+    assert prompts == []
+    mock_get_prompts.assert_awaited_once()
+    assert mock_get_prompts.await_args.kwargs["client_ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_get_prompts_from_mcp_servers_filters_internal_only_server_for_external_ip():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_prompts_from_mcp_servers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["internal"])
+        mock_manager.filter_server_ids_by_ip_with_info.return_value = ([], 1)
+        mock_manager.get_prompts_from_server = AsyncMock(return_value=[Prompt(name="hidden")])
+
+        prompts = await _get_prompts_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
+        )
+
+    assert prompts == []
+    mock_manager.filter_server_ids_by_ip_with_info.assert_called_once_with(
+        ["internal"],
+        "203.0.113.7",
+    )
+    mock_manager.get_prompts_from_server.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -525,15 +587,79 @@ async def test_get_resources_from_mcp_servers_success():
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
         )
 
     mock_allowed.assert_awaited_once()
+    assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
     assert mock_headers.call_count == 2
     assert mock_manager.get_resources_from_server.await_count == 2
     assert {resource.name for resource in resources} == {
         "resource_a",
         "resource_b",
     }
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_resources_forwards_client_ip_for_ip_filtering():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _list_mcp_resources
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_resources_from_mcp_servers",
+        AsyncMock(return_value=[]),
+    ) as mock_get_resources:
+        resources = await _list_mcp_resources(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
+        )
+
+    assert resources == []
+    mock_get_resources.assert_awaited_once()
+    assert mock_get_resources.await_args.kwargs["client_ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_get_resources_from_mcp_servers_filters_internal_only_server_for_external_ip():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_resources_from_mcp_servers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["internal"])
+        mock_manager.filter_server_ids_by_ip_with_info.return_value = ([], 1)
+        mock_manager.get_resources_from_server = AsyncMock(
+            return_value=[Resource(name="hidden", uri="https://example.com/hidden")]
+        )
+
+        resources = await _get_resources_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
+        )
+
+    assert resources == []
+    mock_manager.filter_server_ids_by_ip_with_info.assert_called_once_with(
+        ["internal"],
+        "203.0.113.7",
+    )
+    mock_manager.get_resources_from_server.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -583,12 +709,81 @@ async def test_get_resource_templates_from_mcp_servers_success():
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
         )
 
     mock_allowed.assert_awaited_once()
+    assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
     mock_headers.assert_called_once()
     mock_manager.get_resource_templates_from_server.assert_awaited_once()
     assert [template.name for template in templates] == ["template"]
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_resource_templates_forwards_client_ip_for_ip_filtering():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _list_mcp_resource_templates
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_resource_templates_from_mcp_servers",
+        AsyncMock(return_value=[]),
+    ) as mock_get_resource_templates:
+        resource_templates = await _list_mcp_resource_templates(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
+        )
+
+    assert resource_templates == []
+    mock_get_resource_templates.assert_awaited_once()
+    assert mock_get_resource_templates.await_args.kwargs["client_ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_get_resource_templates_from_mcp_servers_filters_internal_only_server_for_external_ip():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_resource_templates_from_mcp_servers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["internal"])
+        mock_manager.filter_server_ids_by_ip_with_info.return_value = ([], 1)
+        mock_manager.get_resource_templates_from_server = AsyncMock(
+            return_value=[
+                ResourceTemplate(
+                    name="hidden",
+                    uriTemplate="https://example.com/hidden/{id}",
+                )
+            ]
+        )
+
+        resource_templates = await _get_resource_templates_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            client_ip="203.0.113.7",
+        )
+
+    assert resource_templates == []
+    mock_manager.filter_server_ids_by_ip_with_info.assert_called_once_with(
+        ["internal"],
+        "203.0.113.7",
+    )
+    mock_manager.get_resource_templates_from_server.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -624,9 +819,11 @@ async def test_mcp_get_prompt_success():
             name="server_a-hello",  # prefixed name since server prefixes are always added
             arguments={"foo": "bar"},
             user_api_key_auth=user_api_key_auth,
+            client_ip="203.0.113.7",
         )
 
     mock_allowed.assert_awaited_once()
+    assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
     mock_headers.assert_called_once_with(
         server=server,
         mcp_server_auth_headers=None,
@@ -644,6 +841,36 @@ async def test_mcp_get_prompt_success():
         raw_headers=None,
     )
     assert result is prompt_result
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_prompt_blocks_internal_only_server_for_external_ip():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_get_prompt
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["internal"])
+        mock_manager.filter_server_ids_by_ip_with_info.return_value = ([], 1)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await mcp_get_prompt(
+                name="internal-hidden",
+                arguments=None,
+                user_api_key_auth=user_api_key_auth,
+                client_ip="203.0.113.7",
+            )
+
+    assert exc_info.value.status_code == 403
+    mock_manager.filter_server_ids_by_ip_with_info.assert_called_once_with(
+        ["internal"],
+        "203.0.113.7",
+    )
 
 
 @pytest.mark.asyncio
@@ -686,9 +913,11 @@ async def test_mcp_read_resource_success():
         result = await mcp_read_resource(
             url="https://example.com/resource",
             user_api_key_auth=user_api_key_auth,
+            client_ip="203.0.113.7",
         )
 
     mock_allowed.assert_awaited_once()
+    assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
     mock_headers.assert_called_once_with(
         server=server,
         mcp_server_auth_headers=None,
@@ -705,6 +934,35 @@ async def test_mcp_read_resource_success():
         raw_headers=None,
     )
     assert result is read_result
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_blocks_internal_only_server_for_external_ip():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["internal"])
+        mock_manager.filter_server_ids_by_ip_with_info.return_value = ([], 1)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await mcp_read_resource(
+                url="https://example.com/resource",
+                user_api_key_auth=user_api_key_auth,
+                client_ip="203.0.113.7",
+            )
+
+    assert exc_info.value.status_code == 403
+    mock_manager.filter_server_ids_by_ip_with_info.assert_called_once_with(
+        ["internal"],
+        "203.0.113.7",
+    )
 
 
 def test_normalize_resource_contents_passes_metadata():
