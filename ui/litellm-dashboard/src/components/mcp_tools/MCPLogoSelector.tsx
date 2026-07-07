@@ -59,7 +59,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
           <img
             src={resolveLogoSrc(value)}
             alt="Selected logo"
-            className="w-10 h-10 object-contain rounded"
+            className="w-10 h-10 object-contain rounded-sm"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
             }}
@@ -91,7 +91,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
                 className={`flex items-center justify-center p-2 rounded-lg border transition-all cursor-pointer
                   ${
                     isSelected
-                      ? "border-blue-500 bg-blue-50 shadow-sm"
+                      ? "border-blue-500 bg-blue-50 shadow-xs"
                       : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
                   }`}
                 style={{ width: 40, height: 40 }}

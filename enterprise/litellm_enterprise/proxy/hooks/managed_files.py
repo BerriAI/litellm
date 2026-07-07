@@ -125,23 +125,33 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
+        update_data = {
+            "model_mappings": json.dumps(model_mappings),
+            "flat_model_file_ids": list(model_mappings.values()),
+            "updated_by": user_api_key_dict.user_id,
+        }
 
         if file_object is not None:
-            db_data["file_object"] = file_object.model_dump_json()
+            file_object_json = file_object.model_dump_json()
+            db_data["file_object"] = file_object_json
+            update_data["file_object"] = file_object_json
             # Extract storage metadata from hidden params if present
             hidden_params = getattr(file_object, "_hidden_params", {}) or {}
             if "storage_backend" in hidden_params:
                 db_data["storage_backend"] = hidden_params["storage_backend"]
+                update_data["storage_backend"] = hidden_params["storage_backend"]
             if "storage_url" in hidden_params:
                 db_data["storage_url"] = hidden_params["storage_url"]
+                update_data["storage_url"] = hidden_params["storage_url"]
 
             verbose_logger.debug(
                 f"Storage metadata: storage_backend={db_data.get('storage_backend')}, "
                 f"storage_url={db_data.get('storage_url')}"
             )
 
-        result = await self.prisma_client.db.litellm_managedfiletable.create(
-            data=db_data
+        result = await self.prisma_client.db.litellm_managedfiletable.upsert(
+            where={"unified_file_id": file_id},
+            data={"create": db_data, "update": update_data},
         )
         verbose_logger.debug(
             f"LiteLLM Managed File object with id={file_id} stored in db: {result}"

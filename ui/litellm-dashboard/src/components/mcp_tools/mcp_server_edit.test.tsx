@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 import MCPServerEdit from "./mcp_server_edit";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { selectAntOption } from "./testUtils";
 
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
@@ -506,6 +507,68 @@ describe("MCPServerEdit (interactive OAuth)", () => {
     expect(payload.token_validation).toEqual({ organization: "my-org" });
   });
 
+  it("includes credentials.token_endpoint_auth_method in update payload when client_secret_basic is selected", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
+    });
+
+    await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials?.token_endpoint_auth_method).toBe("client_secret_basic");
+  });
+
+  it("omits token_endpoint_auth_method from the update payload when the selector is left blank", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials?.token_endpoint_auth_method).toBeUndefined();
+  });
+
   it("does not include token_validation in payload when field is empty and server had none", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
 
@@ -938,5 +1001,61 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     });
     expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
     expect(mockSetToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCPServerEdit oauth2_flow preservation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function saveAndGetPayload(server: Record<string, unknown>) {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it("never writes oauth2_flow for a legacy null-flow server with a token_url", async () => {
+    const payload = await saveAndGetPayload({
+      token_url: "https://idp.example.com/oauth/token",
+      oauth2_flow: null,
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
+  });
+
+  it("never writes oauth2_flow over an explicit client_credentials row", async () => {
+    const payload = await saveAndGetPayload({
+      oauth2_flow: "client_credentials",
+      token_url: "https://idp.example.com/oauth/token",
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
+  });
+
+  it("never writes oauth2_flow over the DCR authorization_code stamp", async () => {
+    const payload = await saveAndGetPayload({
+      oauth2_flow: "authorization_code",
+      token_url: "https://idp.example.com/oauth/token",
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
   });
 });

@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    get_spend_by_team,
     get_spend_by_team_and_customer,
 )
 
@@ -60,31 +61,17 @@ async def test_spend_query_uses_timestamp_filtering():
     params = call_args[1:]
 
     # 1) SQL should NOT cast the startTime column to DATE (prevents index usage)
-    assert (
-        "::date" not in sql.lower()
-    ), "SQL should not use '::date' casting which prevents index usage"
-    assert (
-        "date(" not in sql.lower()
-    ), "SQL should not use DATE() function which prevents index usage"
+    assert "::date" not in sql.lower(), "SQL should not use '::date' casting which prevents index usage"
+    assert "date(" not in sql.lower(), "SQL should not use DATE() function which prevents index usage"
 
     # 2) SQL should use timestamp-range filtering pattern for index optimization
-    assert (
-        '"startTime" >=' in sql or '"startTime">=' in sql
-    ), "SQL should use >= operator for lower bound"
-    assert (
-        '"startTime" <' in sql or '"startTime"<' in sql
-    ), "SQL should use < operator for upper bound"
-    assert (
-        "interval '1 day'" in sql.lower()
-    ), "SQL should use INTERVAL for date arithmetic"
+    assert '"startTime" >=' in sql or '"startTime">=' in sql, "SQL should use >= operator for lower bound"
+    assert '"startTime" <' in sql or '"startTime"<' in sql, "SQL should use < operator for upper bound"
+    assert "interval '1 day'" in sql.lower(), "SQL should use INTERVAL for date arithmetic"
 
     # 3) Parameters should be datetime objects (not date objects)
-    assert isinstance(
-        params[0], datetime.datetime
-    ), "First parameter (start_date) should be datetime object"
-    assert isinstance(
-        params[1], datetime.datetime
-    ), "Second parameter (end_date) should be datetime object"
+    assert isinstance(params[0], datetime.datetime), "First parameter (start_date) should be datetime object"
+    assert isinstance(params[1], datetime.datetime), "Second parameter (end_date) should be datetime object"
     assert params[0].tzinfo is not None, "start_date should be timezone-aware"
     assert params[1].tzinfo is not None, "end_date should be timezone-aware"
 
@@ -130,12 +117,8 @@ async def test_global_activity_wraps_params_in_at_time_zone_utc(monkeypatch):
     # 2) Params must still be tz-aware UTC datetimes (preserves existing contract).
     assert isinstance(params[0], datetime.datetime)
     assert isinstance(params[1], datetime.datetime)
-    assert params[0].tzinfo is not None and params[0].utcoffset() == datetime.timedelta(
-        0
-    )
-    assert params[1].tzinfo is not None and params[1].utcoffset() == datetime.timedelta(
-        0
-    )
+    assert params[0].tzinfo is not None and params[0].utcoffset() == datetime.timedelta(0)
+    assert params[1].tzinfo is not None and params[1].utcoffset() == datetime.timedelta(0)
 
 
 @pytest.mark.asyncio
@@ -158,9 +141,7 @@ async def test_global_activity_internal_user_wraps_params_in_at_time_zone_utc(
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1"
-    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1")
 
     await get_global_activity(
         start_date="2026-02-16",
@@ -171,8 +152,7 @@ async def test_global_activity_internal_user_wraps_params_in_at_time_zone_utc(
     assert mock_prisma.db.query_raw.called
     sql = mock_prisma.db.query_raw.call_args[0][0]
     assert sql.count("AT TIME ZONE 'UTC'") >= 2, (
-        "Internal-user branch must also wrap date bounds with "
-        f"`AT TIME ZONE 'UTC'`. SQL was:\n{sql}"
+        f"Internal-user branch must also wrap date bounds with `AT TIME ZONE 'UTC'`. SQL was:\n{sql}"
     )
 
 
@@ -219,8 +199,7 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
     assert mock_prisma.db.query_raw.called, "query_raw should have been called"
     sql = mock_prisma.db.query_raw.call_args[0][0]
     assert sql.count("AT TIME ZONE 'UTC'") >= 2, (
-        "/spend/logs/ui must wrap both `startTime` bounds with "
-        f"`AT TIME ZONE 'UTC'`. SQL was:\n{sql}"
+        f"/spend/logs/ui must wrap both `startTime` bounds with `AT TIME ZONE 'UTC'`. SQL was:\n{sql}"
     )
 
 
@@ -281,10 +260,7 @@ async def test_spend_logs_ui_folds_count_into_window_function(monkeypatch):
     assert response["total_pages"] == (137 + 50 - 1) // 50
 
     for row in response["data"]:
-        assert "total_count" not in row, (
-            "the window-function helper column must be stripped before "
-            "serialising rows"
-        )
+        assert "total_count" not in row, "the window-function helper column must be stripped before serialising rows"
 
 
 @pytest.mark.asyncio
@@ -373,3 +349,86 @@ async def test_spend_logs_ui_out_of_range_page_falls_back_to_count(monkeypatch):
     mock_prisma.db.litellm_spendlogs.count.assert_called_once()
     assert response["total"] == 7
     assert response["total_pages"] == (7 + 2 - 1) // 2
+
+
+@pytest.mark.asyncio
+async def test_get_spend_by_team_binds_optional_team_filter():
+    """
+    get_spend_by_team must bind team_id as query parameter $3 behind an
+    `IS NULL OR` predicate: a provided team_id narrows the result to that team,
+    a None team_id short-circuits the filter and returns every team. Regression
+    guard for LIT-4125 (the team query previously carried no team_id predicate).
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_query_raw = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = mock_query_raw
+
+    start_date = datetime.datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end_date = datetime.datetime(2024, 1, 31, tzinfo=timezone.utc)
+
+    await get_spend_by_team(
+        start_date=start_date,
+        end_date=end_date,
+        team_id="test_team",
+        prisma_client=mock_prisma,
+    )
+
+    assert mock_query_raw.called, "query_raw should have been called"
+    sql = mock_query_raw.call_args[0][0]
+    params = mock_query_raw.call_args[0][1:]
+
+    # team_id is bound as parameter $3 (not string-interpolated) and referenced in WHERE
+    assert "sl.team_id = $3" in sql, f"WHERE must filter on team_id. SQL was:\n{sql}"
+    assert "$3::text IS NULL OR" in sql, (
+        f"the team filter must be optional via an IS NULL short-circuit. SQL was:\n{sql}"
+    )
+    assert params[2] == "test_team", "team_id must be forwarded as the third query param"
+
+    # None team_id still forwards param $3 (as None) so the predicate no-ops
+    mock_query_raw.reset_mock()
+    await get_spend_by_team(
+        start_date=start_date,
+        end_date=end_date,
+        team_id=None,
+        prisma_client=mock_prisma,
+    )
+    assert mock_query_raw.call_args[0][1:][2] is None
+
+
+@pytest.mark.asyncio
+async def test_global_spend_report_team_group_forwards_team_id(monkeypatch):
+    """
+    GET /global/spend/report?group_by=team&team_id=X must filter to team X.
+
+    Before LIT-4125 the group_by=team branch ran a query with no team_id
+    predicate, so spend for every team in the range was returned regardless of
+    team_id (team_id was only honored when a customer_id was also supplied).
+    This asserts the endpoint forwards team_id into the DB query.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        get_global_spend_report,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    await get_global_spend_report(
+        start_date="2026-07-01",
+        end_date="2026-07-03",
+        group_by="team",
+        api_key=None,
+        internal_user_id=None,
+        team_id="team_x",
+        customer_id=None,
+    )
+
+    assert mock_prisma.db.query_raw.called, "query_raw should have been called"
+    sql = mock_prisma.db.query_raw.call_args[0][0]
+    params = mock_prisma.db.query_raw.call_args[0][1:]
+    assert "team_x" in params, "team_id must be forwarded into the DB query params"
+    assert "sl.team_id = $3" in sql, f"team query must filter on team_id. SQL was:\n{sql}"

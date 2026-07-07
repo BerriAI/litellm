@@ -186,7 +186,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
             {Array.from(selectedSkills).map((name) => {
               const skill = skillsList.find((s) => s.name === name);
               return (
-                <div key={name} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <div key={name} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
                   <Text className="font-mono text-sm">{name}</Text>
                   {skill?.domain && (
                     <Badge color="blue" size="xs">

@@ -36,6 +36,8 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_bedrock_project_id",
         "tpm",
         "rpm",
+        "itpm",
+        "otpm",
         "use_xai_oauth",
     }
 )
@@ -74,6 +76,7 @@ def get_litellm_params(
     proxy_server_request=None,
     acompletion=None,
     aembedding=None,
+    allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
     input_cost_per_second=None,
@@ -116,6 +119,7 @@ def get_litellm_params(
     # Build base dict with explicit parameters (always included)
     litellm_params = {
         "acompletion": acompletion,
+        "allm_passthrough_route": allm_passthrough_route,
         "api_key": api_key,
         "force_timeout": force_timeout,
         "logger_fn": logger_fn,

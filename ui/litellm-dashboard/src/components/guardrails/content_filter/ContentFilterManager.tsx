@@ -264,9 +264,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
             onBlockedWordUpdate={(id, field, value) =>
               setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)))
             }
-            onFileUpload={(content: string) => {
-              console.log("File uploaded:", content);
-            }}
+            onFileUpload={(content: string) => {}}
             accessToken={accessToken}
             contentCategories={guardrailSettings.content_filter_settings.content_categories || []}
             selectedContentCategories={selectedContentCategories}

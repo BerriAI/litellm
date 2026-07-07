@@ -11,6 +11,7 @@ import {
   BgColorsOutlined,
   BlockOutlined,
   BookOutlined,
+  CommentOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -53,6 +54,7 @@ interface SidebarProps {
   collapsed?: boolean;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
+  enableChatUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -94,6 +96,16 @@ const menuGroups: MenuGroup[] = [
         label: "Playground",
         icon: <PlayCircleOutlined />,
         roles: rolesWithWriteAccess,
+      },
+      {
+        key: "chat",
+        page: "chat",
+        label: (
+          <span className="flex items-center gap-2">
+            Chat <NewBadge />
+          </span>
+        ),
+        icon: <CommentOutlined />,
       },
       {
         key: "models",
@@ -398,6 +410,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   collapsed = false,
   enabledPagesInternalUsers,
   enableProjectsUI,
+  enableChatUI,
   disableAgentsForInternalUsers,
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
@@ -463,11 +476,6 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Debug logging
     if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-      console.log("[LeftNav] Filtering with enabled pages:", {
-        userRole,
-        isAdmin,
-        enabledPagesInternalUsers,
-      });
     }
 
     return items
@@ -484,7 +492,6 @@ const Sidebar: React.FC<SidebarProps> = ({
           // Check enabled pages for internal users (non-admins)
           if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
             const isIncluded = enabledPagesInternalUsers.includes(item.page);
-            console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
             return isIncluded;
           }
           return true;
@@ -492,6 +499,9 @@ const Sidebar: React.FC<SidebarProps> = ({
 
         // Hide Projects page if enableProjectsUI is not enabled
         if (item.key === "projects" && !enableProjectsUI) return false;
+
+        // Hide Chat page if enableChatUI is not enabled
+        if (item.key === "chat" && !enableChatUI) return false;
 
         // Hide agents and vector-stores pages for non-admin users when disabled,
         // unless allow_*_for_team_admins is on and the user is a team admin.
@@ -519,13 +529,11 @@ const Sidebar: React.FC<SidebarProps> = ({
           if (item.children && item.children.length > 0) {
             const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
             if (hasVisibleChildren) {
-              console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
               return true;
             }
           }
 
           const isIncluded = enabledPagesInternalUsers.includes(item.page);
-          console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
           return isIncluded;
         }
 

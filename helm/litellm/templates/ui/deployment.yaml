@@ -46,6 +46,10 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- include "litellm.envFrom" .Values.ui | nindent 10 }}
+          {{- with .Values.ui.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.ui.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -56,6 +60,10 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
+      {{- with .Values.ui.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.ui.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

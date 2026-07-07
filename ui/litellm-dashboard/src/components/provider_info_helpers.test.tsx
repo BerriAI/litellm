@@ -217,12 +217,6 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderModels", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    afterEach(() => {
-      consoleSpy.mockClear();
-    });
-
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
       const result = getProviderModels(undefined as any, modelMap);
@@ -402,13 +396,6 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.OpenAI, modelMap);
       expect(result).toEqual(["valid-model"]);
-    });
-
-    it("should log provider key and mapped provider when called", () => {
-      const modelMap = { "gpt-3.5-turbo": { litellm_provider: "openai" } };
-      getProviderModels(Providers.OpenAI, modelMap);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider key: ${Providers.OpenAI}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider mapped to: ${provider_map[Providers.OpenAI]}`);
     });
 
     it("should return empty array for provider with no matching models", () => {

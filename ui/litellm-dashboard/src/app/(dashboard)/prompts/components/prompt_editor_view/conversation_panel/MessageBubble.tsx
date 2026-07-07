@@ -14,7 +14,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   return (
     <div className={`mb-4 flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
       <div
-        className="max-w-[85%] rounded-lg shadow-sm p-3.5 px-4"
+        className="max-w-[85%] rounded-lg shadow-xs p-3.5 px-4"
         style={{
           backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
           border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
@@ -35,12 +35,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">{message.model}</span>
+            <span className="text-xs px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600 font-normal">
+              {message.model}
+            </span>
           )}
         </div>
 
         <div
-          className="whitespace-pre-wrap break-words max-w-full message-content"
+          className="whitespace-pre-wrap wrap-break-word max-w-full message-content"
           style={{
             wordWrap: "break-word",
             overflowWrap: "break-word",
@@ -76,7 +78,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                     </SyntaxHighlighter>
                   ) : (
                     <code
-                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
+                      className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`}
                       style={{ wordBreak: "break-word" }}
                       {...props}
                     >

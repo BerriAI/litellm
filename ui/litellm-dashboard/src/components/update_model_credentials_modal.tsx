@@ -1,4 +1,4 @@
-import { Button, Form, Input, Modal, Typography } from "antd";
+import { Alert, Button, Form, Input, Modal, Typography } from "antd";
 import { useState } from "react";
 import { modelPatchUpdateCall } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -56,8 +56,15 @@ export default function UpdateModelCredentialsModal({
   return (
     <Modal title="Update API Key" open={open} onCancel={close} footer={null} width={520} destroyOnHidden={true}>
       <Text className="block mb-4 text-gray-500">
-        Rotate this model&apos;s API key. Only the new key is sent; the rest of the deployment is left untouched.
+        Update this model&apos;s API key. Only the new key is sent; the rest of the deployment configuration is left
+        untouched.
       </Text>
+      <Alert
+        type="warning"
+        showIcon
+        className="mb-4"
+        message="Only the API key is rotated here. Models that authenticate with an Azure AD token, AWS credentials, or a Vertex service-account JSON aren't supported yet; update those from the model's LiteLLM Params for now."
+      />
       <Form form={form} onFinish={handleSubmit} layout="vertical">
         <Form.Item label="New API Key" name="api_key" rules={[{ required: true, message: "Enter a new API key" }]}>
           <Input.Password placeholder="Enter the new API key" autoComplete="new-password" />

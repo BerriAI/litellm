@@ -184,7 +184,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
         }
         return (
           <Tooltip title={typeof modelCondition === "string" ? modelCondition : JSON.stringify(modelCondition)}>
-            <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">
+            <code className="text-xs bg-gray-100 px-1 py-0.5 rounded-sm">
               {typeof modelCondition === "string"
                 ? modelCondition.length > 20
                   ? modelCondition.slice(0, 20) + "..."

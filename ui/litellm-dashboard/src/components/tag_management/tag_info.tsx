@@ -117,7 +117,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           </Button>
           <div className="flex items-center gap-2">
             <Text className="font-medium">Tag Name:</Text>
-            <span className="font-mono px-2 py-1 bg-gray-100 rounded text-sm border border-gray-200">
+            <span className="font-mono px-2 py-1 bg-gray-100 rounded-sm text-sm border border-gray-200">
               {tagDetails.name}
             </span>
             <AntdButton

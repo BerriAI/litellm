@@ -228,6 +228,7 @@ def test_increment_token_metrics(prometheus_logger):
         requested_model=None,
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
@@ -244,6 +245,7 @@ def test_increment_token_metrics(prometheus_logger):
         requested_model=None,
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -262,6 +264,7 @@ def test_increment_token_metrics(prometheus_logger):
         requested_model=None,
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -424,6 +427,7 @@ def test_set_latency_metrics(prometheus_logger):
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
         0.5
@@ -442,6 +446,7 @@ def test_set_latency_metrics(prometheus_logger):
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -460,6 +465,7 @@ def test_set_latency_metrics(prometheus_logger):
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
@@ -844,6 +850,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
             model_id=None,
             client_ip=None,
             user_agent=None,
+            api_provider="openai",
         )
     finally:
         litellm.prometheus_emit_rate_limit_labels = original_emit
@@ -867,6 +874,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         model_id=None,
         client_ip=None,
         user_agent=None,
+        api_provider="openai",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 

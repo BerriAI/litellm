@@ -169,9 +169,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               In DB
                             </Badge>
                           ) : value.stored_in_db == false ? (
-                            <Badge className="text-gray bg-white outline">In Config</Badge>
+                            <Badge className="text-gray bg-white outline-solid">In Config</Badge>
                           ) : (
-                            <Badge className="text-gray bg-white outline">Not Set</Badge>
+                            <Badge className="text-gray bg-white outline-solid">Not Set</Badge>
                           )}
                         </TableCell>
                         <TableCell>

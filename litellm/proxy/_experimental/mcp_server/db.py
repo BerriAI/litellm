@@ -1228,6 +1228,23 @@ def _remaining_token_seconds(expires_at: str | None) -> int | None:
     return remaining if remaining > 0 else None
 
 
+async def get_active_submitted_mcp_server_ids_for_user(
+    prisma_client: PrismaClient,
+    user_id: str,
+) -> list[str]:
+    """Return active BYOM servers submitted by this user (creator visibility)."""
+    if not user_id:
+        return []
+
+    rows = await MCPServerRepository(prisma_client).table.find_many(
+        where={
+            "submitted_by": user_id,
+            "approval_status": MCPApprovalStatus.active,
+        },
+    )
+    return [row.server_id for row in rows]
+
+
 async def approve_mcp_server(
     prisma_client: PrismaClient,
     server_id: str,

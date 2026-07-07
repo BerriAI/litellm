@@ -5210,3 +5210,41 @@ class TestModelResponseIteratorCleanup:
 
         mock_iterator.aclose.assert_awaited_once()
         mock_response.aclose.assert_awaited_once()
+
+
+def test_process_candidates_merges_thought_signatures_and_server_side_tools():
+    """
+    thought_signatures and server_side_tool_invocations must both survive in
+    provider_specific_fields when a candidate carries the two at once; the second
+    merge must extend the dict created by the first, not replace it.
+    """
+    candidates = [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "the weather is sunny", "thoughtSignature": "sig-text"},
+                    {
+                        "toolCall": {
+                            "toolType": "google_search",
+                            "id": "tool-1",
+                            "args": {"query": "weather"},
+                        }
+                    },
+                ],
+            },
+            "finishReason": "STOP",
+        }
+    ]
+    model_response = ModelResponse()
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    fields = model_response.choices[-1].message.provider_specific_fields
+    assert fields["thought_signatures"] == ["sig-text"]
+    assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"

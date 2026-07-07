@@ -32,6 +32,14 @@ else:
     PreRoutingHookResponse = Any
 
 
+def _append_custom_keywords(base_keywords: list[str], custom_keywords: Optional[list[str]]) -> list[str]:
+    if not custom_keywords:
+        return base_keywords
+    base_lowered = frozenset(keyword.lower() for keyword in base_keywords)
+    deduped_custom = {keyword.lower(): keyword for keyword in custom_keywords if keyword.lower() not in base_lowered}
+    return [*base_keywords, *deduped_custom.values()]
+
+
 class DimensionScore:
     """Represents a score for a single dimension with optional signal."""
 
@@ -90,7 +98,10 @@ class ComplexityRouter(CustomLogger):
         # Build effective keyword lists (use config overrides or defaults)
         self.code_keywords = self.config.code_keywords or DEFAULT_CODE_KEYWORDS
         self.reasoning_keywords = self.config.reasoning_keywords or DEFAULT_REASONING_KEYWORDS
-        self.technical_keywords = self.config.technical_keywords or DEFAULT_TECHNICAL_KEYWORDS
+        self.technical_keywords = _append_custom_keywords(
+            self.config.technical_keywords or DEFAULT_TECHNICAL_KEYWORDS,
+            self.config.custom_technical_keywords,
+        )
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
 
         # Pre-compile regex patterns for efficiency

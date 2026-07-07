@@ -90,7 +90,6 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list keys:", error);

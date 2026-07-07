@@ -133,8 +133,6 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     try {
       if (!accessToken) return;
 
-      console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
-
       // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
       if (
         (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) ||

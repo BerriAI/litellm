@@ -292,7 +292,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         />
 
         <div className="flex-1 flex overflow-hidden">
-          <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200 flex-shrink-0">
+          <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200 shrink-0">
             <div className="border-b border-gray-200 bg-white px-6 py-4 flex items-center gap-3">
               <ModelConfigCard
                 model={prompt.model}
@@ -317,7 +317,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
               <div className="ml-auto inline-flex items-center bg-gray-200 rounded-full p-0.5">
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                    viewMode === "pretty" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"
+                    viewMode === "pretty" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600"
                   }`}
                   onClick={() => setViewMode("pretty")}
                 >
@@ -325,7 +325,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 </button>
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                    viewMode === "dotprompt" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"
+                    viewMode === "dotprompt" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600"
                   }`}
                   onClick={() => setViewMode("dotprompt")}
                 >
@@ -361,7 +361,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
             )}
           </div>
 
-          <div className="w-1/2 flex-shrink-0">
+          <div className="w-1/2 shrink-0">
             <ConversationPanel prompt={prompt} accessToken={accessToken} />
           </div>
         </div>

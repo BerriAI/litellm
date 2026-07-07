@@ -53,7 +53,8 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
       <div className="mb-2">
         <Text className="text-sm font-medium">Prompt messages</Text>
         <Text className="text-gray-500 text-xs mt-1">
-          Use <code className="bg-gray-100 px-1 rounded text-xs">{"{{variable}}"}</code> syntax for template variables
+          Use <code className="bg-gray-100 px-1 rounded-sm text-xs">{"{{variable}}"}</code> syntax for template
+          variables
         </Text>
       </div>
       <div className="space-y-2">

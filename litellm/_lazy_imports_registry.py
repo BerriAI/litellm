@@ -284,6 +284,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "TencentChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -323,6 +324,7 @@ LLM_CONFIG_NAMES = (
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
     "SonioxAudioTranscriptionConfig",
+    "GDCGeminiConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -1095,6 +1097,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "TencentChatConfig": (".llms.tencent.chat.transformation", "TencentChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",
@@ -1156,6 +1159,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
+    ),
+    "GDCGeminiConfig": (
+        ".llms.gdc.chat.transformation",
+        "GDCGeminiConfig",
     ),
     "ModelScopeChatConfig": (
         ".llms.modelscope.chat.transformation",

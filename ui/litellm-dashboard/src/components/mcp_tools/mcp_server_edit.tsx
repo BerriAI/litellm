@@ -20,6 +20,7 @@ import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
+import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
 import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -218,7 +219,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       static_headers: initialStaticHeaders,
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
-      oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+      oauth_flow_type: mcpServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -996,6 +997,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
+                <TokenEndpointAuthMethodField isEditing />
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -1244,7 +1246,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: transportType ?? mcpServer.transport,
                   auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: currentTokenUrl ?? mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type:
+                    oauthFlowTypeValue ??
+                    (mcpServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE),
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,

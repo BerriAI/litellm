@@ -16,6 +16,8 @@ interface ComplexityRouterConfigProps {
   modelInfo: ModelGroup[];
   value: ComplexityTiers;
   onChange: (tiers: ComplexityTiers) => void;
+  customTechnicalKeywords?: string[];
+  onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
 }
 
 const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; description: string; examples: string }> = {
@@ -41,7 +43,13 @@ const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; descript
   },
 };
 
-const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({ modelInfo, value, onChange }) => {
+const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
+  modelInfo,
+  value,
+  onChange,
+  customTechnicalKeywords,
+  onCustomTechnicalKeywordsChange,
+}) => {
   // Prepare model options for dropdowns
   const modelOptions = modelInfo.map((model) => ({
     value: model.model_group,
@@ -101,6 +109,33 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({ modelIn
             </div>
           );
         })}
+      </Card>
+
+      <Divider />
+
+      <Card>
+        <div className="flex items-center gap-2 mb-2">
+          <Text strong style={{ fontSize: 16 }}>
+            Custom Technical Keywords
+          </Text>
+          <Tooltip title="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
+            <InfoCircleOutlined className="text-gray-400" />
+          </Tooltip>
+        </div>
+        <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
+          Optional: add terms the built-in list misses (e.g., udp, kafka, terraform)
+        </Text>
+        <AntdSelect
+          mode="tags"
+          value={customTechnicalKeywords ?? []}
+          onChange={(keywords: string[]) => onCustomTechnicalKeywordsChange?.(keywords)}
+          placeholder="Type a keyword and press Enter, or paste a comma-separated list"
+          tokenSeparators={[","]}
+          open={false}
+          suffixIcon={null}
+          style={{ width: "100%" }}
+          allowClear
+        />
       </Card>
 
       <Divider />

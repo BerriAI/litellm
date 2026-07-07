@@ -97,14 +97,16 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
         </h3>
         <p className="text-sm text-gray-500 mb-4">
           Are you sure you want to {action} <span className="font-medium text-gray-700">&quot;{serverName}&quot;</span>?{" "}
-          {isApprove ? "This will make it active and available for use." : rejectBody}
+          {isApprove
+            ? "This will activate the server. The submitting user will see it in their MCP Servers list once approved."
+            : rejectBody}
         </p>
         {!isApprove && (
           <textarea
             placeholder="Reason for rejection (optional)"
             value={reviewNotes}
             onChange={(e) => setReviewNotes(e.target.value)}
-            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 mb-4 resize-none"
+            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 mb-4 resize-none"
             rows={3}
           />
         )}
@@ -207,7 +209,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
                           type="checkbox"
                           checked={active}
                           onChange={() => toggle(field.key)}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          className="mt-0.5 h-4 w-4 rounded-sm border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                         />
                         <div>
                           <div className="text-sm font-medium text-gray-800 group-hover:text-blue-700 transition-colors">
@@ -289,7 +291,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
             {server.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{server.description}</p>}
             {server.url && (
               <div className="flex items-center gap-1.5 mt-1.5">
-                <ServerIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                <ServerIcon className="h-3.5 w-3.5 text-gray-400 shrink-0" />
                 <code className="text-xs text-gray-500 font-mono truncate">{server.url}</code>
               </div>
             )}
@@ -310,7 +312,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
           </div>
           {/* Approve/Reject when no checks panel (no rules configured) */}
           {checks.length === 0 && approvalStatus !== "rejected" && (
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               {approvalStatus !== "active" && (
                 <button
                   type="button"
@@ -330,7 +332,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
             </div>
           )}
           {checks.length === 0 && approvalStatus === "rejected" && (
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={onApprove}
@@ -354,7 +356,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
           >
             {/* Large status circle */}
             <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+              className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                 allPassed ? "bg-green-500" : "bg-red-500"
               }`}
             >
@@ -369,7 +371,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               </div>
             </div>
             {/* Approve / Reject in header */}
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               {approvalStatus !== "active" && approvalStatus !== "rejected" && (
                 <button
                   type="button"
@@ -406,7 +408,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
                 {/* Small circle icon */}
                 <div
-                  className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
                     c.passed ? "bg-green-100" : "bg-red-100"
                   }`}
                 >
@@ -564,13 +566,13 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
             placeholder="Search MCP servers..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-md text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-md text-sm text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
           />
         </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-          className="border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+          className="border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
         >
           <option value="all">All Status</option>
           <option value="pending_review">Pending Review</option>
