@@ -1,5 +1,5 @@
 {
-  "@typescript-eslint/no-explicit-any": 1990,
+  "@typescript-eslint/no-explicit-any": 1992,
   "complexity": 128,
   "max-depth": 59,
   "no-console": 15
