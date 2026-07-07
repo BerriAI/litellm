@@ -127,12 +127,8 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
       // Fetch the content for preview
       setLoadingPreviewYaml(true);
-      console.log(`Fetching content for category: ${selectedCategoryName}`, {
-        accessToken: accessToken ? "present" : "missing",
-      });
       getCategoryYaml(accessToken, selectedCategoryName)
         .then((data) => {
-          console.log(`Successfully fetched content for ${selectedCategoryName}:`, data);
           let content = data.yaml_content;
 
           // Format JSON content for better readability

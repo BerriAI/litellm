@@ -3,6 +3,7 @@ import { Modal, Input, Typography } from "antd";
 import { fetchDiscoverableMCPServers } from "../networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "./types";
 import { mcpLogoImg } from "./create_mcp_server";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 const { Search } = Input;
 const { Text } = Typography;
@@ -95,7 +96,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
         <div className="flex items-center justify-between pb-4 border-b border-gray-100">
           <div className="flex items-center space-x-3">
             <img
-              src={mcpLogoImg}
+              src={resolveLogoSrc(mcpLogoImg)}
               alt="MCP Logo"
               className="w-8 h-8 object-contain"
               style={{
@@ -242,7 +243,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
                   >
                     {server.icon_url ? (
                       <img
-                        src={server.icon_url}
+                        src={resolveLogoSrc(server.icon_url)}
                         alt={server.title}
                         style={{
                           width: 20,

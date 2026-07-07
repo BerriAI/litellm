@@ -22,6 +22,15 @@ Not allowed:
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 
+## Typed Contracts (core rule)
+
+Trait and function boundaries MUST be strongly typed. No stringly-typed JSON
+(`&str` / `String` / `Vec<String>` / bare `serde_json::Value`) as a transform
+input or output. Parse wire bytes into typed structs/enums at the host edge;
+`core` and `providers` operate only on those types (e.g. `RealtimeEvent`,
+`RealtimeTransformResult`, `OcrRequestData`). A `type`-style discriminator is a
+typed field on a struct, not a raw string threaded through the API.
+
 ## Structure
 
 Use route names directly under `src/`: `ocr`, future `messages`,

@@ -1,10 +1,31 @@
+# syntax=docker/dockerfile:1.7
+
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
 ARG PROXY_EXTRAS_SOURCE=published
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+# Pinned by digest like the other base images; bump explicitly on Node upgrades.
+ARG UI_BUILD_IMAGE=node:20.18-alpine3.20@sha256:3488b10bf958af7125a176419d2d8a9937d895bf124012aae811651988d2ffe6
 
 FROM $UV_IMAGE AS uvbin
+
+# Admin UI builder. Pinned to the build platform so the architecture-independent
+# Next.js static export compiles once natively even in a multi-arch build,
+# instead of once per target arch under QEMU.
+FROM --platform=$BUILDPLATFORM $UI_BUILD_IMAGE AS ui-builder
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_fund=false \
+    npm_config_audit=false
+
+WORKDIR /ui
+
+COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+
+COPY ui/litellm-dashboard/ ./
+RUN npm run build
 
 FROM $LITELLM_BUILD_IMAGE AS builder
 ARG PROXY_EXTRAS_SOURCE
@@ -19,6 +40,7 @@ RUN for i in 1 2 3; do \
         python3 \
         python3-dev \
         gcc \
+        rust \
         bash \
         coreutils \
         curl \
@@ -51,6 +73,12 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
 
 # Copy full source tree
 COPY . .
+
+# Replace the committed UI bundle with the one built from this exact source.
+# Clearing first drops the committed bundle's content-hashed chunks that COPY
+# would otherwise leave behind alongside the fresh ones.
+RUN rm -rf litellm/proxy/_experimental/out
+COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 # Set non-root flag for build time consistency
 ENV LITELLM_NON_ROOT=true

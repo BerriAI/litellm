@@ -2479,6 +2479,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/migrate-encryption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Migrate Encryption Endpoint
+         * @description Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+         *
+         *     Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+         *     Idempotent and resumable — re-running skips already-migrated values. Pass
+         *     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+         */
+        post: operations["migrate_encryption_endpoint_credentials_migrate_encryption_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/migrate-encryption/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check Encryption Endpoint
+         * @description Read-only residual scan for compliance attestation. Reports how many at-rest
+         *     values are still in the legacy format. ``residual_legacy == 0`` attests no
+         *     legacy ciphertext remains. Admin only; performs no writes.
+         */
+        get: operations["check_encryption_endpoint_credentials_migrate_encryption_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}": {
         parameters: {
             query?: never;
@@ -2981,8 +3027,8 @@ export interface paths {
         /**
          * Get Active Tasks Stats
          * @description Returns:
-         *       total_active_tasks: int
-         *       by_name: { coroutine_name: count }
+         *     total_active_tasks: int
+         *     by_name: { coroutine_name: count }
          */
         get: operations["get_active_tasks_stats_debug_asyncio_tasks_get"];
         put?: never;
@@ -6456,8 +6502,10 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -6480,7 +6528,7 @@ export interface paths {
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
          *     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          *
@@ -6664,6 +6712,7 @@ export interface paths {
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
          *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
          *         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -6739,6 +6788,7 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -6837,6 +6887,7 @@ export interface paths {
          *     - spend: Optional[float] - Amount spent by key
          *     - max_budget: Optional[float] - Max budget for key
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
          *     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -6855,6 +6906,7 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -6868,7 +6920,7 @@ export interface paths {
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
          *     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          *
@@ -6918,6 +6970,7 @@ export interface paths {
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
          *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
          *         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -13517,7 +13570,7 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
@@ -13697,7 +13750,7 @@ export interface paths {
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
@@ -14567,6 +14620,7 @@ export interface paths {
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
          *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
          *     - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -14647,6 +14701,7 @@ export interface paths {
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
          *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+         *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *         - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
          *         - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -17230,6 +17285,29 @@ export interface paths {
         get: operations["get_response_input_items_v1_responses__response_id__input_items_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/rust_control_plane/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Callback Logs
+         * @description Replay a batch of finished logging payloads through the callback fan-out.
+         *
+         *     Admin-only: the payloads write spend logs and trigger every callback, so this
+         *     is a trusted internal route, not a public surface.
+         */
+        post: operations["ingest_callback_logs_v1_rust_control_plane_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20934,6 +21012,11 @@ export interface components {
             /** User Ids */
             user_ids: string[];
         };
+        /** BlockUsersResponse */
+        BlockUsersResponse: {
+            /** Blocked Users */
+            blocked_users: components["schemas"]["LiteLLM_EndUserTable"][];
+        };
         /**
          * BlockedWord
          * @description Represents a blocked word with its action and optional description
@@ -21102,10 +21185,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with
-             * @default chat
+             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -21512,6 +21594,54 @@ export interface components {
             /** Callback Name */
             callback_name: string;
         };
+        /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
+         * CallbackLogRecord
+         * @description A single finished logging event to replay through the callbacks.
+         */
+        CallbackLogRecord: {
+            /** Error */
+            error?: string | null;
+            /** Standard Logging Payload */
+            standard_logging_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+        };
+        /**
+         * CallbackLogsRequest
+         * @description A batch of logging events posted by an external producer.
+         */
+        CallbackLogsRequest: {
+            /** Records */
+            records: components["schemas"]["CallbackLogRecord"][];
+        };
+        /**
+         * CallbackLogsResponse
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
+         */
+        CallbackLogsResponse: {
+            /** Failed */
+            failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
+            /** Processed */
+            processed: number;
+        };
         /** CallbacksByType */
         CallbacksByType: {
             /** Failure */
@@ -21806,7 +21936,7 @@ export interface components {
                 [key: string]: unknown;
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
             /** Signature */
-            signature?: string;
+            signature?: string | null;
             /** Thinking */
             thinking?: string;
             /**
@@ -22356,6 +22486,11 @@ export interface components {
              */
             mcp_trusted_proxy_ranges?: string[] | null;
             /**
+             * Mcp Xff Num Trusted Hops
+             * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
+             */
+            mcp_xff_num_trusted_hops?: number | null;
+            /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
              */
@@ -22375,6 +22510,11 @@ export interface components {
              * @description external services registered as embeddable UI plugins
              */
             plugins?: components["schemas"]["PluginConfig"][] | null;
+            /**
+             * Provider Url Destination Allowed Hosts
+             * @description Allowlist of hosts a request may redirect a provider call's destination URL to.
+             */
+            provider_url_destination_allowed_hosts?: string[] | null;
             /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
@@ -22433,6 +22573,16 @@ export interface components {
              * @description Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.
              */
             user_mcp_management_mode?: ("restricted" | "view_all") | null;
+            /**
+             * User Url Allowed Hosts
+             * @description SSRF allowlist for user-supplied URLs. Entries are `hostname` or `hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted hosts skip the blocked-network check in validate_url() but still resolve DNS. Use this to permit legitimate internal targets, e.g. an internal OpenAPI/MCP server.
+             */
+            user_url_allowed_hosts?: string[] | null;
+            /**
+             * User Url Validation
+             * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
+             */
+            user_url_validation?: boolean | null;
         };
         /** ConfigList */
         ConfigList: {
@@ -22530,10 +22680,10 @@ export interface components {
         /**
          * ContentFilterCategoryConfig
          * @description category: "harmful_self_harm"
-         *                   enabled: true
-         *                   action: "BLOCK"
-         *                   severity_threshold: "medium"
-         *                   category_file: "/path/to/custom_file.yaml"  # optional override
+         *     enabled: true
+         *     action: "BLOCK"
+         *     severity_threshold: "medium"
+         *     category_file: "/path/to/custom_file.yaml"  # optional override
          */
         ContentFilterCategoryConfig: {
             /**
@@ -22758,6 +22908,37 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * CustomerResponse
+         * @description Customer object returned by the /customer read+write endpoints.
+         *
+         *     Nests the full budget response model so server-managed budget fields
+         *     (budget_reset_at, created_at) survive response_model filtering, rather than
+         *     the narrow write-allowlist shape LiteLLM_EndUserTable carries for internal use.
+         */
+        CustomerResponse: {
+            /** Alias */
+            alias?: string | null;
+            /** Allowed Model Region */
+            allowed_model_region?: ("eu" | "us") | null;
+            /** Blocked */
+            blocked: boolean;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** User Id */
+            user_id: string;
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -22921,6 +23102,13 @@ export interface components {
         DeleteCustomerRequest: {
             /** User Ids */
             user_ids: string[];
+        };
+        /** DeleteCustomersResponse */
+        DeleteCustomersResponse: {
+            /** Deleted Customers */
+            deleted_customers: number;
+            /** Message */
+            message: string;
         };
         /**
          * DeleteEvalResponse
@@ -23415,6 +23603,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -23517,6 +23709,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -23555,6 +23749,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -23653,6 +23851,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Token */
             token?: string | null;
             /** Token Id */
@@ -24538,6 +24738,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -24671,6 +24878,8 @@ export interface components {
             allowed_model_region?: ("eu" | "us") | null;
             /** Blocked */
             blocked: boolean;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -24941,6 +25150,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Tool Search Enabled */
+            mcp_tool_search_enabled?: boolean | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /** Models */
@@ -24984,6 +25195,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Tool Search Enabled */
+            mcp_tool_search_enabled?: boolean | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /**
@@ -25238,6 +25451,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Itpm */
+            itpm?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -25273,6 +25488,8 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -25917,6 +26134,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -27062,6 +27286,8 @@ export interface components {
              * @default false
              */
             is_public_model_group: boolean;
+            /** Itpm */
+            itpm?: number | null;
             /** Max Input Tokens */
             max_input_tokens?: number | null;
             /** Max Output Tokens */
@@ -27073,6 +27299,8 @@ export interface components {
             mode: string | ("chat" | "embedding" | "completion" | "image_generation" | "audio_transcription" | "rerank" | "moderations") | null;
             /** Model Group */
             model_group: string;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Providers */
@@ -27725,6 +27953,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -27859,6 +28091,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -27956,6 +28192,8 @@ export interface components {
             team_id?: string | null;
             /** Teams */
             teams?: unknown[] | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Token */
             token?: string | null;
             /** Token Id */
@@ -29477,6 +29715,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -29579,6 +29821,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -29713,6 +29957,27 @@ export interface components {
             passed: number;
             /** Total */
             total: number;
+        };
+        /**
+         * RetryPolicy
+         * @description Use this to set a custom number of retries per exception type
+         *     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+         *     Mapping of Exception type to number of retries
+         *     https://docs.litellm.ai/docs/exception_mapping
+         */
+        RetryPolicy: {
+            /** Authenticationerrorretries */
+            AuthenticationErrorRetries?: number | null;
+            /** Badrequesterrorretries */
+            BadRequestErrorRetries?: number | null;
+            /** Contentpolicyviolationerrorretries */
+            ContentPolicyViolationErrorRetries?: number | null;
+            /** Internalservererrorretries */
+            InternalServerErrorRetries?: number | null;
+            /** Ratelimiterrorretries */
+            RateLimitErrorRetries?: number | null;
+            /** Timeouterrorretries */
+            TimeoutErrorRetries?: number | null;
         };
         /**
          * RoleMappings
@@ -30768,6 +31033,11 @@ export interface components {
              */
             allowed_models?: string[] | null;
             /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
+            /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
              */
@@ -31330,6 +31600,14 @@ export interface components {
              */
             workers: components["schemas"]["WorkerRegistryEntry"][];
         };
+        /** UnblockUsersResponse */
+        UnblockUsersResponse: {
+            /**
+             * Blocked Users
+             * @description User IDs that remain blocked after this unblock call
+             */
+            blocked_users: string[];
+        };
         /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
@@ -31402,6 +31680,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -31488,6 +31770,8 @@ export interface components {
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
             temp_budget_increase?: number | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -31698,12 +31982,13 @@ export interface components {
             } | null;
             /** Model Group Retry Policy */
             model_group_retry_policy?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["RetryPolicy"];
             } | null;
             /** Num Retries */
             num_retries?: number | null;
             /** Retry After */
             retry_after?: number | null;
+            retry_policy?: components["schemas"]["RetryPolicy"] | null;
             /** Routing Groups */
             routing_groups?: components["schemas"]["RoutingGroup"][] | null;
             /** Routing Strategy */
@@ -31864,6 +32149,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -31962,6 +32251,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -32189,6 +32482,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -32225,6 +32525,11 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /**
+             * Is Session Token
+             * @default false
+             */
+            is_session_token: boolean;
             /** Jwt Claims */
             jwt_claims?: {
                 [key: string]: unknown;
@@ -32946,6 +33251,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Itpm */
+            itpm?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -32981,6 +33288,8 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -37015,6 +37324,58 @@ export interface operations {
             };
         };
     };
+    migrate_encryption_endpoint_credentials_migrate_encryption_post: {
+        parameters: {
+            query?: {
+                /** @description If true, scan and report without writing any changes. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_encryption_endpoint_credentials_migrate_encryption_check_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_credential_credentials__credential_name__delete: {
         parameters: {
             query?: never;
@@ -37277,7 +37638,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BlockUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37348,7 +37709,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteCustomersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37380,7 +37741,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_EndUserTable"];
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37409,7 +37770,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_EndUserTable"][];
+                    "application/json": components["schemas"]["CustomerResponse"][];
                 };
             };
         };
@@ -37433,7 +37794,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37466,7 +37827,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UnblockUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37499,7 +37860,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37925,7 +38286,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteCustomersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37957,7 +38318,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37986,7 +38347,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"][];
                 };
             };
         };
@@ -38010,7 +38371,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38076,7 +38437,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -41702,6 +42063,8 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description Filter keys by agent ID */
+                agent_id?: string | null;
                 /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
                 substring_matching?: boolean;
             };
@@ -43683,13 +44046,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *         Every rate-limit condition surfaced by litellm — whether it originated from
-             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *         max-iterations, etc.) — is raised as an instance of this class.
+             *     Every rate-limit condition surfaced by litellm — whether it originated from
+             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *     max-iterations, etc.) — is raised as an instance of this class.
              *
-             *         The :attr:`category` attribute lets callers distinguish the source. See
-             *         :class:`RateLimitErrorCategory` for the available values.
+             *     The :attr:`category` attribute lets callers distinguish the source. See
+             *     :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
@@ -54673,6 +55036,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_callback_logs_v1_rust_control_plane_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallbackLogsResponse"];
                 };
             };
             /** @description Validation Error */

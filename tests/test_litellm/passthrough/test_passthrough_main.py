@@ -726,3 +726,78 @@ async def test_allm_passthrough_route_429_streaming_raises():
 
     assert exc_info.value.response.status_code == 429
     assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"
+
+
+def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj():
+    """
+    Regression guard for LIT-4192: `allm_passthrough_route` sets
+    `kwargs["allm_passthrough_route"] = True` on the async entrypoint, and the
+    inner `llm_passthrough_route` must let that flag flow through
+    `get_litellm_params(**kwargs)` and land in the logging object's
+    `litellm_params`. Without that, `_is_sync_litellm_request` misclassifies
+    the request as sync and fires duplicate success callbacks.
+    """
+    import asyncio
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://bedrock-runtime.us-east-1.amazonaws.com/model/foo/converse"),
+        "https://bedrock-runtime.us-east-1.amazonaws.com",
+    )
+    mock_provider_config.get_api_key.return_value = "fake-key"
+    mock_provider_config.validate_environment.return_value = {}
+    mock_provider_config.sign_request.return_value = ({}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    captured_litellm_params: dict = {}
+
+    def _capture_update_env(*args, **kwargs):
+        captured_litellm_params.clear()
+        captured_litellm_params.update(kwargs.get("litellm_params") or {})
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.update_environment_variables.side_effect = _capture_update_env
+
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=(
+                "bedrock/foo",
+                "bedrock",
+                "fake-key",
+                "https://bedrock-runtime.us-east-1.amazonaws.com",
+            ),
+        ),
+        patch.object(
+            client.client,
+            "send",
+            return_value=MagicMock(status_code=200, json=lambda: {}),
+        ),
+        patch.object(client.client, "build_request"),
+    ):
+        result = llm_passthrough_route(
+            model="bedrock/foo",
+            endpoint="model/foo/converse",
+            method="POST",
+            custom_llm_provider="bedrock",
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="fake-key",
+            json={"messages": []},
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+            allm_passthrough_route=True,
+        )
+
+    if asyncio.iscoroutine(result):
+        result.close()
+
+    assert captured_litellm_params.get("allm_passthrough_route") is True
+    assert LitellmLogging._is_sync_litellm_request(captured_litellm_params) is False

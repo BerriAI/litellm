@@ -148,6 +148,34 @@ def patch_proxy_general_settings(settings: dict):
     )
 
 
+class TestMCPCredentialsTokenExchangeProfile:
+    """token_exchange_profile must be a declared MCPCredentials field so the management API can
+    persist the entra_obo profile. An undeclared key is silently stripped by pydantic when the
+    credentials dict is validated against the TypedDict, so it would never reach the JSON blob."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda creds: NewMCPServerRequest(
+                server_name="s", auth_type=MCPAuth.oauth2_token_exchange, credentials=creds
+            ),
+            lambda creds: UpdateMCPServerRequest(server_id="s", credentials=creds),
+        ],
+        ids=["new", "update"],
+    )
+    def test_request_preserves_token_exchange_profile_in_credentials(self, build):
+        creds = {
+            "client_id": "cid",
+            "client_secret": "sec",
+            "token_exchange_endpoint": "https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+            "scopes": ["api://target/.default"],
+            "token_exchange_profile": "entra_obo",
+        }
+        request = build(creds)
+        assert request.credentials is not None
+        assert request.credentials.get("token_exchange_profile") == "entra_obo"
+
+
 class TestListMCPServers:
     """Test suite for list MCP servers functionality"""
 
@@ -1197,6 +1225,136 @@ class TestListMCPServers:
         # Non-admin viewers get no env var config at all (not even names).
         assert result.env_vars is None
 
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_sanitizes_for_view_only_admin(self):
+        """PROXY_ADMIN_VIEW_ONLY must NOT see credential-bearing fields.
+
+        It previously passed the _user_has_admin_view gate (which also grants view-only
+        admins) and only had the explicit `credentials` field cleared, leaking secrets
+        embedded in url/static_headers/env_vars. Only a FULL PROXY_ADMIN may see those.
+        This test exercises the real role helpers (no patching of the gate)."""
+        mock_server = LiteLLM_MCPServerTable.model_construct(
+            server_id="leaky-server",
+            server_name="Leaky Server",
+            alias="Leaky Server",
+            transport=MCPTransport.http,
+            url="https://leaky.example.com/mcp?api_key=sk-embedded-in-url",
+            static_headers={"Authorization": "Bearer sk-secret-header"},
+            env={"UPSTREAM_TOKEN": "sk-secret-env"},
+            env_vars=[
+                {"name": "GLOBAL_KEY", "value": "super-secret", "scope": "global"},
+            ],
+            credentials={"auth_value": "sk-explicit-credential"},
+        )
+
+        mock_prisma_client = MagicMock()
+
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="leaky-server", alias="Leaky Server"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.health_check_server = AsyncMock(return_value=mock_health_result)
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="leaky-server",
+                user_api_key_dict=mock_user_auth,
+            )
+
+        assert result.server_id == "leaky-server"
+        assert result.credentials is None
+        assert result.url is None
+        assert result.static_headers is None
+        assert result.env == {}
+        assert result.env_vars is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_full_admin_still_sees_secrets(self):
+        """the fix must not over-redact for FULL PROXY_ADMIN,
+        who needs url/static_headers/env to populate the edit form."""
+        mock_server = LiteLLM_MCPServerTable.model_construct(
+            server_id="admin-server",
+            server_name="Admin Server",
+            alias="Admin Server",
+            transport=MCPTransport.http,
+            url="https://admin.example.com/mcp",
+            static_headers={"Authorization": "Bearer sk-secret-header"},
+            credentials={"auth_value": "sk-explicit-credential"},
+        )
+
+        mock_prisma_client = MagicMock()
+
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="admin-server", alias="Admin Server"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.health_check_server = AsyncMock(return_value=mock_health_result)
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="admin-server",
+                user_api_key_dict=mock_user_auth,
+            )
+
+        # credentials field is always redacted; the rest must survive for full admin.
+        assert result.credentials is None
+        assert result.url == "https://admin.example.com/mcp"
+        assert result.static_headers == {"Authorization": "Bearer sk-secret-header"}
+
 
 class TestTeamScopedMCPServerAccess:
     """Tests for cross-team information disclosure and restricted key bypass fixes."""
@@ -1938,6 +2096,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         authorize_response = MagicMock()
         admin_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -1981,6 +2140,91 @@ class TestTemporaryMCPSessionEndpoints:
         )
 
     @pytest.mark.asyncio
+    async def test_mcp_authorize_rejects_non_oauth2_server(self):
+        """mcp_authorize must reject a none-auth server with an accurate 'does not use OAuth'
+        400 before the client_id check, never delegating to authorize_with_server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_authorize,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="none-server")
+        server.auth_type = MCPAuth.none
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.authorize_with_server",
+                AsyncMock(),
+            ) as authorize_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_authorize(
+                    request=MagicMock(),
+                    server_id="none-server",
+                    user_api_key_dict=admin_auth,
+                    client_id=None,
+                    redirect_uri="https://example.com/callback",
+                    state="state123",
+                )
+
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "missing_client_id" not in detail_text
+        authorize_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mcp_token_rejects_non_oauth2_server(self):
+        """mcp_token must reject a none-auth server with 'does not use OAuth' 400 before the
+        client_id check, never delegating to exchange_token_with_server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_token,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="none-server")
+        server.auth_type = MCPAuth.none
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.exchange_token_with_server",
+                AsyncMock(),
+            ) as exchange_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_token(
+                    request=MagicMock(),
+                    server_id="none-server",
+                    user_api_key_dict=admin_auth,
+                    grant_type="authorization_code",
+                    code="code-123",
+                    redirect_uri="https://example.com/callback",
+                    client_id=None,
+                    client_secret=None,
+                    code_verifier="verifier",
+                    refresh_token=None,
+                    scope=None,
+                )
+
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "missing_client_id" not in detail_text
+        exchange_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_mcp_token_proxies_to_exchange_endpoint(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             mcp_token,
@@ -1988,6 +2232,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         exchange_response = {"access_token": "token"}
         admin_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2040,6 +2285,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         exchange_response = {"access_token": "new-token", "refresh_token": "new-rt"}
         admin_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2092,6 +2338,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         register_response = {"client_id": "generated"}
         request_body = {
             "client_name": "LiteLLM",
@@ -2134,7 +2381,54 @@ class TestTemporaryMCPSessionEndpoints:
             response_types=["code"],
             token_endpoint_auth_method="client_secret_basic",
             fallback_client_id="server-1",
+            persist_credentials=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_mcp_register_does_not_persist_for_non_admin(self):
+        """A non-admin caller (who may have access to a real server) must not persist the DCR
+        result onto the shared server row. register_client_with_server is invoked with
+        persist_credentials=False, so user-side registration returns the DCR response without
+        writing shared client credentials. Only a full PROXY_ADMIN establishes the shared client."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_register,
+        )
+
+        request = MagicMock()
+        server = generate_mock_mcp_server_config_record(server_id="server-1")
+        register_response = {"client_id": "generated"}
+        request_body = {
+            "client_name": "LiteLLM",
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "client_secret_basic",
+        }
+        non_admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value=request_body),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.register_client_with_server",
+                AsyncMock(return_value=register_response),
+            ) as register_mock,
+        ):
+            result = await mcp_register(
+                request=request,
+                server_id="server-1",
+                user_api_key_dict=non_admin_auth,
+            )
+
+        assert result is register_response
+        assert register_mock.await_args.kwargs["persist_credentials"] is False
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_falls_back_to_redis(self):
@@ -2996,41 +3290,18 @@ class TestMCPApprovalWorkflow:
         assert result.pending_review == 1
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "user_role, expected_global_value",
-        [
-            (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
-            (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
-        ],
-    )
-    async def test_get_submissions_redacts_global_env_for_view_only_admin(
-        self, user_role, expected_global_value
-    ):
-        """Read-only admins reviewing the submission queue must not receive the
-        submitter's global env var secrets; full admins still see them."""
+    async def test_get_submissions_sanitizes_for_view_only_admin(self):
+        """PROXY_ADMIN_VIEW_ONLY reviewing the submission queue must go through
+        the non-admin sanitizer that fetch/list endpoints use: url,
+        static_headers, env, env_vars, and credentials are all dropped. A
+        mutation swapping the gate back to the old partial-blank pattern (which
+        left url/static_headers/env and env-var names intact) would fail this."""
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
         )
 
-        base = generate_mock_mcp_server_db_record(alias="Pending")
-        item = LiteLLM_MCPServerTable(
-            **{
-                **base.model_dump(),
-                "env_vars": [
-                    {
-                        "name": "ADMIN_API_KEY",
-                        "value": "super-secret",
-                        "scope": "global",
-                    },
-                    {
-                        "name": "USER_TOKEN",
-                        "value": "placeholder-hint",
-                        "scope": "user",
-                    },
-                ],
-            }
-        )
+        item = _leaky_list_server()
         item.approval_status = "pending_review"
         summary = MCPSubmissionsSummary(
             total=1, pending_review=1, active=0, rejected=0, items=[item]
@@ -3047,12 +3318,70 @@ class TestMCPApprovalWorkflow:
             ),
         ):
             result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+                ),
             )
 
-        by_name = {ev.name: ev for ev in result.items[0].env_vars}
-        assert by_name["ADMIN_API_KEY"].value == expected_global_value
-        assert by_name["USER_TOKEN"].value == "placeholder-hint"
+        assert len(result.items) == 1
+        sanitized = result.items[0]
+        assert sanitized.url is None
+        assert sanitized.static_headers is None
+        assert sanitized.env == {}
+        assert sanitized.env_vars is None
+        assert sanitized.credentials is None
+
+        # The source record must not be mutated by sanitization.
+        assert item.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+        assert item.static_headers == {"Authorization": "Bearer sk-secret-header"}
+
+    @pytest.mark.asyncio
+    async def test_get_submissions_full_admin_still_sees_secrets(self):
+        """The view-only redaction must not over-redact for a full PROXY_ADMIN,
+        who needs url/static_headers/env/env_vars to review the pending
+        submission. Only the explicit credentials field is cleared."""
+        from litellm.proxy._types import MCPSubmissionsSummary
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_server_submissions,
+        )
+
+        item = _leaky_list_server()
+        item.approval_status = "pending_review"
+        summary = MCPSubmissionsSummary(
+            total=1, pending_review=1, active=0, rejected=0, items=[item]
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_submissions",
+                AsyncMock(return_value=summary),
+            ),
+        ):
+            result = await get_mcp_server_submissions(
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert len(result.items) == 1
+        raw = result.items[0]
+        assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+        assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
+        assert raw.env == {"UPSTREAM_TOKEN": "sk-secret-env"}
+        assert raw.credentials is None
+        assert raw.env_vars is not None
+        assert len(raw.env_vars) == 1
+        # ``model_construct`` in ``_leaky_list_server`` skips validation, so
+        # env_vars stays as raw dicts; mirror the fixture shape here.
+        entry = raw.env_vars[0]
+        name = entry["name"] if isinstance(entry, dict) else entry.name
+        value = entry["value"] if isinstance(entry, dict) else entry.value
+        assert name == "GLOBAL_KEY"
+        assert value == "super-secret"
 
     @pytest.mark.asyncio
     async def test_approve_non_pending_server_raises_400(self):
@@ -3093,8 +3422,10 @@ class TestMCPApprovalWorkflow:
         pending_server.approval_status = MCPApprovalStatus.pending_review
         approved_server = generate_mock_mcp_server_db_record()
         approved_server.approval_status = MCPApprovalStatus.active
+        approved_server.submitted_by = "submitter-user"
 
         mock_manager = MagicMock()
+        mock_manager.invalidate_byom_submitted_servers_cache = AsyncMock()
         mock_manager.reload_servers_from_database = AsyncMock()
 
         with (
@@ -3120,6 +3451,9 @@ class TestMCPApprovalWorkflow:
             )
 
         mock_manager.reload_servers_from_database.assert_awaited_once()
+        mock_manager.invalidate_byom_submitted_servers_cache.assert_awaited_once_with(
+            "submitter-user"
+        )
         assert result is not None
 
     @pytest.mark.asyncio
@@ -3337,6 +3671,10 @@ async def test_store_mcp_oauth_user_credential_returns_status():
             new=AsyncMock(
                 return_value=generate_mock_mcp_server_db_record(server_id=server_id)
             ),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+            return_value=True,
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
@@ -3693,18 +4031,12 @@ def _server_with_env_vars(server_id: str = "srv-env"):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "user_role, expected_global_value",
-    [
-        (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
-        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
-    ],
-)
-async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
-    user_role, expected_global_value
-):
-    """Read-only admins must not receive admin-supplied global env var secrets;
-    full admins still see them so the edit form can pre-fill."""
+async def test_fetch_single_mcp_server_env_vars_full_admin_vs_view_only():
+    """full admins see admin-supplied global env var secrets so the edit
+    form can pre-fill; read-only admins now go through the non-admin sanitizer, which
+    drops env_vars entirely (the names alone, e.g. ADMIN_API_KEY, leak what secrets the
+    admin configured). Previously the view-only case merely blanked the global value
+    while keeping the names, which still leaked configuration metadata."""
     server = _server_with_env_vars()
 
     health_result = generate_mock_mcp_server_db_record(server_id=server.server_id)
@@ -3712,34 +4044,39 @@ async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
     health_result.last_health_check = datetime.now()
     health_result.health_check_error = None
 
-    with (
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=server),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
-            AsyncMock(return_value=None),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
-            AsyncMock(return_value=health_result),
-        ),
-    ):
-        result = await mgmt_endpoints.fetch_mcp_server(
-            request=_make_mock_request(),
-            server_id=server.server_id,
-            user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
-        )
+    async def _fetch(user_role):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=health_result),
+            ),
+        ):
+            return await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=server.server_id,
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+            )
 
-    by_name = {ev.name: ev for ev in result.env_vars}
-    assert by_name["ADMIN_API_KEY"].value == expected_global_value
-    # Per-user placeholders are always preserved.
+    full_admin = await _fetch(LitellmUserRoles.PROXY_ADMIN)
+    by_name = {ev.name: ev for ev in full_admin.env_vars}
+    assert by_name["ADMIN_API_KEY"].value == "super-secret"
     assert by_name["USER_TOKEN"].value == "placeholder-hint"
+
+    view_only = await _fetch(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    assert view_only.env_vars is None
+
     # The source record must never be mutated.
     assert {ev.name: ev.value for ev in server.env_vars}[
         "ADMIN_API_KEY"
@@ -3747,18 +4084,67 @@ async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "user_role, expected_global_value",
-    [
-        (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
-        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
-    ],
-)
-async def test_fetch_all_mcp_servers_redacts_global_env_for_view_only_admin(
-    user_role, expected_global_value
-):
+async def test_fetch_all_mcp_servers_env_vars_full_admin_vs_view_only():
+    """same posture as the single-server fetch. Full admins
+    keep the env var values; view-only admins get env_vars dropped via the non-admin
+    sanitizer rather than only having the global value blanked."""
     server = _server_with_env_vars()
 
+    async def _fetch_all(user_role):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_mcp_servers_unfiltered",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                None,
+            ),
+        ):
+            return await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+            )
+
+    full_admin = await _fetch_all(LitellmUserRoles.PROXY_ADMIN)
+    by_name = {ev.name: ev for ev in full_admin[0].env_vars}
+    assert by_name["ADMIN_API_KEY"].value == "super-secret"
+    assert by_name["USER_TOKEN"].value == "placeholder-hint"
+
+    view_only = await _fetch_all(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    assert view_only[0].env_vars is None
+
+    assert {ev.name: ev.value for ev in server.env_vars}[
+        "ADMIN_API_KEY"
+    ] == "super-secret"
+
+
+def _leaky_list_server() -> "LiteLLM_MCPServerTable":
+    """A server whose url/static_headers/env carry embedded secrets, for the
+    list-endpoint sanitization tests. ``model_construct`` skips validation so
+    the raw values survive verbatim."""
+    return LiteLLM_MCPServerTable.model_construct(
+        server_id="leaky-list-server",
+        server_name="Leaky List Server",
+        alias="Leaky List Server",
+        transport=MCPTransport.http,
+        url="https://leaky.example.com/mcp?api_key=sk-embedded-in-url",
+        static_headers={"Authorization": "Bearer sk-secret-header"},
+        env={"UPSTREAM_TOKEN": "sk-secret-env"},
+        env_vars=[
+            {"name": "GLOBAL_KEY", "value": "super-secret", "scope": "global"},
+        ],
+        credentials={"auth_value": "sk-explicit-credential"},
+    )
+
+
+async def _fetch_all_via_view_all(user_role: LitellmUserRoles):
+    """Drive GET /v1/mcp/server in view_all mode for the given role using the
+    real role helpers (the full-admin gate is never patched)."""
+    server = _leaky_list_server()
     with (
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
@@ -3776,13 +4162,46 @@ async def test_fetch_all_mcp_servers_redacts_global_env_for_view_only_admin(
         result = await mgmt_endpoints.fetch_all_mcp_servers(
             user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
         )
+    return server, result
 
-    by_name = {ev.name: ev for ev in result[0].env_vars}
-    assert by_name["ADMIN_API_KEY"].value == expected_global_value
-    assert by_name["USER_TOKEN"].value == "placeholder-hint"
-    assert {ev.name: ev.value for ev in server.env_vars}[
-        "ADMIN_API_KEY"
-    ] == "super-secret"
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_sanitized_for_view_only_admin():
+    """PROXY_ADMIN_VIEW_ONLY listing servers must go through the non-admin
+    sanitizer: url and static_headers cleared, env emptied, env_vars dropped.
+    A mutation swapping _user_is_full_admin() back to _user_has_admin_view()
+    (which also grants view-only admins) would return the raw url/headers and
+    fail this. The real role helpers are exercised; the gate is not patched."""
+    source, result = await _fetch_all_via_view_all(
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+
+    assert len(result) == 1
+    sanitized = result[0]
+    assert sanitized.server_id == "leaky-list-server"
+    assert sanitized.url is None
+    assert sanitized.static_headers is None
+    assert sanitized.env == {}
+    assert sanitized.env_vars is None
+    assert sanitized.credentials is None
+
+    # The source record must never be mutated by sanitization.
+    assert source.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+    assert source.static_headers == {"Authorization": "Bearer sk-secret-header"}
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_full_admin_still_sees_secrets():
+    """The view-only redaction must not over-redact for a FULL PROXY_ADMIN,
+    who needs url/static_headers to populate the edit form. Only the explicit
+    credentials field is cleared for full admins on the list endpoint."""
+    _, result = await _fetch_all_via_view_all(LitellmUserRoles.PROXY_ADMIN)
+
+    assert len(result) == 1
+    raw = result[0]
+    assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+    assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
+    assert raw.credentials is None
 
 
 def _make_env_var_server(
@@ -4347,8 +4766,13 @@ class TestMCPUserEnvVarsAccessControl:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
-                AsyncMock(return_value=[_make_env_var_server(server_id="other")]),
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_allowed_mcp_servers",
+                AsyncMock(return_value=["other"]),
             ),
             patch.object(mgmt_endpoints, "get_user_env_vars", get_user_env_vars),
         ):
@@ -4378,7 +4802,12 @@ class TestMCPUserEnvVarsAccessControl:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_allowed_mcp_servers",
                 AsyncMock(return_value=[]),
             ),
             patch.object(mgmt_endpoints, "merge_user_env_vars", merge_mock),
@@ -4412,7 +4841,12 @@ class TestMCPUserEnvVarsAccessControl:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_allowed_mcp_servers",
                 AsyncMock(return_value=[]),
             ),
             patch.object(mgmt_endpoints, "delete_user_env_vars", delete_mock),
@@ -4444,8 +4878,13 @@ class TestMCPUserEnvVarsAccessControl:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
-                AsyncMock(return_value=[server]),
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_allowed_mcp_servers",
+                AsyncMock(return_value=["srv-1"]),
             ),
             patch.object(
                 mgmt_endpoints,
@@ -4465,13 +4904,13 @@ class TestMCPUserEnvVarsAccessControl:
 
     @pytest.mark.asyncio
     async def test_admin_bypasses_access_check(self):
-        """Proxy admins must not be filtered by get_all_mcp_servers_for_user."""
+        """Proxy admins must not be filtered by the allowed-server check."""
         server = _make_env_var_server(
             server_id="srv-1",
             env_vars=_ENV_VARS_MIXED,
             static_headers=_STATIC_HEADERS_MIXED,
         )
-        access_list_mock = AsyncMock(return_value=[])
+        allowed_mock = AsyncMock(return_value=[])
         with (
             patch.object(
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
@@ -4480,7 +4919,9 @@ class TestMCPUserEnvVarsAccessControl:
                 mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
             ),
             patch.object(
-                mgmt_endpoints, "get_all_mcp_servers_for_user", access_list_mock
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_allowed_mcp_servers",
+                allowed_mock,
             ),
             patch.object(
                 mgmt_endpoints, "get_user_env_vars", AsyncMock(return_value={})
@@ -4494,22 +4935,34 @@ class TestMCPUserEnvVarsAccessControl:
                 ),
             )
         assert result.server_id == "srv-1"
-        access_list_mock.assert_not_awaited()
+        allowed_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_non_admin_gets_403_not_404_for_inaccessible_server(self):
-        """Authorization must run before the existence check so a non-admin
-        cannot distinguish "server does not exist" (404) from "server exists but
-        you lack access" (403) and enumerate server IDs."""
-        get_mcp_server_mock = AsyncMock(return_value=None)
+        """A non-admin cannot distinguish "server does not exist" (404) from
+        "server exists but you lack access" (403): both collapse to 403 so server
+        ids stay non-enumerable, even when neither the DB nor the registry has the
+        server."""
         with (
             patch.object(
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
             ),
-            patch.object(mgmt_endpoints, "get_mcp_server", get_mcp_server_mock),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+            ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_mcp_server_by_id",
+                MagicMock(return_value=None),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_allowed_mcp_servers",
                 AsyncMock(return_value=[]),
             ),
         ):
@@ -4522,7 +4975,6 @@ class TestMCPUserEnvVarsAccessControl:
                     ),
                 )
         assert exc.value.status_code == 403
-        get_mcp_server_mock.assert_not_awaited()
 
 
 def test_oauth2_flow_accepted_on_create_request():
@@ -4572,3 +5024,277 @@ def test_oauth2_flow_defaults_to_none_when_omitted():
     assert (
         LiteLLM_MCPServerTable(server_id="srv-1", transport="http").oauth2_flow is None
     )
+
+
+class TestPerUserCredentialConfigServerResolution:
+    """Per-user credential and env-var endpoints must resolve config-defined MCP
+    servers, which live only in the in-memory registry and never get a DB row, so
+    a user can store their BYOK key / OAuth token / env vars against them. The
+    same allowed-server authorization the MCP gateway enforces also gates these
+    writes for non-admins.
+    """
+
+    # 32-char sha256 stable id, the shape a config.yaml server gets.
+    CONFIG_SERVER_ID = "3a6a3f8633340371b49562c8c4682da9"
+
+    def _registry_only_manager(self, *, is_byok: bool = False):
+        """A manager mock where the server exists only in the registry (DB miss)."""
+        config_server = generate_mock_mcp_server_config_record(
+            server_id=self.CONFIG_SERVER_ID, name="Config Server"
+        )
+        record = generate_mock_mcp_server_db_record(
+            server_id=self.CONFIG_SERVER_ID
+        ).model_copy(update={"is_byok": is_byok})
+        manager = MagicMock()
+        manager.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda sid: (
+                config_server if sid == self.CONFIG_SERVER_ID else None
+            )
+        )
+        manager._build_mcp_server_table = MagicMock(return_value=record)
+        manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_store_oauth_credential_resolves_config_server_for_admin(self):
+        """OBO token persists for a config-defined server (DB miss, registry hit).
+        Before the registry fallback this raised 404 "MCP Server not found"."""
+        manager = self._registry_only_manager()
+        store_mock = AsyncMock(return_value=None)
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+            ),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(mgmt_endpoints, "store_user_oauth_credential", store_mock),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_oauth_credential",
+                AsyncMock(return_value={"expires_at": None}),
+            ),
+        ):
+            result = await mgmt_endpoints.store_mcp_oauth_user_credential(
+                server_id=self.CONFIG_SERVER_ID,
+                payload=mgmt_endpoints.MCPOAuthUserCredentialRequest(
+                    access_token="tok", expires_in=3600
+                ),
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="admin"),
+            )
+        assert result.has_credential is True
+        store_mock.assert_awaited_once()
+        manager.get_mcp_server_by_id.assert_called_once_with(self.CONFIG_SERVER_ID)
+
+    @pytest.mark.asyncio
+    async def test_store_byok_credential_resolves_config_server_for_admin(self):
+        """BYOK key persists for a config-defined BYOK server (DB miss, registry
+        hit). Before the registry fallback this raised 404."""
+        manager = self._registry_only_manager(is_byok=True)
+        store_mock = AsyncMock(return_value=None)
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+            ),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(mgmt_endpoints, "store_user_credential", store_mock),
+        ):
+            result = await mgmt_endpoints.store_mcp_user_credential(
+                server_id=self.CONFIG_SERVER_ID,
+                payload=mgmt_endpoints.MCPUserCredentialRequest(credential="my-key"),
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="admin"),
+            )
+        assert result.has_credential is True
+        store_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_oauth_credential_forbidden_for_non_admin_without_access(self):
+        """A non-admin storing a credential for a server not in their allowed set
+        gets 403 and no row is written (the store endpoints had no authz before)."""
+        manager = self._registry_only_manager()
+        manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
+        store_mock = AsyncMock(return_value=None)
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+            ),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(
+                mgmt_endpoints,
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(mgmt_endpoints, "store_user_oauth_credential", store_mock),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await mgmt_endpoints.store_mcp_oauth_user_credential(
+                    server_id=self.CONFIG_SERVER_ID,
+                    payload=mgmt_endpoints.MCPOAuthUserCredentialRequest(
+                        access_token="tok", expires_in=3600
+                    ),
+                    user_api_key_dict=generate_mock_user_api_key_auth(
+                        user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER
+                    ),
+                )
+        assert exc.value.status_code == 403
+        store_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_oauth_credential_allowed_for_non_admin_with_access(self):
+        """A non-admin with the config server in their allowed set persists the
+        token; proves the non-admin authz uses the registry-aware allowed set."""
+        manager = self._registry_only_manager()
+        manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=[self.CONFIG_SERVER_ID]
+        )
+        store_mock = AsyncMock(return_value=None)
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+            ),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(
+                mgmt_endpoints,
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(mgmt_endpoints, "store_user_oauth_credential", store_mock),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_oauth_credential",
+                AsyncMock(return_value={"expires_at": None}),
+            ),
+        ):
+            result = await mgmt_endpoints.store_mcp_oauth_user_credential(
+                server_id=self.CONFIG_SERVER_ID,
+                payload=mgmt_endpoints.MCPOAuthUserCredentialRequest(
+                    access_token="tok", expires_in=3600
+                ),
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER
+                ),
+            )
+        assert result.has_credential is True
+        store_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_env_vars_resolves_config_server_for_non_admin_with_access(
+        self,
+    ):
+        """Per-user env vars persist for a config server a non-admin may access.
+        The non-admin path previously used a DB-only access list that never
+        included config servers, so this 403'd before the fix."""
+        env_var_server = _make_env_var_server(
+            server_id=self.CONFIG_SERVER_ID,
+            env_vars=_ENV_VARS_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        manager = MagicMock()
+        manager.get_mcp_server_by_id = MagicMock(
+            return_value=generate_mock_mcp_server_config_record(
+                server_id=self.CONFIG_SERVER_ID
+            )
+        )
+        manager._build_mcp_server_table = MagicMock(return_value=env_var_server)
+        manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=[self.CONFIG_SERVER_ID]
+        )
+        merge_mock = AsyncMock(return_value={"CORP_USERNAME": "alice"})
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+            ),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(
+                mgmt_endpoints,
+                "build_effective_auth_contexts",
+                AsyncMock(return_value=[object()]),
+            ),
+            patch.object(mgmt_endpoints, "merge_user_env_vars", merge_mock),
+        ):
+            result = await mgmt_endpoints.store_mcp_user_env_vars(
+                server_id=self.CONFIG_SERVER_ID,
+                payload=mgmt_endpoints.MCPUserEnvVarsRequest(
+                    values={"CORP_USERNAME": "alice"}
+                ),
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER
+                ),
+            )
+        merge_mock.assert_awaited_once()
+        _, _, _, updates, _ = merge_mock.await_args.args
+        assert updates == {"CORP_USERNAME": "alice"}
+        assert result.server_id == self.CONFIG_SERVER_ID
+
+
+def _oauth2_create_payload(**overrides):
+    base = dict(
+        server_name="stamp_test_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type="oauth2",
+    )
+    base.update(overrides)
+    return NewMCPServerRequest(**base)
+
+
+def test_stamp_oauth2_flow_bare_oauth2_defaults_to_authorization_code():
+    """A bare oauth2 create (no endpoints, no creds) is interactive: stamping it
+    authorization_code matches how needs_user_oauth_token treats a null flow."""
+    payload = _oauth2_create_payload()
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
+    assert payload.oauth2_flow == "authorization_code"
+
+
+def test_stamp_oauth2_flow_marks_m2m_shape_client_credentials():
+    """token_url + full client credentials and no authorization_url is the M2M shape;
+    the stamp mirrors the legacy inference in _resolve_oauth2_flow so REST-created M2M
+    servers persist the flow instead of relying on read-time inference."""
+    payload = _oauth2_create_payload(
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
+    assert payload.oauth2_flow == "client_credentials"
+
+
+def test_stamp_oauth2_flow_authorization_url_wins_over_m2m_shape():
+    """An authorization endpoint means interactive even when client creds + token_url
+    are present (GitHub Enterprise style); M2M never has an authorization endpoint."""
+    payload = _oauth2_create_payload(
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
+    assert payload.oauth2_flow == "authorization_code"
+
+
+def test_stamp_oauth2_flow_respects_explicit_value():
+    """An explicit oauth2_flow from the caller must never be overridden by the stamp."""
+    payload = _oauth2_create_payload(
+        oauth2_flow="authorization_code",
+        token_url="https://idp.example.com/token",
+        credentials={"client_id": "cid", "client_secret": "csecret"},
+    )
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
+    assert payload.oauth2_flow == "authorization_code"
+
+
+def test_stamp_oauth2_flow_ignores_non_oauth2():
+    payload = _oauth2_create_payload(auth_type="none")
+    mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
+    assert payload.oauth2_flow is None

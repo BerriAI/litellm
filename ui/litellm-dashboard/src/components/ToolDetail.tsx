@@ -291,7 +291,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       <div className="space-y-6">
         {/* Two-panel policy layout */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-xs">
             <h2 className="text-sm font-semibold text-gray-700 mb-1">Input Policy</h2>
             <p className="text-xs text-gray-500 mb-3">
               {inputDesc ?? "Controls what data this tool is allowed to accept."}
@@ -308,7 +308,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
             />
           </section>
 
-          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-xs">
             <h2 className="text-sm font-semibold text-gray-700 mb-1">Output Policy</h2>
             <p className="text-xs text-gray-500 mb-3">
               {outputDesc ?? "Controls how this tool's output is trusted by downstream tools."}
@@ -327,7 +327,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         </div>
 
         {overrides.length > 0 && (
-          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-xs">
             <h2 className="text-sm font-semibold text-gray-700 mb-3">Blocked for team or key</h2>
             <ul className="border rounded-md divide-y divide-gray-100 bg-red-50/30">
               {overrides.map((ov) => (
@@ -353,7 +353,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
           </section>
         )}
 
-        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-xs">
           <h2 className="text-sm font-semibold text-gray-700 mb-3">Block for team or key</h2>
           <div className="flex flex-col gap-4 max-w-md">
             <div>
@@ -417,7 +417,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
           </div>
         </section>
 
-        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-xs">
           <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <HistoryOutlined />
             Recent logs
