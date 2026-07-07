@@ -9,8 +9,9 @@ API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
 import asyncio
+import json
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -52,14 +53,14 @@ class ModelScopeImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, Any] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimg_generation: bool = False,
-    ) -> Union[ImageResponse, Any]:
+    ) -> ImageResponse | Any:
         if aimg_generation:
             return self.async_image_generation(
                 model=model,
@@ -128,10 +129,10 @@ class ModelScopeImageGeneration:
                 json=data,
                 timeout=timeout,
             )
-        except Exception as e:
+        except httpx.HTTPError as e:
             raise ModelScopeError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         final_response = self._poll_for_result_sync(
@@ -158,12 +159,12 @@ class ModelScopeImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, Any] | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         if isinstance(litellm_params, dict):
             api_key = litellm_params.get("api_key")
@@ -222,10 +223,10 @@ class ModelScopeImageGeneration:
                 json=data,
                 timeout=timeout,
             )
-        except Exception as e:
+        except httpx.HTTPError as e:
             raise ModelScopeError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         final_response = await self._poll_for_result_async(
@@ -250,12 +251,12 @@ class ModelScopeImageGeneration:
     def _poll_for_result_sync(
         self,
         initial_response: httpx.Response,
-        api_base: Optional[str],
+        api_base: str | None,
         headers: dict,
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         if initial_response.status_code >= 400:
             raise ModelScopeError(
@@ -265,7 +266,7 @@ class ModelScopeImageGeneration:
 
         try:
             response_data = initial_response.json()
-        except Exception as e:
+        except json.JSONDecodeError as e:
             raise ModelScopeError(
                 status_code=initial_response.status_code,
                 message=f"Error parsing submit response: {e}",
@@ -305,7 +306,7 @@ class ModelScopeImageGeneration:
 
             try:
                 data = response.json()
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 raise ModelScopeError(
                     status_code=response.status_code,
                     message=f"Error parsing poll response: {e}",
@@ -331,12 +332,12 @@ class ModelScopeImageGeneration:
     async def _poll_for_result_async(
         self,
         initial_response: httpx.Response,
-        api_base: Optional[str],
+        api_base: str | None,
         headers: dict,
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         if initial_response.status_code >= 400:
             raise ModelScopeError(
@@ -346,7 +347,7 @@ class ModelScopeImageGeneration:
 
         try:
             response_data = initial_response.json()
-        except Exception as e:
+        except json.JSONDecodeError as e:
             raise ModelScopeError(
                 status_code=initial_response.status_code,
                 message=f"Error parsing submit response: {e}",
@@ -386,7 +387,7 @@ class ModelScopeImageGeneration:
 
             try:
                 data = response.json()
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 raise ModelScopeError(
                     status_code=response.status_code,
                     message=f"Error parsing poll response: {e}",

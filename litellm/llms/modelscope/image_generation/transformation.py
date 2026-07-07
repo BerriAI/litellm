@@ -138,12 +138,13 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         }
 
         # litellm wraps provider fields (e.g. image_url) in extra_body; flatten
-        # them into the body. Skip extra_headers/extra_query -- litellm control
-        # params swept in alongside, not body fields. extra_headers is applied
-        # to HTTP headers by the handler and may carry secrets.
+        # them into the body. Skip extra_headers/extra_query (litellm control
+        # params swept in alongside, may carry secrets) and model/prompt (set
+        # above from the routed values; a client-controlled extra_body must not
+        # override the authorized model or prompt).
         extra_body = optional_params.get("extra_body") or {}
         for key, value in {**optional_params, **extra_body}.items():
-            if key in ("extra_body", "extra_headers", "extra_query") or key.startswith("_"):
+            if key in ("extra_body", "extra_headers", "extra_query", "model", "prompt") or key.startswith("_"):
                 continue
             request_data[key] = value
 
