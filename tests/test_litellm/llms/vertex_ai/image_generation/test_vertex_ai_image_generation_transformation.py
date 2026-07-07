@@ -691,14 +691,15 @@ class TestVertexAIImageModelsSupportsReasoning:
 
     MODELS = [
         "vertex_ai/gemini-2.5-flash-image",
-        "vertex_ai/gemini-3-pro-image-preview",
         "vertex_ai/gemini-3-pro-image",
-        "vertex_ai/gemini-3.1-flash-image-preview",
+        "vertex_ai/gemini-3-pro-image-preview",
         "vertex_ai/gemini-3.1-flash-image",
-        "gemini/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
         "gemini/gemini-3-pro-image",
-        "gemini/gemini-3.1-flash-image-preview",
+        "gemini/gemini-3-pro-image-preview",
         "gemini/gemini-3.1-flash-image",
+        "gemini/gemini-3.1-flash-image-preview",
     ]
 
     def test_supports_reasoning_is_false_in_cost_map(self):
