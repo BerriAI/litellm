@@ -51,6 +51,8 @@ export const OAUTH_FLOW = {
 // from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
 export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
 
+export const MCP_OAUTH2_FLOW_INTERACTIVE = "authorization_code";
+
 export type McpOAuthMode = "m2m" | "passthrough" | "obo";
 
 // Classify an OAuth2 MCP server into the mode that decides how the tool list is
@@ -67,6 +69,16 @@ export function getMcpOAuthMode(s: {
   if (s.auth_type !== AUTH_TYPE.OAUTH2) return null;
   if (s.oauth2_flow === MCP_OAUTH2_FLOW_M2M) return "m2m";
   return s.delegate_auth_to_upstream ? "passthrough" : "obo";
+}
+
+// Map a server's stored `oauth2_flow` (the API value: client_credentials /
+// authorization_code / null) to the edit form's OAuth Flow Type select value.
+// A null/unset flow returns undefined so the select shows its placeholder rather
+// than a guessed default — an unstamped legacy row must be assigned explicitly.
+export function oauth2FlowToFormValue(oauth2Flow?: string | null): string | undefined {
+  if (oauth2Flow === MCP_OAUTH2_FLOW_M2M) return OAUTH_FLOW.M2M;
+  if (oauth2Flow) return OAUTH_FLOW.INTERACTIVE;
+  return undefined;
 }
 
 export const TRANSPORT = {

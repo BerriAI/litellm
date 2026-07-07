@@ -12,7 +12,7 @@ import fnmatch
 import hashlib
 import os
 import re
-from typing import Any, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, List, Literal, NoReturn, Optional, Set, Tuple, Union, cast
 
 import jwt
 from cryptography import x509
@@ -1196,10 +1196,22 @@ class JWTAuthManager:
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find and validate specific team ID from team_id_jwt_field or team_alias_jwt_field"""
         individual_team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
+        team_alias = jwt_handler.get_team_alias(token=jwt_valid_token, default_value=None)
+
+        # `get_team_id` silently substitutes `team_id_default` for a missing
+        # JWT team_id claim. When the token actually carries an alias claim,
+        # that substitution would mask the alias-resolved team, so prefer
+        # alias resolution. `get_all_jwt_team_ids` ignores `team_id_default`;
+        # an empty result means no real JWT team_id claim is present.
+        if (
+            team_alias
+            and individual_team_id is not None
+            and not jwt_handler.get_all_jwt_team_ids(token=jwt_valid_token)
+        ):
+            individual_team_id = None
 
         team_object: Optional[LiteLLM_TeamTable] = None
 
-        # First try to get team by team_id
         if individual_team_id:
             try:
                 team_object = await get_team_object(
@@ -1222,8 +1234,6 @@ class JWTAuthManager:
                 )
                 return None, None
 
-        # If no team_id found, try to resolve via team_alias_jwt_field
-        team_alias = jwt_handler.get_team_alias(token=jwt_valid_token, default_value=None)
         if team_alias:
             verbose_proxy_logger.info(f"JWT Auth: Resolving team by alias: '{team_alias}'")
             team_object = await get_team_object_by_alias(
@@ -1329,7 +1339,10 @@ class JWTAuthManager:
         denied_auth_enforced_pass_through_route = False
 
         if not team_ids:
-            if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
+            if (
+                jwt_handler.litellm_jwtauth.enforce_team_based_model_access
+                and not jwt_handler.litellm_jwtauth.fallback_to_db_teams
+            ):
                 raise HTTPException(
                     status_code=403,
                     detail="No teams found in token. `enforce_team_based_model_access` is set to True. Token must belong to a team.",
@@ -1571,6 +1584,7 @@ class JWTAuthManager:
     def get_team_id_from_header(
         request_headers: Optional[dict],
         allowed_team_ids: Set[str],
+        fallback_to_db_teams: bool = False,
     ) -> Optional[str]:
         """
         Extract team_id from x-litellm-team-id header if present.
@@ -1579,6 +1593,10 @@ class JWTAuthManager:
         Args:
             request_headers: Dictionary of request headers
             allowed_team_ids: Set of team IDs the user is allowed to access (from JWT)
+            fallback_to_db_teams: When True and the JWT carries no team claims
+                (allowed_team_ids is empty), the header value is returned
+                provisionally and validated against DB memberships later in
+                auth_builder instead of being rejected here.
 
         Returns:
             The team_id from header if valid, None otherwise
@@ -1596,8 +1614,8 @@ class JWTAuthManager:
         if not header_team_id:
             return None
 
-        # Validate that the team_id is in the allowed teams
-        if header_team_id not in allowed_team_ids:
+        defer_to_db_membership = fallback_to_db_teams and not allowed_team_ids
+        if not defer_to_db_membership and header_team_id not in allowed_team_ids:
             raise HTTPException(
                 status_code=403,
                 detail=f"Team '{header_team_id}' from x-litellm-team-id header is not in your JWT's allowed teams. Allowed teams: {list(allowed_team_ids)}",
@@ -1694,11 +1712,20 @@ class JWTAuthManager:
                     ttl=get_management_object_ttl(user_api_key_cache),
                 )
 
-        # Sync team memberships
-        jwt_team_ids = set(jwt_handler.get_team_ids_from_jwt(jwt_valid_token))
+        # Sync team memberships. With fallback_to_db_teams on, read both plural and
+        # singular claim shapes so a singular-only IdP token (e.g. Okta/Auth0) is
+        # not mistaken for claimless and left with stale DB memberships the fallback
+        # could later attribute. With the flag off, keep the upstream plural-only
+        # reconciliation so existing deployments are unchanged.
+        jwt_team_ids = set(
+            jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
+            if jwt_handler.litellm_jwtauth.fallback_to_db_teams
+            else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+        )
         existing_teams = set(user_object.teams or [])
         teams_to_add = jwt_team_ids - existing_teams
-        teams_to_remove = existing_teams - jwt_team_ids
+        preserve_db_teams_without_claims = jwt_handler.litellm_jwtauth.fallback_to_db_teams and not jwt_team_ids
+        teams_to_remove = set() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
         if teams_to_add or teams_to_remove:
             from litellm.proxy.management_endpoints.scim.scim_v2 import (
                 patch_team_membership,
@@ -1819,6 +1846,155 @@ class JWTAuthManager:
             return None, None, None
 
     @staticmethod
+    async def _resolve_db_team_fallback(
+        user_object: LiteLLM_UserTable | None,
+        user_id: str | None,
+        requested_model: str | None,
+        route: str,
+        jwt_handler: JWTHandler,
+        enforce_team_based_model_access: bool,
+        team_id_upsert: bool,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+        request_method: str | None = None,
+    ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
+        """
+        Resolve a team for a user whose JWT carries no team claims by selecting
+        the first DB team membership that loads successfully and, when a model is
+        requested, can access that model — mirroring the per-team model-access
+        check the claim-based path enforces, so a team's `models` restriction is
+        not bypassed by the fallback.
+
+        The same `team_allowed_routes` gate the claim-based path applies is
+        enforced here too, so a DB-selected team cannot reach a route the JWT
+        config excludes for team-role callers. Auth-enforced passthrough routes
+        are exempt from that gate by design (they are governed by the team's
+        `allowed_passthrough_routes`, re-checked by the caller).
+
+        The resolved team's membership row is loaded too (when user_id is set) so
+        per-team membership budget limits are enforced on the fallback path the
+        same as on the claim-based path.
+
+        Raises HTTP 403 when the user has no usable DB team membership and
+        `enforce_team_based_model_access` is set; otherwise returns (None, None, None).
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        user_team_ids = user_object.teams if user_object else []
+        team_route_allowed = JWTAuthManager._is_team_route_allowed(
+            route=route, request_method=request_method, jwt_handler=jwt_handler
+        )
+        any_team_resolved = False
+        for candidate_team_id in user_team_ids:
+            try:
+                team_object = await get_team_object(
+                    team_id=candidate_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=team_id_upsert,
+                )
+            except HTTPException:
+                continue
+            any_team_resolved = True
+            if requested_model:
+                try:
+                    await can_team_access_model(
+                        model=requested_model,
+                        team_object=team_object,
+                        llm_router=llm_router,
+                        team_model_aliases=None,
+                    )
+                except ProxyException:
+                    continue
+            if not team_route_allowed:
+                continue
+            verbose_proxy_logger.debug(
+                "JWT DB team fallback: resolved team_id=%s from user DB membership",
+                candidate_team_id,
+            )
+            if user_id:
+                return (
+                    candidate_team_id,
+                    team_object,
+                    await get_team_membership(
+                        user_id=user_id,
+                        team_id=candidate_team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ),
+                )
+            return candidate_team_id, team_object, None
+
+        if enforce_team_based_model_access:
+            if requested_model and any_team_resolved:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"No team you are a member of has access to the requested "
+                        f"model: {requested_model}. Check `/models` to see the models "
+                        f"available to you."
+                    ),
+                )
+            raise HTTPException(
+                status_code=403,
+                detail=("User is not a member of any team. Add the user to a team via the LiteLLM UI or API."),
+            )
+        return None, None, None
+
+    @staticmethod
+    def _is_team_route_allowed(
+        route: str,
+        request_method: str | None,
+        jwt_handler: JWTHandler,
+    ) -> bool:
+        """
+        Whether a team-role caller may reach `route` per the JWT config's
+        `team_allowed_routes`. Auth-enforced passthrough routes are exempt
+        here; their team's `allowed_passthrough_routes` gate runs separately.
+        """
+        normalized_method = request_method.upper() if isinstance(request_method, str) else None
+        return RouteChecks.is_auth_enforced_pass_through_route(
+            route=route, method=normalized_method
+        ) or allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+        )
+
+    @staticmethod
+    def _raise_header_team_membership_denial(team_id: str) -> NoReturn:
+        """
+        The single denial shape for a provisional x-litellm-team-id header,
+        raised identically for nonexistent teams and for teams the user is not
+        a member of, so the response does not reveal whether a team id exists.
+        """
+        raise HTTPException(
+            status_code=403,
+            detail=(f"Team '{team_id}' (from x-litellm-team-id header) is not in your team memberships."),
+        )
+
+    @staticmethod
+    def _validate_header_team_in_db_membership(
+        team_id: str,
+        user_object: LiteLLM_UserTable | None,
+    ) -> None:
+        """
+        A provisional team_id from the x-litellm-team-id header (accepted without
+        JWT-team validation when the JWT carries no team claims) must exist in the
+        user's DB team memberships before it becomes request context.
+        """
+        user_team_ids = user_object.teams if user_object else []
+        if team_id in user_team_ids:
+            return
+        JWTAuthManager._raise_header_team_membership_denial(team_id)
+
+    @staticmethod
     async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
@@ -1911,24 +2087,49 @@ class JWTAuthManager:
         ## Check if team_id is specified via x-litellm-team-id header
         all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
         specific_team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
-        if specific_team_id:
+
+        # The DB fallback only applies when the token carries no team identity at
+        # all. `get_all_jwt_team_ids` ignores `team_id_default` so a configured
+        # default does not hide a claimless token, `get_team_alias` covers
+        # alias-only tokens so the alias still resolves via
+        # `find_and_validate_specific_team_id`, and `team_id is None` excludes
+        # the RBAC team-role path (which already set `team_id`); otherwise a
+        # provisional x-litellm-team-id header could override an RBAC-asserted team.
+        db_team_fallback = (
+            jwt_handler.litellm_jwtauth.fallback_to_db_teams
+            and not jwt_handler.get_all_jwt_team_ids(token=jwt_valid_token)
+            and not jwt_handler.get_team_alias(token=jwt_valid_token, default_value=None)
+            and team_id is None
+        )
+        if specific_team_id and not db_team_fallback:
             all_team_ids.add(specific_team_id)
 
         header_team_id = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,
             allowed_team_ids=all_team_ids,
+            fallback_to_db_teams=db_team_fallback,
         )
         if header_team_id:
             team_id = header_team_id
-            team_object = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-            )
-        elif not team_id:
+            # A provisional header team (accepted only because the JWT carries no
+            # team claims) is validated against DB membership further down; never
+            # upsert it here or an attacker-supplied x-litellm-team-id would create
+            # an orphaned team row before that check runs. A genuine membership team
+            # already exists, so suppressing the upsert in that case costs nothing.
+            try:
+                team_object = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=(jwt_handler.litellm_jwtauth.team_id_upsert and not db_team_fallback),
+                )
+            except HTTPException:
+                if not db_team_fallback:
+                    raise
+                JWTAuthManager._raise_header_team_membership_denial(team_id)
+        elif not team_id and not db_team_fallback:
             ## SPECIFIC TEAM ID
             (
                 team_id,
@@ -2020,8 +2221,36 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
         )
 
-        # If JWT did not resolve team_id, attempt single-team DB fallback.
-        if team_id is None:
+        # If JWT did not resolve team_id, attempt a team fallback.
+        if team_id is None and db_team_fallback:
+            (
+                team_id,
+                team_object,
+                team_membership_object,
+            ) = await JWTAuthManager._resolve_db_team_fallback(
+                user_object=user_object,
+                user_id=user_id,
+                requested_model=request_data.get("model"),
+                route=route,
+                jwt_handler=jwt_handler,
+                enforce_team_based_model_access=jwt_handler.litellm_jwtauth.enforce_team_based_model_access,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                request_method=request_method,
+            )
+            # The earlier passthrough gate ran when team_id was None; re-check
+            # against the DB-resolved team so a fallback-selected team must also
+            # pass the auth-enforced passthrough allowlist.
+            if team_id and not JWTAuthManager._team_has_passthrough_route_access(
+                team_object=team_object,
+                route=route,
+                request_method=request_method,
+            ):
+                JWTAuthManager._raise_team_passthrough_route_denial(route=route)
+        elif team_id is None:
             (
                 team_id,
                 team_object,
@@ -2035,6 +2264,22 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
+        elif db_team_fallback and team_id == header_team_id:
+            JWTAuthManager._validate_header_team_in_db_membership(
+                team_id=team_id,
+                user_object=user_object,
+            )
+            if not JWTAuthManager._is_team_route_allowed(
+                route=route,
+                request_method=request_method,
+                jwt_handler=jwt_handler,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Team '{team_id}' (from x-litellm-team-id header) is not allowed to access route '{route}'."
+                    ),
+                )
 
         ## MAP USER TO TEAMS
         await JWTAuthManager.map_user_to_teams(

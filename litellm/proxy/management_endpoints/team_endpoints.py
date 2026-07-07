@@ -26,6 +26,7 @@ from litellm._uuid import uuid
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     BlockTeamRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
@@ -1046,6 +1047,13 @@ async def new_team(
         if data.team_id is None:
             data.team_id = str(uuid.uuid4())
         else:
+            if data.team_id == UI_TEAM_ID:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"team_id '{UI_TEAM_ID}' is reserved for LiteLLM UI dashboard sessions and cannot be used for a real team. Please use a different team id."
+                    },
+                )
             # Check if team_id exists already
             _existing_team_id = await prisma_client.get_data(
                 team_id=data.team_id, table_name="team", query_type="find_unique"
