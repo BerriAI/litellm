@@ -386,6 +386,81 @@ class TestProxySettingEndpoints:
         call_args = mock_prisma.db.litellm_ssoconfig.find_unique.call_args
         assert call_args.kwargs["where"]["id"] == "sso_config"
 
+    def test_get_sso_settings_falls_back_to_env_when_db_empty(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """SSO configured only via env vars (no DB row) still populates the panel."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        # No SSO row saved through the UI
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_decrypt_and_set_db_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "env_google_client_id")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "env_google_client_secret")
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_ENDPOINT", "https://env.okta.com/authorize")
+        monkeypatch.setenv("PROXY_BASE_URL", "https://env-proxy.example.com")
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+
+        # Non-secret env values surface verbatim
+        assert values["google_client_id"] == "env_google_client_id"
+        assert values["generic_authorization_endpoint"] == "https://env.okta.com/authorize"
+        assert values["proxy_base_url"] == "https://env-proxy.example.com"
+
+        # Secret env values are still masked on read
+        assert values["google_client_secret"] != "env_google_client_secret"
+        assert "*" in values["google_client_secret"]
+
+    def test_get_sso_settings_db_takes_precedence_over_env(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """When both DB and env define a field, the stored DB value wins."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.sso_settings = {
+            "google_client_id": "db_google_client_id",
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_db_record
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_decrypt_and_set_db_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "env_google_client_id")
+        monkeypatch.setenv("MICROSOFT_TENANT", "env_tenant")
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+
+        # DB value wins for the overlapping field
+        assert values["google_client_id"] == "db_google_client_id"
+        # Env-only field still falls back
+        assert values["microsoft_tenant"] == "env_tenant"
+
     def test_update_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test updating the SSO settings to the dedicated database table"""
         import json
