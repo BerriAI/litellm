@@ -651,7 +651,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           : {}),
         ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
         restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
-          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null }
+          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null, token_exchange_profile: null }
           : {}),
         server_id: mcpServer.server_id,
         mcp_info: {

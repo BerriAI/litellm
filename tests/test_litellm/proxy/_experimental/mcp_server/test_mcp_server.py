@@ -5187,6 +5187,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     legacy_server.token_exchange_endpoint = None
     legacy_server.audience = None
     legacy_server.subject_token_type = None
+    legacy_server.token_exchange_profile = None
     legacy_server.token_url = "https://oauth.example.com/token"
     legacy_server.authorization_url = None
     legacy_server.client_id = "client-id"

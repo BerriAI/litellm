@@ -334,6 +334,7 @@ model LiteLLM_MCPServerTable {
   // RFC 8707 resource indicators are a separate concept, named "resource" in the v2 egress types.
   audience           String?
   subject_token_type String?
+  token_exchange_profile String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
