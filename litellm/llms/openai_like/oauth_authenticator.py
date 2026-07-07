@@ -64,9 +64,7 @@ def get_client_credentials_token(
         )
 
     secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()[:16]
-    cache_key = (
-        f"oauth_client_credentials:{token_url}:{client_id}:{scope or ''}:{secret_hash}"
-    )
+    cache_key = f"oauth_client_credentials:{token_url}:{client_id}:{scope or ''}:{secret_hash}"
     cached = _token_cache.get_cache(cache_key)
     if isinstance(cached, str):
         return cached
