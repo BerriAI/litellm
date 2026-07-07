@@ -467,3 +467,69 @@ async def test_auth_type_switch_clears_flow_fields_with_external_fields_set():
         "subject_token_type",
     ):
         assert data_dict[stale_field] is None, f"{stale_field} must be cleared via the fields_set path"
+
+
+@pytest.mark.asyncio
+async def test_explicit_clear_without_credentials_purges_legacy_blob_copy():
+    """Clearing a column in an update that does not touch credentials must strip
+    the legacy blob copy too — otherwise the next credentials update's
+    migrate-on-write would repopulate the column the admin just cleared."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://dead-idp.example.com/token"},
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", token_exchange_endpoint=None)
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] is None
+    stored_blob = json.loads(data_dict["credentials"])
+    assert "token_exchange_endpoint" not in stored_blob
+    # Unrelated blob keys (encrypted secrets) survive untouched.
+    assert stored_blob["client_id"] == "enc-old-cid"
+
+
+@pytest.mark.asyncio
+async def test_explicit_te_write_without_credentials_migrates_other_legacy_fields():
+    """A no-credentials update that writes one token-exchange column migrates the
+    whole row: untouched null columns are lifted from the blob, and every blob
+    copy is stripped."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={
+            "client_id": "enc-old-cid",
+            "token_exchange_endpoint": "https://legacy-idp.example.com/token",
+            "audience": "api://legacy",
+        },
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", audience="api://new")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["audience"] == "api://new"
+    assert data_dict["token_exchange_endpoint"] == "https://legacy-idp.example.com/token"
+    stored_blob = json.loads(data_dict["credentials"])
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type"):
+        assert te_field not in stored_blob
+
+
+@pytest.mark.asyncio
+async def test_te_update_without_blob_te_keys_leaves_credentials_untouched():
+    """A no-credentials column write on a row whose blob has no legacy copies
+    must not rewrite the credentials blob at all."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row("oauth2_token_exchange", credentials={"client_id": "enc-old-cid"})
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", token_exchange_endpoint="https://new.example.com/token")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://new.example.com/token"
+    assert "credentials" not in data_dict
