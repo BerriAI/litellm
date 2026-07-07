@@ -316,6 +316,9 @@ class VertexBase:
             api_base=api_base,
         )
 
+        if partner == VertexPartnerProvider.llama:
+            return default_api_base
+
         if len(default_api_base.split(":")) > 1:
             endpoint = default_api_base.split(":")[-1]
         else:
