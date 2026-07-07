@@ -436,12 +436,19 @@ from litellm.proxy.plugin_routes import (
     router as plugin_router,
     register_plugins_from_config,
 )
-from litellm.proxy.enterprise_billing.billing_metrics import (
-    build_billing_metrics_recorder,
-)
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
+    BillingRecorder,
 )
+
+try:
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        build_billing_metrics_recorder as _build_billing_metrics_recorder,
+    )
+
+    build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
+except ImportError:
+    build_billing_metrics_recorder = None
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -1818,13 +1825,17 @@ app.add_middleware(
     # loaded the YAML config's environment_variables. Building it here at import
     # time would permanently capture recorder=None for YAML-configured
     # deployments. The lambda reads the module globals at call time.
-    recorder_factory=lambda: build_billing_metrics_recorder(
-        premium=premium_user,
-        # Read from the license check, not the premium_user_data module global:
-        # that global is bound once at import and goes stale when the license
-        # arrives via the YAML config's environment_variables.
-        license_data=_license_check.airgapped_license_data,
-        litellm_version=version,
+    recorder_factory=lambda: (
+        build_billing_metrics_recorder(
+            premium=premium_user,
+            # Read from the license check, not the premium_user_data module
+            # global: that global is bound once at import and goes stale when
+            # the license arrives via the YAML config's environment_variables.
+            license_data=_license_check.airgapped_license_data,
+            litellm_version=version,
+        )
+        if build_billing_metrics_recorder is not None
+        else None
     ),
 )
 
