@@ -92,7 +92,7 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
         assert chunks[2]["content_block"] == {"type": "text", "text": ""}
         assert [c["index"] for c in chunks] == [0, 0, 1, 1]
 
-    def test_process_event_registered_item_id_does_not_synthesize_start(self):
+    def test_process_event_message_item_opens_text_block_exactly_once(self):
         chunks = _process_all(
             [
                 {
