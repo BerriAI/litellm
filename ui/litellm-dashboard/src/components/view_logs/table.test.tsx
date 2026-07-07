@@ -144,6 +144,8 @@ describe("DataTable expansion", () => {
       />,
     );
 
+    expect(screen.queryByText("child of r2")).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "expand r2" }));
 
     const childCell = screen.getByText("child of r2");
