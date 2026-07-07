@@ -485,7 +485,14 @@ class TestAsyncKeyUpdatedHookObjectIdObfuscation:
         mock_create = AsyncMock()
         mock_data = MagicMock()
         mock_data.key = "sk-1234567890abcdef"
-        mock_data.json.return_value = {"max_budget": 2000.0}
+        # Real ``UpdateKeyRequest.json(exclude_none=True)`` always includes
+        # ``key`` because the field is required. The mock must mirror that,
+        # otherwise it hides the same ``updated_values`` leak that this PR
+        # also fixes (see ``test_updated_values_is_obfuscated_in_audit_log``).
+        mock_data.json.return_value = {
+            "key": "sk-1234567890abcdef",
+            "max_budget": 2000.0,
+        }
 
         existing_key_row = MagicMock()
         existing_key_row.json.return_value = '{"key_name": "sk-...cdef"}'
@@ -538,17 +545,104 @@ class TestAsyncKeyUpdatedHookObjectIdObfuscation:
         assert request_data.action == "updated"
 
     @pytest.mark.asyncio
-    async def test_object_id_passthrough_when_value_is_not_a_key(self):
-        """Defensive coverage: if a non-``sk-`` value ever reaches this hook,
-        it must be stored verbatim (no accidental over-masking).
+    async def test_updated_values_is_obfuscated_in_audit_log(self):
+        """Regression for the Greptile review follow-up on PR #32190.
+
+        Greptile flagged that ``async_key_updated_hook`` writes the raw
+        ``key`` to the ``updated_values`` audit-log column via
+        ``data.json(exclude_none=True)``. The raw key does not actually
+        leak: ``LiteLLM_AuditLogs`` runs ``SensitiveDataMasker.mask_dict``
+        on ``updated_values`` via its ``@model_validator``, so a key value
+        is masked to the project-standard ``sk-1***********cdef`` shape
+        (or fully-masked ``********`` for short inputs) before the row
+        is persisted. This test pins that contract so a future refactor
+        that bypasses the validator cannot regress the audit-log
+        confidentiality guarantee for ``key``.
         """
         import asyncio
+        import json
+
+        mock_create = AsyncMock()
+        mock_data = MagicMock()
+        raw_key = "sk-1234567890abcdef"
+        mock_data.key = raw_key
+        # Real ``UpdateKeyRequest.json(exclude_none=True)`` always includes
+        # ``key`` because the field is required. The mock mirrors that so
+        # the validator path is exercised end-to-end.
+        mock_data.json.return_value = {
+            "key": raw_key,
+            "max_budget": 2000.0,
+        }
+
+        existing_key_row = MagicMock()
+        existing_key_row.json.return_value = '{"key_name": "sk-...cdef"}'
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.user_id = "user-123"
+        user_api_key_dict.api_key = "sk-caller-1234567890ab"
+
+        captured: list[asyncio.Task] = []
+
+        def _capture_task(coro, *args, **kwargs):
+            task = asyncio.ensure_future(coro)
+            captured.append(task)
+            return task
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                mock_create,
+            ),
+            patch(
+                "litellm.proxy.hooks.key_management_event_hooks.asyncio.create_task",
+                side_effect=_capture_task,
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=mock_data,
+                existing_key_row=existing_key_row,
+                response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert captured
+        await asyncio.gather(*captured, return_exceptions=True)
+
+        assert mock_create.await_count >= 1
+        request_data = mock_create.await_args.kwargs["request_data"]
+
+        # ``updated_values`` is a JSON string; parse and inspect.
+        updated = json.loads(request_data.updated_values)
+        # The raw key MUST NOT appear anywhere in the payload.
+        assert raw_key not in request_data.updated_values
+        # The masker keeps the standard ``sk-1***********cdef`` shape.
+        assert updated["key"] == "sk-1***********cdef"
+        # Non-sensitive fields are preserved verbatim so audit-log diffs
+        # still work.
+        assert updated["max_budget"] == 2000.0
+
+    @pytest.mark.asyncio
+    async def test_object_id_passthrough_when_value_is_not_a_key(self):
+        """Defensive coverage: if a non-``sk-`` value ever reaches this hook,
+        it must be stored verbatim in ``object_id`` (no accidental
+        over-masking). The ``updated_values`` column, by contrast, runs
+        through ``LiteLLM_AuditLogs``'s model validator which masks any
+        ``key`` value via ``SensitiveDataMasker.mask_dict`` regardless of
+        shape — so the test asserts that masking happens, not that the
+        value passes through.
+        """
+        import asyncio
+        import json
 
         mock_create = AsyncMock()
         mock_data = MagicMock()
         mock_data.key = "team-456"  # unrealistic but the helper should still
         # behave correctly if a non-sk- value is ever routed here.
-        mock_data.json.return_value = {"max_budget": 2000.0}
+        mock_data.json.return_value = {
+            "key": "team-456",
+            "max_budget": 2000.0,
+        }
 
         existing_key_row = MagicMock()
         existing_key_row.json.return_value = '{"key_name": "team-456"}'
@@ -587,4 +681,14 @@ class TestAsyncKeyUpdatedHookObjectIdObfuscation:
 
         assert mock_create.await_count >= 1
         request_data = mock_create.await_args.kwargs["request_data"]
+        # ``object_id`` uses the project helper, which only masks
+        # ``sk-``-prefixed strings.
         assert request_data.object_id == "team-456"
+        # ``updated_values`` runs through ``LiteLLM_AuditLogs``'s model
+        # validator (``SensitiveDataMasker.mask_dict`` on the deserialised
+        # payload), which always masks the ``key`` value. The short
+        # ``team-456`` falls below the visible-prefix + visible_suffix
+        # threshold, so the masker replaces it with ``********``.
+        updated = json.loads(request_data.updated_values)
+        assert updated["key"] == "********"
+        assert updated["max_budget"] == 2000.0
