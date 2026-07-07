@@ -154,6 +154,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         applied_edits: Optional[List[AppliedEdit]] = None,
         compaction_block: Optional[CompactionBlock] = None,
         iterations_usage: Optional[List[UsageIteration]] = None,
+        thinking_disabled: bool = False,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -167,6 +168,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
+        self.thinking_disabled = thinking_disabled
         self.sent_compaction_block: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
@@ -407,6 +409,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                     applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                    thinking_disabled=self.thinking_disabled,
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -627,6 +630,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                     applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                    thinking_disabled=self.thinking_disabled,
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -860,7 +864,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             block_type,
             content_block_start,
         ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=chunk.choices  # type: ignore
+            choices=chunk.choices,  # type: ignore
+            thinking_disabled=self.thinking_disabled,
         )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit

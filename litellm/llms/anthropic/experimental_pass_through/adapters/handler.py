@@ -599,6 +599,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         completion_response = await litellm.acompletion(**completion_kwargs)
 
+        thinking_disabled = thinking is None or (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+
         if stream:
             transformed_stream = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
@@ -606,6 +608,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
+                thinking_disabled=thinking_disabled,
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -615,6 +618,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
+                thinking_disabled=thinking_disabled,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -740,6 +744,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         completion_response = litellm.completion(**completion_kwargs)
 
+        thinking_disabled = thinking is None or (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+
         if stream:
             transformed_stream = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
@@ -747,6 +753,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
+                thinking_disabled=thinking_disabled,
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -756,6 +763,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
+                thinking_disabled=thinking_disabled,
             )
             if anthropic_response is not None:
                 return anthropic_response
