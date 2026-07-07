@@ -6070,6 +6070,83 @@ class TestOBOCallToolRetry:
         assert first.attempts == 1 and retry.attempts == 1
 
 
+class TestOBOConcurrencyLimit:
+    """OBO (token_exchange) tool calls must honor the server's max_concurrent_requests.
+
+    Regression: the token_exchange dispatch built its coroutine outside
+    _limit_outbound_concurrency, so OBO calls skipped the per-server semaphore the
+    non-OBO path enforces and a caller could exceed the admin-configured cap.
+    """
+
+    @pytest.mark.asyncio
+    async def test_obo_dispatch_respects_max_concurrent_requests(self):
+        max_concurrent = 2
+        overflow = 3
+        server = MCPServer(
+            server_id="obo-concurrency",
+            name="obo",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            max_concurrent_requests=max_concurrent,
+        )
+
+        release = asyncio.Event()
+        inflight = {"current": 0, "peak": 0}
+
+        class _ConcurrencyRecordingClient:
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+                inflight["current"] += 1
+                inflight["peak"] = max(inflight["peak"], inflight["current"])
+                try:
+                    await release.wait()
+                finally:
+                    inflight["current"] -= 1
+                return CallToolResult(content=[], isError=False)
+
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=_ConcurrencyRecordingClient())
+
+        async def _dispatch():
+            return await manager._call_regular_mcp_tool(
+                mcp_server=server,
+                original_tool_name="do_thing",
+                arguments={},
+                tasks=[],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers={"Authorization": "Bearer subject-jwt"},
+                raw_headers=None,
+                proxy_logging_obj=None,
+            )
+
+        callers = [asyncio.create_task(_dispatch()) for _ in range(max_concurrent + overflow)]
+
+        stable = 0
+        previous = -1
+        for _ in range(1000):
+            await asyncio.sleep(0)
+            current = inflight["current"]
+            if current == previous:
+                stable += 1
+                if current > 0 and stable >= 10:
+                    break
+            else:
+                stable = 0
+                previous = current
+
+        peak_while_blocked = inflight["peak"]
+        release.set()
+        results = await asyncio.gather(*callers)
+
+        assert peak_while_blocked == max_concurrent
+        assert inflight["current"] == 0
+        assert all(result.isError is False for result in results)
+
+
 class TestOBOEndpointDiscovery:
     """An oauth2_token_exchange server with no configured token endpoint discovers it (RFC 9728 ->
     RFC 8414) like the oauth2 flow does; an explicitly configured endpoint skips discovery."""
