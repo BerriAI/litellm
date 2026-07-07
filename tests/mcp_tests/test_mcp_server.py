@@ -514,6 +514,69 @@ async def test_sse_mcp_handler_mock():
         )
 
 
+@pytest.mark.asyncio
+async def test_sse_mcp_handler_propagates_passthrough_401():
+    """SSE handler must raise 401 + WWW-Authenticate when the upstream
+    pass-through probe rejects the client's bearer token, instead of letting
+    the SSE session start and silently return empty tool lists."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/mcp/sse",
+        "headers": [(b"accept", b"text/event-stream")],
+        "query_string": b"",
+        "server": ("localhost", 8000),
+        "scheme": "http",
+    }
+    mock_receive = AsyncMock()
+    mock_send = AsyncMock()
+
+    mock_auth_result = (UserAPIKeyAuth(), None, None, {}, {}, [])
+
+    challenge = HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": "Bearer authorization_uri=https://example/"},
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
+            AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new=AsyncMock(return_value=mock_auth_result),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new=AsyncMock(side_effect=challenge),
+        ),
+    ):
+        from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
+
+        with pytest.raises(HTTPException) as excinfo:
+            await handle_sse_mcp(mock_scope, mock_receive, mock_send)
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.headers and "WWW-Authenticate" in excinfo.value.headers
+
+
 def test_generate_stable_server_id():
     """
     Test the _generate_stable_server_id method to ensure hash stability across releases.
@@ -892,6 +955,7 @@ async def test_get_tools_from_mcp_servers():
                 add_prefix=False,
                 raw_headers=None,
                 user_api_key_auth=None,
+                oauth2_headers=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1026,7 +1090,9 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         mock_client_constructor,
     ):
         # Call list_tools
-        tools = await test_manager.list_tools(user_api_key_auth=MagicMock())
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        tools = await test_manager.list_tools(user_api_key_auth=UserAPIKeyAuth())
         # Should only return tools from server_a
         assert len(tools) == 1
         # The server should use the server_name as prefix since no alias is provided
@@ -1818,10 +1884,11 @@ def test_get_server_auth_header_no_auth_headers():
 
 
 def test_create_tool_response_objects():
-    """Test _create_tool_response_objects function."""
+    """Test _create_tool_response_objects enriches mcp_info with server_id and alias."""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (
         _create_tool_response_objects,
     )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from mcp.types import Tool as MCPTool
 
     # Create mock tools
@@ -1838,20 +1905,32 @@ def test_create_tool_response_objects():
         ),
     ]
 
-    server_mcp_info = {
-        "server_name": "zapier",
+    server = MCPServer(
+        server_id="a1b2c3d4",
+        name="zapier_internal",
+        alias="zapier",
+        transport="http",
+        mcp_info={
+            "server_name": "zapier_internal",
+            "logo_url": "https://zapier.com/logo.png",
+        },
+    )
+
+    result = _create_tool_response_objects(mock_tools, server)
+
+    expected_mcp_info = {
+        "server_name": "zapier_internal",
         "logo_url": "https://zapier.com/logo.png",
+        "server_id": "a1b2c3d4",
+        "alias": "zapier",
     }
-
-    result = _create_tool_response_objects(mock_tools, server_mcp_info)
-
     assert len(result) == 2
     assert result[0].name == "send_email"
     assert result[0].description == "Send an email"
-    assert result[0].mcp_info == server_mcp_info
+    assert result[0].mcp_info == expected_mcp_info
     assert result[1].name == "create_event"
     assert result[1].description == "Create a calendar event"
-    assert result[1].mcp_info == server_mcp_info
+    assert result[1].mcp_info == expected_mcp_info
 
 
 @pytest.mark.asyncio
@@ -1862,9 +1941,13 @@ async def test_get_tools_for_single_server():
     )
     from mcp.types import Tool as MCPTool
 
-    # Create a mock server
+    # Create a mock server (pin allowlist fields; MagicMock auto-attrs are truthy)
     mock_server = MagicMock()
     mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.server_id = "zapier_id"
+    mock_server.alias = "zapier_alias"
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = None
 
     # Create mock tools
     mock_tools = [
@@ -1896,7 +1979,49 @@ async def test_get_tools_for_single_server():
         # Verify the result
         assert len(result) == 1
         assert result[0].name == "send_email"
-        assert result[0].mcp_info == {"server_name": "zapier"}
+        assert result[0].mcp_info == {
+            "server_name": "zapier",
+            "server_id": "zapier_id",
+            "alias": "zapier_alias",
+        }
+
+
+@pytest.mark.asyncio
+async def test_get_tools_for_single_server_applies_disallowed_tools_without_allowlist():
+    """REST listing must honor disallowed_tools even when no allowlist is set."""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_tools_for_single_server,
+    )
+    from mcp.types import Tool as MCPTool
+
+    mock_server = MagicMock()
+    mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.name = "zapier"
+    mock_server.server_id = "zapier"
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = ["send_email"]
+
+    mock_tools = [
+        MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="read_email",
+            description="Read an email",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+
+        result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
+
+    assert [tool.name for tool in result] == ["read_email"]
 
 
 @pytest.mark.asyncio

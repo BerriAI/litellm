@@ -5,10 +5,12 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -26,7 +28,6 @@ from ...openai.chat.gpt_transformation import (
 
 
 class XAIChatConfig(OpenAIGPTConfig):
-
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "xai"
@@ -35,8 +36,72 @@ class XAIChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("XAI_API_KEY")
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        from litellm.llms.xai.oauth import (
+            XAIOAuthAuthenticator,
+            XAIOAuthError,
+            should_use_xai_oauth,
+        )
+
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
+            try:
+                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
+            except XAIOAuthError as exc:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider=self.custom_llm_provider or "xai",
+                    message=str(exc),
+                ) from exc
+            if "content-type" not in headers and "Content-Type" not in headers:
+                headers["Content-Type"] = "application/json"
+            return headers
+
+        return super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=dynamic_api_key,
+            api_base=api_base,
+        )
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
+
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
+            api_base = XAIOAuthAuthenticator().get_api_base()
+
+        return super().get_complete_url(
+            api_base=api_base,
+            api_key=dynamic_api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            stream=stream,
+        )
 
     def get_supported_openai_params(self, model: str) -> list:
         base_openai_params = [
@@ -75,9 +140,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         # reasoning check
         #########################################################
         try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ):
+            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_openai_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
@@ -155,9 +218,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         Filter out 'name' from messages
         """
         messages = strip_name_from_messages(messages)
-        return super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        return super().transform_request(model, messages, optional_params, litellm_params, headers)
 
     @staticmethod
     def _fix_choice_finish_reason_for_tool_calls(choice: Choices) -> None:
@@ -167,11 +228,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         XAI API returns empty string for finish_reason when using tools,
         so we need to set it to "tool_calls" when tool_calls are present.
         """
-        if (
-            choice.finish_reason == ""
-            and choice.message.tool_calls
-            and len(choice.message.tool_calls) > 0
-        ):
+        if choice.finish_reason == "" and choice.message.tool_calls and len(choice.message.tool_calls) > 0:
             choice.finish_reason = "tool_calls"
 
     def transform_response(
@@ -278,9 +335,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             return
 
         details = getattr(usage, "completion_tokens_details", None)
-        reasoning_tokens = (
-            int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
-        )
+        reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
         if reasoning_tokens <= 0:
             return
 
@@ -297,9 +352,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         usage.completion_tokens = completion_tokens + reasoning_tokens
 
-    def _enhance_usage_with_xai_web_search_fields(
-        self, model_response: ModelResponse, raw_response_json: dict
-    ) -> None:
+    def _enhance_usage_with_xai_web_search_fields(self, model_response: ModelResponse, raw_response_json: dict) -> None:
         """
         Extract num_sources_used from X.AI response and map it to web_search_requests.
         """

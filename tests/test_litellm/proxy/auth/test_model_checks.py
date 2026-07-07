@@ -388,6 +388,62 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
     }
 
 
+def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
+    """Regression test for #30358.
+
+    A wildcard with a custom prefix (e.g. ``ollama_server1/*`` to distinguish multiple Ollama
+    instances) must not stack the provider's own prefix onto the expanded model ids. The expanded
+    ids should be ``ollama_server1/gemma3:1b`` rather than ``ollama_server1/ollama/gemma3:1b``.
+    """
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["ollama/gemma3:1b", "ollama/llama3:8b"],
+    )
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="ollama_server1/*",
+        litellm_params=LiteLLM_Params(
+            model="ollama_chat/*", custom_llm_provider="ollama_chat"
+        ),
+    )
+
+    assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
+
+
+def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment(
+    monkeypatch,
+):
+    """Only a known provider prefix should be stripped before re-prefixing.
+
+    If ``get_provider_models`` returns ids whose first segment is an org rather than a litellm
+    provider (e.g. ``meta-llama/Llama-3-8B``), stripping the first slash segment would drop the
+    org and produce an uncallable id. The org segment must be preserved.
+    """
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["meta-llama/Llama-3-8B"],
+    )
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="my_hf/*",
+        litellm_params=LiteLLM_Params(
+            model="huggingface/*", custom_llm_provider="huggingface"
+        ),
+    )
+
+    assert result == ["my_hf/meta-llama/Llama-3-8B"]
+
+
 def test_wildcard_credential_hydration_preserves_missing_credential_name(
     monkeypatch,
 ):
@@ -487,3 +543,169 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
     )
 
     assert "openai/gpt-4o-mini" in result
+
+
+def test_get_key_models_all_team_models_recursive_team():
+    """GH#30619: when key and team both have all-team-models,
+    the sentinel should expand to proxy_model_list."""
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": "team-1",
+            "team_models": [SpecialModelNames.all_team_models.value],
+        },
+    )()
+    proxy_model_list = ["model-a", "model-b"]
+    result = get_key_models(user_api_key_dict, proxy_model_list, {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b"}
+
+
+def test_get_key_models_all_team_models_keeps_mixed_team_entries():
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": "team-1",
+            "team_models": [
+                SpecialModelNames.all_team_models.value,
+                "restricted-model",
+            ],
+        },
+    )()
+    result = get_key_models(user_api_key_dict, ["model-a", "model-b"], {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b", "restricted-model"}
+
+
+def test_get_team_models_all_team_models_expands():
+    """GH#30619: all-team-models in team_models should expand."""
+    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.proxy._types import SpecialModelNames
+
+    result = get_team_models(
+        [SpecialModelNames.all_team_models.value],
+        ["model-a", "model-b"],
+        {},
+    )
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b"}
+
+
+def test_get_team_models_all_team_models_expands_with_access_groups():
+    """GH#30619: all-team-models with include_model_access_groups
+    should include access group keys."""
+    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.proxy._types import SpecialModelNames
+
+    result = get_team_models(
+        [SpecialModelNames.all_team_models.value],
+        ["model-a", "model-b"],
+        {"group-1": ["g1-model"], "group-2": ["g2-model"]},
+        include_model_access_groups=True,
+    )
+    assert SpecialModelNames.all_team_models.value not in result
+    assert "model-a" in result
+    assert "model-b" in result
+    assert "group-1" in result
+    assert "group-2" in result
+
+
+def test_get_key_models_teamless_all_team_models_returns_unrestricted():
+    """Teamless key with all-team-models must resolve the same as leaving the
+    models field empty ([] = unrestricted). The sentinel must not leak into
+    the returned list. Fails if someone adds a team_id guard to the sentinel
+    expansion in get_key_models."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": None,
+            "team_models": [],
+        },
+    )()
+    proxy_model_list = ["gpt-4o", "claude-sonnet-4-20250514"]
+    result = get_key_models(user_api_key_dict, proxy_model_list, {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert result == [], "should return [] (unrestricted), same as an unscoped key"
+
+
+def test_expand_wildcard_deployments_non_wildcard_passthrough():
+    """Non-wildcard deployments must be returned unchanged."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    assert result == [deployment]
+
+
+def test_expand_wildcard_deployments_openai_wildcard():
+    """openai/* should expand into ≥1 known openai model entries."""
+    from unittest.mock import patch
+
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    fake_models = ["openai/gpt-4o", "openai/gpt-4o-mini"]
+    deployment = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+    }
+    with patch(
+        "litellm.proxy.auth.model_checks.get_known_models_from_wildcard",
+        return_value=fake_models,
+    ):
+        result = expand_wildcard_deployments_for_model_info([deployment])
+
+    assert len(result) == 2
+    assert all(r["model_name"] in fake_models for r in result)
+    assert all(r["litellm_params"]["model"] in fake_models for r in result)
+
+
+def test_expand_wildcard_concrete_model_name_with_wildcard_litellm_params():
+    """Concrete model_name must not be overwritten when only litellm_params.model is wildcard."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {
+        "model_name": "my-custom-alias",
+        "litellm_params": {"model": "openai/*"},
+    }
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    # model_name is not a wildcard, so the deployment passes through unchanged
+    assert result == [deployment]
+
+
+def test_expand_wildcard_invalid_litellm_params_passthrough():
+    """Deployments with invalid litellm_params must pass through unchanged (no 500)."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "max_retries": "not-an-int-field-that-breaks",
+        },
+    }
+    # Even if LiteLLM_Params construction fails the deployment should survive
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    assert result == [deployment]

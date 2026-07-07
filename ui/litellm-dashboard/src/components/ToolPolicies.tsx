@@ -9,11 +9,7 @@ import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDrop
 import FilterComponent, { FilterOption } from "./molecules/filter";
 import { MetricCard } from "./GuardrailsMonitor/MetricCard";
 import { PolicySelect, INPUT_POLICY_OPTIONS, OUTPUT_POLICY_OPTIONS } from "./ToolPolicies/PolicySelect";
-import {
-  fetchToolsList,
-  updateToolPolicy,
-  ToolRow,
-} from "./networking";
+import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
 
 function getUTCDateKey(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
@@ -192,9 +188,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
       const activeTeamsCount = new Set(tools.map((t) => t.team_id).filter(Boolean)).size;
 
       const needsReviewTools = tools.filter(
-        (t) =>
-          isCreatedInUTCDay(t.created_at, todayKey) &&
-          t.input_policy === "untrusted"
+        (t) => isCreatedInUTCDay(t.created_at, todayKey) && t.input_policy === "untrusted",
       );
 
       return {
@@ -290,8 +284,8 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
           <h2 className="text-sm font-semibold text-amber-900 mb-1">Needs Review</h2>
           <p className="text-sm text-amber-800 mb-3">
-            {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require
-            policy decisions.
+            {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require policy
+            decisions.
           </p>
           <div className="flex flex-wrap gap-2">
             {needsReviewTools.map((t) => (
@@ -315,7 +309,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
+      <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
         <div className="border-b px-6 py-4 w-full max-w-full box-border">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
             <div className="flex flex-wrap items-center gap-3">
@@ -323,7 +317,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                 <input
                   type="text"
                   placeholder="Search by Tool Name"
-                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   value={searchTerm}
                   onChange={(e) => {
                     setSearchTerm(e.target.value);
@@ -419,7 +413,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         )}
 
         {error && (
-          <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
+          <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded-sm text-sm text-red-700">{error}</div>
         )}
 
         <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
@@ -473,7 +467,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                     <button
                       type="button"
                       onClick={() => onSelectTool?.(tool.tool_name)}
-                      className="text-left w-full font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:ring-0"
+                      className="text-left w-full font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:text-blue-800 hover:underline focus:outline-hidden focus:ring-0"
                     >
                       <Tooltip title={onSelectTool ? "Click to view details and block for team/key" : tool.tool_name}>
                         <span>{tool.tool_name}</span>
@@ -522,7 +516,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.user_agent ?? "-"}>
-                      <span className="font-mono max-w-[20ch] truncate block text-xs text-gray-500">{tool.user_agent ?? "-"}</span>
+                      <span className="font-mono max-w-[20ch] truncate block text-xs text-gray-500">
+                        {tool.user_agent ?? "-"}
+                      </span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
@@ -556,7 +552,6 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
           </div>
         )}
       </div>
-
     </div>
   );
 };

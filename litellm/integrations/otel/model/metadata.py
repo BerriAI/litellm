@@ -36,7 +36,6 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Mapping, cast
 
@@ -53,8 +52,10 @@ class RequestIdentity:
     call_id: str | None = None
     team_id: str | None = None
     team_alias: str | None = None
-    # The team's free-form metadata dict, JSON-serialized (empty/missing -> None).
-    team_metadata: str | None = None
+    # The team's free-form metadata, carried raw (empty/missing -> None) and
+    # filtered to an operator allowlist only at Baggage-promotion time, so an
+    # unconfigured deployment never promotes any of it.
+    team_metadata: Mapping[str, Any] | None = None
     key_hash: str | None = None
     end_user: str | None = None
     # The model litellm dispatched to the provider. Only known once the call
@@ -72,26 +73,17 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
-        metadata = {
-            key: str(value)
-            for key, value in raw_meta.items()
-            if isinstance(value, (str, bool, int, float))
-        }
+        metadata = {key: str(value) for key, value in raw_meta.items() if isinstance(value, (str, bool, int, float))}
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
             # the bare ``team_id`` is a legacy alias and is often empty, so prefer
             # the canonical key and fall back to the alias.
-            team_id=as_str(raw_meta.get("user_api_key_team_id"))
-            or as_str(raw_meta.get("team_id")),
-            team_alias=as_str(raw_meta.get("user_api_key_team_alias"))
-            or as_str(raw_meta.get("team_alias")),
-            team_metadata=_team_metadata_json(
-                raw_meta.get("user_api_key_team_metadata")
-            ),
+            team_id=as_str(raw_meta.get("user_api_key_team_id")) or as_str(raw_meta.get("team_id")),
+            team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
+            team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
-            end_user=as_str(payload.get("end_user"))
-            or as_str(raw_meta.get("user_api_key_end_user_id")),
+            end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
             provider_model=resolve_provider_model(payload),
             metadata=metadata,
         )
@@ -121,7 +113,7 @@ class RequestIdentity:
         return cls(
             team_id=as_str(get("team_id")),
             team_alias=as_str(get("team_alias")),
-            team_metadata=_team_metadata_json(get("team_metadata")),
+            team_metadata=_team_metadata_dict(get("team_metadata")),
             key_hash=as_str(get("api_key")),
             end_user=as_str(get("end_user_id")),
             # ``provider_model`` is unknown at the auth boundary — routing hasn't
@@ -152,18 +144,12 @@ class RequestContext:
         return self.identity.provider_model
 
     @classmethod
-    def from_standard_logging_payload(
-        cls, payload: "StandardLoggingPayload"
-    ) -> "RequestContext":
+    def from_standard_logging_payload(cls, payload: "StandardLoggingPayload") -> "RequestContext":
         raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
         hidden = cast(Mapping[str, object], payload.get("hidden_params") or {})
         raw_response = payload.get("response")
-        response = cast(
-            Mapping[str, object], raw_response if isinstance(raw_response, dict) else {}
-        )
-        model_group = as_str(payload.get("model_group")) or as_str(
-            raw_meta.get("model_group")
-        )
+        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
+        model_group = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
         return cls(
             # The user asked for the group; fall back to the call model on the SDK
             # path, which has no group. Empty string (never None) so the span name
@@ -171,8 +157,7 @@ class RequestContext:
             request_model=model_group or as_str(payload.get("model")) or "",
             response_model=as_str(response.get("model")),
             model_group=model_group,
-            model_id=as_str(payload.get("model_id"))
-            or _model_info_id(raw_meta.get("model_info")),
+            model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
             identity=RequestIdentity.from_payload(payload),
         )
@@ -232,9 +217,7 @@ class LLMCallEvent:
         )
 
 
-def _call_id(
-    payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]
-) -> str | None:
+def _call_id(payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]) -> str | None:
     """The call id from the payload (when closed) or the bare kwargs (at pre_call)."""
     if payload is not None:
         call_id = as_str(payload.get("litellm_call_id")) or as_str(payload.get("id"))
@@ -254,26 +237,6 @@ def model_from_request_data(data: object) -> str | None:
     return None
 
 
-def guardrail_entries_from_request_data(
-    request_data: Mapping[str, Any],
-) -> list[dict]:
-    """The guardrail-information dicts buried in ``metadata`` of a post-call dict.
-
-    ``standard_logging_guardrail_information`` is stored as either a single dict
-    or a list of them; normalize to a list of dicts (dropping non-dict noise) so
-    the caller just iterates. Empty list when none are present.
-    """
-    metadata = request_data.get("metadata")
-    if not isinstance(metadata, Mapping):
-        return []
-    info = metadata.get("standard_logging_guardrail_information")
-    if isinstance(info, Mapping):
-        return [cast(dict, info)]
-    if isinstance(info, list):
-        return [entry for entry in info if isinstance(entry, dict)]
-    return []
-
-
 def resolve_provider_model(payload: "StandardLoggingPayload") -> str | None:
     """The model litellm dispatched to the provider, from the payload.
 
@@ -287,9 +250,7 @@ def resolve_provider_model(payload: "StandardLoggingPayload") -> str | None:
     return (
         # ``deployment`` survives only on paths that don't strip it from metadata;
         # harmless (and most precise) to prefer it when present.
-        as_str(raw_meta.get("deployment"))
-        or as_str(hidden.get("litellm_model_name"))
-        or as_str(payload.get("model"))
+        as_str(raw_meta.get("deployment")) or as_str(hidden.get("litellm_model_name")) or as_str(payload.get("model"))
     )
 
 
@@ -300,16 +261,14 @@ def _model_info_id(model_info: object) -> str | None:
     return None
 
 
-def _team_metadata_json(value: object) -> str | None:
-    """JSON-serialize a team's metadata dict for a single Baggage value.
+def _team_metadata_dict(value: object) -> Mapping[str, Any] | None:
+    """The team's free-form metadata as a raw mapping, or ``None`` when missing
+    or empty.
 
-    Returns ``None`` for a missing, non-dict, or empty mapping so the empty case
-    is dropped rather than promoting a useless ``"{}"``. Keys are sorted for a
-    stable, diff-friendly serialization.
+    Carried raw on the identity and filtered to an operator allowlist only at
+    Baggage-promotion time (see ``baggage.promoted_baggage``), so an empty case
+    is dropped rather than carrying a useless ``{}``.
     """
-    if not isinstance(value, Mapping) or not value:
-        return None
-    try:
-        return json.dumps(value, default=str, sort_keys=True)
-    except Exception:
-        return None
+    if isinstance(value, Mapping) and value:
+        return dict(value)
+    return None

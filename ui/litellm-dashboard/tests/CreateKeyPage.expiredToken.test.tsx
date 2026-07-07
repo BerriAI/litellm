@@ -72,6 +72,8 @@ vi.mock("@/components/networking", () => {
   return {
     // Called on mount; we don't care about its contents, only that it resolves
     getUiConfig: vi.fn().mockResolvedValue({}),
+    // Fetched by useUISettings(); resolve with empty settings so nudges stay default-on
+    getUiSettings: vi.fn().mockResolvedValue({ values: {}, field_schema: {} }),
     // Used to build the redirect URL
     proxyBaseUrl: "https://example.com",
     // Called when decoding a valid token
@@ -105,7 +107,6 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
 vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
-vi.mock("@/components/view_users", () => ({ default: stub("view-users") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
 vi.mock("@/components/organizations", () => ({
   default: stub("organizations"),
@@ -146,17 +147,22 @@ vi.mock("@/lib/cva.config", () => ({
   cx: (...args: string[]) => args.join(" "),
 }));
 
-import CreateKeyPage from "@/app/page";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import CreateKeyPage from "@/app/(dashboard)/page";
 import { AuthProvider } from "@/contexts/AuthContext";
 
 // The page consumes auth state via useAuth(). Wrap it so the hook resolves
 // against a real provider — the provider's effects (cookie read, JWT decode,
-// redirect-on-expired) are what these tests exercise.
+// redirect-on-expired) are what these tests exercise. The QueryClientProvider
+// mirrors what layout.tsx supplies in production for hooks like useUISettings.
 function PageUnderTest() {
+  const [queryClient] = React.useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
   return (
-    <AuthProvider>
-      <CreateKeyPage />
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <CreateKeyPage />
+      </AuthProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -224,7 +230,7 @@ describe("CreateKeyPage auth behavior", () => {
     // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
       expect(window.location.replace).toHaveBeenCalledWith(
-        expect.stringContaining("https://example.com/ui/login?redirect_to=")
+        expect.stringContaining("https://example.com/ui/login?redirect_to="),
       );
     });
 
@@ -235,7 +241,7 @@ describe("CreateKeyPage auth behavior", () => {
     expect(wroteDeletion).toBe(true);
   });
 
-  it("does NOT redirect when token is valid and renders the app chrome", async () => {
+  it("does NOT redirect when token is valid and renders the page content", async () => {
     // Arrange: valid token in cookie
     setCookie("token=validtoken");
 
@@ -262,9 +268,9 @@ describe("CreateKeyPage auth behavior", () => {
       expect(window.location.replace).not.toHaveBeenCalled();
     });
 
-    // And some top-level UI appears (Navbar stub)
+    // And the default page content appears (UserDashboard stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("navbar")).toBeInTheDocument();
+      expect(screen.getByTestId("user-dashboard")).toBeInTheDocument();
     });
   });
 

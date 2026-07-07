@@ -2,9 +2,7 @@ import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage } from 
 
 export const getHashicorpVaultConfig = async (accessToken: string) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/config_overrides/hashicorp_vault`
-    : `/config_overrides/hashicorp_vault`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/config_overrides/hashicorp_vault` : `/config_overrides/hashicorp_vault`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -20,14 +18,9 @@ export const getHashicorpVaultConfig = async (accessToken: string) => {
   return data;
 };
 
-export const updateHashicorpVaultConfig = async (
-  accessToken: string,
-  config: Record<string, any>,
-) => {
+export const updateHashicorpVaultConfig = async (accessToken: string, config: Record<string, any>) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/config_overrides/hashicorp_vault`
-    : `/config_overrides/hashicorp_vault`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/config_overrides/hashicorp_vault` : `/config_overrides/hashicorp_vault`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -47,9 +40,7 @@ export const updateHashicorpVaultConfig = async (
 
 export const deleteHashicorpVaultConfig = async (accessToken: string) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/config_overrides/hashicorp_vault`
-    : `/config_overrides/hashicorp_vault`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/config_overrides/hashicorp_vault` : `/config_overrides/hashicorp_vault`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: {

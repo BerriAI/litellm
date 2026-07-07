@@ -11,60 +11,13 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
    * Get callback configuration metadata (logos, params, etc.)
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/callbacks/configs` : `/callbacks/configs`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
+    return await apiClient.get(`/callbacks/configs`, { accessToken });
   } catch (error) {
     console.error("Failed to get callbacks:", error);
     throw error;
   }
 };
 
-export const getInProductNudgesCall = async (accessToken: string) => {
-  /**
-   * Get in-product nudges configuration.
-   */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/in_product_nudges` : `/in_product_nudges`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to get in-product nudges:", error);
-    throw error;
-  }
-};
 /**
  * Helper file for calls being made to proxy
  */
@@ -72,41 +25,51 @@ import MessageManager from "@/components/molecules/message_manager";
 import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
-import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
+import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
+import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
+import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
+
+export { serverRootPath };
+
+export { deriveErrorMessage };
+export { ApiError } from "@/lib/http/client";
 
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
 // to the backend — use relative URLs (null) so rewrites can intercept them.
-const defaultProxyBaseUrl =
+const resolveDefaultBase = (fallback: string | null): string | null =>
   process.env.NEXT_PUBLIC_BASE_URL
     ? process.env.NEXT_PUBLIC_BASE_URL
     : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-    ? "http://localhost:4000"
-    : null;
-const defaultServerRootPath = "/";
-export let serverRootPath = defaultServerRootPath;
+      ? "http://localhost:4000"
+      : fallback;
+const defaultProxyBaseUrl = resolveDefaultBase(null);
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
 // This survives page navigation and the sessionStorage.clear() in user_dashboard.
-const _rawWorkerUrl =
-  typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
+const _rawWorkerUrl = typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
 // Validate stored worker URL — reject non-HTTP schemes to prevent exfiltration
 const _initialWorkerUrl = (() => {
   if (!_rawWorkerUrl) return null;
   try {
     const parsed = new URL(_rawWorkerUrl);
     if (parsed.protocol === "http:" || parsed.protocol === "https:") return _rawWorkerUrl;
-  } catch { /* invalid URL */ }
+  } catch {
+    /* invalid URL */
+  }
   // Invalid URL in storage — clear it
   if (typeof window !== "undefined") window.localStorage.removeItem(WORKER_URL_KEY);
   return null;
 })();
 export let proxyBaseUrl: string | null = _initialWorkerUrl ?? defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () { };
+  console.log = function () {};
 }
 
 const getWindowLocation = () => {
@@ -124,32 +87,14 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
   if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
     return;
   }
-  const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
-    ? process.env.NEXT_PUBLIC_BASE_URL
-    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-    ? "http://localhost:4000"
-    : browserLocation?.origin ?? null;
-  let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
-  console.log("proxyBaseUrl:", proxyBaseUrl);
-  console.log("serverRootPath:", serverRootPath);
-
-  if (!initialProxyBaseUrl) {
-    proxyBaseUrl = proxyBaseUrl ?? null;
-    console.log("Updated proxyBaseUrl:", proxyBaseUrl);
-    return;
-  }
-
-  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
-    initialProxyBaseUrl += serverRootPath;
-  }
-
-  proxyBaseUrl = initialProxyBaseUrl;
-  console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+  proxyBaseUrl = resolveApiBase({
+    explicitBase: receivedProxyBaseUrl || resolveDefaultBase(getWindowLocation()?.origin ?? null),
+    serverRootPath,
+  });
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
-  serverRootPath = receivedServerRootPath;
+  setServerRootPath(receivedServerRootPath);
 };
 
 export const getProxyBaseUrl = (): string => {
@@ -331,6 +276,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
 }
@@ -357,8 +303,6 @@ export const handleError = async (errorData: string | any) => {
       }
     }
     lastErrorTime = currentTime;
-  } else {
-    console.log("Error suppressed to prevent spam:", errorData);
   }
 };
 
@@ -408,7 +352,6 @@ const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
-  console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
 }
 
@@ -416,6 +359,12 @@ export function setGlobalLitellmHeaderName(headerName: string = "Authorization")
 export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
+
+const apiClient = createApiClient({
+  getBaseUrl: getProxyBaseUrl,
+  getAuthHeaderName: getGlobalLitellmHeaderName,
+  onError: handleError,
+});
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
@@ -433,7 +382,6 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
 };
 
 export const getUiConfig = async () => {
-  console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
   const url = defaultProxyBaseUrl
     ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config`
@@ -443,7 +391,7 @@ export const getUiConfig = async () => {
   /**
    * Update the proxy base url and server root path
    */
-  console.log("jsonData in getUiConfig:", jsonData);
+  updateServerRootPath(jsonData.server_root_path);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
   return jsonData;
 };
@@ -472,7 +420,6 @@ export const modelCostMap = async () => {
       },
     });
     const jsonData = await response.json();
-    console.log(`received litellm model cost data: ${jsonData}`);
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map:", error);
@@ -491,7 +438,6 @@ export const reloadModelCostMap = async (accessToken: string) => {
       },
     });
     const jsonData = await response.json();
-    console.log(`Model cost map reload response: ${jsonData}`);
     return jsonData;
   } catch (error) {
     console.error("Failed to reload model cost map:", error);
@@ -512,7 +458,6 @@ export const scheduleModelCostMapReload = async (accessToken: string, hours: num
       },
     });
     const jsonData = await response.json();
-    console.log(`Schedule model cost map reload response: ${jsonData}`);
     return jsonData;
   } catch (error) {
     console.error("Failed to schedule model cost map reload:", error);
@@ -531,7 +476,6 @@ export const cancelModelCostMapReload = async (accessToken: string) => {
       },
     });
     const jsonData = await response.json();
-    console.log(`Cancel model cost map reload response: ${jsonData}`);
     return jsonData;
   } catch (error) {
     console.error("Failed to cancel model cost map reload:", error);
@@ -541,9 +485,7 @@ export const cancelModelCostMapReload = async (accessToken: string) => {
 
 export const getModelCostMapSource = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model/cost_map/source`
-      : `/model/cost_map/source`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/cost_map/source` : `/model/cost_map/source`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -558,7 +500,6 @@ export const getModelCostMapSource = async (accessToken: string) => {
     }
 
     const jsonData = await response.json();
-    console.log("Model cost map source info:", jsonData);
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map source info:", error);
@@ -571,7 +512,6 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/schedule/model_cost_map_reload/status`
       : `/schedule/model_cost_map_reload/status`;
-    console.log("Fetching status from URL:", url);
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -588,7 +528,6 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
     }
 
     const jsonData = await response.json();
-    console.log(`Model cost map reload status:`, jsonData);
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map reload status:", error);
@@ -597,27 +536,12 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
 };
 export const modelCreateCall = async (accessToken: string, formValues: Model) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/new` : `/model/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/model/new`, {
+      accessToken,
+      body: {
         ...formValues,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
 
     // Close any existing messages before showing new ones
     MessageManager.destroy();
@@ -633,29 +557,13 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
 };
 
 export const modelDeleteCall = async (accessToken: string, model_id: string) => {
-  console.log(`model_id in model delete call: ${model_id}`);
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/delete` : `/model/delete`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/model/delete`, {
+      accessToken,
+      body: {
         id: model_id,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -664,34 +572,17 @@ export const modelDeleteCall = async (accessToken: string, model_id: string) => 
 };
 
 export const budgetDeleteCall = async (accessToken: string | null, budget_id: string) => {
-  console.log(`budget_id in budget delete call: ${budget_id}`);
-
   if (accessToken == null) {
     return;
   }
 
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/delete` : `/budget/delete`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/budget/delete`, {
+      accessToken,
+      body: {
         id: budget_id,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -704,30 +595,12 @@ export const budgetCreateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in budgetCreateCall:", formValues); // Log the form values before making the API call
-
-    console.log("Form Values after check:", formValues);
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/new` : `/budget/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/budget/new`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -741,30 +614,12 @@ export const budgetUpdateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in budgetUpdateCall:", formValues); // Log the form values before making the API call
-
-    console.log("Form Values after check:", formValues);
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/update` : `/budget/update`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/budget/update`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -778,27 +633,12 @@ export const invitationCreateCall = async (
   userID: string, // Assuming formValues is an object
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/invitation/new` : `/invitation/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/invitation/new`, {
+      accessToken,
+      body: {
         user_id: userID, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -812,28 +652,7 @@ export const alertingSettingsCall = async (accessToken: string) => {
    * Get all configurable params for setting a model
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/alerting/settings` : `/alerting/settings`;
-
-    //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    //NotificationsManager.info("Received model data");
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.get(`/alerting/settings`, { accessToken });
   } catch (error) {
     console.error("Failed to get callbacks:", error);
     throw error;
@@ -845,8 +664,6 @@ export const keyCreateServiceAccountCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in keyCreateServiceAccountCall:", formValues); // Log the form values before making the API call
-
     // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
     if (formValues.description) {
       // add to formValues.metadata
@@ -862,7 +679,6 @@ export const keyCreateServiceAccountCall = async (
     // Parse JSON fields if they exist
     for (const field of jsonFields) {
       if (formValues[field]) {
-        console.log(`formValues.${field}:`, formValues[field]);
         // if there's an exception JSON.parse, show it in the message
         try {
           formValues[field] = JSON.parse(formValues[field]);
@@ -872,7 +688,6 @@ export const keyCreateServiceAccountCall = async (
       }
     }
 
-    console.log("Form Values after check:", formValues);
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/service-account/generate` : `/key/service-account/generate`;
     const response = await fetch(url, {
       method: "POST",
@@ -893,7 +708,6 @@ export const keyCreateServiceAccountCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -908,8 +722,6 @@ export const keyCreateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
-
     // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
     if (formValues.description) {
       // add to formValues.metadat
@@ -925,7 +737,6 @@ export const keyCreateCall = async (
     // Parse JSON fields if they exist
     for (const field of jsonFields) {
       if (formValues[field]) {
-        console.log(`formValues.${field}:`, formValues[field]);
         // if there's an exception JSON.parse, show it in the message
         try {
           formValues[field] = JSON.parse(formValues[field]);
@@ -935,7 +746,6 @@ export const keyCreateCall = async (
       }
     }
 
-    console.log("Form Values after check:", formValues);
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
     const response = await fetch(url, {
       method: "POST",
@@ -957,7 +767,6 @@ export const keyCreateCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1010,8 +819,6 @@ export const userCreateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
-
     // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
     if (formValues.description) {
       // add to formValues.metadata
@@ -1028,7 +835,6 @@ export const userCreateCall = async (
     formValues.auto_create_key = false;
     // if formValues.metadata is not undefined, make it a valid dict
     if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
@@ -1037,7 +843,6 @@ export const userCreateCall = async (
       }
     }
 
-    console.log("Form Values after check:", formValues);
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/new` : `/user/new`;
     const response = await fetch(url, {
       method: "POST",
@@ -1059,7 +864,6 @@ export const userCreateCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1070,32 +874,7 @@ export const userCreateCall = async (
 
 export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/key/delete` : `/key/delete`;
-    console.log("in keyDeleteCall:", user_key);
-    //NotificationsManager.info("Making key delete request");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        keys: [user_key],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
-    //NotificationsManager.success("API Key Deleted");
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.post(`/key/delete`, { accessToken, body: { keys: [user_key] } });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1104,31 +883,7 @@ export const keyDeleteCall = async (accessToken: string, user_key: string) => {
 
 export const userDeleteCall = async (accessToken: string, userIds: string[]) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/delete` : `/user/delete`;
-    console.log("in userDeleteCall:", userIds);
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        user_ids: userIds,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
-    //NotificationsManager.success("User(s) Deleted");
-    return data;
+    return await apiClient.post(`/user/delete`, { accessToken, body: { user_ids: userIds } });
   } catch (error) {
     console.error("Failed to delete user(s):", error);
     throw error;
@@ -1137,35 +892,28 @@ export const userDeleteCall = async (accessToken: string, userIds: string[]) => 
 
 export const teamDeleteCall = async (accessToken: string, teamID: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/delete` : `/team/delete`;
-    console.log("in teamDeleteCall:", teamID);
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        team_ids: [teamID],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.post(`/team/delete`, { accessToken, body: { team_ids: [teamID] } });
   } catch (error) {
     console.error("Failed to delete key:", error);
     throw error;
   }
 };
+
+export interface UserInfo {
+  user_id: string;
+  user_email: string;
+  user_alias: string | null;
+  user_role: string;
+  spend: number;
+  max_budget: number | null;
+  models: string[];
+  key_count: number;
+  created_at: string;
+  updated_at: string;
+  sso_user_id: string | null;
+  budget_duration: string | null;
+  metadata?: Record<string, unknown> | null;
+}
 
 export type UserListResponse = {
   page: number;
@@ -1192,76 +940,22 @@ export const userListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
-    console.log("in userListCall");
-    const queryParams = new URLSearchParams();
-
-    if (userIDs && userIDs.length > 0) {
-      // Convert array to comma-separated string
-      const userIDsString = userIDs.join(",");
-      queryParams.append("user_ids", userIDsString);
-    }
-
-    if (page) {
-      queryParams.append("page", page.toString());
-    }
-
-    if (page_size) {
-      queryParams.append("page_size", page_size.toString());
-    }
-
-    if (userEmail) {
-      queryParams.append("user_email", userEmail);
-    }
-
-    if (userRole) {
-      queryParams.append("role", userRole);
-    }
-
-    if (team) {
-      queryParams.append("team", team);
-    }
-
-    if (sso_user_id) {
-      queryParams.append("sso_user_ids", sso_user_id);
-    }
-
-    if (sortBy) {
-      queryParams.append("sort_by", sortBy);
-    }
-
-    if (sortOrder) {
-      queryParams.append("sort_order", sortOrder);
-    }
-
-    if (organizationIds && organizationIds.length > 0) {
-      queryParams.append("organization_ids", organizationIds.join(","));
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const data = (await apiClient.get(`/user/list`, {
+      accessToken,
+      query: {
+        user_ids: userIDs && userIDs.length > 0 ? userIDs.join(",") : undefined,
+        page: page || undefined,
+        page_size: page_size || undefined,
+        user_email: userEmail || undefined,
+        role: userRole || undefined,
+        team: team || undefined,
+        sso_user_ids: sso_user_id || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortOrder || undefined,
+        organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
       },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = (await response.json()) as UserListResponse;
-    console.log("/user/list API Response:", data);
+    })) as UserListResponse;
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1295,32 +989,9 @@ export interface UserInfoV2Response {
  * @param accessToken - Bearer token for auth
  * @param userId - Optional user ID to look up. If omitted, returns the caller's own info.
  */
-export const userGetInfoV2 = async (
-  accessToken: string,
-  userId?: string,
-): Promise<UserInfoV2Response> => {
+export const userGetInfoV2 = async (accessToken: string, userId?: string): Promise<UserInfoV2Response> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/user/info` : `/v2/user/info`;
-    if (userId) {
-      url += `?user_id=${encodeURIComponent(userId)}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.get(`/v2/user/info`, { accessToken, query: { user_id: userId || undefined } });
   } catch (error) {
     console.error("Failed to fetch user info v2:", error);
     throw error;
@@ -1336,46 +1007,22 @@ export const userInfoCall = async (
   page_size: number | null,
   lookup_user_id: boolean = false,
 ) => {
-  console.log(`userInfoCall: ${userID}, ${userRole}, ${viewAll}, ${page}, ${page_size}, ${lookup_user_id}`);
   try {
-    let url: string;
-
     if (viewAll) {
-      // Use /user/list endpoint when viewAll is true
-      url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
-      const queryParams = new URLSearchParams();
-      if (page != null) queryParams.append("page", page.toString());
-      if (page_size != null) queryParams.append("page_size", page_size.toString());
-      url += `?${queryParams.toString()}`;
-    } else {
-      // Use /user/info endpoint for individual user info
-      url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if ((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) {
-        // do nothing
-      } else if (userID) {
-        url += `?user_id=${userID}`;
-      }
+      return await apiClient.get(`/user/list`, {
+        accessToken,
+        query: {
+          page: page != null ? page.toString() : undefined,
+          page_size: page_size != null ? page_size.toString() : undefined,
+        },
+      });
     }
 
-    console.log("Requesting user data from:", url);
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+    const includeUserID = !((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) && userID;
+    return await apiClient.get(`/user/info`, {
+      accessToken,
+      query: { user_id: includeUserID ? userID : undefined },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
-    return data;
   } catch (error) {
     console.error("Failed to fetch user data:", error);
     throw error;
@@ -1384,30 +1031,7 @@ export const userInfoCall = async (
 
 export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
-    if (teamID) {
-      url = `${url}?team_id=${encodeURIComponent(teamID)}`;
-    }
-    console.log("in teamInfoCall");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1437,50 +1061,15 @@ export const v2TeamListCall = async (
    * Get list of teams with filtering and sorting options
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/team/list` : `/v2/team/list`;
-    console.log("in teamInfoCall");
-    const queryParams = new URLSearchParams();
-
-    if (userID) {
-      queryParams.append("user_id", userID.toString());
-    }
-
-    if (organizationID) {
-      queryParams.append("organization_id", organizationID.toString());
-    }
-
-    if (teamID) {
-      queryParams.append("team_id", teamID.toString());
-    }
-
-    if (team_alias) {
-      queryParams.append("team_alias", team_alias.toString());
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/v2/team/list`, {
+      accessToken,
+      query: {
+        user_id: userID || undefined,
+        organization_id: organizationID || undefined,
+        team_id: teamID || undefined,
+        team_alias: team_alias || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/v2/team/list API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1498,50 +1087,15 @@ export const teamListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/list` : `/team/list`;
-    console.log("in teamInfoCall");
-    const queryParams = new URLSearchParams();
-
-    if (userID) {
-      queryParams.append("user_id", userID.toString());
-    }
-
-    if (organizationID) {
-      queryParams.append("organization_id", organizationID.toString());
-    }
-
-    if (teamID) {
-      queryParams.append("team_id", teamID.toString());
-    }
-
-    if (team_alias) {
-      queryParams.append("team_alias", team_alias.toString());
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/team/list`, {
+      accessToken,
+      query: {
+        user_id: userID || undefined,
+        organization_id: organizationID || undefined,
+        team_id: teamID || undefined,
+        team_alias: team_alias || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/team/list API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1553,25 +1107,7 @@ export const availableTeamListCall = async (accessToken: string) => {
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/available` : `/team/available`;
-    console.log("in availableTeamListCall");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/team/available_teams API Response:", data);
+    const data = await apiClient.get(`/team/available`, { accessToken });
     return data;
   } catch (error) {
     throw error;
@@ -1587,39 +1123,13 @@ export const organizationListCall = async (
    * Get all organizations on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/list` : `/organization/list`;
-    const queryParams = new URLSearchParams();
-
-    if (org_id) {
-      queryParams.append("org_id", org_id.toString());
-    }
-
-    if (org_alias) {
-      queryParams.append("org_alias", org_alias.toString());
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/organization/list`, {
+      accessToken,
+      query: {
+        org_id: org_id || undefined,
+        org_alias: org_alias || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1632,7 +1142,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     if (organizationID) {
       url = `${url}?organization_id=${organizationID}`;
     }
-    console.log("in teamInfoCall");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1649,7 +1158,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1663,10 +1171,7 @@ export const organizationCreateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in organizationCreateCall:", formValues); // Log the form values before making the API call
-
     if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
@@ -1676,27 +1181,12 @@ export const organizationCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/new` : `/organization/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/organization/new`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1710,29 +1200,12 @@ export const organizationUpdateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in organizationUpdateCall:", formValues); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/update` : `/organization/update`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.patch(`/organization/update`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Update Team Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1891,7 +1364,13 @@ const fetchDailyActivity = async ({
   }
 };
 
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1, userId: string | null = null) => {
+export const userDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  userId: string | null = null,
+) => {
   /**
    * Get daily user activity on proxy
    */
@@ -2046,30 +1525,15 @@ export const claimOnboardingToken = async (
   userID: string,
   password: string,
 ) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/onboarding/claim_token` : `/onboarding/claim_token`;
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/onboarding/claim_token`, {
+      accessToken,
+      body: {
         invitation_link: inviteUUID,
         user_id: userID,
         password: password,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2101,7 +1565,6 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
     }
 
     const data = await response.json();
-    console.log("Regenerate key Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to regenerate key:", error);
@@ -2128,19 +1591,6 @@ export const modelInfoCall = async (
    * Get all models on proxy
    */
   try {
-    console.log(
-      "modelInfoCall:",
-      accessToken,
-      userID,
-      userRole,
-      page,
-      size,
-      search,
-      modelId,
-      teamId,
-      sortBy,
-      sortOrder,
-    );
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
@@ -2194,7 +1644,6 @@ export const modelInfoCall = async (
     }
 
     const data = await response.json();
-    console.log("modelInfoCall:", data);
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -2228,7 +1677,6 @@ export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
     }
 
     const data = await response.json();
-    console.log("modelInfoV1Call:", data);
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2299,26 +1747,8 @@ export const modelHubCall = async (accessToken: string) => {
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/info` : `/model_group/info`;
-
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("modelHubCall:", data);
+    const data = await apiClient.get(`/model_group/info`, { accessToken });
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -2331,25 +1761,7 @@ export const modelHubCall = async (accessToken: string) => {
 // Function to get allowed IPs
 export const getAllowedIPs = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/allowed_ips` : `/get/allowed_ips`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("getAllowedIPs:", data);
+    const data = await apiClient.get(`/get/allowed_ips`, { accessToken });
     return data.data; // Assuming the API returns { data: [...] }
   } catch (error) {
     console.error("Failed to get allowed IPs:", error);
@@ -2360,26 +1772,7 @@ export const getAllowedIPs = async (accessToken: string) => {
 // Function to add an allowed IP
 export const addAllowedIP = async (accessToken: string, ip: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/add/allowed_ip` : `/add/allowed_ip`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ip: ip }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("addAllowedIP:", data);
+    const data = await apiClient.post(`/add/allowed_ip`, { accessToken, body: { ip: ip } });
     return data;
   } catch (error) {
     console.error("Failed to add allowed IP:", error);
@@ -2390,26 +1783,7 @@ export const addAllowedIP = async (accessToken: string, ip: string) => {
 // Function to delete an allowed IP
 export const deleteAllowedIP = async (accessToken: string, ip: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/delete/allowed_ip` : `/delete/allowed_ip`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ip: ip }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("deleteAllowedIP:", data);
+    const data = await apiClient.post(`/delete/allowed_ip`, { accessToken, body: { ip: ip } });
     return data;
   } catch (error) {
     console.error("Failed to delete allowed IP:", error);
@@ -2422,23 +1796,10 @@ export const updateUsefulLinksCall = async (
   useful_links: Record<string, string | { url: string; index: number }>,
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ useful_links: useful_links }),
+    return await apiClient.post(`/model_hub/update_useful_links`, {
+      accessToken,
+      body: { useful_links: useful_links },
     });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2458,47 +1819,17 @@ export const modelAvailableCall = async (
   /**
    * Get all the models user has access to
    */
-  console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName);
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
-    const params = new URLSearchParams();
-    params.append("include_model_access_groups", "True");
-    if (return_wildcard_routes === true) {
-      params.append("return_wildcard_routes", "True");
-    }
-    if (only_model_access_groups === true) {
-      params.append("only_model_access_groups", "True");
-    }
-    if (teamID) {
-      params.append("team_id", teamID.toString());
-    }
-    if (scope) {
-      params.append("scope", scope);
-    }
-    if (params.toString()) {
-      url += `?${params.toString()}`;
-    }
-
-    //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/models`, {
+      accessToken,
+      query: {
+        include_model_access_groups: "True",
+        return_wildcard_routes: return_wildcard_routes === true ? "True" : undefined,
+        only_model_access_groups: only_model_access_groups === true ? "True" : undefined,
+        team_id: teamID || undefined,
+        scope: scope || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    //NotificationsManager.info("Received model data");
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2507,24 +1838,7 @@ export const modelAvailableCall = async (
 
 export const teamSpendLogsCall = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/teams` : `/global/spend/teams`;
-    console.log("in teamSpendLogsCall:", url);
-    const response = await fetch(`${url}`, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.get(`/global/spend/teams`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2550,7 +1864,6 @@ export const tagsSpendLogsCall = async (
       url += `&tags=${tags.join(",")}`;
     }
 
-    console.log("in tagsSpendLogsCall:", url);
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
@@ -2566,7 +1879,6 @@ export const tagsSpendLogsCall = async (
     }
 
     const data = await response.json();
-    console.log(data);
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2576,25 +1888,7 @@ export const tagsSpendLogsCall = async (
 
 export const allTagNamesCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/all_tag_names` : `/global/spend/all_tag_names`;
-
-    console.log("in global/spend/all_tag_names call", url);
-    const response = await fetch(`${url}`, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.get(`/global/spend/all_tag_names`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2604,25 +1898,7 @@ export const allTagNamesCall = async (accessToken: string) => {
 
 export const allEndUsersCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/list` : `/customer/list`;
-
-    console.log("in customer/list", url);
-    const response = await fetch(`${url}`, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.get(`/customer/list`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to fetch end users:", error);
@@ -2632,35 +1908,14 @@ export const allEndUsersCall = async (accessToken: string) => {
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    const base = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
-    const queryParams = new URLSearchParams();
-    if (params.get("user_email")) {
-      queryParams.append("user_email", params.get("user_email")!);
-    }
-    if (params.get("user_id")) {
-      queryParams.append("user_id", params.get("user_id")!);
-    }
-    if (params.get("team_id")) {
-      queryParams.append("team_id", params.get("team_id")!);
-    }
-    const qs = queryParams.toString();
-    const url = qs ? `${base}?${qs}` : base;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/user/filter/ui`, {
+      accessToken,
+      query: {
+        user_email: params.get("user_email") || undefined,
+        user_id: params.get("user_id") || undefined,
+        team_id: params.get("team_id") || undefined,
       },
     });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2748,7 +2003,6 @@ export const uiSpendLogsCall = async ({
     }
 
     const data = await response.json();
-    console.log("Spend Logs Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch spend logs:", error);
@@ -2758,25 +2012,8 @@ export const uiSpendLogsCall = async ({
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
-
     //NotificationsManager.info("Making spend logs request");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.get(`/global/spend/logs`, { accessToken });
     //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
@@ -2805,7 +2042,6 @@ export const adminTopKeysCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    console.log(data);
     //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
@@ -2821,41 +2057,12 @@ export const adminTopEndUsersCall = async (
   endTime: string | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/end_users` : `/global/spend/end_users`;
-
-    let body = "";
-    if (keyToken) {
-      body = JSON.stringify({
-        api_key: keyToken,
-        startTime: startTime,
-        endTime: endTime,
-      });
-    } else {
-      body = JSON.stringify({ startTime: startTime, endTime: endTime });
-    }
+    const body = keyToken
+      ? { api_key: keyToken, startTime: startTime, endTime: endTime }
+      : { startTime: startTime, endTime: endTime };
 
     //NotificationsManager.info("Making top end users request");
-
-    // Define requestOptions with body as an optional property
-    const requestOptions = {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: body,
-    };
-
-    const response = await fetch(url, requestOptions);
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.post(`/global/spend/end_users`, { accessToken, body });
     //NotificationsManager.success("Top End users received");
     return data;
   } catch (error) {
@@ -2871,34 +2078,13 @@ export const adminspendByProvider = async (
   endTime: string | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/provider` : `/global/spend/provider`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    if (keyToken) {
-      url += `&api_key=${keyToken}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    const data = await apiClient.get(`/global/spend/provider`, {
+      accessToken,
+      query: {
+        ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
+        ...(keyToken ? { api_key: keyToken } : {}),
       },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    });
     return data;
   } catch (error) {
     console.error("Failed to fetch spend data:", error);
@@ -2912,30 +2098,10 @@ export const adminGlobalActivity = async (
   endTime: string | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity` : `/global/activity`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.get(`/global/activity`, {
+      accessToken,
+      query: startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined,
+    });
     return data;
   } catch (error) {
     console.error("Failed to fetch spend data:", error);
@@ -2972,7 +2138,6 @@ export const adminGlobalCacheActivity = async (
     }
 
     const data = await response.json();
-    console.log(data);
     return data;
   } catch (error) {
     console.error("Failed to fetch spend data:", error);
@@ -3009,7 +2174,6 @@ export const adminGlobalActivityPerModel = async (
     }
 
     const data = await response.json();
-    console.log(data);
     return data;
   } catch (error) {
     console.error("Failed to fetch spend data:", error);
@@ -3037,7 +2201,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    console.log(data);
     //NotificationsManager.success("Top Models received");
     return data;
   } catch (error) {
@@ -3071,7 +2234,6 @@ export const keyInfoCall = async (accessToken: string, keys: string[]) => {
     }
 
     const data = await response.json();
-    console.log(data);
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -3086,8 +2248,6 @@ export const testConnectionRequest = async (
   mode: string,
 ) => {
   try {
-    console.log("Sending model connection test request:", JSON.stringify(litellm_params));
-
     // Construct the URL based on environment
     const url = proxyBaseUrl ? `${proxyBaseUrl}/health/test_connection` : `/health/test_connection`;
 
@@ -3140,7 +2300,6 @@ export const testConnectionRequest = async (
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
-    console.log("entering keyInfoV1Call");
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/info` : `/key/info`;
     url = `${url}?key=${key}`; // Add key as query parameter
 
@@ -3153,8 +2312,6 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
       // Remove body since this is a GET request
     });
 
-    console.log("response", response);
-
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
@@ -3162,7 +2319,6 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     }
 
     const data = await response.json();
-    console.log("data", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch key info:", error);
@@ -3188,82 +2344,28 @@ export const keyListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/list` : `/key/list`;
-    console.log("in keyListCall");
-    const queryParams = new URLSearchParams();
-
-    if (teamID) {
-      queryParams.append("team_id", teamID.toString());
-    }
-
-    if (organizationID) {
-      queryParams.append("organization_id", organizationID.toString());
-    }
-
-    if (selectedKeyAlias) {
-      queryParams.append("key_alias", selectedKeyAlias);
-    }
-
-    if (keyHash) {
-      queryParams.append("key_hash", keyHash);
-    }
-
-    if (userID) {
-      queryParams.append("user_id", userID.toString());
-    }
-
-    if (page) {
-      queryParams.append("page", page.toString());
-    }
-
-    if (pageSize) {
-      queryParams.append("size", pageSize.toString());
-    }
-
-    if (sortBy) {
-      queryParams.append("sort_by", sortBy);
-    }
-
-    if (sortOrder) {
-      queryParams.append("sort_order", sortOrder);
-    }
-
-    if (expand) {
-      queryParams.append("expand", expand);
-    }
-
-    if (status) {
-      queryParams.append("status", status);
-    }
-
-    queryParams.append("return_full_object", "true");
-    queryParams.append("include_team_keys", "true");
-    queryParams.append("include_created_by_keys", "true");
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/key/list`, {
+      accessToken,
+      query: {
+        team_id: teamID || undefined,
+        organization_id: organizationID || undefined,
+        key_alias: selectedKeyAlias || undefined,
+        key_hash: keyHash || undefined,
+        user_id: userID || undefined,
+        page: page ? page.toString() : undefined,
+        size: pageSize ? pageSize.toString() : undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortOrder || undefined,
+        expand: expand || undefined,
+        status: status || undefined,
+        return_full_object: "true",
+        include_team_keys: "true",
+        include_created_by_keys: "true",
+        // /key/list is exact by default; opt in so the key-list search box keeps
+        // matching partial user_id/key_alias.
+        substring_matching: "true",
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/team/list API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3289,84 +2391,46 @@ export const keyAliasesCall = async (
    * Get key aliases from proxy with pagination and optional search
    */
   try {
-    const params = new URLSearchParams(
-      Object.entries({
+    return await apiClient.get(`/key/aliases`, {
+      accessToken,
+      query: {
         page: String(page),
         size: String(size),
-        ...(search ? { search } : {}),
-        ...(team_id ? { team_id } : {}),
-      }),
-    );
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/aliases` : `/key/aliases`;
-    url = `${url}?${params}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+        search: search || undefined,
+        team_id: team_id || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/key/aliases API Response:", data);
-    return data;
   } catch (error) {
     console.error("Failed to fetch key aliases:", error);
     throw error;
   }
 };
 
-export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null) => {
+export const userDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  userId: string | null = null,
+) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity/aggregated` : `/user/daily/activity/aggregated`;
-    const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
       const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    // Send timezone offset so backend can adjust date range for UTC storage
-    queryParams.append("timezone", new Date().getTimezoneOffset().toString());
-    if (userId) {
-      queryParams.append("user_id", userId);
-    }
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/user/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        user_id: userId || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
     throw error;
@@ -3375,24 +2439,10 @@ export const userDailyActivityAggregatedCall = async (accessToken: string, start
 
 export const getPossibleUserRoles = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_roles` : `/user/available_roles`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = (await response.json()) as Record<string, Record<string, string>>;
-    console.log("response from user/available_role", data);
+    const data = (await apiClient.get(`/user/available_roles`, { accessToken })) as Record<
+      string,
+      Record<string, string>
+    >;
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3405,9 +2455,7 @@ export const teamCreateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamCreateCall:", formValues); // Log the form values before making the API call
     if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
@@ -3416,27 +2464,12 @@ export const teamCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/new` : `/team/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/team/new`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3450,9 +2483,7 @@ export const credentialCreateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in credentialCreateCall:", formValues); // Log the form values before making the API call
     if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
@@ -3461,27 +2492,12 @@ export const credentialCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/credentials`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3495,26 +2511,7 @@ export const credentialListCall = async (accessToken: string) => {
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
-    console.log("in credentialListCall");
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/credentials API Response:", data);
+    const data = await apiClient.get(`/credentials`, { accessToken });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3525,33 +2522,15 @@ export const credentialListCall = async (accessToken: string) => {
 
 export const credentialGetCall = async (accessToken: string, credentialName: string | null, modelId: string | null) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
+    let path = `/credentials`;
 
     if (credentialName) {
-      url += `/by_name/${credentialName}`;
+      path += `/by_name/${credentialName}`;
     } else if (modelId) {
-      url += `/by_model/${modelId}`;
+      path += `/by_model/${modelId}`;
     }
 
-    console.log("in credentialListCall");
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/credentials API Response:", data);
+    const data = await apiClient.get(path, { accessToken });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3562,25 +2541,7 @@ export const credentialGetCall = async (accessToken: string, credentialName: str
 
 export const credentialDeleteCall = async (accessToken: string, credentialName: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
-    console.log("in credentialDeleteCall:", credentialName);
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
+    const data = await apiClient.delete(`/credentials/${credentialName}`, { accessToken });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3595,9 +2556,7 @@ export const credentialUpdateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in credentialUpdateCall:", formValues); // Log the form values before making the API call
     if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
@@ -3606,27 +2565,12 @@ export const credentialUpdateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.patch(`/credentials/${credentialName}`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3640,10 +2584,7 @@ export const keyUpdateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in keyUpdateCall:", formValues); // Log the form values before making the API call
-
     if (formValues.model_tpm_limit) {
-      console.log("formValues.model_tpm_limit:", formValues.model_tpm_limit);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.model_tpm_limit = JSON.parse(formValues.model_tpm_limit);
@@ -3653,7 +2594,6 @@ export const keyUpdateCall = async (
     }
 
     if (formValues.model_rpm_limit) {
-      console.log("formValues.model_rpm_limit:", formValues.model_rpm_limit);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.model_rpm_limit = JSON.parse(formValues.model_rpm_limit);
@@ -3680,7 +2620,6 @@ export const keyUpdateCall = async (
       throw new Error(errorData);
     }
     const data = await response.json();
-    console.log("Update key Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3694,8 +2633,6 @@ export const teamUpdateCall = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamUpateCall:", formValues); // Log the form values before making the API call
-
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/update` : `/team/update`;
     const response = await fetch(url, {
       method: "POST",
@@ -3716,7 +2653,6 @@ export const teamUpdateCall = async (
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
-    console.log("Update Team Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the updated team
   } catch (error) {
@@ -3738,8 +2674,8 @@ export const modelPatchUpdateCall = async (
   modelId: string,
 ) => {
   try {
-    console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
-
+    // Intentionally not logging the payload: it can contain freshly-entered
+    // provider secrets (api_key, vertex_credentials, AWS creds).
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
     const response = await fetch(url, {
       method: "PATCH",
@@ -3759,7 +2695,6 @@ export const modelPatchUpdateCall = async (
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
-    console.log("Update model Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3775,13 +2710,12 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  budget_duration?: string | null;
   allowed_models?: string[] | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues);
-
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_add` : `/team/member_add`;
 
     const response = await fetch(url, {
@@ -3814,7 +2748,6 @@ export const teamMemberAddCall = async (accessToken: string, teamId: string, for
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -3830,8 +2763,6 @@ export const teamBulkMemberAddCall = async (
   allUsers?: boolean,
 ) => {
   try {
-    console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
-
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/bulk_member_add` : `/team/bulk_member_add`;
 
     let requestBody: any = {
@@ -3875,7 +2806,6 @@ export const teamBulkMemberAddCall = async (
     }
 
     const data = await response.json();
-    console.log("Bulk team member add API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to bulk add team members:", error);
@@ -3889,11 +2819,6 @@ export const teamMemberUpdateCall = async (
   formValues: Member, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberUpdateCall:", formValues);
-    console.log("Budget value:", formValues.max_budget_in_team);
-    console.log("TPM limit:", formValues.tpm_limit);
-    console.log("RPM limit:", formValues.rpm_limit);
-
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_update` : `/team/member_update`;
 
     const requestBody: any = {
@@ -3902,24 +2827,25 @@ export const teamMemberUpdateCall = async (
       user_id: formValues.user_id,
     };
 
-    // Add optional budget and rate limit fields
+    const orNull = (value: unknown) => (value === undefined || value === null || value === "" ? null : value);
     if (formValues.user_email !== undefined) {
       requestBody.user_email = formValues.user_email;
     }
-    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
-      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    if ("max_budget_in_team" in formValues) {
+      requestBody.max_budget_in_team = orNull(formValues.max_budget_in_team);
     }
-    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
-      requestBody.tpm_limit = formValues.tpm_limit;
+    if ("tpm_limit" in formValues) {
+      requestBody.tpm_limit = orNull(formValues.tpm_limit);
     }
-    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
-      requestBody.rpm_limit = formValues.rpm_limit;
+    if ("rpm_limit" in formValues) {
+      requestBody.rpm_limit = orNull(formValues.rpm_limit);
+    }
+    if ("budget_duration" in formValues) {
+      requestBody.budget_duration = orNull(formValues.budget_duration);
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
     }
-
-    console.log("Final request body:", requestBody);
 
     const response = await fetch(url, {
       method: "POST",
@@ -3948,7 +2874,6 @@ export const teamMemberUpdateCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to update team member:", error);
@@ -3962,16 +2887,9 @@ export const teamMemberDeleteCall = async (
   formValues: Member, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_delete` : `/team/member_delete`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/team/member_delete`, {
+      accessToken,
+      body: {
         team_id: teamId,
         ...(formValues.user_email !== undefined && {
           user_email: formValues.user_email,
@@ -3979,18 +2897,8 @@ export const teamMemberDeleteCall = async (
         ...(formValues.user_id !== undefined && {
           user_id: formValues.user_id,
         }),
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4005,8 +2913,6 @@ export const organizationMemberAddCall = async (
   formValues: Member, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
-
     const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/member_add` : `/organization/member_add`;
     const response = await fetch(url, {
       method: "POST",
@@ -4028,7 +2934,6 @@ export const organizationMemberAddCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4039,31 +2944,13 @@ export const organizationMemberAddCall = async (
 
 export const organizationMemberDeleteCall = async (accessToken: string, organizationId: string, userId: string) => {
   try {
-    console.log("Form Values in organizationMemberDeleteCall:", userId); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/member_delete` : `/organization/member_delete`;
-
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.delete(`/organization/member_delete`, {
+      accessToken,
+      body: {
         organization_id: organizationId,
         user_id: userId,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to delete organization member:", error);
@@ -4076,31 +2963,13 @@ export const organizationMemberUpdateCall = async (
   formValues: Member, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in organizationMemberUpdateCall:", formValues); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/member_update` : `/organization/member_update`;
-
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.patch(`/organization/member_update`, {
+      accessToken,
+      body: {
         organization_id: organizationId,
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to update organization member:", error);
@@ -4114,35 +2983,14 @@ export const userUpdateUserCall = async (
   userRole: string | null,
 ) => {
   try {
-    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/update` : `/user/update`;
-    let response_body = { ...formValues };
+    const response_body = { ...formValues };
     if (userRole !== null) {
       response_body["user_role"] = userRole;
     }
-    response_body = JSON.stringify(response_body);
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: response_body,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = (await response.json()) as {
+    const data = (await apiClient.post(`/user/update`, { accessToken, body: response_body })) as {
       user_id: string;
       data: UserInfo;
     };
-    console.log("API Response:", data);
     //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4159,51 +3007,31 @@ export const userBulkUpdateUserCall = async (
   allUsers: boolean = false, // Flag to update all users
 ) => {
   try {
-    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/bulk_update` : `/user/bulk_update`;
-
-    let request_body_json: string;
+    let request_body: Record<string, any>;
 
     if (allUsers) {
       // Update all users mode
-      request_body_json = JSON.stringify({
+      request_body = {
         all_users: true,
         user_updates: formValues,
-      });
+      };
     } else if (userIds && userIds.length > 0) {
       // Update specific users mode
-      let request_body = [];
+      let users = [];
       for (const user_id of userIds) {
-        request_body.push({
+        users.push({
           user_id: user_id,
           ...formValues,
         });
       }
-      request_body_json = JSON.stringify({
-        users: request_body,
-      });
+      request_body = {
+        users: users,
+      };
     } else {
       throw new Error("Must provide either userIds or set allUsers=true");
     }
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: request_body_json,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = (await response.json()) as {
+    const data = (await apiClient.post(`/user/bulk_update`, { accessToken, body: request_body })) as {
       results: Array<{
         user_id?: string;
         user_email?: string;
@@ -4215,7 +3043,6 @@ export const userBulkUpdateUserCall = async (
       successful_updates: number;
       failed_updates: number;
     };
-    console.log("API Response:", data);
     //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4230,8 +3057,6 @@ export const serviceHealthCheck = async (accessToken: string, service: string) =
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/health/services?service=${service}`
       : `/health/services?service=${service}`;
-
-    console.log("Checking Slack Budget Alerts service health");
 
     const response = await fetch(url, {
       method: "GET",
@@ -4262,25 +3087,8 @@ export const getBudgetList = async (accessToken: string) => {
    * Get all configurable params for setting a budget
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/budget/list` : `/budget/list`;
-
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/budget/list`, { accessToken });
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4294,25 +3102,8 @@ export const getCallbacksCall = async (accessToken: string, userID: string, user
    * Get all the models user has access to
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/config/callbacks` : `/get/config/callbacks`;
-
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/get/config/callbacks`, { accessToken });
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4356,24 +3147,7 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
 
 export const getRouterSettingsCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/router/settings` : `/router/settings`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/router/settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get router settings:", error);
@@ -4383,24 +3157,7 @@ export const getRouterSettingsCall = async (accessToken: string) => {
 
 export const getCacheSettingsCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/cache/settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get cache settings:", error);
@@ -4410,27 +3167,12 @@ export const getCacheSettingsCall = async (accessToken: string) => {
 
 export const testCacheConnectionCall = async (accessToken: string, cacheSettings: Record<string, any>) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings/test` : `/cache/settings/test`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/cache/settings/test`, {
+      accessToken,
+      body: {
         cache_settings: cacheSettings,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to test cache connection:", error);
@@ -4440,27 +3182,12 @@ export const testCacheConnectionCall = async (accessToken: string, cacheSettings
 
 export const updateCacheSettingsCall = async (accessToken: string, cacheSettings: Record<string, any>) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/cache/settings`, {
+      accessToken,
+      body: {
         cache_settings: cacheSettings,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to update cache settings:", error);
@@ -4470,29 +3197,14 @@ export const updateCacheSettingsCall = async (accessToken: string, cacheSettings
 
 export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: string | null) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
+    let path = `/config/pass_through_endpoint`;
 
     if (teamId) {
-      url += `/team/${teamId}`;
+      path += `/team/${teamId}`;
     }
 
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(path, { accessToken });
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4538,28 +3250,13 @@ export const createPassThroughEndpoint = async (accessToken: string, formValues:
    * Set callbacks on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
-
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/config/pass_through_endpoint`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4571,31 +3268,13 @@ export const createPassThroughEndpoint = async (accessToken: string, formValues:
 
 export const updateConfigFieldSetting = async (accessToken: string, fieldName: string, fieldValue: any) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/update` : `/config/field/update`;
-
     let formData = {
       field_name: fieldName,
       field_value: fieldValue,
       config_type: "general_settings",
     };
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/config/field/update`, { accessToken, body: formData });
     //NotificationsManager.info("Received model data");
     NotificationsManager.success("Successfully updated value!");
     return data;
@@ -4608,30 +3287,12 @@ export const updateConfigFieldSetting = async (accessToken: string, fieldName: s
 
 export const deleteConfigFieldSetting = async (accessToken: string, fieldName: string) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/delete` : `/config/field/delete`;
-
     let formData = {
       field_name: fieldName,
       config_type: "general_settings",
     };
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/config/field/delete`, { accessToken, body: formData });
     NotificationsManager.success("Field reset on proxy");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4678,28 +3339,13 @@ export const setCallbacksCall = async (accessToken: string, formValues: Record<s
    * Set callbacks on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;
-
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/config/update`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4807,27 +3453,8 @@ export const getProxyUISettings = async (accessToken: string) => {
    * Get all the models user has access to
    */
   try {
-    console.log("Getting proxy UI settings");
-    console.log("proxyBaseUrl in getProxyUISettings:", proxyBaseUrl);
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/sso/get/ui_settings` : `/sso/get/ui_settings`;
-
     //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/sso/get/ui_settings`, { accessToken });
     //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4871,23 +3498,7 @@ export const getMCPSemanticFilterSettings = async (accessToken: string) => {
    * Get MCP semantic filter configuration
    */
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/mcp_semantic_filter_settings` : `/get/mcp_semantic_filter_settings`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/get/mcp_semantic_filter_settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get MCP semantic filter settings:", error);
@@ -5006,7 +3617,6 @@ export const getGuardrailsList = async (accessToken: string) => {
     const data = await response.json();
     return data;
   } catch (error) {
-    console.log("v2/guardrails/list failed, falling back to v1:", error);
     try {
       const v1Url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
       const fallbackResponse = await fetch(v1Url, {
@@ -5063,83 +3673,41 @@ interface ListGuardrailSubmissionsResponse {
 
 export const listGuardrailSubmissions = async (
   accessToken: string,
-  params?: { status?: string; team_id?: string; team_guardrail?: boolean; search?: string }
+  params?: { status?: string; team_id?: string; team_guardrail?: boolean; search?: string },
 ): Promise<ListGuardrailSubmissionsResponse> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/submissions` : `/guardrails/submissions`;
-  const searchParams = new URLSearchParams();
-  if (params?.status) searchParams.set("status", params.status);
-  if (params?.team_id) searchParams.set("team_id", params.team_id);
-  if (params?.team_guardrail !== undefined) searchParams.set("team_guardrail", String(params.team_guardrail));
-  if (params?.search) searchParams.set("search", params.search);
-  const fullUrl = searchParams.toString() ? `${url}?${searchParams.toString()}` : url;
-  const response = await fetch(fullUrl, {
-    method: "GET",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
+  return apiClient.get<ListGuardrailSubmissionsResponse>(`/guardrails/submissions`, {
+    accessToken,
+    query: {
+      ...(params?.status ? { status: params.status } : {}),
+      ...(params?.team_id ? { team_id: params.team_id } : {}),
+      ...(params?.team_guardrail !== undefined ? { team_guardrail: params.team_guardrail } : {}),
+      ...(params?.search ? { search: params.search } : {}),
     },
   });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
 };
 
 export const approveGuardrailSubmission = async (
   accessToken: string,
-  guardrailId: string
+  guardrailId: string,
 ): Promise<{ guardrail_id: string; status: string; message: string }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`
-    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
+  return apiClient.post<{ guardrail_id: string; status: string; message: string }>(
+    `/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`,
+    { accessToken },
+  );
 };
 
 export const rejectGuardrailSubmission = async (
   accessToken: string,
-  guardrailId: string
+  guardrailId: string,
 ): Promise<{ guardrail_id: string; status: string; message: string }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`
-    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
+  return apiClient.post<{ guardrail_id: string; status: string; message: string }>(
+    `/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`,
+    { accessToken },
+  );
 };
 
 // Guardrails / Policies usage (dashboard)
-export const getGuardrailsUsageOverview = async (
-  accessToken: string,
-  startDate?: string,
-  endDate?: string
-) => {
+export const getGuardrailsUsageOverview = async (accessToken: string, startDate?: string, endDate?: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/overview` : `/guardrails/usage/overview`;
     const params = new URLSearchParams();
@@ -5168,10 +3736,12 @@ export const getGuardrailsUsageDetail = async (
   accessToken: string,
   guardrailId: string,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/detail/${encodeURIComponent(guardrailId)}` : `/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`;
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`
+      : `/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`;
     const params = new URLSearchParams();
     if (startDate) params.append("start_date", startDate);
     if (endDate) params.append("end_date", endDate);
@@ -5196,7 +3766,15 @@ export const getGuardrailsUsageDetail = async (
 
 export const getGuardrailsUsageLogs = async (
   accessToken: string,
-  options: { guardrailId?: string; policyId?: string; page?: number; pageSize?: number; action?: string; startDate?: string; endDate?: string }
+  options: {
+    guardrailId?: string;
+    policyId?: string;
+    page?: number;
+    pageSize?: number;
+    action?: string;
+    startDate?: string;
+    endDate?: string;
+  },
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/logs` : `/guardrails/usage/logs`;
@@ -5233,23 +3811,7 @@ export const getGuardrailsUsageLogs = async (
 
 export const getPoliciesList = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/list` : `/policies/list`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policies/list`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policies list:", error);
@@ -5298,7 +3860,7 @@ interface TestPoliciesAndGuardrailsResponse {
 export const testPoliciesAndGuardrails = async (
   accessToken: string,
   body: TestPoliciesAndGuardrailsRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<TestPoliciesAndGuardrailsResponse> => {
   try {
     const url = proxyBaseUrl
@@ -5327,7 +3889,8 @@ export const testPoliciesAndGuardrails = async (
       let errorMessage = "Failed to test policies and guardrails";
       try {
         const errorJson = JSON.parse(errorData);
-        if (errorJson.detail) errorMessage = typeof errorJson.detail === "string" ? errorJson.detail : JSON.stringify(errorJson.detail);
+        if (errorJson.detail)
+          errorMessage = typeof errorJson.detail === "string" ? errorJson.detail : JSON.stringify(errorJson.detail);
         else if (errorJson.message) errorMessage = errorJson.message;
       } catch {
         errorMessage = errorData || errorMessage;
@@ -5345,23 +3908,7 @@ export const testPoliciesAndGuardrails = async (
 
 export const getPolicyInfoWithGuardrails = async (accessToken: string, policyName: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/info/${policyName}` : `/policy/info/${policyName}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policy/info/${policyName}`, { accessToken });
     return data;
   } catch (error) {
     console.error(`Failed to get policy info for ${policyName}:`, error);
@@ -5371,23 +3918,7 @@ export const getPolicyInfoWithGuardrails = async (accessToken: string, policyNam
 
 export const getPolicyTemplates = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates` : `/policy/templates`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policy/templates`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policy templates:", error);
@@ -5400,12 +3931,10 @@ export const enrichPolicyTemplate = async (
   templateId: string,
   parameters: Record<string, string>,
   model?: string,
-  competitors?: string[]
+  competitors?: string[],
 ) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/policy/templates/enrich`
-      : `/policy/templates/enrich`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates/enrich` : `/policy/templates/enrich`;
     const body: any = { template_id: templateId, parameters };
     if (model) body.model = model;
     if (competitors) body.competitors = competitors;
@@ -5437,68 +3966,32 @@ export const suggestPolicyTemplates = async (
   accessToken: string,
   attackExamples: string[],
   description: string,
-  model: string
+  model: string,
 ) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/policy/templates/suggest`
-      : `/policy/templates/suggest`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    return await apiClient.post(`/policy/templates/suggest`, {
+      accessToken,
+      body: {
         attack_examples: attackExamples.filter((e) => e.trim()),
         description,
         model,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return response.json();
   } catch (error) {
     console.error("Failed to suggest policy templates:", error);
     throw error;
   }
 };
 
-export const testPolicyTemplate = async (
-  accessToken: string,
-  guardrailDefinitions: any[],
-  text: string
-) => {
+export const testPolicyTemplate = async (accessToken: string, guardrailDefinitions: any[], text: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/policy/templates/test`
-      : `/policy/templates/test`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    return await apiClient.post(`/policy/templates/test`, {
+      accessToken,
+      body: {
         guardrail_definitions: guardrailDefinitions,
         text,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return response.json();
   } catch (error) {
     console.error("Failed to test policy template:", error);
     throw error;
@@ -5518,11 +4011,9 @@ export const enrichPolicyTemplateStream = async (
   }) => void,
   onError?: (error: string) => void,
   options?: { instruction?: string; existingCompetitors?: string[] },
-  onStatus?: (message: string) => void
+  onStatus?: (message: string) => void,
 ) => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/policy/templates/enrich/stream`
-    : `/policy/templates/enrich/stream`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates/enrich/stream` : `/policy/templates/enrich/stream`;
   const body: any = { template_id: templateId, parameters, model };
   if (options?.instruction) body.instruction = options.instruction;
   if (options?.existingCompetitors) body.competitors = options.existingCompetitors;
@@ -5597,9 +4088,7 @@ export const usageAiChatStream = async (
   onToolCall?: (event: UsageAiToolCallEvent) => void,
   signal?: AbortSignal,
 ) => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/usage/ai/chat`
-    : `/usage/ai/chat`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/usage/ai/chat` : `/usage/ai/chat`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -5657,24 +4146,7 @@ export const usageAiChatStream = async (
 
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies` : `/policies`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(policyData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/policies`, { accessToken, body: policyData });
     return data;
   } catch (error) {
     console.error("Failed to create policy:", error);
@@ -5684,24 +4156,7 @@ export const createPolicyCall = async (accessToken: string, policyData: any) => 
 
 export const updatePolicyCall = async (accessToken: string, policyId: string, policyData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(policyData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.put(`/policies/${policyId}`, { accessToken, body: policyData });
     return data;
   } catch (error) {
     console.error("Failed to update policy:", error);
@@ -5711,7 +4166,7 @@ export const updatePolicyCall = async (accessToken: string, policyId: string, po
 
 export const listPolicyVersions = async (
   accessToken: string,
-  policyName: string
+  policyName: string,
 ): Promise<{ policy_name: string; versions: any[]; total_count: number }> => {
   try {
     const encodedName = encodeURIComponent(policyName);
@@ -5743,7 +4198,7 @@ export const listPolicyVersions = async (
 export const createPolicyVersion = async (
   accessToken: string,
   policyName: string,
-  sourcePolicyId?: string | null
+  sourcePolicyId?: string | null,
 ): Promise<any> => {
   try {
     const encodedName = encodeURIComponent(policyName);
@@ -5776,29 +4231,13 @@ export const createPolicyVersion = async (
 export const updatePolicyVersionStatus = async (
   accessToken: string,
   policyId: string,
-  versionStatus: "published" | "production"
+  versionStatus: "published" | "production",
 ): Promise<any> => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/policies/${policyId}/status`
-      : `/policies/${policyId}/status`;
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ version_status: versionStatus }),
+    return await apiClient.put(`/policies/${policyId}/status`, {
+      accessToken,
+      body: { version_status: versionStatus },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Failed to update policy version status:", error);
     throw error;
@@ -5807,23 +4246,7 @@ export const updatePolicyVersionStatus = async (
 
 export const deletePolicyCall = async (accessToken: string, policyId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.delete(`/policies/${policyId}`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to delete policy:", error);
@@ -5833,23 +4256,7 @@ export const deletePolicyCall = async (accessToken: string, policyId: string) =>
 
 export const getPolicyInfo = async (accessToken: string, policyId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policies/${policyId}`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policy info:", error);
@@ -5861,23 +4268,7 @@ export const getPolicyInfo = async (accessToken: string, policyId: string) => {
 
 export const getPolicyAttachmentsList = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments/list` : `/policies/attachments/list`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policies/attachments/list`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policy attachments list:", error);
@@ -5887,24 +4278,7 @@ export const getPolicyAttachmentsList = async (accessToken: string) => {
 
 export const createPolicyAttachmentCall = async (accessToken: string, attachmentData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments` : `/policies/attachments`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(attachmentData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/policies/attachments`, { accessToken, body: attachmentData });
     return data;
   } catch (error) {
     console.error("Failed to create policy attachment:", error);
@@ -5943,27 +4317,13 @@ export const deletePolicyAttachmentCall = async (accessToken: string, attachment
 export const testPipelineCall = async (
   accessToken: string,
   pipeline: any,
-  testMessages: Array<{role: string, content: string}>
+  testMessages: Array<{ role: string; content: string }>,
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/test-pipeline` : `/policies/test-pipeline`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ pipeline, test_messages: testMessages }),
+    const data = await apiClient.post(`/policies/test-pipeline`, {
+      accessToken,
+      body: { pipeline, test_messages: testMessages },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to test pipeline:", error);
@@ -6001,39 +4361,17 @@ export const getResolvedGuardrails = async (accessToken: string, policyId: strin
 
 export const resolvePoliciesCall = async (
   accessToken: string,
-  context: { team_alias?: string; key_alias?: string; model?: string; tags?: string[] }
+  context: { team_alias?: string; key_alias?: string; model?: string; tags?: string[] },
 ) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/policies/resolve`
-      : `/policies/resolve`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(context),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.post(`/policies/resolve`, { accessToken, body: context });
   } catch (error) {
     console.error("Failed to resolve policies:", error);
     throw error;
   }
 };
 
-export const estimateAttachmentImpactCall = async (
-  accessToken: string,
-  attachmentData: any
-) => {
+export const estimateAttachmentImpactCall = async (accessToken: string, attachmentData: any) => {
   try {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/policies/attachments/estimate-impact`
@@ -6061,68 +4399,36 @@ export const estimateAttachmentImpactCall = async (
   }
 };
 
-export const getPromptsList = async (
-  accessToken: string,
-  environment?: string,
-): Promise<ListPromptsResponse> => {
+export const getPromptsList = async (accessToken: string, environment?: string): Promise<ListPromptsResponse> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
-    if (environment) {
-      url += `?environment=${encodeURIComponent(environment)}`;
-    }
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
+    return await apiClient.get(`/prompts/list`, { accessToken, query: { environment: environment || undefined } });
   } catch (error) {
     console.error("Failed to get prompts list:", error);
     throw error;
   }
 };
 
-export const getPromptInfo = async (accessToken: string, promptId: string, environment?: string): Promise<PromptInfoResponse> => {
+export const getPromptInfo = async (
+  accessToken: string,
+  promptId: string,
+  environment?: string,
+): Promise<PromptInfoResponse> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
-    if (environment) {
-      url += `?environment=${encodeURIComponent(environment)}`;
-    }
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+    return await apiClient.get(`/prompts/${promptId}/info`, {
+      accessToken,
+      query: { environment: environment || undefined },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to get prompt info:", error);
     throw error;
   }
 };
 
-export const getPromptVersions = async (accessToken: string, promptId: string, environment?: string): Promise<ListPromptsResponse> => {
+export const getPromptVersions = async (
+  accessToken: string,
+  promptId: string,
+  environment?: string,
+): Promise<ListPromptsResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/versions` : `/prompts/${promptId}/versions`;
     if (environment) {
@@ -6156,25 +4462,7 @@ export const getPromptVersions = async (accessToken: string, promptId: string, e
 
 export const createPromptCall = async (accessToken: string, promptData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(promptData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/prompts`, { accessToken, body: promptData });
     return data;
   } catch (error) {
     console.error("Failed to create prompt:", error);
@@ -6184,25 +4472,7 @@ export const createPromptCall = async (accessToken: string, promptData: any) => 
 
 export const updatePromptCall = async (accessToken: string, promptId: string, promptData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
-
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(promptData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.put(`/prompts/${promptId}`, { accessToken, body: promptData });
     return data;
   } catch (error) {
     console.error("Failed to update prompt:", error);
@@ -6212,24 +4482,7 @@ export const updatePromptCall = async (accessToken: string, promptId: string, pr
 
 export const deletePromptCall = async (accessToken: string, promptId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
-
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.delete(`/prompts/${promptId}`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to delete prompt:", error);
@@ -6291,7 +4544,6 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
     }
 
     const data = await response.json();
-    console.log("Create agent response:", data);
     return data;
   } catch (error) {
     console.error("Failed to create agent:", error);
@@ -6394,7 +4646,6 @@ export const createGuardrailCall = async (accessToken: string, guardrailData: an
     }
 
     const data = await response.json();
-    console.log("Create guardrail response:", data);
     return data;
   } catch (error) {
     console.error("Failed to create guardrail:", error);
@@ -6409,8 +4660,6 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
       ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
       : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
 
-    console.log("Fetching log details from:", url);
-
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6427,7 +4676,6 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
     }
 
     const data = await response.json();
-    console.log("Fetched log details:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch log details:", error);
@@ -6437,28 +4685,7 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
 
 export const getInternalUserSettings = async (accessToken: string) => {
   try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/internal_user_settings` : `/get/internal_user_settings`;
-
-    console.log("Fetching SSO settings from:", url);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched SSO settings:", data);
+    const data = await apiClient.get(`/get/internal_user_settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to fetch SSO settings:", error);
@@ -6470,8 +4697,6 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/update/internal_user_settings` : `/update/internal_user_settings`;
-
-    console.log("Updating internal user settings:", settings);
 
     const response = await fetch(url, {
       method: "PATCH",
@@ -6489,7 +4714,6 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
     }
 
     const data = await response.json();
-    console.log("Updated internal user settings:", data);
     NotificationsManager.success("Internal user settings updated successfully");
     return data;
   } catch (error) {
@@ -6500,9 +4724,7 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
 
 export const fetchOpenAPIRegistry = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/openapi-registry`
-      : `/v1/mcp/openapi-registry`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/openapi-registry` : `/v1/mcp/openapi-registry`;
 
     const response = await fetch(url, {
       method: HTTP_REQUEST.GET,
@@ -6526,26 +4748,7 @@ export const fetchOpenAPIRegistry = async (accessToken: string) => {
 
 export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/discover`
-      : `/v1/mcp/discover`;
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.get(`/v1/mcp/discover`, { accessToken });
   } catch (error) {
     console.error("Failed to fetch discoverable MCP servers:", error);
     throw error;
@@ -6554,34 +4757,7 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 
 export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
   try {
-    // Construct base URL with optional team_id filter
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
-    if (teamId) {
-      const params = new URLSearchParams();
-      params.append("team_id", teamId);
-      url = `${url}?${params.toString()}`;
-    }
-
-    console.log("Fetching MCP servers from:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched MCP servers:", data);
-    return data;
+    return await apiClient.get(`/v1/mcp/server`, { accessToken, query: { team_id: teamId || undefined } });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
     throw error;
@@ -6590,36 +4766,12 @@ export const fetchMCPServers = async (accessToken: string, teamId?: string | nul
 
 export const fetchMCPServerHealth = async (accessToken: string, serverIds?: string[]) => {
   try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/health` : `/v1/mcp/server/health`;
-
-    // Add server_ids query parameters if provided
-    if (serverIds && serverIds.length > 0) {
-      const params = new URLSearchParams();
-      serverIds.forEach((id) => params.append("server_ids", id));
-      url = `${url}?${params.toString()}`;
-    }
-
-    console.log("Fetching MCP server health from:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/v1/mcp/server/health`, {
+      accessToken,
+      query: {
+        server_ids: serverIds && serverIds.length > 0 ? serverIds : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched MCP server health:", data);
-    return data;
   } catch (error) {
     console.error("Failed to fetch MCP server health:", error);
     throw error;
@@ -6628,28 +4780,7 @@ export const fetchMCPServerHealth = async (accessToken: string, serverIds?: stri
 
 export const fetchMCPAccessGroups = async (accessToken: string) => {
   try {
-    // Construct base URL
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/access_groups` : `/v1/mcp/access_groups`;
-
-    console.log("Fetching MCP access groups from:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched MCP access groups:", data);
+    const data = await apiClient.get(`/v1/mcp/access_groups`, { accessToken });
     return data.access_groups || [];
   } catch (error) {
     console.error("Failed to fetch MCP access groups:", error);
@@ -6659,9 +4790,7 @@ export const fetchMCPAccessGroups = async (accessToken: string) => {
 
 export const fetchMCPClientIp = async (accessToken: string): Promise<string | null> => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/network/client-ip`
-      : `/v1/mcp/network/client-ip`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/network/client-ip` : `/v1/mcp/network/client-ip`;
 
     const response = await fetch(url, {
       method: HTTP_REQUEST.GET,
@@ -6686,30 +4815,12 @@ export const createMCPServer = async (
   formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in createMCPServer:", formValues); // Log the form values before making the API call
-
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/v1/mcp/server`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -6720,24 +4831,7 @@ export const createMCPServer = async (
 
 export const updateMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.put(`/v1/mcp/server`, { accessToken, body: formValues });
   } catch (error) {
     console.error("Failed to update MCP server:", error);
     throw error;
@@ -6746,22 +4840,7 @@ export const updateMCPServer = async (accessToken: string, formValues: Record<st
 
 export const deleteMCPServer = async (accessToken: string, serverId: string) => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
-    console.log("in deleteMCPServer:", serverId);
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.DELETE,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
+    await apiClient.delete(`/v1/mcp/server/${serverId}`, { accessToken });
   } catch (error) {
     console.error("Failed to delete key:", error);
     throw error;
@@ -6770,21 +4849,7 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
 
 export const fetchMCPToolsets = async (accessToken: string): Promise<any[]> => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-    return await response.json();
+    return await apiClient.get(`/v1/mcp/toolset`, { accessToken });
   } catch (error) {
     console.error("Failed to fetch MCP toolsets:", error);
     throw error;
@@ -6793,22 +4858,7 @@ export const fetchMCPToolsets = async (accessToken: string): Promise<any[]> => {
 
 export const createMCPToolset = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.POST,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formValues),
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-    return await response.json();
+    return await apiClient.post(`/v1/mcp/toolset`, { accessToken, body: formValues });
   } catch (error) {
     console.error("Failed to create MCP toolset:", error);
     throw error;
@@ -6817,22 +4867,7 @@ export const createMCPToolset = async (accessToken: string, formValues: Record<s
 
 export const updateMCPToolset = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.PUT,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formValues),
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-    return await response.json();
+    return await apiClient.put(`/v1/mcp/toolset`, { accessToken, body: formValues });
   } catch (error) {
     console.error("Failed to update MCP toolset:", error);
     throw error;
@@ -6841,20 +4876,7 @@ export const updateMCPToolset = async (accessToken: string, formValues: Record<s
 
 export const deleteMCPToolset = async (accessToken: string, toolsetId: string) => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset/${toolsetId}`;
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.DELETE,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
+    await apiClient.delete(`/v1/mcp/toolset/${toolsetId}`, { accessToken });
   } catch (error) {
     console.error("Failed to delete MCP toolset:", error);
     throw error;
@@ -6863,22 +4885,7 @@ export const deleteMCPToolset = async (accessToken: string, toolsetId: string) =
 
 export const registerMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/register`;
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.POST,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formValues),
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-    return response.json();
+    return await apiClient.post(`/v1/mcp/server/register`, { accessToken, body: formValues });
   } catch (error) {
     console.error("Failed to register MCP server:", error);
     throw error;
@@ -6957,26 +4964,7 @@ export const rejectMCPServer = async (accessToken: string, serverId: string, rev
 // Search Tools API calls
 export const fetchSearchTools = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/list` : `/search_tools/list`;
-    console.log("Fetching search tools from:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched search tools:", data);
+    const data = await apiClient.get(`/search_tools/list`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to fetch search tools:", error);
@@ -6986,29 +4974,12 @@ export const fetchSearchTools = async (accessToken: string) => {
 
 export const createSearchTool = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    console.log("Creating search tool with values:", formValues);
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools` : `/search_tools`;
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.POST,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/search_tools`, {
+      accessToken,
+      body: {
         search_tool: formValues,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Created search tool:", data);
     return data;
   } catch (error) {
     console.error("Failed to create search tool:", error);
@@ -7018,29 +4989,12 @@ export const createSearchTool = async (accessToken: string, formValues: Record<s
 
 export const updateSearchTool = async (accessToken: string, searchToolId: string, formValues: Record<string, any>) => {
   try {
-    console.log("Updating search tool with ID:", searchToolId, "values:", formValues);
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/${searchToolId}` : `/search_tools/${searchToolId}`;
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.PUT,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.put(`/search_tools/${searchToolId}`, {
+      accessToken,
+      body: {
         search_tool: formValues,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Updated search tool:", data);
     return data;
   } catch (error) {
     console.error("Failed to update search tool:", error);
@@ -7050,26 +5004,7 @@ export const updateSearchTool = async (accessToken: string, searchToolId: string
 
 export const deleteSearchTool = async (accessToken: string, searchToolId: string) => {
   try {
-    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/search_tools/${searchToolId}`;
-    console.log("Deleting search tool:", searchToolId);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.DELETE,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Deleted search tool:", data);
+    const data = await apiClient.delete(`/search_tools/${searchToolId}`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to delete search tool:", error);
@@ -7082,7 +5017,6 @@ export const fetchAvailableSearchProviders = async (accessToken: string) => {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/search_tools/ui/available_providers`
       : `/search_tools/ui/available_providers`;
-    console.log("Fetching available search providers from:", url);
 
     const response = await fetch(url, {
       method: HTTP_REQUEST.GET,
@@ -7100,7 +5034,6 @@ export const fetchAvailableSearchProviders = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    console.log("Fetched available search providers:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch available search providers:", error);
@@ -7110,29 +5043,12 @@ export const fetchAvailableSearchProviders = async (accessToken: string) => {
 
 export const testSearchToolConnection = async (accessToken: string, litellmParams: Record<string, any>) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/test_connection` : `/search_tools/test_connection`;
-    console.log("Testing search tool connection:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.POST,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/search_tools/test_connection`, {
+      accessToken,
+      body: {
         litellm_params: litellmParams,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Test connection response:", data);
     return data;
   } catch (error) {
     console.error("Failed to test search tool connection:", error);
@@ -7144,13 +5060,12 @@ export const listMCPTools = async (
   accessToken: string,
   serverId: string,
   customHeaders?: Record<string, string>,
+  includeDisabledTools?: boolean,
 ) => {
-  // Construct base URL
-  let url = proxyBaseUrl
-    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-    : `/mcp-rest/tools/list?server_id=${serverId}`;
-
-  console.log("Fetching MCP tools from:", url);
+  // Construct base URL. include_disabled_tools returns the full server catalog
+  // (admin-only, backend-enforced) so the settings UI can configure the allowlist.
+  const query = `server_id=${serverId}${includeDisabledTools ? "&include_disabled_tools=true" : ""}`;
+  let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/list?${query}` : `/mcp-rest/tools/list?${query}`;
 
   const headers: Record<string, string> = {
     [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -7190,7 +5105,6 @@ export const listMCPTools = async (
       stack_trace: null,
     };
   }
-  console.log("Fetched MCP tools response:", data);
 
   if (!response.ok) {
     // Preserve the legacy "never throws" contract so existing callers
@@ -7198,8 +5112,7 @@ export const listMCPTools = async (
     // to inspect `result.error` / `result.message`. Attach `status` so
     // callers that need to react to auth failures (e.g. the useQuery in
     // mcp_tools.tsx) can still detect 401s from the returned object.
-    const errorMessage =
-      (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    const errorMessage = (data && (data.message || data.error)) || "Failed to fetch MCP tools";
     return {
       tools: [],
       error: (data && data.error) || `http_${response.status}`,
@@ -7230,8 +5143,6 @@ export const callMCPTool = async (
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;
-
-    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments, "for server:", serverId);
 
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -7294,7 +5205,6 @@ export const callMCPTool = async (
     }
 
     const data = await response.json();
-    console.log("MCP tool call response:", data);
     return data;
   } catch (error) {
     console.error("Failed to call MCP tool:", error);
@@ -7458,28 +5368,7 @@ export const tagDeleteCall = async (accessToken: string, tagName: string): Promi
 
 export const getDefaultTeamSettings = async (accessToken: string) => {
   try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/default_team_settings` : `/get/default_team_settings`;
-
-    console.log("Fetching default team settings from:", url);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched default team settings:", data);
+    const data = await apiClient.get(`/get/default_team_settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to fetch default team settings:", error);
@@ -7489,29 +5378,7 @@ export const getDefaultTeamSettings = async (accessToken: string) => {
 
 export const updateDefaultTeamSettings = async (accessToken: string, settings: Record<string, any>) => {
   try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/default_team_settings` : `/update/default_team_settings`;
-
-    console.log("Updating default team settings:", settings);
-
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Updated default team settings:", data);
+    const data = await apiClient.patch(`/update/default_team_settings`, { accessToken, body: settings });
     return data;
   } catch (error) {
     console.error("Failed to update default team settings:", error);
@@ -7550,29 +5417,13 @@ export const getTeamPermissionsCall = async (accessToken: string, teamId: string
 
 export const teamPermissionsUpdateCall = async (accessToken: string, teamId: string, permissions: string[]) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/permissions_update` : `/team/permissions_update`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/team/permissions_update`, {
+      accessToken,
+      body: {
         team_id: teamId,
         team_member_permissions: permissions,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Team permissions response:", data);
     return data;
   } catch (error) {
     console.error("Failed to update team permissions:", error);
@@ -7581,13 +5432,27 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 };
 
 /**
- * Get all spend logs for a particular session
+ * Get a page of spend logs for a particular session.
+ *
+ * The backend paginates this endpoint (page / page_size, returning
+ * { data, total, page, page_size, total_pages }). Callers that need the whole
+ * session should page through total_pages and accumulate the results.
  */
-export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string,
+  page: number = 1,
+  page_size: number = 100,
+) => {
   try {
+    const params = new URLSearchParams({
+      session_id,
+      page: String(page),
+      page_size: String(page_size),
+    });
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
-      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+      ? `${proxyBaseUrl}/spend/logs/session/ui?${params.toString()}`
+      : `/spend/logs/session/ui?${params.toString()}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7817,7 +5682,6 @@ export const getEmailEventSettings = async (accessToken: string): Promise<EmailE
     }
 
     const data = await response.json();
-    console.log("Email event settings response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get email event settings:", error);
@@ -7845,7 +5709,6 @@ export const updateEmailEventSettings = async (accessToken: string, settings: Em
     }
 
     const data = await response.json();
-    console.log("Update email event settings response:", data);
     return data;
   } catch (error) {
     console.error("Failed to update email event settings:", error);
@@ -7872,7 +5735,6 @@ export const resetEmailEventSettings = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    console.log("Reset email event settings response:", data);
     return data;
   } catch (error) {
     console.error("Failed to reset email event settings:", error);
@@ -7880,7 +5742,6 @@ export const resetEmailEventSettings = async (accessToken: string) => {
   }
 };
 
-export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
 export const deleteAgentCall = async (accessToken: string, agentId: string) => {
@@ -7902,7 +5763,6 @@ export const deleteAgentCall = async (accessToken: string, agentId: string) => {
     }
 
     const data = await response.json();
-    console.log("Delete agent response:", data);
     return data;
   } catch (error) {
     console.error("Failed to delete agent:", error);
@@ -7932,7 +5792,6 @@ export const makeAgentsPublicCall = async (accessToken: string, agentIds: string
     }
 
     const data = await response.json();
-    console.log("Make agents public response:", data);
     return data;
   } catch (error) {
     console.error("Failed to make agents public:", error);
@@ -7962,7 +5821,6 @@ export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: strin
     }
 
     const data = await response.json();
-    console.log("Make agents public response:", data);
     return data;
   } catch (error) {
     console.error("Failed to make agents public:", error);
@@ -7989,7 +5847,6 @@ export const deleteGuardrailCall = async (accessToken: string, guardrailId: stri
     }
 
     const data = await response.json();
-    console.log("Delete guardrail response:", data);
     return data;
   } catch (error) {
     console.error("Failed to delete guardrail:", error);
@@ -8018,7 +5875,6 @@ export const getGuardrailUISettings = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    console.log("Guardrail UI settings response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get guardrail UI settings:", error);
@@ -8047,7 +5903,6 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     }
 
     const data = await response.json();
-    console.log("Guardrail provider specific params response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get guardrail provider specific parameters:", error);
@@ -8062,8 +5917,6 @@ export const getCategoryYaml = async (accessToken: string, categoryName: string)
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/guardrails/ui/category_yaml/${encodedCategoryName}`
       : `/guardrails/ui/category_yaml/${encodedCategoryName}`;
-
-    console.log(`Fetching category YAML from: ${url}`);
 
     const response = await fetch(url, {
       method: "GET",
@@ -8081,7 +5934,6 @@ export const getCategoryYaml = async (accessToken: string, categoryName: string)
     }
 
     const data = await response.json();
-    console.log("Category YAML response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get category YAML:", error);
@@ -8091,9 +5943,7 @@ export const getCategoryYaml = async (accessToken: string, categoryName: string)
 
 export const getMajorAirlines = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/ui/major_airlines`
-      : `/guardrails/ui/major_airlines`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/major_airlines` : `/guardrails/ui/major_airlines`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -8105,10 +5955,7 @@ export const getMajorAirlines = async (accessToken: string) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      console.error(
-        `Failed to get major airlines. Status: ${response.status}, Error:`,
-        errorData
-      );
+      console.error(`Failed to get major airlines. Status: ${response.status}, Error:`, errorData);
       handleError(errorData);
       throw new Error(`Failed to get major airlines: ${response.status} ${errorData}`);
     }
@@ -8141,7 +5988,6 @@ export const getAgentsList = async (accessToken: string, healthCheck: boolean = 
     }
 
     const data = await response.json();
-    console.log("Agents list response:", data);
     return { agents: data };
   } catch (error) {
     console.error("Failed to get agents list:", error);
@@ -8168,7 +6014,6 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
     }
 
     const data = await response.json();
-    console.log("Agent info response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get agent info:", error);
@@ -8195,7 +6040,6 @@ export const getGuardrailInfo = async (accessToken: string, guardrailId: string)
     }
 
     const data = await response.json();
-    console.log("Guardrail info response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get guardrail info:", error);
@@ -8235,7 +6079,6 @@ export const patchAgentCall = async (
     }
 
     const data = await response.json();
-    console.log("Patch agent response:", data);
     return data;
   } catch (error) {
     console.error("Failed to update guardrail:", error);
@@ -8272,7 +6115,6 @@ export const updateGuardrailCall = async (
     }
 
     const data = await response.json();
-    console.log("Update guardrail response:", data);
     return data;
   } catch (error) {
     console.error("Failed to update guardrail:", error);
@@ -8334,7 +6176,6 @@ export const applyGuardrail = async (
     }
 
     const data = await response.json();
-    console.log("Apply guardrail response:", data);
     return data;
   } catch (error) {
     console.error("Failed to apply guardrail:", error);
@@ -8415,7 +6256,6 @@ export const testCustomCodeGuardrail = async (
     }
 
     const data = await response.json();
-    console.log("Test custom code guardrail response:", data);
     return data;
   } catch (error) {
     console.error("Failed to test custom code guardrail:", error);
@@ -8445,7 +6285,6 @@ export const validateBlockedWordsFile = async (accessToken: string, fileContent:
     }
 
     const data = await response.json();
-    console.log("Validate blocked words file response:", data);
     return data;
   } catch (error) {
     console.error("Failed to validate blocked words file:", error);
@@ -8455,28 +6294,7 @@ export const validateBlockedWordsFile = async (accessToken: string, fileContent:
 
 export const getSSOSettings = async (accessToken: string) => {
   try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/sso_settings` : `/get/sso_settings`;
-
-    console.log("Fetching SSO configuration from:", url);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched SSO configuration:", data);
+    const data = await apiClient.get(`/get/sso_settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to fetch SSO configuration:", error);
@@ -8488,8 +6306,6 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/update/sso_settings` : `/update/sso_settings`;
-
-    console.log("Updating SSO configuration:", settings);
 
     const response = await fetch(url, {
       method: "PATCH",
@@ -8521,7 +6337,6 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
     }
 
     const data = await response.json();
-    console.log("Updated SSO configuration:", data);
     return data;
   } catch (error) {
     console.error("Failed to update SSO configuration:", error);
@@ -8640,9 +6455,7 @@ export interface LicenseInfo {
   };
 }
 
-export const getLicenseInfo = async (
-  accessToken: string,
-): Promise<LicenseInfo | null> => {
+export const getLicenseInfo = async (accessToken: string): Promise<LicenseInfo | null> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/health/license` : `/health/license`;
 
@@ -8711,27 +6524,12 @@ export const deleteCallback = async (accessToken: string, callbackName: string) 
    * Delete specific callback from proxy using the /config/callback/delete API
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/callback/delete` : `/config/callback/delete`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/config/callback/delete`, {
+      accessToken,
+      body: {
         callback_name: callbackName,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to delete specific callback:", error);
@@ -8745,8 +6543,6 @@ export const testMCPToolsListRequest = async (
   oauthAccessToken?: string | null,
 ) => {
   try {
-    console.log("Testing MCP tools list with config:", JSON.stringify(mcpServerConfig));
-
     // Construct the URL for POST request
     const url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/test/tools/list` : `/mcp-rest/test/tools/list`;
 
@@ -8781,17 +6577,25 @@ export const testMCPToolsListRequest = async (
     const data = await response.json();
 
     if (!response.ok || data.error) {
+      if (response.status === 403) {
+        return {
+          tools: [],
+          error: true,
+          status: 403,
+          message: MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE,
+        };
+      }
       // Return the error response instead of throwing an error
       // This allows the caller to handle the error format properly
       if (data.error) {
-        return data; // Return the full error response
-      } else {
-        return {
-          tools: [],
-          error: "request_failed",
-          message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
-        };
+        return { ...data, status: response.status };
       }
+      return {
+        tools: [],
+        error: "request_failed",
+        status: response.status,
+        message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
+      };
     }
 
     return data;
@@ -9019,11 +6823,6 @@ export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?:
    * Get Daily Active Users (DAU) for last 7 days ending on endDate
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/dau` : `/tag/dau`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -9031,39 +6830,15 @@ export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?:
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("end_date", formatDate(endDate));
-
-    // Handle multiple tag filters (takes precedence over single tag filter)
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    } else if (tagFilter) {
-      queryParams.append("tag_filter", tagFilter);
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const hasTagFilters = tagFilters && tagFilters.length > 0;
+    return await apiClient.get(`/tag/dau`, {
+      accessToken,
+      query: {
+        end_date: formatDate(endDate),
+        tag_filters: hasTagFilters ? tagFilters : undefined,
+        tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch DAU:", error);
     throw error;
@@ -9075,11 +6850,6 @@ export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?:
    * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/wau` : `/tag/wau`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -9087,39 +6857,15 @@ export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?:
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("end_date", formatDate(endDate));
-
-    // Handle multiple tag filters (takes precedence over single tag filter)
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    } else if (tagFilter) {
-      queryParams.append("tag_filter", tagFilter);
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const hasTagFilters = tagFilters && tagFilters.length > 0;
+    return await apiClient.get(`/tag/wau`, {
+      accessToken,
+      query: {
+        end_date: formatDate(endDate),
+        tag_filters: hasTagFilters ? tagFilters : undefined,
+        tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch WAU:", error);
     throw error;
@@ -9131,11 +6877,6 @@ export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?:
    * Get Monthly Active Users (MAU) for last 7 months ending on endDate
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/mau` : `/tag/mau`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -9143,39 +6884,15 @@ export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?:
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("end_date", formatDate(endDate));
-
-    // Handle multiple tag filters (takes precedence over single tag filter)
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    } else if (tagFilter) {
-      queryParams.append("tag_filter", tagFilter);
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const hasTagFilters = tagFilters && tagFilters.length > 0;
+    return await apiClient.get(`/tag/mau`, {
+      accessToken,
+      query: {
+        end_date: formatDate(endDate),
+        tag_filters: hasTagFilters ? tagFilters : undefined,
+        tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch MAU:", error);
     throw error;
@@ -9187,24 +6904,7 @@ export const tagDistinctCall = async (accessToken: string) => {
    * Get all distinct user agent tags (up to 250)
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/distinct` : `/tag/distinct`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/tag/distinct`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to fetch distinct tags:", error);
@@ -9222,11 +6922,6 @@ export const userAgentSummaryCall = async (
    * Get user agent summary statistics
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/summary` : `/tag/summary`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -9234,38 +6929,14 @@ export const userAgentSummaryCall = async (
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-
-    // Handle multiple tag filters
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/tag/summary`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        tag_filters: tagFilters && tagFilters.length > 0 ? tagFilters : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch user agent summary:", error);
     throw error;
@@ -9282,61 +6953,18 @@ export const perUserAnalyticsCall = async (
    * Get per-user analytics data for the last 30 days
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics` : `/tag/user-agent/per-user-analytics`;
-
-    const queryParams = new URLSearchParams();
-
-    queryParams.append("page", page.toString());
-    queryParams.append("page_size", pageSize.toString());
-
-    // Handle multiple tag filters
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/tag/user-agent/per-user-analytics`, {
+      accessToken,
+      query: {
+        page: page.toString(),
+        page_size: pageSize.toString(),
+        tag_filters: tagFilters && tagFilters.length > 0 ? tagFilters : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch per-user analytics:", error);
     throw error;
   }
-};
-
-export const deriveErrorMessage = (errorData: any): string => {
-  const detail = errorData?.detail;
-  const detailStr = Array.isArray(detail)
-    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
-    : typeof detail === "string"
-      ? detail
-      : undefined;
-  return (
-    (errorData?.error && (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
-    errorData?.message ||
-    detailStr ||
-    JSON.stringify(errorData)
-  );
 };
 
 export interface LoginRequest {
@@ -9381,9 +7009,7 @@ export const loginCall = async (username: string, password: string, useV3?: bool
 
   // v3 returns an opaque code — exchange it for the real JWT
   if (useV3 && data.code) {
-    const exchangeUrl = proxyBaseUrl
-      ? `${proxyBaseUrl}/v3/login/exchange`
-      : "/v3/login/exchange";
+    const exchangeUrl = proxyBaseUrl ? `${proxyBaseUrl}/v3/login/exchange` : "/v3/login/exchange";
 
     const exchangeResponse = await fetch(exchangeUrl, {
       method: "POST",
@@ -9470,7 +7096,6 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   const data = await response.json();
   return data;
 };
-
 
 // Claude Code Marketplace Networking Functions
 
@@ -9580,19 +7205,7 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */
-export const registerClaudeCodePlugin = async (
-  accessToken: string,
-  pluginData: {
-    name: string;
-    source: { source: string; repo?: string; url?: string };
-    version?: string;
-    description?: string;
-    author?: { name: string; email?: string };
-    homepage?: string;
-    keywords?: string[];
-    category?: string;
-  },
-) => {
+export const registerClaudeCodePlugin = async (accessToken: string, pluginData: SkillRegisterRequest) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
@@ -9607,8 +7220,13 @@ export const registerClaudeCodePlugin = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      const errorBody = await response.text();
+      let errorMessage: string;
+      try {
+        errorMessage = deriveErrorMessage(JSON.parse(errorBody));
+      } catch {
+        errorMessage = errorBody || `Request failed with status ${response.status}`;
+      }
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
@@ -9751,11 +7369,9 @@ export interface ComplianceCheckRequest {
 
 export const checkEuAiActCompliance = async (
   accessToken: string,
-  payload: ComplianceCheckRequest
+  payload: ComplianceCheckRequest,
 ): Promise<ComplianceResponse> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/compliance/eu-ai-act`
-    : `/compliance/eu-ai-act`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/compliance/eu-ai-act` : `/compliance/eu-ai-act`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -9773,11 +7389,9 @@ export const checkEuAiActCompliance = async (
 
 export const checkGdprCompliance = async (
   accessToken: string,
-  payload: ComplianceCheckRequest
+  payload: ComplianceCheckRequest,
 ): Promise<ComplianceResponse> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/compliance/gdpr`
-    : `/compliance/gdpr`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/compliance/gdpr` : `/compliance/gdpr`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -9823,12 +7437,8 @@ export interface ToolPolicyOptionsResponse {
   output_policies: ToolPolicyOption[];
 }
 
-export const fetchToolPolicyOptions = async (
-  accessToken: string
-): Promise<ToolPolicyOptionsResponse> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/tool/policy/options`
-    : `/v1/tool/policy/options`;
+export const fetchToolPolicyOptions = async (accessToken: string): Promise<ToolPolicyOptionsResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/policy/options` : `/v1/tool/policy/options`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -9895,12 +7505,10 @@ export interface ToolUsageLogsResponse {
 export const getToolUsageLogs = async (
   accessToken: string,
   toolName: string,
-  options: { page?: number; pageSize?: number; startDate?: string; endDate?: string }
+  options: { page?: number; pageSize?: number; startDate?: string; endDate?: string },
 ): Promise<ToolUsageLogsResponse> => {
   const encoded = encodeURIComponent(toolName);
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/tool/${encoded}/logs`
-    : `/v1/tool/${encoded}/logs`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/${encoded}/logs` : `/v1/tool/${encoded}/logs`;
   const params = new URLSearchParams();
   if (options.page != null) params.append("page", String(options.page));
   if (options.pageSize != null) params.append("page_size", String(options.pageSize));
@@ -9921,14 +7529,9 @@ export const getToolUsageLogs = async (
   return response.json();
 };
 
-export const fetchToolDetail = async (
-  accessToken: string,
-  toolName: string
-): Promise<ToolDetailResponse> => {
+export const fetchToolDetail = async (accessToken: string, toolName: string): Promise<ToolDetailResponse> => {
   const encoded = encodeURIComponent(toolName);
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/tool/${encoded}/detail`
-    : `/v1/tool/${encoded}/detail`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/${encoded}/detail` : `/v1/tool/${encoded}/detail`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -9947,7 +7550,7 @@ export const updateToolPolicy = async (
   accessToken: string,
   toolName: string,
   policies: { input_policy?: string; output_policy?: string },
-  options?: { team_id?: string | null; key_hash?: string | null; key_alias?: string | null }
+  options?: { team_id?: string | null; key_hash?: string | null; key_alias?: string | null },
 ): Promise<ToolRow> => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/policy` : `/v1/tool/policy`;
   const body: Record<string, string | undefined | null> = {
@@ -9976,7 +7579,7 @@ export const updateToolPolicy = async (
 export const deleteToolPolicyOverride = async (
   accessToken: string,
   toolName: string,
-  params: { team_id?: string | null; key_hash?: string | null }
+  params: { team_id?: string | null; key_hash?: string | null },
 ): Promise<{ deleted: boolean; tool_name: string }> => {
   const encoded = encodeURIComponent(toolName);
   const q = new URLSearchParams();
@@ -10039,14 +7642,17 @@ export const storeMCPOAuthUserCredential = async (
     const err = await response.json().catch(() => ({}));
     const errObj = err as { detail?: unknown };
     const detail = errObj?.detail;
-    const detailMsg =
-      Array.isArray(detail)
-        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
-        : typeof detail === "string"
-          ? detail
-          : detail && typeof (detail as Record<string, unknown>).error === "string"
-            ? (detail as Record<string, unknown>).error as string
-            : undefined;
+    const detailMsg = Array.isArray(detail)
+      ? detail
+          .map((d: unknown) =>
+            d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d),
+          )
+          .join("; ")
+      : typeof detail === "string"
+        ? detail
+        : detail && typeof (detail as Record<string, unknown>).error === "string"
+          ? ((detail as Record<string, unknown>).error as string)
+          : undefined;
     throw new Error(detailMsg || "Failed to store OAuth credential");
   }
   return response.json();
@@ -10067,14 +7673,17 @@ export const deleteMCPOAuthUserCredential = async (
     const err = await response.json().catch(() => ({}));
     const errObj = err as { detail?: unknown };
     const detail = errObj?.detail;
-    const detailMsg =
-      Array.isArray(detail)
-        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
-        : typeof detail === "string"
-          ? detail
-          : detail && typeof (detail as Record<string, unknown>).error === "string"
-            ? (detail as Record<string, unknown>).error as string
-            : undefined;
+    const detailMsg = Array.isArray(detail)
+      ? detail
+          .map((d: unknown) =>
+            d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d),
+          )
+          .join("; ")
+      : typeof detail === "string"
+        ? detail
+        : detail && typeof (detail as Record<string, unknown>).error === "string"
+          ? ((detail as Record<string, unknown>).error as string)
+          : undefined;
     throw new Error(detailMsg || "Failed to revoke OAuth credential");
   }
   return response.json();
@@ -10097,18 +7706,43 @@ export const getMCPOAuthUserCredentialStatus = async (
   return response.json();
 };
 
-export const listMCPUserCredentials = async (
-  accessToken: string,
-): Promise<MCPUserCredentialListItem[]> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/user-credentials`
-    : `/v1/mcp/user-credentials`;
+export const listMCPUserCredentials = async (accessToken: string): Promise<MCPUserCredentialListItem[]> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/user-credentials` : `/v1/mcp/user-credentials`;
   const response = await fetch(url, {
     method: "GET",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
   });
   if (!response.ok) return [];
   return response.json();
+};
+
+// ============================================================
+// MCP per-user env vars (/v1/mcp/server/{id}/user-env-vars)
+// ============================================================
+
+export const getMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.get<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
+};
+
+export const storeMCPUserEnvVars = async (
+  accessToken: string,
+  serverId: string,
+  values: Record<string, string>,
+): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.post<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, {
+    accessToken,
+    body: { values },
+  });
+};
+
+export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {
+  // Best-effort status badges: a failure here must not break the page, so fall
+  // back to an empty list rather than surfacing the error to the caller.
+  try {
+    return await apiClient.get<MCPUserEnvVarsStatus[]>("/v1/mcp/user-env-vars/status", { accessToken });
+  } catch {
+    return [];
+  }
 };
 
 // ============================================================
@@ -10128,8 +7762,7 @@ export const listMCPUserCredentials = async (
  * other potentially-unsafe character (spaces, `?`, `#`, `%`, etc.) per
  * path segment.
  */
-const encodeMemoryKeyForPath = (key: string): string =>
-  key.split("/").map(encodeURIComponent).join("/");
+const encodeMemoryKeyForPath = (key: string): string => key.split("/").map(encodeURIComponent).join("/");
 
 export interface MemoryRow {
   memory_id: string;
@@ -10168,8 +7801,7 @@ export const fetchMemoryList = async (
     params.append("key", options.key);
   }
   if (options.page != null) params.append("page", String(options.page));
-  if (options.pageSize != null)
-    params.append("page_size", String(options.pageSize));
+  if (options.pageSize != null) params.append("page_size", String(options.pageSize));
   const url = params.toString() ? `${base}?${params.toString()}` : base;
   const response = await fetch(url, {
     method: "GET",
@@ -10216,9 +7848,7 @@ export const updateMemory = async (
   payload: { value?: string; metadata?: unknown },
 ): Promise<MemoryRow> => {
   const encoded = encodeMemoryKeyForPath(key);
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/memory/${encoded}`
-    : `/v1/memory/${encoded}`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory/${encoded}` : `/v1/memory/${encoded}`;
   const response = await fetch(url, {
     method: "PUT",
     headers: {
@@ -10234,14 +7864,9 @@ export const updateMemory = async (
   return response.json();
 };
 
-export const deleteMemory = async (
-  accessToken: string,
-  key: string,
-): Promise<void> => {
+export const deleteMemory = async (accessToken: string, key: string): Promise<void> => {
   const encoded = encodeMemoryKeyForPath(key);
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/memory/${encoded}`
-    : `/v1/memory/${encoded}`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory/${encoded}` : `/v1/memory/${encoded}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: {

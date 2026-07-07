@@ -49,9 +49,7 @@ class PolicyResolver:
             visited = set()
 
         if policy_name in visited:
-            verbose_proxy_logger.warning(
-                f"Circular inheritance detected for policy '{policy_name}'"
-            )
+            verbose_proxy_logger.warning(f"Circular inheritance detected for policy '{policy_name}'")
             return []
 
         policy = policies.get(policy_name)
@@ -92,9 +90,7 @@ class PolicyResolver:
         """
         from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
 
-        inheritance_chain = PolicyResolver.resolve_inheritance_chain(
-            policy_name=policy_name, policies=policies
-        )
+        inheritance_chain = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=policies)
 
         # Start with empty set of guardrails
         guardrails: Set[str] = set()
@@ -164,9 +160,7 @@ class PolicyResolver:
 
         # Use provided policy names or get matching policies via attachments
         matching_policy_names = (
-            policy_names
-            if policy_names is not None
-            else PolicyMatcher.get_matching_policies(context=context)
+            policy_names if policy_names is not None else PolicyMatcher.get_matching_policies(context=context)
         )
 
         if not matching_policy_names:
@@ -186,9 +180,7 @@ class PolicyResolver:
                 context=context,
             )
             all_guardrails.update(resolved.guardrails)
-            verbose_proxy_logger.debug(
-                f"Policy '{policy_name}' contributes guardrails: {resolved.guardrails}"
-            )
+            verbose_proxy_logger.debug(f"Policy '{policy_name}' contributes guardrails: {resolved.guardrails}")
 
         result = list(all_guardrails)
         verbose_proxy_logger.debug(f"Final guardrails for context: {result}")
@@ -226,9 +218,7 @@ class PolicyResolver:
             policies = registry.get_all_policies()
 
         matching_policy_names = (
-            policy_names
-            if policy_names is not None
-            else PolicyMatcher.get_matching_policies(context=context)
+            policy_names if policy_names is not None else PolicyMatcher.get_matching_policies(context=context)
         )
         if not matching_policy_names:
             return []
@@ -241,8 +231,7 @@ class PolicyResolver:
             if policy.pipeline is not None:
                 pipelines.append((policy_name, policy.pipeline))
                 verbose_proxy_logger.debug(
-                    f"Policy '{policy_name}' has pipeline with "
-                    f"{len(policy.pipeline.steps)} steps"
+                    f"Policy '{policy_name}' has pipeline with {len(policy.pipeline.steps)} steps"
                 )
 
         return pipelines

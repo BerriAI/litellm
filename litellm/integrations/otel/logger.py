@@ -3,18 +3,21 @@
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
-from opentelemetry.context import attach, get_current
+from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
+    request_root_span,
+    resolve_mcp_span_context,
     resolve_parent_context,
     resolve_request_span_context,
     set_request_baggage,
@@ -25,25 +28,37 @@ from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
-    guardrail_entries_from_request_data,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
+    MCPToolCallSpanData,
     ServiceSpanData,
     SpanError,
+    is_mcp_list_tools,
+    is_mcp_tool_call,
+)
+from litellm.integrations.otel.plumbing.metrics import (
+    GenAIMetricRecorder,
+    create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
+    get_meter,
     get_tracer,
+    resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
-    from litellm.types.utils import StandardLoggingGuardrailInformation
+    from litellm.types.utils import (
+        StandardLoggingGuardrailInformation,
+        StandardLoggingPayload,
+    )
 
 LITELLM_TRACER_NAME = "litellm"
 
@@ -90,26 +105,36 @@ class OpenTelemetryV2(CustomLogger):
         callback_name: str | None = None,
         tracer_provider: TracerProvider | None = None,
         logger_provider: Any | None = None,  # reserved for OTel logs
-        meter_provider: Any | None = None,  # reserved for metrics
+        meter_provider: Any | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
-            tracer_provider
-            if tracer_provider is not None
-            else build_tracer_provider(self.config)
+            tracer_provider if tracer_provider is not None else build_tracer_provider(self.config)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
-        self._emitter = SpanEmitter(
-            self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names)
-        )
-        self._tenant_tracers = TenantTracerCache(
-            self.config, callback_name, LITELLM_TRACER_NAME
-        )
+        self._metrics_recorder = self._init_metrics(meter_provider)
+        self._metric_filter_error_logged = False
+        self._emitter = SpanEmitter(self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names))
+        self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
+
+    def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
+        """Create the six GenAI histograms when metrics are enabled, else ``None``.
+
+        ``meter_provider`` is an explicit override (tests inject one); otherwise the
+        provider is resolved from the OTel global so the operator's configured
+        readers/exporters receive the metrics, building and registering one only
+        when no global provider is set.
+        """
+        if not self.config.enable_metrics:
+            return None
+        provider = resolve_meter_provider(self.config, meter_provider)
+        meter = get_meter(provider, LITELLM_TRACER_NAME)
+        return GenAIMetricRecorder(create_genai_metrics(meter), self.callback_name)
 
     # ====================================================================== #
     #  Proxy global registration
@@ -117,9 +142,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _register_in_callback_list(self, callbacks: list) -> None:
         already_otel = any(
-            cb.__class__.__module__.startswith(_OTEL_MODULES)
-            for cb in callbacks
-            if hasattr(cb, "__class__")
+            cb.__class__.__module__.startswith(_OTEL_MODULES) for cb in callbacks if hasattr(cb, "__class__")
         )
         if not already_otel:
             callbacks.append(self)
@@ -186,13 +209,9 @@ class OpenTelemetryV2(CustomLogger):
                 call.provisional_span_name,
                 parent_context=parent_context,
                 start_time_ns=start_time_ns,
-                tracer=self._tenant_tracers.tracer_for(
-                    self.tracer, call.dynamic_params
-                ),
+                tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
             )
-        self._open_llm_calls[call_id] = _LLMCallSpan(
-            span=span, start_time_ns=start_time_ns
-        )
+        self._open_llm_calls[call_id] = _LLMCallSpan(span=span, start_time_ns=start_time_ns)
         # Evict the oldest open call if the map is over budget. A call that opens
         # but never closes (a stream that only fires stream events) would linger
         # otherwise; the evicted span is simply dropped (never exported).
@@ -200,10 +219,128 @@ class OpenTelemetryV2(CustomLogger):
             self._open_llm_calls.popitem(last=False)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
+        self._record_metrics(kwargs, response_obj, start_time, end_time)
+
+    def _record_metrics(self, kwargs, response_obj, start_time, end_time) -> None:
+        """Record the GenAI metrics for a successful LLM call. Best-effort: a
+        recording failure (e.g. a malformed payload) must never break the span
+        close or the request itself."""
+        if self._metrics_recorder is None:
+            return
+        try:
+            self._metrics_recorder.record(kwargs, response_obj, start_time, end_time)
+        except ValueError as exc:
+            if not self._metric_filter_error_logged:
+                verbose_logger.error(
+                    "OpenTelemetryV2: invalid otel.attributes metric filter, metrics disabled: %s",
+                    exc,
+                )
+                self._metric_filter_error_logged = True
+        except Exception as exc:
+            verbose_logger.debug("OpenTelemetryV2: metric recording failed: %s", exc)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
+
+    def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
+        """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
+        processor stamps team/key/metadata onto the span. Identity is read from the
+        parsed payload, never the client's ``params._meta`` carrier, so it can't be
+        spoofed."""
+        bag = promoted_baggage(
+            identity,
+            model,
+            promoted_keys=tuple(self.config.baggage_promoted_keys),
+            metadata_keys=tuple(self.config.baggage_metadata_keys),
+            team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
+        )
+        return set_request_baggage(bag, context=context) if bag else context
+
+    def _emit_mcp_tool_call(
+        self,
+        kwargs: Mapping[str, Any],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        """Emit an MCP tool-call span when the closed request was a tool call.
+
+        MCP tool calls reach the success/failure callbacks like any other request
+        (with ``call_type`` ``call_mcp_tool``), but they are not LLM calls and have
+        no ``pre_call`` carrier — so they get their own CLIENT span here. Per the MCP
+        semconv it parents to the trace context the client propagated in
+        ``params._meta`` (or starts a new root) and links the transport span, rather
+        than nesting under the HTTP/session span. Returns whether it handled the
+        event, so the caller skips the LLM-call path. The whole span is emitted at
+        once (there is no boundary to open it at), deduped on the call id.
+        """
+        raw_payload = kwargs.get("standard_logging_object")
+        if not raw_payload or not is_mcp_tool_call(cast(Mapping[str, object], raw_payload)):
+            return False
+        payload = cast("StandardLoggingPayload", raw_payload)
+        data = MCPToolCallSpanData.from_standard_logging_payload(
+            payload, capture_content=self.config.capture_span_content
+        )
+        # A stray LLM carrier from a ``pre_call`` that mis-fired for this id would
+        # otherwise linger until evicted; drop it so it's neither leaked nor closed
+        # as a phantom LLM span.
+        if data.identity.call_id:
+            self._open_llm_calls.pop(data.identity.call_id, None)
+        parent_context, links = resolve_mcp_span_context()
+        parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
+        self._emitter.emit(
+            SpanRole.MCP_TOOL_CALL,
+            data,
+            parent_context=parent_context,
+            start_time_ns=to_ns(start_time),
+            end_time_ns=to_ns(end_time),
+            links=links,
+        )
+        return True
+
+    def _emit_mcp_list_tools(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        """Emit an MCP ``tools/list`` span when the closed request was a discovery call.
+
+        Like a tool call, listing reaches the success/failure callbacks (here with
+        ``call_type`` ``list_mcp_tools``) with no ``pre_call`` carrier, so it gets its
+        own CLIENT span. Per the MCP semconv it parents to the ``params._meta`` trace
+        context (or starts a new root) and links the transport span, rather than
+        nesting under the HTTP/session span. Returns whether it handled the event so
+        the caller skips the LLM-call path.
+        """
+        raw_payload = kwargs.get("standard_logging_object")
+        if not raw_payload or not is_mcp_list_tools(cast(Mapping[str, object], raw_payload)):
+            return False
+        payload = cast("StandardLoggingPayload", raw_payload)
+        data = MCPListToolsSpanData.from_standard_logging_payload(
+            payload, capture_content=self.config.capture_span_content
+        )
+        if data.identity.call_id:
+            self._open_llm_calls.pop(data.identity.call_id, None)
+        parent_context, links = resolve_mcp_span_context()
+        parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
+        self._emitter.emit(
+            SpanRole.MCP_LIST_TOOLS,
+            data,
+            parent_context=parent_context,
+            start_time_ns=to_ns(start_time),
+            end_time_ns=to_ns(end_time),
+            links=links,
+        )
+        return True
 
     def _close_llm_call(
         self,
@@ -231,32 +368,20 @@ class OpenTelemetryV2(CustomLogger):
                 # it (named provisionally) so it isn't leaked as an open span.
                 carrier.span.end(end_time=to_ns(end_time))
             return None
-        data = LLMCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
-        )
+        data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=self.config.capture_span_content)
         end_time_ns = to_ns(end_time)
         if carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
             # status, and end it. Its parent (the server span) was captured at
             # creation from real ambient context.
-            self._emitter.finish_span(
-                SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns
-            )
+            self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
             return carrier.span
         # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
         # The worker copied the request task's context, which carries the anchored
         # root span — parent to it (ambient fallback on the SDK path). Seed identity
         # Baggage so the span — and the SDK path, which has none — is labeled
         # consistently.
-        parent_ctx = resolve_request_span_context()
-        bag = promoted_baggage(
-            data.identity,
-            data.request_model,
-            promoted_keys=tuple(self.config.baggage_promoted_keys),
-            metadata_keys=tuple(self.config.baggage_metadata_keys),
-        )
-        if bag:
-            parent_ctx = set_request_baggage(bag, context=parent_ctx)
+        parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
         return self._emitter.emit(
             SpanRole.LLM_CALL,
             data,
@@ -329,12 +454,7 @@ class OpenTelemetryV2(CustomLogger):
         # zero-duration root with no context, so skip it. Real background work
         # (budget/reset jobs, spend flush) passes start/end times and still emits
         # as a root; anything with a parent emits regardless.
-        if (
-            error_override is None
-            and start_time is None
-            and end_time is None
-            and parent_otel_span is None
-        ):
+        if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
             return None
         if error_override is not None and data.error is None:
             data = ServiceSpanData(
@@ -380,6 +500,7 @@ class OpenTelemetryV2(CustomLogger):
                 model,
                 promoted_keys=tuple(self.config.baggage_promoted_keys),
                 metadata_keys=tuple(self.config.baggage_metadata_keys),
+                team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
             )
             if bag:
                 # Attach (no detach): the contextvar is scoped to this request's
@@ -387,8 +508,12 @@ class OpenTelemetryV2(CustomLogger):
                 attach(set_request_baggage(bag, context=get_current()))
                 # The server span was started by the instrumentor before this ran,
                 # so the Baggage processor (which only fires at span start) won't
-                # backfill it — stamp identity on it directly.
-                server_span = get_current_span()
+                # backfill it — stamp identity on it directly. Prefer the anchored
+                # root span over the ambient one so identity still lands on the
+                # server span when seeding from inside the live ``auth`` phase span
+                # (the auth-failure path), where ``get_current_span`` is the phase
+                # span, not the request's root.
+                server_span = request_root_span() or get_current_span()
                 if is_recordable_span(server_span):
                     # Re-capture the anchor here too: this runs post-auth with the
                     # server span active and covers entrypoints that bypass
@@ -419,46 +544,27 @@ class OpenTelemetryV2(CustomLogger):
         )
         return data
 
-    async def async_post_call_success_hook(
-        self,
-        data: Mapping[str, Any],
-        user_api_key_dict: Any,
-        response: Any,
-    ) -> Any:
-        self._emit_guardrail_spans(data)
-        return response
-
-    async def async_post_call_failure_hook(
-        self,
-        request_data: Mapping[str, Any],
-        original_exception: BaseException | None,
-        user_api_key_dict: Any,
-        traceback_str: str | None = None,
-    ) -> None:
-        self._emit_guardrail_spans(request_data)
-
-    def _emit_guardrail_spans(self, request_data: Mapping[str, Any]) -> None:
+    def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
+        # Emitted by the guardrail-recording code the moment a guardrail finishes,
+        # not from a post-call hook — that hook does not fire on every path (a
+        # pass-through request that passes its guardrails never reaches it), which
+        # left passing guardrails without a span.
+        #
         # A guardrail is a sibling of the LLM call under the request's root span,
-        # so parent it to the explicit anchor — not the active span, which on the
-        # failure path can be the live ``auth`` phase span (post-call failure hooks
-        # run from inside it on an auth rejection). Emit with the guardrail's actual
-        # execution window so a pre_call guardrail is placed before the LLM call
-        # rather than at post-call emission time.
-        guardrails = guardrail_entries_from_request_data(request_data)
-        if not guardrails:
-            return
-        parent_ctx = resolve_request_span_context()
-        for entry in guardrails:
-            data = GuardrailSpanData.from_logging_entry(
-                cast("StandardLoggingGuardrailInformation", entry)
-            )
-            self._emitter.emit(
-                SpanRole.GUARDRAIL,
-                data,
-                parent_context=parent_ctx,
-                start_time_ns=to_ns(data.start_time),
-                end_time_ns=to_ns(data.end_time),
-            )
+        # so parent it to the explicit anchor — never the active span, which during
+        # a pre_call guardrail can be the live ``auth`` phase span. Emit with the
+        # guardrail's actual execution window so a pre_call guardrail is placed
+        # before the LLM call rather than at emission time. One entry in, one span
+        # out — the module-level entry point routes each entry to this single
+        # registered logger so a guardrail is never emitted more than once.
+        data = GuardrailSpanData.from_logging_entry(entry)
+        self._emitter.emit(
+            SpanRole.GUARDRAIL,
+            data,
+            parent_context=resolve_request_span_context(),
+            start_time_ns=to_ns(data.start_time),
+            end_time_ns=to_ns(data.end_time),
+        )
 
     def create_litellm_proxy_request_started_span(
         self, start_time: datetime, headers: Mapping[str, str] | None
@@ -470,6 +576,56 @@ class OpenTelemetryV2(CustomLogger):
         return span
 
 
+def select_global_otel_v2_logger(
+    in_memory_loggers: Sequence[object],
+    registered: "OpenTelemetryV2 | None" = None,
+) -> "OpenTelemetryV2":
+    """The single ``OpenTelemetryV2`` whose provider should become the OTel global.
+
+    The callback factory designates one logger as canonical the moment it builds
+    the first one (``_init_otel_logger_on_litellm_proxy`` sets
+    ``proxy_server.open_telemetry_logger``), and every other v2 entry point —
+    guardrail, identity seeding, phase spans — already routes through that same
+    ``registered`` owner. Reuse it here too so the global provider has one source
+    of truth instead of a second, independently-derived guess; this is the logger
+    a preset (arize, langfuse, …) folds the ``OTEL_*`` base exporter and its own
+    exporter into, so the FastAPI server span and the gen-ai spans share one
+    provider and one trace.
+
+    Fall back to ``in_memory_loggers`` for the SDK path, where no proxy global is
+    set (selecting from there, not ``service_callback``, which a preset logger does
+    not always reach), and build a generic logger from ``OTEL_*`` only when none was
+    configured at all. Each fallback still avoids the second generic logger that
+    orphaned the gen-ai spans onto a different backend than the server span.
+    """
+    if registered is not None:
+        return registered
+    existing = next((cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None)
+    return existing if existing is not None else OpenTelemetryV2()
+
+
+def publish_global_otel_v2_provider(
+    in_memory_loggers: Sequence[object],
+    set_global_provider: Callable[[TracerProvider], None],
+    registered: "OpenTelemetryV2 | None" = None,
+) -> "OpenTelemetryV2":
+    """Select the single v2 logger and publish its provider as the OTel global.
+
+    The proxy calls this once at startup, after callbacks are initialized, so the
+    preset logger already exists; it passes ``registered`` (the canonical owner the
+    factory designated as ``proxy_server.open_telemetry_logger``) so the global
+    provider reuses the same logger the rest of the v2 code emits through (see
+    :func:`select_global_otel_v2_logger`). Both ``registered`` and
+    ``set_global_provider`` (the proxy passes
+    ``opentelemetry.trace.set_tracer_provider``) are injected so the publish step is
+    unit-testable without reading or mutating real global OTel state. Returns the
+    logger whose provider was published.
+    """
+    logger = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
+    set_global_provider(logger._tracer_provider)
+    return logger
+
+
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
     try:
         from litellm.proxy import proxy_server
@@ -477,6 +633,26 @@ def _registered_v2_logger() -> "OpenTelemetryV2 | None":
         return None
     logger = getattr(proxy_server, "open_telemetry_logger", None)
     return logger if isinstance(logger, OpenTelemetryV2) else None
+
+
+def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
+    """Emit a guardrail span on the registered v2 OTel logger.
+
+    Called by the guardrail-recording code the moment a guardrail finishes, so a
+    span is produced regardless of whether a post-call hook later runs (it does
+    not on the pass-through allow path). Routes through the single canonical
+    logger — the same one every other v2 entry point uses — so a guardrail
+    recorded once yields exactly one span; fanning out across every reachable
+    ``OpenTelemetryV2`` instance double-emits the same entry. Best-effort: span
+    emission must never break guardrail evaluation.
+    """
+    logger = _registered_v2_logger()
+    if logger is None:
+        return
+    try:
+        logger.emit_guardrail_span(entry)
+    except Exception:
+        pass
 
 
 def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:

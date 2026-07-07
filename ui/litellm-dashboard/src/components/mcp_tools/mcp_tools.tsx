@@ -1,11 +1,15 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
-import { listMCPTools, callMCPTool } from "../networking";
+import { resolveLogoSrc } from "@/lib/assetPaths";
+import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
+import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
-import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
+import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
+import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
+import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
+import { setSecureItem } from "@/utils/secureStorage";
 
 import { Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
@@ -15,7 +19,8 @@ const MCPToolsViewer = ({
   serverId,
   accessToken,
   auth_type,
-  tokenUrl,
+  oauth2_flow,
+  delegate_auth_to_upstream,
   userRole,
   userID,
   serverAlias,
@@ -30,40 +35,63 @@ const MCPToolsViewer = ({
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // OAuth session token (sessionStorage-backed, cleared on tab/browser close).
-  // Only the interactive (authorization_code/PKCE) flow needs a user-facing
-  // auth gate. M2M (client_credentials) servers are also `auth_type === "oauth2"`,
-  // but the backend fetches their token internally — gating tool listing on
-  // them would force users through a non-existent authorization endpoint.
-  // We detect M2M via the presence of `tokenUrl`, matching the heuristic in
-  // `mcp_server_edit.tsx`.
-  const isOAuth = auth_type === "oauth2" && !tokenUrl;
+  // PKCE passthrough holds a browser-side session token (sessionStorage) and
+  // gates tool listing behind it. OBO uses a backend-stored per-user token that
+  // the user must establish once via an interactive login; we gate on whether
+  // that DB credential exists. M2M uses the backend's own service token and
+  // needs no gate.
+  const oauthMode = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream });
+  const isPassthrough = oauthMode === "passthrough";
+  const isObo = oauthMode === "obo";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
-    isOAuth && isTokenValid(serverId, userID)
-      ? (getToken(serverId, userID)?.access_token ?? null)
-      : null
+    isPassthrough && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
 
   // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
   useEffect(() => {
-    if (!isOAuth) {
+    if (!isPassthrough) {
       setOauthToken(null);
       return;
     }
-    setOauthToken(
-      isTokenValid(serverId, userID)
-        ? (getToken(serverId, userID)?.access_token ?? null)
-        : null
-    );
-  }, [serverId, userID, isOAuth]);
+    setOauthToken(isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null);
+  }, [serverId, userID, isPassthrough]);
 
-  const { startOAuthFlow, status: oauthStatus, error: oauthError } = useToolsOAuthFlow({
+  const {
+    startOAuthFlow,
+    status: oauthStatus,
+    error: oauthError,
+  } = useToolsOAuthFlow({
     accessToken: accessToken ?? "",
     serverId,
     serverAlias,
     userId: userID,
     onSuccess: setOauthToken,
   });
+
+  // OBO servers list tools using a per-user token the backend stores in the DB;
+  // check whether the current user has a valid one so we can prompt them to
+  // authorize when they don't (otherwise the backend silently returns no tools).
+  const {
+    data: oboCredStatus,
+    isLoading: isLoadingOboCred,
+    isError: isOboCredError,
+    refetch: refetchOboCred,
+  } = useQuery({
+    queryKey: ["mcpOauthUserCredStatus", serverId, userID],
+    queryFn: () => getMCPOAuthUserCredentialStatus(accessToken ?? "", serverId),
+    enabled: !!accessToken && isObo,
+    staleTime: 30000,
+  });
+
+  // A stored credential is sufficient: the backend proactively refreshes an
+  // expired or near-expiry token from the stored refresh_token on the next list
+  // call, so the user only needs to authorize when no credential row exists. If
+  // the status check itself fails we can't confirm a credential, so surface the
+  // Authorize gate rather than a silent empty tool list; re-authorizing only
+  // overwrites the user's own row, so it is safe when a credential did exist.
+  const hasOboCred = !!oboCredStatus?.has_credential;
+  const oboNeedsAuth = isObo && !isLoadingOboCred && (isOboCredError || (!!oboCredStatus && !hasOboCred));
+  const oboStatusLoading = isObo && isLoadingOboCred;
 
   // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
@@ -77,17 +105,9 @@ const MCPToolsViewer = ({
     // The backend's _get_mcp_server_auth_headers_from_headers() picks up the
     // x-mcp-{alias}-{header} pattern and forwards it to the upstream MCP server.
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
-    if (oauthToken) {
-      if (serverAlias) {
-        const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
-        if (safeAlias) {
-          customHeaders[`x-mcp-${safeAlias}-authorization`] = `Bearer ${oauthToken}`;
-        } else {
-          customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-        }
-      } else {
-        customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-      }
+    // Passthrough only: OBO/M2M tokens are attached server-side, not from the browser.
+    if (isPassthrough && oauthToken) {
+      Object.assign(customHeaders, buildMcpPassthroughAuthHeader(serverAlias, oauthToken));
     }
 
     // Add passthrough headers with server-specific prefix
@@ -126,9 +146,7 @@ const MCPToolsViewer = ({
         if (status === 401) {
           removeToken(serverId, userID);
         }
-        const enhancedError = new Error(
-          result.message || result.error || "Failed to fetch MCP tools",
-        ) as Error & {
+        const enhancedError = new Error(result.message || result.error || "Failed to fetch MCP tools") as Error & {
           status?: number;
           statusText?: string;
           details?: any;
@@ -140,8 +158,9 @@ const MCPToolsViewer = ({
       }
       return result;
     },
-    // For OAuth servers, block the query until a session token is available
-    enabled: !!accessToken && (!isOAuth || oauthToken !== null),
+    // Passthrough blocks until a browser session token exists; OBO blocks until
+    // the user has a valid DB credential (else the backend returns no tools).
+    enabled: !!accessToken && (isPassthrough ? oauthToken !== null : isObo ? hasOboCred : true),
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
@@ -150,12 +169,37 @@ const MCPToolsViewer = ({
     },
   });
 
+  // OBO authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
+  // and the chat "Connect" button, but persists the token to the per-user DB.
+  const onOboAuthSuccess = useCallback(() => {
+    refetchOboCred();
+    refetchTools();
+  }, [refetchOboCred, refetchTools]);
+
+  const {
+    startOAuthFlow: startDbOAuthFlow,
+    status: dbOAuthStatus,
+    error: dbOAuthError,
+  } = useUserMcpOAuthFlow({
+    accessToken: accessToken ?? "",
+    serverId,
+    serverAlias,
+    onSuccess: onOboAuthSuccess,
+  });
+
+  // Stash which server started the redirect so the MCP Servers page can reopen
+  // this Tools tab on return and let the flow resume to persist the credential.
+  const startOboAuthorize = useCallback(() => {
+    try {
+      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId }));
+    } catch (_) {}
+    startDbOAuthFlow();
+  }, [serverId, startDbOAuthFlow]);
+
   // If the tools query fails with 401, the cached OAuth token is invalid —
   // clear it so the auth gate is shown again and the user can re-authenticate.
   useEffect(() => {
-    const err = mcpToolsError as
-      | (Error & { status?: number; response?: { status?: number } })
-      | null;
+    const err = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
     const status = err?.status ?? err?.response?.status;
     if (status === 401) {
       removeToken(serverId, userID);
@@ -169,13 +213,9 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result: CallMCPToolResponse = await callMCPTool(
-          accessToken, 
-          serverId, 
-          args.tool.name, 
-          args.arguments,
-          { customHeaders: buildCustomHeaders() }
-        );
+        const result: CallMCPToolResponse = await callMCPTool(accessToken, serverId, args.tool.name, args.arguments, {
+          customHeaders: buildCustomHeaders(),
+        });
         return result;
       } catch (error) {
         throw error;
@@ -197,6 +237,18 @@ const MCPToolsViewer = ({
   });
 
   const toolsData = mcpToolsResponse?.tools || [];
+
+  const oboToolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
+  const oboTokenRejected = isObo && (oboToolsError?.status ?? oboToolsError?.response?.status) === 401;
+
+  // An auth gate replaces the tool list when the user must authenticate first:
+  // passthrough needs a browser token; OBO needs a stored DB credential or a
+  // still-valid one — a 401 from the list call means the backend has none even
+  // after attempting a refresh, so re-authorization is required.
+  const authGateActive = (isPassthrough && !oauthToken) || oboNeedsAuth || oboTokenRejected;
+  // Treat OBO credential-status loading as "tools loading" so the empty state
+  // doesn't flash before we know whether the user needs to authorize.
+  const toolsAreaLoading = isLoadingTools || oboStatusLoading;
 
   // Filter tools based on search term
   const filteredTools = toolsData.filter((tool: MCPTool) => {
@@ -223,9 +275,7 @@ const MCPToolsViewer = ({
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center">
                       <KeyOutlined className="text-blue-600 mr-2" />
-                      <Text className="text-sm font-medium text-blue-800">
-                        Additional Headers
-                      </Text>
+                      <Text className="text-sm font-medium text-blue-800">Additional Headers</Text>
                     </div>
                     <AntdButton
                       size="small"
@@ -236,20 +286,18 @@ const MCPToolsViewer = ({
                       {showHeaderInput ? "Hide" : "Configure"}
                     </AntdButton>
                   </div>
-                  
+
                   {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
                     <Text className="text-xs text-blue-700">
                       This server requires additional headers. Click &quot;Configure&quot; to provide values.
                     </Text>
                   )}
-                  
+
                   {showHeaderInput && (
                     <div className="mt-3 space-y-2">
                       {extraHeaders?.map((headerName) => (
                         <div key={headerName}>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            {headerName}
-                          </label>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">{headerName}</label>
                           <Input
                             size="small"
                             placeholder={`Enter ${headerName}`}
@@ -261,7 +309,7 @@ const MCPToolsViewer = ({
                               });
                             }}
                             prefix={<KeyOutlined className="text-gray-400" />}
-                            className="rounded"
+                            className="rounded-sm"
                           />
                         </div>
                       ))}
@@ -272,14 +320,14 @@ const MCPToolsViewer = ({
                           refetchTools();
                           setShowHeaderInput(false);
                         }}
-                        disabled={Object.values(passthroughHeaders).every(v => !v || !v.trim())}
+                        disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
                         className="w-full mt-2"
                       >
                         Load Tools
                       </AntdButton>
                     </div>
                   )}
-                  
+
                   {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
                     <div className="mt-2">
                       <Text className="text-xs text-green-700 flex items-center">
@@ -302,14 +350,12 @@ const MCPToolsViewer = ({
                   )}
                 </Text>
 
-                {/* OAuth Auth Gate — shown when token is absent for OAuth servers */}
-                {isOAuth && !oauthToken && (
+                {/* Passthrough auth gate — browser session token absent */}
+                {isPassthrough && !oauthToken && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
                     <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
-                    <p className="text-xs text-gray-500 mb-3">
-                      Authenticate to view available tools
-                    </p>
+                    <p className="text-xs text-gray-500 mb-3">Authenticate to view available tools</p>
                     <AntdButton
                       size="small"
                       type="primary"
@@ -319,134 +365,170 @@ const MCPToolsViewer = ({
                     >
                       Authorize
                     </AntdButton>
-                    {oauthError && (
-                      <p className="text-xs text-red-500 mt-2">{oauthError}</p>
-                    )}
+                    {oauthError && <p className="text-xs text-red-500 mt-2">{oauthError}</p>}
+                  </div>
+                )}
+
+                {/* OBO auth gate — shown when there is no credential row for this
+                    user, or when the list call returns 401 (no valid token and the
+                    server-side refresh could not mint one, e.g. an expired token
+                    with no usable refresh token). A refreshable token is refreshed
+                    on the list call and never trips this gate. */}
+                {(oboNeedsAuth || oboTokenRejected) && (
+                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
+                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Authenticate with the upstream provider to view available tools
+                    </p>
+                    <AntdButton
+                      size="small"
+                      type="primary"
+                      loading={dbOAuthStatus === "authorizing" || dbOAuthStatus === "exchanging"}
+                      onClick={startOboAuthorize}
+                      disabled={!accessToken}
+                    >
+                      Authorize
+                    </AntdButton>
+                    {dbOAuthError && <p className="text-xs text-red-500 mt-2">{dbOAuthError}</p>}
                   </div>
                 )}
 
                 {/* Search Bar — only shown when tools are loaded */}
-                {!isOAuth || oauthToken ? <>
-                {toolsData.length > 0 && (
-                  <div className="mb-3">
-                    <Input
-                      placeholder="Search tools..."
-                      prefix={<SearchOutlined className="text-gray-400" />}
-                      value={toolSearchTerm}
-                      onChange={(e) => setToolSearchTerm(e.target.value)}
-                      allowClear
-                      className="rounded-lg"
-                      size="middle"
-                    />
-                  </div>
-                )}
-
-                {/* Loading State */}
-                {isLoadingTools && (
-                  <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
-                    <div className="relative mb-3">
-                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
-                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
-                    </div>
-                    <p className="text-xs font-medium text-gray-700">Loading tools...</p>
-                  </div>
-                )}
-
-                {/* Error State */}
-                {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
-                  <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
-                    <p className="font-medium">
-                      Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
-                    </p>
-                  </div>
-                )}
-
-                {/* No Tools State */}
-                {!isLoadingTools && !mcpToolsResponse?.error && !mcpToolsError && (!toolsData || toolsData.length === 0) && (
-                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                    <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
-                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 8.172V5L8 4z"
-                        />
-                      </svg>
-                    </div>
-                    <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
-                    <p className="text-xs text-gray-500">No tools found for this server</p>
-                  </div>
-                )}
-
-                {/* Tools List */}
-                {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
+                {!authGateActive ? (
                   <>
-                    {filteredTools.length === 0 ? (
-                      <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                        <SearchOutlined className="text-2xl text-gray-400 mb-2" />
-                        <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
-                        <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
-                      </div>
-                    ) : (
-                      <div
-                        className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
-                        style={{
-                          maxHeight: "400px",
-                          scrollbarWidth: "auto",
-                          scrollbarColor: "#cbd5e0 #f7fafc",
-                        }}
-                      >
-                        {filteredTools.map((tool: MCPTool) => (
-                      <div
-                        key={tool.name}
-                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${selectedTool?.name === tool.name
-                            ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
-                            : "border-gray-200 bg-white hover:border-gray-300"
-                          }`}
-                        onClick={() => {
-                          setSelectedTool(tool);
-                          setToolResult(null);
-                          setToolError(null);
-                        }}
-                      >
-                        <div className="flex items-start space-x-2">
-                          {tool.mcp_info.logo_url && (
-                            <img
-                              src={tool.mcp_info.logo_url}
-                              alt={`${tool.mcp_info.server_name} logo`}
-                              className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
-                            />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-mono text-xs font-medium text-gray-900 truncate">{tool.name}</h4>
-                            <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
-                            <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
-                              {tool.description}
-                            </p>
-                          </div>
-                        </div>
-                        {selectedTool?.name === tool.name && (
-                          <div className="mt-2 pt-2 border-t border-blue-200">
-                            <div className="flex items-center text-xs font-medium text-blue-700">
-                              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                <path
-                                  fillRule="evenodd"
-                                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                              Selected
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                        ))}
+                    {toolsData.length > 0 && (
+                      <div className="mb-3">
+                        <Input
+                          placeholder="Search tools..."
+                          prefix={<SearchOutlined className="text-gray-400" />}
+                          value={toolSearchTerm}
+                          onChange={(e) => setToolSearchTerm(e.target.value)}
+                          allowClear
+                          className="rounded-lg"
+                          size="middle"
+                        />
                       </div>
                     )}
+
+                    {/* Loading State */}
+                    {toolsAreaLoading && (
+                      <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
+                        <div className="relative mb-3">
+                          <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
+                          <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
+                        </div>
+                        <p className="text-xs font-medium text-gray-700">Loading tools...</p>
+                      </div>
+                    )}
+
+                    {/* Error State */}
+                    {(mcpToolsResponse?.error || mcpToolsError) && !toolsAreaLoading && !toolsData.length && (
+                      <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
+                        <p className="font-medium">
+                          Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* No Tools State */}
+                    {!toolsAreaLoading &&
+                      !mcpToolsResponse?.error &&
+                      !mcpToolsError &&
+                      (!toolsData || toolsData.length === 0) && (
+                        <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                          <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
+                            <svg
+                              className="w-4 h-4 text-gray-400"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 8.172V5L8 4z"
+                              />
+                            </svg>
+                          </div>
+                          <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
+                          <p className="text-xs text-gray-500">No tools found for this server</p>
+                        </div>
+                      )}
+
+                    {/* Tools List */}
+                    {!toolsAreaLoading && !mcpToolsResponse?.error && toolsData.length > 0 && (
+                      <>
+                        {filteredTools.length === 0 ? (
+                          <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                            <SearchOutlined className="text-2xl text-gray-400 mb-2" />
+                            <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
+                            <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
+                          </div>
+                        ) : (
+                          <div
+                            className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
+                            style={{
+                              maxHeight: "400px",
+                              scrollbarWidth: "auto",
+                              scrollbarColor: "#cbd5e0 #f7fafc",
+                            }}
+                          >
+                            {filteredTools.map((tool: MCPTool) => (
+                              <div
+                                key={tool.name}
+                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-xs ${
+                                  selectedTool?.name === tool.name
+                                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
+                                    : "border-gray-200 bg-white hover:border-gray-300"
+                                }`}
+                                onClick={() => {
+                                  setSelectedTool(tool);
+                                  setToolResult(null);
+                                  setToolError(null);
+                                }}
+                              >
+                                <div className="flex items-start space-x-2">
+                                  {tool.mcp_info.logo_url && (
+                                    <img
+                                      src={resolveLogoSrc(tool.mcp_info.logo_url)}
+                                      alt={`${tool.mcp_info.server_name} logo`}
+                                      className="w-4 h-4 object-contain shrink-0 mt-0.5"
+                                    />
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <h4 className="font-mono text-xs font-medium text-gray-900 truncate">
+                                      {tool.name}
+                                    </h4>
+                                    <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
+                                    <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
+                                      {tool.description}
+                                    </p>
+                                  </div>
+                                </div>
+                                {selectedTool?.name === tool.name && (
+                                  <div className="mt-2 pt-2 border-t border-blue-200">
+                                    <div className="flex items-center text-xs font-medium text-blue-700">
+                                      <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                        <path
+                                          fillRule="evenodd"
+                                          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                          clipRule="evenodd"
+                                        />
+                                      </svg>
+                                      Selected
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
                   </>
-                )}
-                </> : null}
+                ) : null}
               </div>
             </div>
           </div>

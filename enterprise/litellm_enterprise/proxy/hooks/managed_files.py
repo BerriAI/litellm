@@ -1,9 +1,9 @@
 # What is this?
 ## This hook is used to check for LiteLLM managed files in the request body, and replace them with model-specific file id
 
-import asyncio
 import base64
 import json
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
@@ -13,7 +13,9 @@ from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    extract_file_metadata,
+)
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
@@ -123,23 +125,33 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
+        update_data = {
+            "model_mappings": json.dumps(model_mappings),
+            "flat_model_file_ids": list(model_mappings.values()),
+            "updated_by": user_api_key_dict.user_id,
+        }
 
         if file_object is not None:
-            db_data["file_object"] = file_object.model_dump_json()
+            file_object_json = file_object.model_dump_json()
+            db_data["file_object"] = file_object_json
+            update_data["file_object"] = file_object_json
             # Extract storage metadata from hidden params if present
             hidden_params = getattr(file_object, "_hidden_params", {}) or {}
             if "storage_backend" in hidden_params:
                 db_data["storage_backend"] = hidden_params["storage_backend"]
+                update_data["storage_backend"] = hidden_params["storage_backend"]
             if "storage_url" in hidden_params:
                 db_data["storage_url"] = hidden_params["storage_url"]
+                update_data["storage_url"] = hidden_params["storage_url"]
 
             verbose_logger.debug(
                 f"Storage metadata: storage_backend={db_data.get('storage_backend')}, "
                 f"storage_url={db_data.get('storage_url')}"
             )
 
-        result = await self.prisma_client.db.litellm_managedfiletable.create(
-            data=db_data
+        result = await self.prisma_client.db.litellm_managedfiletable.upsert(
+            where={"unified_file_id": file_id},
+            data={"create": db_data, "update": update_data},
         )
         verbose_logger.debug(
             f"LiteLLM Managed File object with id={file_id} stored in db: {result}"
@@ -412,7 +424,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
                     )
 
-    async def async_pre_call_hook(  # noqa: PLR0915
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -504,7 +516,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if retrieve_file_id
                 else False
             )
-            if potential_file_id:
+            if potential_file_id and "llm_output_file_id," in potential_file_id:
                 model_id = self.get_model_id_from_unified_file_id(potential_file_id)
                 if model_id:
                     data["model"] = model_id
@@ -981,9 +993,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         target_model_names_list: List[str],
     ) -> OpenAIFileObject:
         ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
-        file_data = extract_file_data(create_file_request["file"])
-
-        file_type = file_data["content_type"]
+        _, file_type = extract_file_metadata(create_file_request["file"])
 
         output_file_id = file_objects[0].id
         model_id = file_objects[0]._hidden_params.get("model_id")
@@ -1058,7 +1068,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return file_id.split("llm_output_file_model_id,")[1].split(";")[0]
 
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
-        return file_id.split("llm_output_file_id,")[1].split(";")[0]
+        marker = "llm_output_file_id,"
+        if marker not in file_id:
+            raise ValueError(
+                f"Unified id does not contain {marker!r}: {file_id[:80]!r}"
+            )
+        return file_id.split(marker, 1)[1].split(";")[0]
 
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
@@ -1099,13 +1114,33 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for file_attr in ["output_file_id", "error_file_id"]:
                     file_id_value = getattr(response, file_attr, None)
                     if file_id_value and model_id:
-                        original_file_id = file_id_value
-                        unified_file_id = self.get_unified_output_file_id(
-                            output_file_id=original_file_id,
-                            model_id=model_id,
-                            model_name=resolved_model_name,
+                        decoded_output_file_id = _is_base64_encoded_unified_file_id(
+                            file_id_value
                         )
-                        setattr(response, file_attr, unified_file_id)
+                        if (
+                            decoded_output_file_id
+                            and "llm_output_file_id," in decoded_output_file_id
+                        ):
+                            provider_file_id = (
+                                self.get_output_file_id_from_unified_file_id(
+                                    decoded_output_file_id
+                                )
+                            )
+                            unified_file_id = file_id_value
+                        elif decoded_output_file_id:
+                            verbose_logger.warning(
+                                f"Skipping {file_attr}={file_id_value!r}: "
+                                "unified id is not a managed file output id"
+                            )
+                            continue
+                        else:
+                            provider_file_id = file_id_value
+                            unified_file_id = self.get_unified_output_file_id(
+                                output_file_id=provider_file_id,
+                                model_id=model_id,
+                                model_name=resolved_model_name,
+                            )
+                            setattr(response, file_attr, unified_file_id)
 
                         # Use llm_router credentials when available. Without credentials,
                         # Azure and other auth-required providers return 500/401.
@@ -1125,27 +1160,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                     or {}
                                 )
                                 file_object = await litellm.afile_retrieve(
-                                    file_id=original_file_id,
+                                    file_id=provider_file_id,
                                     **_creds,
                                 )
                             else:
                                 file_object = await litellm.afile_retrieve(
                                     custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",  # type: ignore[arg-type]
-                                    file_id=original_file_id,
+                                    file_id=provider_file_id,
                                 )
                             verbose_logger.debug(
-                                f"Successfully retrieved file object for {file_attr}={original_file_id}"
+                                f"Successfully retrieved file object for {file_attr}={provider_file_id}"
                             )
                         except Exception as e:
                             verbose_logger.warning(
-                                f"Failed to retrieve file object for {file_attr}={original_file_id}: {str(e)}. Storing with None and will fetch on-demand."
+                                f"Failed to retrieve file object for {file_attr}={provider_file_id}: {str(e)}. Storing with None and will fetch on-demand."
                             )
 
                         await self.store_unified_file_id(
                             file_id=unified_file_id,
                             file_object=file_object,
                             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                            model_mappings={model_id: original_file_id},
+                            model_mappings={model_id: provider_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
             await self.store_unified_object_id(
@@ -1447,8 +1482,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 error_message += f" (showing {MAX_BATCHES_IN_ERROR} most recent): {', '.join(batch_statuses)}. "
 
             error_message += (
-                f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
-                f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
+                "To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
+                "Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
 
             # Record blocked deletion metric
@@ -1525,9 +1560,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if specific_model_file_id_mapping:
             exception_dict = {}
-            for model_id, file_id in specific_model_file_id_mapping.items():
+            for model_id, provider_file_id in specific_model_file_id_mapping.items():
                 try:
-                    return await llm_router.afile_content(model=model_id, file_id=file_id, **data)  # type: ignore
+                    # Cloud-storage providers (e.g. Bedrock S3) validate file ids
+                    # against the deployment's configured bucket, which they only
+                    # trust from this immutable server-side snapshot, never from
+                    # request params.
+                    credentials = llm_router.get_deployment_credentials_with_provider(
+                        model_id=model_id
+                    )
+                    if credentials is not None:
+                        data["_litellm_internal_model_credentials"] = cast(
+                            Dict, MappingProxyType(dict(credentials))
+                        )
+                    else:
+                        data.pop("_litellm_internal_model_credentials", None)
+                    return await llm_router.afile_content(model=model_id, file_id=provider_file_id, **data)  # type: ignore
                 except Exception as e:
                     exception_dict[model_id] = str(e)
             raise Exception(

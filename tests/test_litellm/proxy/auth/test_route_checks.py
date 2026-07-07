@@ -403,6 +403,48 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.parametrize(
+    "route, method",
+    [
+        ("/mcp", "POST"),
+        ("/mcp/", "POST"),
+        ("/mcp/my-server", "POST"),  # matches the /mcp/{subpath} pattern
+        ("/mcp/tools", "GET"),
+        ("/mcp/tools/list", "POST"),
+        ("/mcp/tools/call", "POST"),
+        ("/mcp-rest/tools/list", "GET"),
+        ("/mcp-rest/tools/call", "POST"),
+        ("/v1/mcp/tools", "GET"),
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_mcp_inference_endpoints(route, method):
+    """Every MCP inference/discovery endpoint must be reachable by virtual keys
+    scoped to allowed_routes=["llm_api_routes"], the default the Create Key UI
+    applies.
+
+    /v1/mcp/tools is the most recent addition: before it joined this group a key
+    could list tools via /mcp/tools/list and /mcp-rest/tools/list but got a 403
+    on the equivalent /v1/mcp/tools. Unlike /v1/mcp/server, none of these paths
+    have a management write counterpart, so they live directly in
+    `mcp_inference_routes` rather than behind a method-aware carve-out.
+    """
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request(method),
+    )
+
+    assert result is True
+
+
 def test_spend_logs_v2_classified_as_management_not_llm_api():
     """Paginated spend logs are a management/spend read route, not an LLM API."""
 
@@ -455,6 +497,32 @@ def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
 def test_mcp_inference_routes_classified_as_llm_api(route):
     """MCP tool-call / passthrough routes must remain llm_api routes so they
     continue to be blocked by DISABLE_LLM_API_ENDPOINTS on admin nodes."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
+    ],
+)
+def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
+    """GA Realtime WebRTC HTTP routes must be classified as LLM API routes so
+    non-admin virtual keys can call them instead of hitting the admin-only
+    401 branch in non_proxy_admin_allowed_routes_check.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/29923
+    """
 
     assert RouteChecks.is_llm_api_route(route=route) is True
     assert RouteChecks.is_management_route(route=route) is False
@@ -733,7 +801,7 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -799,7 +867,7 @@ def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoi
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -849,7 +917,7 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -893,7 +961,7 @@ def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -948,7 +1016,7 @@ def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -987,7 +1055,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -1021,7 +1089,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -1398,6 +1466,65 @@ def test_rag_routes_accessible_to_internal_user_viewer():
             valid_token=valid_token,
             request_data={},
         )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/vector_stores/vs_123",
+        "/v1/vector_stores/vs_123",
+        "/vector_stores/vs_123/search",
+        "/v1/vector_stores/vs_123/search",
+        "/vector_stores/vs_123/files",
+        "/v1/vector_stores/vs_123/files",
+    ],
+)
+def test_vector_store_routes_are_llm_api_routes(route):
+    """Retrieve/update/delete on a single vector store must classify as LLM API routes.
+
+    Regression for the missing bare `/v1/vector_stores/{vector_store_id}` entry in
+    `openai_routes` that left retrieve/update/delete blocked for internal roles
+    while `/search` and `/files` sub-routes worked.
+    """
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("GET", "/v1/vector_stores/vs_123"),
+        ("POST", "/v1/vector_stores/vs_123"),
+        ("DELETE", "/v1/vector_stores/vs_123"),
+    ],
+)
+def test_vector_store_crud_accessible_to_internal_roles(user_role, method, route):
+    """Internal user and internal viewer must reach vector store retrieve/update/delete.
+
+    Object-level access is still gated by `assert_user_can_access_vector_store`;
+    this only verifies the route gate no longer 403s these roles.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = method
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role),
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
 
 
 def test_videos_route_accessible_to_internal_users():
@@ -1900,7 +2027,6 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 # corners of the codebase and represent the long tail of GETs we'd otherwise
 # need to enumerate manually. Default-allow makes them all work.
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
-    "/in_product_nudges",
     "/health/latest",
     "/credentials",
     "/v1/mcp/network/client-ip",
@@ -2602,3 +2728,72 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     assert (
         RouteChecks.is_llm_api_route(route=route) is True
     ), f"{route!r} should be classified as an LLM API route"
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/search_tools/list",
+        "/search_tools/ui/available_providers",
+    ],
+)
+def test_internal_user_can_read_search_tools(route):
+    """Regression for LIT-3150: internal users must be able to view search tools,
+    the same way they can view vector stores."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/search_tools",  # create
+        "/search_tools/abc123",  # update / delete / get-by-id
+        "/search_tools/test_connection",
+    ],
+)
+def test_internal_user_blocked_from_search_tool_writes(route):
+    """Read access must not leak the search-tool management write routes to
+    internal users; only proxy admins create/update/delete/test them."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+    assert f"Route={route}" in str(exc_info.value)
+    assert "Your role=internal_user" in str(exc_info.value)

@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Select, Button, Card, Typography, Spin, Tag } from "antd";
 import { SaveOutlined, PlusOutlined } from "@ant-design/icons";
-import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting, fetchMCPClientIp } from "../networking";
+import { DeprecationBanner } from "../DeprecationBanner";
+import {
+  getGeneralSettingsCall,
+  updateConfigFieldSetting,
+  deleteConfigFieldSetting,
+  fetchMCPClientIp,
+} from "../networking";
 
 const { Text } = Typography;
 
@@ -88,10 +94,12 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
 
   return (
     <div className="space-y-6 p-4">
+      <DeprecationBanner featureName="MCP Network Settings and the internal-network-only flag" />
       <div>
         <Text className="text-lg font-semibold">Private IP Ranges</Text>
         <p className="text-sm text-gray-500 mt-1">
-          Define which IP ranges are part of your private network. Callers from these IPs can see all MCP servers. Callers from any other IP can only see servers marked &quot;Available on Public Internet&quot;.
+          Define which IP ranges are part of your private network. Callers from these IPs can see all MCP servers.
+          Callers from any other IP can only see servers marked &quot;Available on Public Internet&quot;.
         </p>
       </div>
 
@@ -136,12 +144,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       </Card>
 
       <div className="flex justify-end">
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          onClick={handleSave}
-          loading={saving}
-        >
+        <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
           Save
         </Button>
       </div>

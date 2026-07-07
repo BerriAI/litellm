@@ -172,10 +172,13 @@ nothing here imports outside it:
   `capture_span_content` gates whether prompt/response bodies may be written as
   span attributes; it defaults **off** (`no_content`). The Baggage allowlists are
   configurable, not hard-coded: set `LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS` /
-  `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` (comma-separated) as env vars, or
-  `baggage_promoted_keys` / `baggage_metadata_keys` (YAML lists) under
-  `callback_settings.otel` in `config.yaml` — the latter reach the config through
-  the logger's constructor kwargs.
+  `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` /
+  `LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS` (comma-separated) as env vars, or
+  `baggage_promoted_keys` / `baggage_metadata_keys` /
+  `baggage_team_metadata_keys` (YAML lists) under `callback_settings.otel` in
+  `config.yaml` — the latter reach the config through the logger's constructor
+  kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
+  free-form metadata is promoted until each sub-key is explicitly allowlisted.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.
@@ -213,7 +216,13 @@ lives in [`plumbing/`](./plumbing):
   `TracerProvider` so one logger serves many tenants. The cache is a bounded LRU
   that flushes + shuts down evicted providers, since the key derives from
   request-supplied credentials and must not grow (or leak threads) without limit.
-- [`metrics.py`](./plumbing/metrics.py) — GenAI client metric instruments.
+- [`metrics.py`](./plumbing/metrics.py) — GenAI client metric instruments. The
+  six `gen_ai.client.*` histograms are recorded through the meter resolved by
+  `providers.resolve_meter_provider`: an injected provider wins (tests/DI),
+  otherwise the operator's globally configured `MeterProvider` is reused so its
+  readers/exporters receive them alongside the server metrics, and one is built
+  and registered as the global only when none is set (mirroring how V2 owns trace
+  export).
 
 ### Adapter
 

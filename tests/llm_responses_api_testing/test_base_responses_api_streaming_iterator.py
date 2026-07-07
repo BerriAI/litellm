@@ -67,6 +67,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
@@ -107,6 +108,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         # Create a mock ResponsesAPIResponse for the completed event
@@ -179,6 +181,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         # Create a mock OutputTextDeltaEvent (not a completed event)
@@ -239,6 +242,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         # Create the iterator instance
@@ -265,6 +269,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         # Create the iterator instance
@@ -291,6 +296,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         # Create the iterator instance
@@ -329,6 +335,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.aiter_bytes = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_logging_obj.async_success_handler = Mock()
         mock_logging_obj.success_handler = Mock()
         mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -397,6 +404,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_logging_obj.async_failure_handler = Mock()
         mock_logging_obj.failure_handler = Mock()
 
@@ -457,6 +465,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_logging_obj.async_failure_handler = Mock()
         mock_logging_obj.failure_handler = Mock()
 
@@ -505,6 +514,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.aiter_bytes = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_logging_obj.async_failure_handler = Mock()
         mock_logging_obj.failure_handler = Mock()
         mock_logging_obj.async_success_handler = Mock()
@@ -587,6 +597,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response.aiter_bytes = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_logging_obj.async_failure_handler = Mock()
         mock_logging_obj.failure_handler = Mock()
         mock_logging_obj.async_success_handler = Mock()

@@ -1,12 +1,9 @@
 import json
 import os
 import sys
-from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call as mock_call, patch
 
-import orjson
 import pytest
-from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -18,8 +15,11 @@ from starlette.datastructures import Headers
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._types import (
+    SpecialHeaders,
+    SpecialMCPServerNames,
+    UserAPIKeyAuth,
+)
 
 
 @pytest.mark.asyncio
@@ -169,6 +169,151 @@ class TestMCPRequestHandler:
                 # Verify the mock functions were called correctly
                 mock_key_servers.assert_called_once_with(user_api_key_auth)
                 mock_team_servers.assert_called_once_with(user_api_key_auth)
+
+    @pytest.mark.parametrize(
+        "require_key_mcp_access_defined,expected",
+        [
+            # Default (flag off): a key with no MCP scope of its own inherits
+            # the team's servers.
+            (False, ["team_server1", "team_server2"]),
+            # Flag on: the team is a ceiling, not a default — the key inherits
+            # nothing and must grant servers explicitly.
+            (True, []),
+        ],
+    )
+    async def test_require_key_mcp_access_defined_gates_team_inheritance(
+        self, require_key_mcp_access_defined, expected
+    ):
+        """The require_key_mcp_access_defined general setting flips an empty key
+        from inheriting its team's MCP servers (default) to inheriting none."""
+        auth = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team"
+        )
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_key",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=["team_server1", "team_server2"],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_access_group_mcp_server_extras",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"require_key_mcp_access_defined": require_key_mcp_access_defined},
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+
+        assert sorted(result) == sorted(expected)
+
+    @pytest.mark.parametrize(
+        "key_servers,grants,expected,scenario",
+        [
+            # Explicit key subset is still honored under the flag (intersected
+            # with the team ceiling) — the flag only removes empty-key inheritance.
+            (["team_server1"], [], ["team_server1"], "explicit_subset_survives"),
+            # An access-group grant is the escape hatch: it surfaces even though
+            # the key inherits nothing from the team.
+            ([], ["granted_server"], ["granted_server"], "access_group_grant_survives"),
+        ],
+    )
+    async def test_require_key_mcp_access_defined_preserves_explicit_grants(
+        self, key_servers, grants, expected, scenario
+    ):
+        """With require_key_mcp_access_defined on, a key still reaches servers it
+        grants explicitly or via an access group — only blanket team inheritance
+        is removed."""
+        auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+            access_group_ids=["grp"] if grants else [],
+        )
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_key",
+                new_callable=AsyncMock,
+                return_value=key_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=["team_server1", "team_server2"],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_access_group_mcp_server_extras",
+                new_callable=AsyncMock,
+                return_value=grants,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"require_key_mcp_access_defined": True},
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+
+        assert sorted(result) == sorted(expected)
+
+    @pytest.mark.parametrize("team_servers", [[], ["team_server1", "team_server2"]])
+    async def test_no_mcp_servers_sentinel_returns_empty(self, team_servers):
+        """A key scoped to the no-mcp-servers sentinel resolves to zero servers,
+        overriding team inheritance and never leaking the sentinel marker."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team"
+        )
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.no_mcp_servers.value
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ), patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=team_servers,
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+
+    async def test_get_allowed_mcp_servers_for_key_returns_sentinel_marker(self):
+        """_get_allowed_mcp_servers_for_key surfaces the sentinel unexpanded so the
+        caller can short-circuit, ignoring any other entries on the key."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.no_mcp_servers.value,
+            "some-other-server",
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth
+            )
+
+        assert result == [SpecialMCPServerNames.no_mcp_servers.value]
 
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""
@@ -453,7 +598,7 @@ class TestMCPRequestHandler:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             side_effect=mock_user_api_key_auth,
-        ) as mock_auth:
+        ):
             # Call the method
             (
                 auth_result,
@@ -662,12 +807,11 @@ class TestMCPOAuth2AuthFlow:
 
     async def test_oauth2_token_in_authorization_header_fallback(self):
         """
-        When only Authorization header is present with a non-LiteLLM OAuth2 token
-        AND the target server is operator-configured for ``auth_type=oauth2``,
-        auth should fall back to permissive mode (OAuth2 passthrough).
+        When only the Authorization header is present with a non-LiteLLM OAuth2
+        token AND the target server delegates auth to upstream, LiteLLM skips its
+        own validation entirely (so the upstream token is never mistaken for a
+        virtual key) and forwards the bearer upstream.
         """
-        from fastapi import HTTPException
-
         from litellm.types.mcp import MCPAuth
 
         scope = {
@@ -679,17 +823,16 @@ class TestMCPOAuth2AuthFlow:
             ],
         }
 
-        async def mock_user_api_key_auth_fails(api_key, request):
-            raise HTTPException(status_code=401, detail="Invalid API key")
-
         oauth2_server = MagicMock()
         oauth2_server.auth_type = MCPAuth.oauth2
+        oauth2_server.delegate_auth_to_upstream = True
+        oauth2_server.has_client_credentials = False
 
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                side_effect=mock_user_api_key_auth_fails,
-            ),
+                new_callable=AsyncMock,
+            ) as mock_auth,
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr,
@@ -704,10 +847,10 @@ class TestMCPOAuth2AuthFlow:
                 raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
-            # Should succeed with default UserAPIKeyAuth (OAuth2 fallback)
-            assert auth_result is not None
             assert isinstance(auth_result, UserAPIKeyAuth)
-            # OAuth2 headers should contain the token for upstream forwarding
+            # The upstream token is never validated as a LiteLLM key ...
+            mock_auth.assert_not_called()
+            # ... and is preserved for upstream forwarding.
             assert (
                 oauth2_headers.get("Authorization")
                 == "Bearer atlassian-oauth2-access-token-xyz"
@@ -817,11 +960,12 @@ class TestMCPOAuth2AuthFlow:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 500
 
-    async def test_proxy_exception_oauth2_fallback(self):
+    async def test_proxy_exception_non_delegate_oauth2_propagates(self):
         """
-        user_api_key_auth raises ProxyException (not HTTPException) in production.
-        The OAuth2 fallback must catch ProxyException with code 401/403 too,
-        but only when the target server is operator-configured for ``auth_type=oauth2``.
+        Production raises ProxyException (not HTTPException) on auth failure. For
+        a non-delegate oauth2 server the bearer is treated as a LiteLLM credential
+        and a 401 must propagate as a real auth error, not be exchanged for an
+        anonymous upstream-passthrough session.
         """
         from litellm.proxy._types import ProxyException
         from litellm.types.mcp import MCPAuth
@@ -845,6 +989,8 @@ class TestMCPOAuth2AuthFlow:
 
         oauth2_server = MagicMock()
         oauth2_server.auth_type = MCPAuth.oauth2
+        oauth2_server.delegate_auth_to_upstream = False
+        oauth2_server.is_oauth_passthrough = False
 
         with (
             patch(
@@ -856,22 +1002,9 @@ class TestMCPOAuth2AuthFlow:
             ) as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
-            (
-                auth_result,
-                mcp_auth_header,
-                mcp_servers,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers,
-            ) = await MCPRequestHandler.process_mcp_request(scope)
-
-            # Should succeed with default UserAPIKeyAuth (OAuth2 fallback)
-            assert auth_result is not None
-            assert isinstance(auth_result, UserAPIKeyAuth)
-            assert (
-                oauth2_headers.get("Authorization")
-                == "Bearer atlassian-oauth2-access-token-xyz"
-            )
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert str(exc_info.value.code) == "401"
 
     async def test_proxy_exception_non_auth_still_raises(self):
         """
@@ -999,6 +1132,284 @@ class TestMCPPublicRouteGuard:
 
 
 @pytest.mark.asyncio
+class TestMCPPassthroughColdStartAdmission:
+    @staticmethod
+    def _make_passthrough_server():
+        server = MagicMock()
+        server.is_oauth_passthrough = True
+        return server
+
+    async def test_cold_start_ignores_header_without_path_target(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"x-mcp-servers", b"passthrough_server")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._is_mcp_passthrough_cold_start"
+            ) as mock_cold_start,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+            # Cold-start admission must not fire for the aggregate ``/mcp``
+            # route — only path-targeted routes are eligible for OAuth
+            # discovery admission.
+            mock_cold_start.assert_not_called()
+
+    async def test_cold_start_rejects_server_specific_authorization_header(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [
+                (
+                    b"x-mcp-passthrough_server-authorization",
+                    b"Bearer upstream-token",
+                )
+            ],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+
+    async def test_cold_start_rejects_legacy_mcp_auth_header(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [(b"x-mcp-auth", b"Bearer upstream-token")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+
+    async def test_cold_start_fails_closed_when_client_ip_hides_server(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
+                return_value="203.0.113.10",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+            mock_mgr.get_mcp_server_by_name.assert_any_call(
+                "passthrough_server", client_ip="203.0.113.10"
+            )
+
+    async def test_cold_start_propagates_non_401_http_error(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_forbidden(api_key, request):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_forbidden,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 403
+
+    async def test_cold_start_propagates_non_auth_proxy_exception(self):
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_server_error(api_key, request):
+            raise ProxyException(
+                message="Internal error",
+                type="server_error",
+                param=None,
+                code=500,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_server_error,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(scope)
+
+    async def test_cold_start_allows_401_for_path_passthrough_target(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            mock_mgr.get_mcp_server_by_name.assert_any_call(
+                "passthrough_server", client_ip=""
+            )
+
+    async def test_cold_start_allows_proxy_exception_401_for_path_target(self):
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise ProxyException(
+                message="Authentication Error",
+                type="auth_error",
+                param="api_key",
+                code=401,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            mock_mgr.get_mcp_server_by_name.assert_any_call(
+                "passthrough_server", client_ip=""
+            )
+
+
+@pytest.mark.asyncio
 class TestMCPOAuth2FallbackTargetGating:
     """
     Regression tests for GHSA-h8fm-g6wc-j228 / HW6xR21d:
@@ -1009,9 +1420,14 @@ class TestMCPOAuth2FallbackTargetGating:
     """
 
     @staticmethod
-    def _make_server(auth_type):
+    def _make_server(auth_type, is_oauth_passthrough=False):
         server = MagicMock()
         server.auth_type = auth_type
+        # MagicMock would otherwise auto-create truthy stand-ins for any
+        # attribute access (including ``is_oauth_passthrough``), which
+        # would silently flip the passthrough fallback gate on. Pin the
+        # boolean explicitly so non-passthrough fixtures stay non-passthrough.
+        server.is_oauth_passthrough = is_oauth_passthrough
         return server
 
     async def test_fallback_blocked_when_target_is_not_oauth2(self):
@@ -1076,11 +1492,15 @@ class TestMCPOAuth2FallbackTargetGating:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
 
-    async def test_fallback_allowed_when_target_is_oauth2_mode(self):
+    async def test_non_delegate_oauth2_does_not_fall_back_to_anonymous(self):
         """
-        Operator-configured OAuth2 passthrough still works: target server has
-        ``auth_type=oauth2`` → failed LiteLLM auth falls back to anonymous so
-        the bearer can be forwarded to upstream.
+        An ``auth_type=oauth2`` server that has NOT opted into
+        ``delegate_auth_to_upstream`` must not exchange a failed LiteLLM auth for
+        an anonymous session: forwarding an arbitrary bearer upstream is only
+        allowed once the operator explicitly delegates auth. A failed validation
+        here is a genuine 401 and propagates (which is also what keeps the
+        success-path trace free of a phantom 401, since no doomed validation runs
+        for a delegated server).
         """
         from fastapi import HTTPException
 
@@ -1110,8 +1530,91 @@ class TestMCPOAuth2FallbackTargetGating:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
             )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_fallback_allowed_when_target_is_passthrough(self):
+        """
+        Cold-start return per RFC 9728 / MCP Authorization spec: client
+        discovered the upstream IdP via the gateway's protected-resource
+        metadata, completed OAuth, and is returning with
+        ``Authorization: Bearer <upstream-token>``. The bearer is not a
+        LiteLLM key but the target is a pass-through server, so admission
+        falls back to anonymous and forwards the bearer upstream.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [(b"authorization", b"Bearer upstream-token-xyz")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPOAuth2FallbackTargetGating._make_server(
+                    auth_type=MCPAuth.none,
+                    is_oauth_passthrough=True,
+                )
+            )
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
+            assert auth_result.api_key is None
+
+    async def test_fallback_blocked_when_client_ip_hides_oauth2_target(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/hidden_oauth2_server",
+            "headers": [(b"authorization", b"Bearer upstream-token")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
+                return_value="203.0.113.10",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+            # Lookup may run twice — once for the oauth2-target fallback gate
+            # and once for the passthrough-target fallback gate. Both must
+            # resolve to ``None`` (hidden by client IP) so neither bypass
+            # opens. Use ``assert_any_call`` to assert the IP-scoped lookup
+            # happened without locking the count.
+            mock_mgr.get_mcp_server_by_name.assert_any_call(
+                "hidden_oauth2_server", client_ip="203.0.113.10"
+            )
 
     async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
         """
@@ -1241,6 +1744,39 @@ class TestMCPDelegateAuthToUpstream:
             is False
         )
 
+    def test_build_mcp_server_table_preserves_oauth_passthrough(self):
+        """Registry → API list rows must expose oauth_passthrough for the UI.
+
+        ``oauth_passthrough`` is the dedicated non-oauth2 pass-through opt-in,
+        distinct from ``delegate_auth_to_upstream`` (oauth2-only). Both must
+        round-trip independently so neither flag silently implies the other.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        passthrough = MCPServer(
+            server_id="passthrough-1",
+            name="passthrough",
+            transport="http",
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+            available_on_public_internet=True,
+        )
+        row = manager._build_mcp_server_table(passthrough)
+        assert row.oauth_passthrough is True
+        # The oauth2-only flag must remain independent and default off.
+        assert row.delegate_auth_to_upstream is False
+
+        not_passthrough = passthrough.model_copy(update={"oauth_passthrough": False})
+        assert (
+            manager._build_mcp_server_table(not_passthrough).oauth_passthrough is False
+        )
+
     async def test_delegate_skips_litellm_auth_with_no_authorization(self):
         """
         oauth2 + delegate_auth_to_upstream=True, no Authorization header at
@@ -1274,19 +1810,16 @@ class TestMCPDelegateAuthToUpstream:
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_not_called()
 
-    async def test_delegate_with_upstream_token_in_authorization_falls_back_to_anonymous(
+    async def test_delegate_with_upstream_token_in_authorization_skips_litellm_auth(
         self,
     ):
         """
         oauth2 + delegate_auth_to_upstream=True with an upstream OAuth token in
-        ``Authorization`` (not a LiteLLM key): LiteLLM auth is attempted first
-        (and fails), then the existing oauth2 fallback returns anonymous so the
-        bearer is forwarded upstream untouched. The delegate branch itself does
-        not fire when Authorization is present — that is what protects spend
-        tracking for callers using Authorization-style LiteLLM keys.
+        ``Authorization``: the delegate gate fires before any LiteLLM validation,
+        so ``user_api_key_auth`` is never called and the bearer is forwarded
+        upstream untouched. Skipping the doomed validation is what keeps a tool
+        call that actually succeeds from carrying a phantom 401 auth span.
         """
-        from fastapi import HTTPException
-
         from litellm.types.mcp import MCPAuth
 
         scope = {
@@ -1296,14 +1829,11 @@ class TestMCPDelegateAuthToUpstream:
             "headers": [(b"authorization", b"Bearer upstream-pkce-token")],
         }
 
-        async def mock_user_api_key_auth_fails(api_key, request):
-            raise HTTPException(status_code=401, detail="Invalid API key")
-
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                side_effect=mock_user_api_key_auth_fails,
-            ),
+                new_callable=AsyncMock,
+            ) as mock_auth,
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr,
@@ -1324,6 +1854,7 @@ class TestMCPDelegateAuthToUpstream:
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert oauth2_headers.get("Authorization") == "Bearer upstream-pkce-token"
+            mock_auth.assert_not_called()
 
     async def test_delegate_off_still_requires_litellm_auth(self):
         """
@@ -1518,12 +2049,15 @@ class TestMCPDelegateAuthToUpstream:
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
 
-    async def test_litellm_key_via_authorization_header_not_bypassed(self):
+    async def test_authorization_bearer_on_delegate_server_treated_as_upstream(self):
         """
-        Regression: a LiteLLM key sent via the secondary ``Authorization`` header
-        (e.g. ``Authorization: Bearer sk-...``) must still trigger normal auth
-        and not be silently swallowed by the delegate bypass — otherwise spend
-        tracking and rate limiting are skipped for those callers.
+        On a delegate server the ``Authorization`` header is, by contract, an
+        upstream token rather than a LiteLLM key — even when it is sk-shaped. It
+        is forwarded upstream without LiteLLM validation, so ``user_api_key_auth``
+        is not called and no LiteLLM identity is resolved. Callers who need
+        LiteLLM identity / spend tracking on a delegate server must supply
+        ``x-litellm-api-key`` (see
+        test_explicit_litellm_key_takes_precedence_over_delegate).
         """
         from litellm.types.mcp import MCPAuth
 
@@ -1550,10 +2084,18 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+            (
+                auth_result,
+                _,
+                _,
+                _,
+                oauth2_headers,
+                _,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
-            assert auth_result.user_id == "real-user"
-            mock_auth.assert_called_once()
+            assert auth_result.user_id is None
+            assert oauth2_headers.get("Authorization") == "Bearer sk-1234"
+            mock_auth.assert_not_called()
 
     async def test_delegate_ignored_for_client_credentials_server(self):
         """
@@ -1806,9 +2348,12 @@ class TestMCPDelegateAuthToUpstream:
             delegate_auth_to_upstream=True,
         )
 
-        def lookup_by_name(name):
+        def lookup_by_name(name, **_kwargs):
             # Only the *exact* delegated name resolves. Anything else (e.g.
             # ``delegated_server/extra``) returns None so the bypass fails.
+            # ``**_kwargs`` accepts the ``client_ip`` kwarg the cold-start
+            # admission path now forwards (real signature:
+            # ``get_mcp_server_by_name(name, client_ip=None)``).
             if name == "delegated_server":
                 return delegate_server
             return None
@@ -1869,7 +2414,10 @@ class TestMCPDelegateAuthToUpstream:
             auth_type=MCPAuth.api_key,
         )
 
-        def lookup_by_name(name):
+        def lookup_by_name(name, **_kwargs):
+            # ``**_kwargs`` accepts the ``client_ip`` kwarg the cold-start
+            # admission path now forwards (real signature:
+            # ``get_mcp_server_by_name(name, client_ip=None)``).
             return {
                 "delegated_server": delegate_server,
                 "non_delegate_server": non_delegate,
@@ -2342,7 +2890,6 @@ class TestMCPAccessGroupsE2E:
             mock_auth.assert_called_once()
 
 
-@pytest.mark.asyncio
 def test_mcp_path_based_server_segregation(monkeypatch):
     # Import the MCP server FastAPI app and context getter
     from litellm.proxy._experimental.mcp_server.server import app, get_auth_context
@@ -2955,6 +3502,89 @@ class TestAgentMCPPermissions:
                         user_api_key_auth=user_api_key_auth,
                     )
                     assert sorted(result) == ["tool_a", "tool_b"]
+
+    async def test_get_agent_object_permission_uses_shared_helper(self):
+        """``_get_agent_object_permission`` must resolve the agent's
+        ``object_permission_id`` and then defer to the shared
+        ``get_object_permission`` helper so cache entries are shared with the
+        org / team / key paths."""
+        from litellm.caching.dual_cache import DualCache
+
+        cache = DualCache()
+        agent_row = MagicMock()
+        agent_row.object_permission_id = "perm-xyz"
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+            return_value=agent_row
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-shared",
+        )
+        expected_perm = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission",
+                new_callable=AsyncMock,
+                return_value=expected_perm,
+            ) as mock_get_perm,
+        ):
+            result = await MCPRequestHandler._get_agent_object_permission(
+                user_api_key_auth
+            )
+            assert result is expected_perm
+            mock_get_perm.assert_awaited_once()
+            assert mock_get_perm.await_args.kwargs["object_permission_id"] == "perm-xyz"
+
+            # Second call: the agent_id -> object_permission_id mapping is
+            # cached, so the agent row is not re-fetched.
+            prisma_client.db.litellm_agentstable.find_unique.reset_mock()
+            await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+            prisma_client.db.litellm_agentstable.find_unique.assert_not_called()
+
+    async def test_get_agent_object_permission_caches_missing_permission(self):
+        """When the agent has no ``object_permission_id`` the sentinel must be
+        cached so subsequent requests do not hit the DB again."""
+        from litellm.caching.dual_cache import DualCache
+
+        cache = DualCache()
+        agent_row = MagicMock()
+        agent_row.object_permission_id = None
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+            return_value=agent_row
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-no-perm",
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission",
+                new_callable=AsyncMock,
+            ) as mock_get_perm,
+        ):
+            assert (
+                await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+                is None
+            )
+            assert (
+                await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+                is None
+            )
+
+            mock_get_perm.assert_not_awaited()
+            prisma_client.db.litellm_agentstable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3865,3 +4495,242 @@ async def test_get_allowed_mcp_servers_surfaces_ungated_key_access_group_grant_e
         assert result == ["srv-deepwiki"]
     finally:
         _stop_patches(patches)
+
+
+def test_expand_permission_list_does_not_honor_all_proxy_sentinel():
+    """The all-proxy sentinel is a team-only grant. The shared expand_permission_list
+    also feeds the key/org/end_user/agent resolvers, so it must NOT expand the
+    sentinel to the full registry; it passes through as an inert literal (denied
+    downstream). Concrete ids still resolve normally. If the sentinel were expanded
+    here, any stored key/org/end_user permission holding it would silently gain every
+    server."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import SpecialMCPServerName
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    sentinel = SpecialMCPServerName.all_proxy_servers.value
+    for sid in ("srv-x", "srv-y"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        result = global_mcp_server_manager.expand_permission_list([sentinel])
+        assert set(result).isdisjoint({"srv-x", "srv-y"})
+        assert result == [sentinel]
+        assert global_mcp_server_manager.expand_permission_list(["srv-x"]) == ["srv-x"]
+    finally:
+        for sid in ("srv-x", "srv-y"):
+            global_mcp_server_manager.registry.pop(sid, None)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically():
+    """The TEAM resolver expands the all-proxy sentinel to every registered server and
+    picks up a server registered later, so a team scoped to all-proxy tracks the live
+    registry without any change to its stored permission. Reverting the team-side
+    expansion collapses this to the inert literal and the result no longer contains the
+    real servers."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTable,
+        SpecialMCPServerName,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for sid in ("srv-x", "srv-y"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        team_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-perm",
+            mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="team-1",
+            access_group_ids=[],
+            object_permission_id="team-perm",
+        )
+        team_obj.object_permission = team_perm
+        auth = UserAPIKeyAuth(token="test-token", api_key="sk-test", team_id="team-1")
+
+        patches = _patch_proxy_server_globals_for_mcp() + [
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new_callable=AsyncMock,
+                return_value=team_obj,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ]
+        _start_patches(patches)
+        try:
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+            assert set(result) == {"srv-x", "srv-y"}
+
+            global_mcp_server_manager.registry["srv-z"] = MCPServer(
+                server_id="srv-z",
+                name="srv-z",
+                server_name="srv-z",
+                url="https://srv-z.example.com",
+                transport=MCPTransport.http,
+            )
+            result_after = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+            assert "srv-z" in result_after
+        finally:
+            _stop_patches(patches)
+    finally:
+        for sid in ("srv-x", "srv-y", "srv-z"):
+            global_mcp_server_manager.registry.pop(sid, None)
+
+
+@pytest.mark.asyncio
+async def test_key_with_all_proxy_sentinel_does_not_grant_all_servers():
+    """Security regression: the all-proxy sentinel is a team-only grant. A KEY whose
+    stored object_permission holds the sentinel (via a stale write, a configured
+    default, or a bug) must NOT be silently widened to every server at runtime. A
+    teamless key with the sentinel resolves to no real server — never srv-secret or the
+    full registry. On the pre-hardening code the key path expanded the sentinel and
+    this key would reach srv-secret."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        SpecialMCPServerName,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for sid in ("srv-x", "srv-y", "srv-secret"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        key_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-perm",
+            mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        auth = UserAPIKeyAuth(token="test-token", api_key="sk-test", object_permission=key_perm)
+
+        patches = _patch_proxy_server_globals_for_mcp()
+        _start_patches(patches)
+        try:
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        finally:
+            _stop_patches(patches)
+
+        assert "srv-secret" not in result
+        assert set(result).isdisjoint(global_mcp_server_manager.get_registry().keys())
+    finally:
+        for sid in ("srv-x", "srv-y", "srv-secret"):
+            global_mcp_server_manager.registry.pop(sid, None)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_team_all_proxy_key_scoped_to_one_end_to_end():
+    """End-to-end: a team scoped to the all-proxy sentinel is a ceiling of every
+    registered server, so a key scoped to a single server (srv-x) resolves to
+    exactly that server (key ∩ all-servers == key). If the sentinel branch is
+    reverted the team ceiling collapses to the literal marker, the intersection
+    empties, and the result is [] instead of ["srv-x"]."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTable,
+        SpecialMCPServerName,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for sid in ("srv-x", "srv-y"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        key_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-perm",
+            mcp_servers=["srv-x"],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        team_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-perm",
+            mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="team-1",
+            access_group_ids=[],
+            object_permission_id="team-perm",
+        )
+        team_obj.object_permission = team_perm
+
+        auth = UserAPIKeyAuth(
+            token="test-token",
+            api_key="sk-test",
+            team_id="team-1",
+            object_permission=key_perm,
+        )
+
+        patches = _patch_proxy_server_globals_for_mcp() + [
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new_callable=AsyncMock,
+                return_value=team_obj,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ]
+        _start_patches(patches)
+        try:
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        finally:
+            _stop_patches(patches)
+
+        assert result == ["srv-x"]
+    finally:
+        for sid in ("srv-x", "srv-y"):
+            global_mcp_server_manager.registry.pop(sid, None)

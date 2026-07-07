@@ -20,6 +20,7 @@ class FunctionResponse(TypedDict, total=False):
     id: str
     name: Required[str]
     response: Optional[dict]
+    parts: List["FunctionResponsePartType"]
 
 
 class FunctionCall(TypedDict, total=False):
@@ -38,6 +39,11 @@ class FileDataType(TypedDict):
 class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
+
+
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
 
 
 class PartType(TypedDict, total=False):
@@ -176,9 +182,7 @@ HarmBlockThreshold = Literal[
 ]
 HarmBlockMethod = Literal["HARM_BLOCK_METHOD_UNSPECIFIED", "SEVERITY", "PROBABILITY"]
 
-HarmProbability = Literal[
-    "HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
-]
+HarmProbability = Literal["HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"]
 
 HarmSeverity = Literal[
     "HARM_SEVERITY_UNSPECIFIED",
@@ -204,9 +208,7 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal[
-    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
-]
+GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -226,6 +228,7 @@ class VoiceConfig(TypedDict):
 
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    languageCode: str
 
 
 class GenerationConfig(TypedDict, total=False):
@@ -240,6 +243,7 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     response_json_schema: dict
+    responseFormat: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
@@ -299,9 +303,7 @@ class UsageMetadata(TypedDict, total=False):
     cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[
-        PromptTokensDetails
-    ]  # Alternative key name used in some responses
+    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -750,3 +752,12 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+
+
+VERTEX_AI_PROVIDER_METADATA_FIELDS = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)

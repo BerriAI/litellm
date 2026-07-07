@@ -31,8 +31,9 @@ test.describe("AI Hub (internal admin view)", () => {
     // Submit
     await modal.getByRole("button", { name: "Make Public" }).click();
 
-    await expect(page.getByText(/Successfully made .* model group\(s\) public/i).first())
-      .toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Successfully made .* model group\(s\) public/i).first()).toBeVisible({
+      timeout: 15_000,
+    });
   });
 
   test("AI Hub tab list renders Model Hub, Agent Hub, MCP Hub and Skill Hub", async ({ page }) => {

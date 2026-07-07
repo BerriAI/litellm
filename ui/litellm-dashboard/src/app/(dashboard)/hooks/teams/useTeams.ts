@@ -4,12 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { teamInfoCall } from "@/components/networking";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 
 export interface TeamsResponse {
   teams: Team[];
@@ -23,7 +18,6 @@ export interface DeletedTeam extends Team {
   deleted_at: string;
   deleted_by: string;
 }
-
 
 export interface TeamListCallOptions {
   organizationID?: string | null;
@@ -47,7 +41,7 @@ export const teamListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
@@ -83,7 +77,6 @@ export const teamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/v2/team/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list teams:", error);
@@ -98,6 +91,31 @@ export const useTeams = (): UseQueryResult<Team[]> => {
     queryKey: teamKeys.list({}),
     queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
     enabled: Boolean(accessToken),
+  });
+};
+
+const ALL_TEAMS_PAGE_SIZE = 100;
+
+const fetchAllTeamsPaged = async (accessToken: string): Promise<Team[]> => {
+  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE);
+  const totalPages = firstPage.total_pages ?? 1;
+  if (totalPages <= 1) return firstPage.teams;
+
+  const remainingPages: TeamsResponse[] = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE)),
+  );
+  return [firstPage, ...remainingPages].flatMap((page) => page.teams);
+};
+
+export const useAllTeams = (): UseQueryResult<Team[]> => {
+  const { accessToken } = useAuthorized();
+  return useQuery<Team[]>({
+    queryKey: teamKeys.list({
+      filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE, accessToken: accessToken ?? "" },
+    }),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!),
+    enabled: Boolean(accessToken),
+    staleTime: 30000,
   });
 };
 
@@ -128,11 +146,7 @@ export const useTeam = (teamId?: string) => {
 
 const infiniteTeamKeys = createQueryKeys("infiniteTeams");
 
-export const useInfiniteTeams = (
-  pageSize: number = 50,
-  search?: string,
-  organizationId?: string | null,
-) => {
+export const useInfiniteTeams = (pageSize: number = 50, search?: string, organizationId?: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
   const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
 
@@ -174,7 +188,7 @@ const deletedTeamListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
@@ -210,11 +224,10 @@ const deletedTeamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/team/list?status=deleted API Response:", data);
-    
+
     // Extract teams array from response if it's wrapped in a response object
     // Otherwise return the data directly if it's already an array
-    if (data && typeof data === 'object' && 'teams' in data) {
+    if (data && typeof data === "object" && "teams" in data) {
       return data.teams as DeletedTeam[];
     }
     return data as DeletedTeam[];

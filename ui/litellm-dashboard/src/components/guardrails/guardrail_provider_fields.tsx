@@ -61,7 +61,6 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
       try {
         const data = await getGuardrailProviderSpecificParams(accessToken);
-        console.log("Provider params API response:", data);
         setProviderParams(data);
 
         // Populate dynamic providers from API response
@@ -102,15 +101,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];
 
-  console.log("Provider key:", providerKey);
-  console.log("Provider fields:", providerFields);
-
   if (!providerFields || Object.keys(providerFields).length === 0) {
     return <div>No configuration fields available for this provider.</div>;
   }
 
-  console.log("Value:", value);
-  
   // Fields to skip for content filter provider (handled in dedicated steps)
   const contentFilterFieldsToSkip = new Set([
     "patterns",
@@ -121,15 +115,14 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     "pattern_redaction_format",
     "keyword_redaction_tag",
   ]);
-  
+
   const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
-  
+
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
       const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
       const fieldValue = parentValue ? parentValue[fieldKey] : value?.[fieldKey];
-      console.log("Field value:", fieldValue);
       // Skip ui_friendly_name - it's metadata for the UI dropdown, not a user configuration field
       if (fieldKey === "ui_friendly_name") {
         return null;
@@ -158,9 +151,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
       }
 
       const resolvedInitialValue =
-        fieldValue !== undefined
-          ? fieldValue
-          : (field.default_value ?? (field.type === "percentage" ? 0.5 : undefined));
+        fieldValue !== undefined ? fieldValue : field.default_value ?? (field.type === "percentage" ? 0.5 : undefined);
 
       return (
         <Form.Item

@@ -225,7 +225,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
               {Array.from(selectedServers).map((serverId) => {
                 const server = mcpHubData.find((s) => s.server_id === serverId);
                 return (
-                  <div key={serverId} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                  <div key={serverId} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
                     <div className="flex-1">
                       <div className="flex items-center space-x-2">
                         <Text className="font-medium">{server?.server_name || serverId}</Text>

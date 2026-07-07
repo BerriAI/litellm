@@ -9,12 +9,7 @@ vi.mock("@/components/common_components/ModelSelector", () => ({
   default: ({ onChange, value, labelText, disabled }: any) => (
     <div>
       <label htmlFor="model-selector">{labelText ?? "Select Model"}</label>
-      <select
-        id="model-selector"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-      >
+      <select id="model-selector" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
         <option value="gpt-4o">gpt-4o</option>
         <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
       </select>
@@ -22,9 +17,7 @@ vi.mock("@/components/common_components/ModelSelector", () => ({
   ),
 }));
 
-const buildProps = (
-  overrides: Partial<React.ComponentProps<typeof MCPSemanticFilterTestPanel>> = {}
-) => ({
+const buildProps = (overrides: Partial<React.ComponentProps<typeof MCPSemanticFilterTestPanel>> = {}) => ({
   accessToken: "test-token",
   testQuery: "",
   setTestQuery: vi.fn(),
@@ -50,9 +43,7 @@ describe("MCPSemanticFilterTestPanel", () => {
 
   it("should show the test query textarea", () => {
     render(<MCPSemanticFilterTestPanel {...buildProps()} />);
-    expect(
-      screen.getByPlaceholderText(/enter a test query to see which tools/i)
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/enter a test query to see which tools/i)).toBeInTheDocument();
   });
 
   it("should call setTestQuery when user types in the query field", () => {
@@ -71,29 +62,19 @@ describe("MCPSemanticFilterTestPanel", () => {
   });
 
   it("should disable the Test Filter button when filterEnabled is false", () => {
-    render(
-      <MCPSemanticFilterTestPanel
-        {...buildProps({ testQuery: "search query", filterEnabled: false })}
-      />
-    );
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query", filterEnabled: false })} />);
     expect(screen.getByRole("button", { name: /test filter/i })).toBeDisabled();
   });
 
   it("should enable the Test Filter button when testQuery is set and filter is enabled", () => {
-    render(
-      <MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query" })} />
-    );
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query" })} />);
     expect(screen.getByRole("button", { name: /test filter/i })).not.toBeDisabled();
   });
 
   it("should call onTest when the Test Filter button is clicked", async () => {
     const mockOnTest = vi.fn();
     const user = userEvent.setup();
-    render(
-      <MCPSemanticFilterTestPanel
-        {...buildProps({ testQuery: "search query", onTest: mockOnTest })}
-      />
-    );
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query", onTest: mockOnTest })} />);
 
     await user.click(screen.getByRole("button", { name: /test filter/i }));
     expect(mockOnTest).toHaveBeenCalledOnce();
@@ -122,6 +103,18 @@ describe("MCPSemanticFilterTestPanel", () => {
     expect(screen.getByText("wiki-fetch")).toBeInTheDocument();
     expect(screen.getByText("github-search")).toBeInTheDocument();
     expect(screen.getByText("slack-post")).toBeInTheDocument();
+    expect(screen.queryByText(/more selected tools not shown/i)).not.toBeInTheDocument();
+  });
+
+  it("should note how many selected tools are missing when the header list is incomplete", () => {
+    const testResult: TestResult = {
+      totalTools: 40,
+      selectedTools: 8,
+      tools: ["metrics_mcp-node_query_by_id", "metrics_mcp-latency_query_api", "inventory_mcp-site_lookup"],
+    };
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
+
+    expect(screen.getByText("+5 more selected tools not shown")).toBeInTheDocument();
   });
 
   it("should not render the results section when testResult is null", () => {

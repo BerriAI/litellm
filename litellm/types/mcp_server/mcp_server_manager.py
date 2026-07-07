@@ -3,8 +3,12 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from litellm.proxy._types import MCPAuthType, MCPTransportType
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPAuthType,
+    MCPTokenEndpointAuthMethod,
+    MCPTransportType,
+)
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
@@ -36,12 +40,12 @@ class MCPServer(BaseModel):
     disallowed_tools: Optional[List[str]] = None
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
-    allowed_params: Optional[Dict[str, List[str]]] = (
-        None  # map of tool names to allowed parameter lists
-    )
-    static_headers: Optional[Dict[str, str]] = (
-        None  # static headers to forward to the MCP server
-    )
+    allowed_params: Optional[Dict[str, List[str]]] = None  # map of tool names to allowed parameter lists
+    static_headers: Optional[Dict[str, str]] = None  # static headers to forward to the MCP server
+    # Admin-configured env vars. Each entry is {name, value, scope, description}.
+    # scope=="global" values are interpolated into static_headers using ${NAME}.
+    # scope=="user" values must be supplied per-user.
+    env_vars: Optional[List[Dict[str, Any]]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -49,6 +53,10 @@ class MCPServer(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    # How the gateway authenticates to the upstream token endpoint. When
+    # "client_secret_basic" the credentials go in an HTTP Basic Authorization
+    # header (omitted from the body); None defaults to "client_secret_post".
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod] = None
     # AWS SigV4 fields
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -57,10 +65,13 @@ class MCPServer(BaseModel):
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
     aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
-    # Token Exchange (OBO) fields — RFC 8693
+    # Token Exchange (OBO) fields
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
+    # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
+    token_exchange_profile: str = "rfc8693"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -68,12 +79,29 @@ class MCPServer(BaseModel):
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # When True AND auth_type == oauth2, MCP requests targeting this server
+    # Explicit opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. When ``auth_type == oauth2`` and this is ``True``, MCP requests
     # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
-    # completes PKCE directly with the upstream MCP server. Honored only for
-    # auth_type=oauth2; ignored for any other auth_type. See
-    # MCPRequestHandler._target_servers_delegate_auth_to_upstream.
+    # completes PKCE directly with the upstream MCP server. See
+    # ``MCPRequestHandler._target_servers_delegate_auth_to_upstream``.
+    #
+    # Honored only for ``auth_type == oauth2``; ignored for any other
+    # ``auth_type``. OAuth pass-through for non-oauth2 servers
+    # (``auth_type in (None, MCPAuth.none)``) is a separate, explicit opt-in —
+    # see ``oauth_passthrough`` / ``is_oauth_passthrough``.
     delegate_auth_to_upstream: bool = False
+    # Explicit opt-in to OAuth pass-through for non-oauth2 servers. When this
+    # is ``True`` AND ``auth_type in (None, MCPAuth.none)`` AND ``extra_headers``
+    # contains ``Authorization``, the gateway proxies upstream
+    # ``/.well-known/oauth-protected-resource`` metadata, emits spec-compliant
+    # 401 challenges when no bearer is supplied, and propagates upstream
+    # 401/403 responses instead of swallowing them. See ``is_oauth_passthrough``.
+    #
+    # Intentionally distinct from ``delegate_auth_to_upstream`` (oauth2-only):
+    # reusing that flag would silently change behavior for servers that forward
+    # ``Authorization`` for non-OAuth reasons (e.g. static bearer tokens). Must
+    # be set explicitly to avoid regressing servers that did not opt in.
+    oauth_passthrough: bool = False
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
@@ -92,12 +120,18 @@ class MCPServer(BaseModel):
     # Defaults to the token's expires_in minus the expiry buffer, or
     # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
+    timeout: Optional[float] = None
+    # Max concurrent outbound tool calls to this server; excess calls queue.
+    # None or a value <= 0 means unlimited.
+    max_concurrent_requests: Optional[int] = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
     # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.
     short_prefix: Optional[str] = None
+    allow_sampling: bool = False
+    allow_elicitation: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
@@ -138,6 +172,42 @@ class MCPServer(BaseModel):
             return any(h.lower() in auth_header_names for h in self.extra_headers)
 
         return False
+
+    @property
+    def is_oauth_passthrough(self) -> bool:
+        """True iff the gateway should transparently forward upstream OAuth
+        (discovery + 401s) rather than participating as an authorization
+        server itself.
+
+        A server is pass-through for OAuth purposes when ALL three conditions
+        hold:
+        1. ``auth_type`` is ``None`` or ``MCPAuth.none`` (the gateway does
+           not manage OAuth for this server).
+        2. ``extra_headers`` includes ``Authorization`` — the admin has
+           opted this server into forwarding the client's bearer token
+           straight to the upstream MCP server.
+        3. ``oauth_passthrough`` is ``True`` — the admin has
+           explicitly opted into upstream-delegated OAuth semantics for
+           this server. This is the explicit detection flag: without it,
+           a server that merely forwards ``Authorization`` (e.g. for
+           static bearer tokens or custom auth schemes) keeps the
+           pre-PR behavior and is not treated as OAuth pass-through.
+           This is deliberately a separate flag from
+           ``delegate_auth_to_upstream`` (which is oauth2-only) so enabling
+           pass-through here never changes behavior for oauth2 servers.
+
+        This is intentionally narrower than ``requires_per_user_auth``,
+        which also covers PATs (``x-api-key``, ``api-key``, ``apikey``).
+        Those are static credentials, not OAuth bearer tokens, so they
+        must not trigger upstream OAuth discovery or 401 propagation.
+        """
+        if self.auth_type not in (None, MCPAuth.none):
+            return False
+        if not self.extra_headers:
+            return False
+        if self.oauth_passthrough is not True:
+            return False
+        return any(h.lower() == "authorization" for h in self.extra_headers)
 
     @property
     def has_token_exchange_config(self) -> bool:
