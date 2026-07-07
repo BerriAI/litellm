@@ -213,7 +213,9 @@ class GraySwanGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body))
 
         # Prepare and send payload
-        payload = self._prepare_payload(messages, dynamic_body, request_data)
+        payload = self._prepare_payload(
+            messages, dynamic_body, request_data, logging_obj
+        )
         if payload is None:
             return inputs
 
@@ -502,8 +504,43 @@ class GraySwanGuardrail(CustomGuardrail):
             "grayswan-api-key": self.api_key,
         }
 
+    def _extract_inbound_headers(
+        self,
+        request_data: dict,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> Optional[Dict[str, str]]:
+        headers = request_data.get("proxy_server_request", {}).get("headers")
+        if not headers:
+            headers = request_data.get("headers")
+        if not headers:
+            headers = (request_data.get("metadata") or {}).get("headers")
+        if (
+            not headers
+            and logging_obj
+            and getattr(logging_obj, "model_call_details", None)
+        ):
+            headers = (
+                (logging_obj.model_call_details or {})
+                .get("litellm_params", {})
+                .get("metadata", {})
+                .get("headers")
+            )
+        if not isinstance(headers, dict):
+            return None
+
+        forwarded_header_names = ("shade_scan_id",)
+        forwarded_headers = {}
+        for key, value in headers.items():
+            if str(key).lower() in forwarded_header_names:
+                forwarded_headers[str(key)] = str(value)
+        return forwarded_headers or None
+
     def _prepare_payload(
-        self, messages: List[Dict[str, str]], dynamic_body: dict, request_data: dict
+        self,
+        messages: List[Dict[str, str]],
+        dynamic_body: dict,
+        request_data: dict,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Optional[Dict[str, Any]]:
         payload: Dict[str, Any] = {"messages": messages}
 
@@ -523,13 +560,19 @@ class GraySwanGuardrail(CustomGuardrail):
         if "metadata" in dynamic_body:
             payload["metadata"] = dynamic_body["metadata"]
 
+        inbound_headers = self._extract_inbound_headers(request_data, logging_obj)
+
         litellm_metadata = request_data.get("litellm_metadata")
         if isinstance(litellm_metadata, dict) and litellm_metadata:
             cleaned_litellm_metadata = dict(litellm_metadata)
+            if inbound_headers:
+                cleaned_litellm_metadata["headers"] = inbound_headers
             # cleaned_litellm_metadata.pop("user_api_key_auth", None)
             sanitized = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
             if isinstance(sanitized, dict) and sanitized:
                 payload["litellm_metadata"] = sanitized
+        elif inbound_headers:
+            payload["litellm_metadata"] = {"headers": inbound_headers}
 
         return payload
 
