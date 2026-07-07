@@ -1042,11 +1042,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
            must be at entry granularity. Scope: the entry's stable identity.
 
         ``scope`` parts may include unhashable containers (list, dict, set);
-        they are normalized into a hashable shape via ``_freeze_for_dedupe``
-        before keying the marker dict. The marker is stored in
-        ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it is
-        request-local (kwargs is shared across the sync/async callbacks and
-        lifecycle hooks for one request).
+        they are normalized into a hashable shape via ``_freeze_for_dedupe``,
+        then rendered to a ``str`` before keying the marker dict. The marker
+        is stored in ``kwargs["litellm_params"]["metadata"]["_otel_internal"]``,
+        which is the same dict object snapshotted into
+        ``proxy_server_request["body"]`` for spend-log/audit purposes, so it
+        is request-local (kwargs is shared across the sync/async callbacks
+        and lifecycle hooks for one request). The key is kept as a ``str``
+        rather than a raw ``tuple`` because a tuple is a valid Python dict
+        key but not a valid JSON object key, and would be silently dropped
+        when that snapshot is later JSON-serialized downstream.
         """
         litellm_params = kwargs.get("litellm_params")
         if not isinstance(litellm_params, dict):
@@ -1068,10 +1073,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (
-            self.__class__.__name__,
-            id(self),
-            *(_freeze_for_dedupe(part) for part in scope),
+        dedupe_key = repr(
+            (
+                self.__class__.__name__,
+                id(self),
+                *(_freeze_for_dedupe(part) for part in scope),
+            )
         )
         if spans_logged.get(dedupe_key) is True:
             return False
