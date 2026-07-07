@@ -357,6 +357,7 @@ class MCPRequestHandler:
         # Inline imports avoid a circular dependency: mcp_server_manager imports
         # from this module.
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
             global_mcp_server_manager,
         )
         from litellm.types.mcp import MCPAuth
@@ -382,7 +383,26 @@ class MCPRequestHandler:
             # fetches the upstream token automatically using stored credentials,
             # so allowing anonymous bypass would let any external caller invoke
             # tools authenticated as LiteLLM's service account.
-            if server.has_client_credentials:
+            #
+            # Resolve the flow rather than reading has_client_credentials directly:
+            # this is a security gate, and a legacy row whose oauth2_flow was never
+            # stamped still carries the M2M credential shape (client_id/secret +
+            # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
+            # row as non-M2M here would reopen the anonymous bypass the explicit
+            # column no longer closes on its own. Mirrors the request-time backstop
+            # in server.py::_get_allowed_mcp_servers; both fail closed on the
+            # ambiguous shape and are removed together once no null rows remain. A
+            # pure-PKCE delegate server (no stored credentials) resolves to a
+            # non-M2M flow and keeps its bypass.
+            resolved_flow = MCPServerManager._resolve_oauth2_flow(
+                auth_type=server.auth_type,
+                oauth2_flow=server.oauth2_flow,
+                token_url=server.token_url,
+                authorization_url=server.authorization_url,
+                client_id=server.client_id,
+                client_secret=server.client_secret,
+            )
+            if resolved_flow == "client_credentials":
                 return False
         return True
 

@@ -2146,6 +2146,104 @@ class TestMCPDelegateAuthToUpstream:
             assert exc_info.value.status_code == 401
             mock_auth.assert_called_once()
 
+    async def test_delegate_ignored_for_unstamped_m2m_shaped_server(self):
+        """
+        oauth2 + delegate + oauth2_flow=None but the M2M credential shape
+        (client_id/secret + token_url, no authorization_url) → bypass must NOT
+        fire. A legacy row that was never stamped still resolves to
+        client_credentials by shape, and reading the bare column here would
+        reopen the anonymous bypass to a server that runs upstream as LiteLLM's
+        service account. Fails closed like the client_credentials case above.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/legacy_m2m_server",
+            "headers": [],
+        }
+
+        legacy_m2m_server = MCPServer(
+            server_id="legacy-m2m-id",
+            name="legacy_m2m_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        assert legacy_m2m_server.has_client_credentials is False
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = legacy_m2m_server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            mock_auth.assert_called_once()
+
+    async def test_delegate_bypass_for_pure_pkce_server(self):
+        """
+        oauth2 + delegate + oauth2_flow=None and NO stored client credentials
+        (pure PKCE, the common delegate case) → bypass must still fire. The
+        shape resolves to a non-M2M flow, so the security gate leaves it alone;
+        the fail-closed rule targets the M2M shape specifically, not every
+        unstamped row.
+        """
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/pkce_server",
+            "headers": [],
+        }
+
+        pkce_server = MCPServer(
+            server_id="pkce-server-id",
+            name="pkce_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow=None,
+        )
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = pkce_server
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+            mock_auth.assert_not_called()
+            assert auth.api_key is None
+
     async def test_delegate_bypass_for_internal_server(self):
         """
         Delegate + oauth2 interactive servers bypass LiteLLM auth even when
