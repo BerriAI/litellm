@@ -88,7 +88,8 @@ def classify_null_flow_row(
 
 
 async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[BackfillRule, int]:
-    """Stamp every ``auth_type=oauth2`` row whose ``oauth2_flow`` is null; returns counts per rule."""
+    """Classify every ``auth_type=oauth2`` row whose ``oauth2_flow`` is null; stamp the provable
+    ones, warn on the ambiguous ones, and return counts per rule."""
     null_rows: list[Any] = await prisma_client.db.litellm_mcpservertable.find_many(
         where={"auth_type": "oauth2", "oauth2_flow": None},
     )
@@ -125,16 +126,20 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
                 "next boot.",
                 row.server_id,
             )
-            continue
-        await prisma_client.db.litellm_mcpservertable.update(
-            where={"server_id": row.server_id},
-            data={"oauth2_flow": flow, "updated_by": _BACKFILL_AUDIT_ACTOR},
-        )
-        verbose_proxy_logger.info(
-            "oauth2_flow backfill: server_id=%s stamped %s (rule=%s)",
-            row.server_id,
-            flow,
-            rule,
+        else:
+            verbose_proxy_logger.info(
+                "oauth2_flow backfill: server_id=%s stamped %s (rule=%s)",
+                row.server_id,
+                flow,
+                rule,
+            )
+
+    stamped_flows = {flow for _, (flow, _) in classified if flow is not None}
+    for stamped_flow in stamped_flows:
+        server_ids_for_flow = [row.server_id for row, (row_flow, _) in classified if row_flow == stamped_flow]
+        await prisma_client.db.litellm_mcpservertable.update_many(
+            where={"server_id": {"in": server_ids_for_flow}},
+            data={"oauth2_flow": stamped_flow, "updated_by": _BACKFILL_AUDIT_ACTOR},
         )
 
     counts: dict[BackfillRule, int] = dict(Counter(rule for _, (_, rule) in classified))

@@ -115,7 +115,7 @@ def _row(server_id, *, authorization_url=None, registration_url=None, token_url=
 def _mock_prisma(null_rows, token_rows):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=null_rows)
-    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+    mock_prisma.db.litellm_mcpservertable.update_many = AsyncMock(return_value=MagicMock())
     mock_prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=token_rows)
     return mock_prisma
 
@@ -132,7 +132,7 @@ async def test_backfill_only_targets_null_flow_oauth2_rows():
         where={"auth_type": "oauth2", "oauth2_flow": None},
     )
     mock_prisma.db.litellm_mcpusercredentials.find_many.assert_not_awaited()
-    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+    mock_prisma.db.litellm_mcpservertable.update_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -158,15 +158,10 @@ async def test_backfill_stamps_rows_and_reports_rule_counts():
 
     assert counts == {"per_user_tokens": 1, "ambiguous_m2m_shape": 1, "authorization_url": 1}
 
-    stamped = {
-        call.kwargs["where"]["server_id"]: call.kwargs["data"]
-        for call in mock_prisma.db.litellm_mcpservertable.update.await_args_list
-    }
-    assert stamped["signed_in_dcr"]["oauth2_flow"] == "authorization_code"
-    assert stamped["legacy_interactive"]["oauth2_flow"] == "authorization_code"
-    assert "legacy_m2m" not in stamped
-    assert mock_prisma.db.litellm_mcpservertable.update.await_count == 2
-    assert all(data["updated_by"] == "oauth2_flow_backfill" for data in stamped.values())
+    mock_prisma.db.litellm_mcpservertable.update_many.assert_awaited_once()
+    call = mock_prisma.db.litellm_mcpservertable.update_many.await_args
+    assert sorted(call.kwargs["where"]["server_id"]["in"]) == ["legacy_interactive", "signed_in_dcr"]
+    assert call.kwargs["data"] == {"oauth2_flow": "authorization_code", "updated_by": "oauth2_flow_backfill"}
 
 
 @pytest.mark.asyncio
@@ -183,7 +178,7 @@ async def test_backfill_handles_json_string_credentials():
     counts = await backfill_null_oauth2_flows(mock_prisma)
 
     assert counts == {"ambiguous_m2m_shape": 1}
-    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+    mock_prisma.db.litellm_mcpservertable.update_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
