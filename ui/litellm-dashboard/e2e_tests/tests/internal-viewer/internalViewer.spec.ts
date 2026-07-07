@@ -37,7 +37,7 @@ test.describe("Internal Viewer", () => {
     ];
     for (const label of expectedVisible) {
       await expect(
-        nav.getByRole("link", { name: label, exact: true }).first(),
+        nav.getByRole("menuitem", { name: label, exact: true }).first(),
         `expected nav item "${label}" to render for Internal Viewer`,
       ).toBeVisible({ timeout: 5_000 });
     }
@@ -46,7 +46,7 @@ test.describe("Internal Viewer", () => {
     const expectedHidden = ["Internal Users", "Organizations", "Models + Endpoints"];
     for (const label of expectedHidden) {
       await expect(
-        nav.getByRole("link", { name: label, exact: true }),
+        nav.getByRole("menuitem", { name: label, exact: true }),
         `nav item "${label}" must not render for Internal Viewer`,
       ).toHaveCount(0);
     }
