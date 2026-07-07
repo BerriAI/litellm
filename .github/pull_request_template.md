@@ -13,7 +13,7 @@
 - [ ] I have added meaningful tests
 - [ ] My PR passes all CI/CD checks (e.g., lint, format, unit tests)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
-- [ ] I have requested a Greptile review by commenting `@greptileai` and received a **Confidence Score of at least 4/5** before requesting a maintainer review
+- [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)
 
 ## Delays in PR merge?
 
@@ -24,6 +24,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 <!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
      The proof must be completely e2e with no mocks, using, for example, actual LLM calls costing real $. `pytest` commands are not enough
      For bug fixes: show reproduction before the fix and passing behavior after
+     Include the commit hash each proof was captured at, for both the before and the after runs
      For new features: show the feature working end-to-end
      For UI changes: include before/after screenshots -->
 
