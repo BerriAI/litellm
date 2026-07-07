@@ -1125,6 +1125,18 @@ _DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
         "vertex_ai_credentials",
         "aws_access_key_id",
         "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_project_id",
+        "aws_batch_role_arn",
+        "aws_workspace_id",
     }
 )
 
@@ -6354,6 +6366,17 @@ class ProxyConfig:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._experimental.mcp_server.oauth2_flow_backfill import (
+            backfill_null_oauth2_flows,
+        )
+
+        try:
+            if prisma_client is not None:
+                await backfill_null_oauth2_flows(prisma_client)
+        except Exception as e:  # noqa: BLE001
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db backfill - {}".format(str(e))
+            )
 
         try:
             await global_mcp_server_manager.reload_servers_from_database()

@@ -582,6 +582,7 @@ async def acompletion(
         "api_key": api_key,
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
+        "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
         "extra_headers": extra_headers,
@@ -5193,6 +5194,7 @@ def completion(  # type: ignore
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
             "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (

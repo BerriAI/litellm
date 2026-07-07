@@ -128,6 +128,9 @@ class BaseResponsesAPIStreamingIterator:
             self.finished = True
             return None
 
+        if self.logging_obj.completion_start_time is None:
+            self.logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+
         try:
             # Parse the JSON chunk
             parsed_chunk = json.loads(chunk)
