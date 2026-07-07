@@ -6366,6 +6366,17 @@ class ProxyConfig:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._experimental.mcp_server.oauth2_flow_backfill import (
+            backfill_null_oauth2_flows,
+        )
+
+        try:
+            if prisma_client is not None:
+                await backfill_null_oauth2_flows(prisma_client)
+        except Exception as e:  # noqa: BLE001
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db backfill - {}".format(str(e))
+            )
 
         try:
             await global_mcp_server_manager.reload_servers_from_database()
