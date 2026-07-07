@@ -4656,9 +4656,10 @@ export const createGuardrailCall = async (accessToken: string, guardrailData: an
 export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, start_date: string) => {
   try {
     // Construct base URL
+    const encodedLogId = encodeURIComponent(logId);
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
-      : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
+      ? `${proxyBaseUrl}/spend/logs/ui/${encodedLogId}?start_date=${encodeURIComponent(start_date)}`
+      : `/spend/logs/ui/${encodedLogId}?start_date=${encodeURIComponent(start_date)}`;
 
     const response = await fetch(url, {
       method: "GET",
