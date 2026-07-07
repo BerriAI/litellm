@@ -350,6 +350,44 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toBeUndefined();
     });
 
+    it("shows the token-exchange fields only for the OAuth Token Exchange (OBO) auth type", async () => {
+      await selectHttpTransport();
+
+      // Plain OAuth must not render the token-exchange section.
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.getByText("Token Exchange Endpoint (optional)")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Subject Token Type (optional)")).toBeInTheDocument();
+
+      // Switching away hides the section again.
+      await selectAntOption("Authentication", "API Key");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+
+      // Selecting token exchange and then switching transport to stdio unmounts the
+      // whole Authentication section (the section-level transport gate), taking the
+      // token-exchange fields with it — their required client_id/client_secret rules
+      // cannot block a stdio submit because antd does not validate unmounted fields.
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.getByText("Token Exchange Endpoint (optional)")).toBeInTheDocument();
+      });
+      await selectAntOption("Transport Type", "Standard Input/Output");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+    });
+
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
       await selectHttpTransport();
 
