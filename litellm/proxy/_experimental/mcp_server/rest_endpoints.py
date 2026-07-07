@@ -1079,6 +1079,11 @@ if MCP_AVAILABLE:
             forwarded_authorization = (
                 effective_oauth2_headers.get("Authorization") if effective_oauth2_headers else None
             )
+            is_interactive_authz_code = (
+                server_model.auth_type == MCPAuth.oauth2
+                and forwarded_authorization is not None
+                and to_server_spec(server_model) is not None
+            )
             preview_cred_provider = (
                 UpstreamCredentialProvider(
                     oauth_token_store=PresentedOAuthTokenStore(
