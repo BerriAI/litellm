@@ -56,6 +56,10 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -104,6 +108,7 @@ from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
+    SSOConfigRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -4110,6 +4115,116 @@ async def delete_key_aliases(
     )
 
 
+def _reencrypt_secret_field(field_name: str, value: Any, new_master_key: str) -> Any:
+    """Decrypt one at-rest field with the current key and re-encrypt it with the
+    new key.
+
+    Non-strings, empty strings, and values that do not decrypt pass through
+    unchanged so a rotation never corrupts a value or double-encrypts one that
+    was already ciphertext under an unknown key.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    decrypted = decrypt_value_helper(value=value, key=field_name, exception_type="debug", return_original_value=False)
+    if decrypted is None:
+        return value
+    return encrypt_value_helper(decrypted, new_encryption_key=new_master_key)
+
+
+async def _rotate_callback_vars(
+    prisma_client: PrismaClient,
+    table_name: Literal["team", "verification_token"],
+    new_master_key: str,
+) -> None:
+    """Re-encrypt ``callback_vars`` credentials stored on team / verification-token
+    metadata under the new master key.
+
+    Both metadata shapes are covered: ``metadata.logging[*].callback_vars`` and
+    the top-level ``metadata.callback_settings.callback_vars`` (e.g.
+    ``LANGFUSE_SECRET_KEY``). Values decrypt with the current in-memory key and
+    re-encrypt with ``new_master_key``, so they stay readable once the master key
+    is swapped. A row whose transform fails is preserved, never dropped.
+    """
+    if table_name == "team":
+        table = TeamRepository(prisma_client).table
+        pk = "team_id"
+    else:
+        table = VerificationTokenRepository(prisma_client).table
+        pk = "token"
+
+    rows = await table.find_many()
+    for row in rows or []:
+        metadata = getattr(row, "metadata", None)
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        if not isinstance(metadata, dict) or ("logging" not in metadata and "callback_settings" not in metadata):
+            continue
+        re_encrypted = encrypt_callback_vars(decrypt_callback_vars(metadata), new_encryption_key=new_master_key)
+        if re_encrypted == metadata:
+            continue
+        await table.update(
+            where={pk: getattr(row, pk)},
+            data={"metadata": safe_dumps(re_encrypted)},
+        )
+
+
+async def _rotate_config_settings(
+    prisma_client: PrismaClient,
+    param_name: str,
+    sensitive_fields: Tuple[str, ...],
+    new_master_key: str,
+) -> None:
+    """Re-encrypt the sensitive fields of a JSON ``LiteLLM_Config`` row (e.g.
+    ``vantage_settings`` / ``cloudzero_settings``) under the new master key.
+    """
+    record = await ConfigRepository(prisma_client).table.find_unique(where={"param_name": param_name})
+    if record is None or record.param_value is None:
+        return
+    settings = record.param_value
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    if not isinstance(settings, dict):
+        return
+    new_settings = {
+        **settings,
+        **{
+            field_name: _reencrypt_secret_field(field_name, settings.get(field_name), new_master_key)
+            for field_name in sensitive_fields
+            if field_name in settings
+        },
+    }
+    if new_settings == settings:
+        return
+    await ConfigRepository(prisma_client).table.update(
+        where={"param_name": param_name},
+        data={"param_value": safe_dumps(new_settings)},
+    )
+
+
+async def _rotate_sso_config(prisma_client: PrismaClient, new_master_key: str) -> None:
+    """Re-encrypt every stored SSO field under the new master key. SSO settings
+    are all encrypted on save, so every string field is re-encrypted; non-string
+    fields (role/team mappings) pass through unchanged.
+    """
+    record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
+    if record is None or record.sso_settings is None:
+        return
+    settings = record.sso_settings
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    if not isinstance(settings, dict):
+        return
+    new_settings = {
+        field_name: _reencrypt_secret_field(field_name, value, new_master_key) for field_name, value in settings.items()
+    }
+    if new_settings == settings:
+        return
+    await SSOConfigRepository(prisma_client).table.update(
+        where={"id": "sso_config"},
+        data={"sso_settings": safe_dumps(new_settings)},
+    )
+
+
 async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -4255,6 +4370,30 @@ async def _rotate_master_key(
                 # Continue with next credential instead of failing entire rotation
                 continue
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
+
+    best_effort_steps: Tuple[Tuple[str, Callable[[], Any]], ...] = (
+        (
+            "verification_token callback_vars",
+            lambda: _rotate_callback_vars(prisma_client, "verification_token", new_master_key),
+        ),
+        ("team callback_vars", lambda: _rotate_callback_vars(prisma_client, "team", new_master_key)),
+        (
+            "vantage_settings",
+            lambda: _rotate_config_settings(
+                prisma_client, "vantage_settings", ("api_key", "integration_token"), new_master_key
+            ),
+        ),
+        (
+            "cloudzero_settings",
+            lambda: _rotate_config_settings(prisma_client, "cloudzero_settings", ("api_key",), new_master_key),
+        ),
+        ("sso_config", lambda: _rotate_sso_config(prisma_client, new_master_key)),
+    )
+    for label, step in best_effort_steps:
+        try:
+            await step()
+        except Exception as e:  # noqa: BLE001  # best-effort tail: one table's failure must not abort an in-progress rotation
+            verbose_proxy_logger.warning("Failed to rotate %s during master key rotation: %s", label, str(e))
 
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:

@@ -14480,3 +14480,241 @@ async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_g
     assert int(exc.value.code) == 403
     assert "permissions" in str(exc.value.message)
     assert "Enterprise" not in str(exc.value.message)
+
+
+class _FakeTable:
+    """Minimal async table stub recording the last update payload."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.updates = []
+
+    async def find_many(self):
+        return self._rows
+
+    async def find_unique(self, where):
+        return self._rows[0] if self._rows else None
+
+    async def update(self, where, data):
+        self.updates.append({"where": where, "data": data})
+
+
+def _fake_prisma_with_table(db_attr, rows):
+    from unittest.mock import MagicMock
+
+    table = _FakeTable(rows)
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    setattr(prisma_client.db, db_attr, table)
+    return prisma_client, table
+
+
+@pytest.mark.asyncio
+async def test_rotate_callback_vars_reencrypts_under_new_master_key(monkeypatch):
+    """callback_vars on verification-token metadata (both logging[*] and
+    callback_settings shapes) must decrypt under the OLD master key and be
+    re-encrypted under the NEW one, so they stay readable after rotation and
+    stop producing the recurring 'Error decrypting value' log.
+    """
+    import copy
+    from types import SimpleNamespace
+
+    from litellm.proxy.common_utils.callback_utils import (
+        decrypt_callback_vars,
+        encrypt_callback_vars,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_callback_vars,
+    )
+
+    old_key = "sk-old-master-key"
+    new_key = "sk-new-master-key"
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+    plaintext_metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {
+                    "LANGFUSE_SECRET_KEY": "sk-langfuse-secret",
+                    "LANGFUSE_HOST": "https://cloud.langfuse.com",
+                },
+            }
+        ],
+        "callback_settings": {
+            "callback_vars": {"LANGSMITH_API_KEY": "ls-super-secret"}
+        },
+    }
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", old_key)
+    encrypted_under_old = encrypt_callback_vars(copy.deepcopy(plaintext_metadata))
+    # sanity: the secret was actually encrypted (prefix present, value changed)
+    old_secret = encrypted_under_old["logging"][0]["callback_vars"]["LANGFUSE_SECRET_KEY"]
+    assert old_secret.startswith("litellm_enc::")
+    assert old_secret != plaintext_metadata["logging"][0]["callback_vars"]["LANGFUSE_SECRET_KEY"]
+
+    row = SimpleNamespace(token="sk-hash-123", metadata=copy.deepcopy(encrypted_under_old))
+    prisma_client, table = _fake_prisma_with_table("litellm_verificationtoken", [row])
+
+    await _rotate_callback_vars(
+        prisma_client=prisma_client,
+        table_name="verification_token",
+        new_master_key=new_key,
+    )
+
+    assert len(table.updates) == 1
+    assert table.updates[0]["where"] == {"token": "sk-hash-123"}
+    rotated_metadata = json.loads(table.updates[0]["data"]["metadata"])
+
+    # Decrypting with the NEW master key recovers the original plaintext.
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", new_key)
+    decrypted_new = decrypt_callback_vars(rotated_metadata)
+    assert (
+        decrypted_new["logging"][0]["callback_vars"]["LANGFUSE_SECRET_KEY"]
+        == "sk-langfuse-secret"
+    )
+    assert (
+        decrypted_new["callback_settings"]["callback_vars"]["LANGSMITH_API_KEY"]
+        == "ls-super-secret"
+    )
+    # Non-sensitive var is untouched (never encrypted, never lost).
+    assert (
+        decrypted_new["logging"][0]["callback_vars"]["LANGFUSE_HOST"]
+        == "https://cloud.langfuse.com"
+    )
+
+    # Decrypting with the OLD master key must now FAIL (value not recovered),
+    # proving the ciphertext was genuinely re-keyed and not left under old key.
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", old_key)
+    decrypted_old = decrypt_callback_vars(rotated_metadata)
+    assert (
+        decrypted_old["logging"][0]["callback_vars"]["LANGFUSE_SECRET_KEY"]
+        != "sk-langfuse-secret"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rotate_callback_vars_skips_rows_without_callback_metadata(monkeypatch):
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_callback_vars,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old")
+
+    rows = [
+        SimpleNamespace(team_id="t1", metadata={"foo": "bar"}),
+        SimpleNamespace(team_id="t2", metadata=None),
+    ]
+    prisma_client, table = _fake_prisma_with_table("litellm_teamtable", rows)
+
+    await _rotate_callback_vars(
+        prisma_client=prisma_client,
+        table_name="team",
+        new_master_key="sk-new",
+    )
+
+    assert table.updates == []
+
+
+@pytest.mark.asyncio
+async def test_rotate_config_settings_reencrypts_sensitive_fields(monkeypatch):
+    """vantage / cloudzero config secrets must be re-encrypted under the new key
+    while non-secret fields (base_url) are left untouched.
+    """
+    import json as _json
+    from types import SimpleNamespace
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_value_helper,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_config_settings,
+    )
+
+    old_key = "sk-old-master-key"
+    new_key = "sk-new-master-key"
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", old_key)
+    settings = {
+        "api_key": encrypt_value_helper("vantage-api-key"),
+        "integration_token": encrypt_value_helper("vantage-int-token"),
+        "base_url": "https://api.vantage.sh",
+    }
+    row = SimpleNamespace(param_name="vantage_settings", param_value=_json.dumps(settings))
+    prisma_client, table = _fake_prisma_with_table("litellm_config", [row])
+
+    await _rotate_config_settings(
+        prisma_client=prisma_client,
+        param_name="vantage_settings",
+        sensitive_fields=("api_key", "integration_token"),
+        new_master_key=new_key,
+    )
+
+    assert len(table.updates) == 1
+    rotated = _json.loads(table.updates[0]["data"]["param_value"])
+    assert rotated["base_url"] == "https://api.vantage.sh"
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", new_key)
+    assert (
+        decrypt_value_helper(rotated["api_key"], key="api_key", exception_type="debug")
+        == "vantage-api-key"
+    )
+    assert (
+        decrypt_value_helper(
+            rotated["integration_token"], key="integration_token", exception_type="debug"
+        )
+        == "vantage-int-token"
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", old_key)
+    assert (
+        decrypt_value_helper(rotated["api_key"], key="api_key", exception_type="debug")
+        != "vantage-api-key"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rotate_sso_config_reencrypts_all_string_fields(monkeypatch):
+    from types import SimpleNamespace
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_value_helper,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_sso_config,
+    )
+
+    old_key = "sk-old-master-key"
+    new_key = "sk-new-master-key"
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", old_key)
+    sso_settings = {
+        "google_client_secret": encrypt_value_helper("google-secret"),
+        "role_mappings": {"admin": ["proxy_admin"]},
+    }
+    row = SimpleNamespace(id="sso_config", sso_settings=sso_settings)
+    prisma_client, table = _fake_prisma_with_table("litellm_ssoconfig", [row])
+
+    await _rotate_sso_config(prisma_client=prisma_client, new_master_key=new_key)
+
+    assert len(table.updates) == 1
+    rotated = json.loads(table.updates[0]["data"]["sso_settings"])
+    # non-string field passes through unchanged
+    assert rotated["role_mappings"] == {"admin": ["proxy_admin"]}
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", new_key)
+    assert (
+        decrypt_value_helper(
+            rotated["google_client_secret"],
+            key="google_client_secret",
+            exception_type="debug",
+        )
+        == "google-secret"
+    )

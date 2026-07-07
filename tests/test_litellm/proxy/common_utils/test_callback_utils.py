@@ -226,6 +226,32 @@ def test_encrypt_callback_vars_round_trip(monkeypatch):
     )
 
 
+def test_encrypt_callback_vars_new_encryption_key(monkeypatch):
+    """Passing new_encryption_key encrypts under that key (not the current salt
+    key), so the values only decrypt once the salt/master key is swapped to it.
+    This is what master-key rotation relies on.
+    """
+    monkeypatch.setenv("LITELLM_SALT_KEY", "old-salt-32-bytes-aaaaaaaaaaaaaa")
+    new_key = "new-salt-32-bytes-bbbbbbbbbbbbbb"
+    encrypted = encrypt_callback_vars(_sample_metadata(), new_encryption_key=new_key)
+
+    enc_secret = encrypted["logging"][0]["callback_vars"]["langfuse_secret_key"]
+    assert enc_secret.startswith("litellm_enc::")
+
+    # Still under the OLD salt key: decrypt fails, value not recovered.
+    under_old = decrypt_callback_vars(encrypted)
+    assert (
+        under_old["logging"][0]["callback_vars"]["langfuse_secret_key"] != "sk-lf-secret"
+    )
+
+    # Swap the salt key to the new key: now it decrypts cleanly.
+    monkeypatch.setenv("LITELLM_SALT_KEY", new_key)
+    under_new = decrypt_callback_vars(encrypted)
+    assert (
+        under_new["logging"][0]["callback_vars"]["langfuse_secret_key"] == "sk-lf-secret"
+    )
+
+
 def test_encrypt_callback_vars_is_idempotent(monkeypatch):
     _set_salt_key(monkeypatch)
     once = encrypt_callback_vars(_sample_metadata())
