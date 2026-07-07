@@ -1773,6 +1773,66 @@ class TestMCPServerManager:
         assert result.error.tag == "misconfigured"
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_reads_all_token_exchange_fields(self):
+        """Every token-exchange setting is configurable through config.yaml as a top-level
+        key (the config counterpart of the REST/UI columns) and reaches the resolver spec;
+        omitted keys resolve to their documented defaults. token_exchange servers need no
+        oauth2_flow (that requirement is oauth2-only)."""
+        from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
+
+        manager = MCPServerManager()
+        config = {
+            "te_full": {
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "token_exchange_endpoint": "https://idp.example.com/oauth2/token",
+                "audience": "api://upstream",
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "token_exchange_profile": "entra_obo",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "scopes": ["api://upstream/.default"],
+            },
+            "te_minimal": {
+                "url": "https://up2.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "token_exchange_endpoint": "https://idp2.example.com/oauth2/token",
+                "client_id": "cid2",
+                "client_secret": "csec2",
+            },
+        }
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(config)
+
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+
+        full = by_name["te_full"]
+        assert full.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+        assert full.audience == "api://upstream"
+        assert full.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
+        assert full.token_exchange_profile == "entra_obo"
+
+        minimal = by_name["te_minimal"]
+        assert minimal.audience is None
+        assert minimal.subject_token_type == DEFAULT_SUBJECT_TOKEN_TYPE
+        assert minimal.token_exchange_profile == "rfc8693"
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+
+        spec = to_server_spec(full)
+        assert spec is not None
+        assert spec.config.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+        assert spec.config.profile == "entra_obo"
+
+        minimal_spec = to_server_spec(minimal)
+        assert minimal_spec is not None
+        assert minimal_spec.config.subject_token_type == DEFAULT_SUBJECT_TOKEN_TYPE
+        assert minimal_spec.config.profile == "rfc8693"
+
+    @pytest.mark.asyncio
     async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
         manager = MCPServerManager()
 
