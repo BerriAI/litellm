@@ -15,18 +15,20 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class StreamTransformSink:
     """Out-parameter used by ``process_output_streaming_response`` to hand the
-    per-choice streaming holdback back to the caller.
+    guardrailed streaming state back to the caller.
 
-    The return value of ``process_output_streaming_response`` is contractually
-    the (in-place mutated) ``responses_so_far`` list, so text transformations on
-    the streaming path need a side channel to report how many trailing chars the
-    guardrail asked to withhold from emission (``stream_holdback_chars`` on the
-    guardrail response). Only the OpenAI chat handler populates this today; the
-    hook passes a fresh sink per processing round and reads ``holdback_per_choice``
-    afterwards. A mutable dataclass is deliberate here: it is a write-once output
-    parameter for a single call, not shared state.
+    The streaming text-transform path must not mutate ``responses_so_far`` (it is
+    the raw accumulator the guardrail re-reads every round), so the guardrailed
+    accumulated text per choice (``mutated_text_per_choice``, keyed by
+    ``StreamingChoices.index``) and the per-choice trailing holdback the guardrail
+    requested (``holdback_per_choice``, from ``stream_holdback_chars``) are
+    reported here instead of in place. Only the OpenAI chat handler populates this
+    today; the hook passes a fresh sink per round and reads it afterwards. A
+    mutable dataclass is deliberate: it is a write-once output parameter for a
+    single call, not shared state.
     """
 
+    mutated_text_per_choice: dict[int, str] = field(default_factory=dict)
     holdback_per_choice: dict[int, int] = field(default_factory=dict)
 
 

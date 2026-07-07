@@ -1363,6 +1363,23 @@ class TestGenericGuardrailAPIResponseParsing:
 
         assert response.stream_holdback_chars is None
 
+    def test_from_dict_malformed_holdback_degrades_to_zero(self):
+        """A null/non-numeric/negative holdback element must not raise; it degrades
+        to 0 (no holdback) so a bad guardrail response can't abort the stream."""
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["a", "b", "c", "d"],
+                "stream_holdback_chars": ["3", None, "bad", -2],
+            }
+        )
+
+        assert response.stream_holdback_chars == [3, 0, 0, 0]
+
     @pytest.mark.asyncio
     async def test_apply_guardrail_flows_holdback_back_to_inputs(self, generic_guardrail):
         """A GUARDRAIL_INTERVENED response with stream_holdback_chars is surfaced on

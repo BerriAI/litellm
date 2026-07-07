@@ -668,6 +668,7 @@ class _StreamingTextGuardrail(CustomGuardrail):
         self._shrink_to = shrink_to
         self._shrink_after = shrink_after
         self.response_calls = 0
+        self.received_texts = []
 
     def should_run_guardrail(self, data, event_type):  # type: ignore[override]
         return True
@@ -677,6 +678,7 @@ class _StreamingTextGuardrail(CustomGuardrail):
         if input_type != "response":
             return {"texts": [t.upper() for t in texts]}
 
+        self.received_texts.append(list(texts))
         idx = self.response_calls
         self.response_calls += 1
         if self._shrink_to is not None and idx >= self._shrink_after:
@@ -962,3 +964,47 @@ class TestStreamingTransform:
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail["error"] == "stream_transform_underflow"
+
+    @pytest.mark.asyncio
+    async def test_guardrail_always_sees_raw_accumulated_text(self):
+        """The guardrail must receive the raw accumulated output each round, not a
+        transformed-prefix + raw-suffix mix (responses_so_far stays untouched)."""
+        guardrail = _StreamingTextGuardrail()
+
+        chunks = [_stream_chunk("aa "), _stream_chunk("bb "), _stream_chunk("cc", finish_reason="stop")]
+
+        await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        # Every recorded input is the cumulative RAW (lowercase) text; if the
+        # accumulator were corrupted by write-back, later rounds would contain
+        # uppercased prefixes like "AA bb ".
+        for received in guardrail.received_texts:
+            assert received[0] == received[0].lower()
+        assert guardrail.received_texts[-1] == ["aa bb cc"]
+
+    def test_accumulate_keys_by_choice_index_not_position(self):
+        """Single-choice chunks carrying a non-zero .index (n>1 streaming) must be
+        keyed by index, not enumerate position (which would collapse to 0)."""
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            _stream_chunk("hello", index=1),
+            _stream_chunk(" world", index=1),
+        ]
+
+        accumulated = handler._accumulate_string_content_by_choice_index(chunks)
+
+        assert accumulated == {1: "hello world"}
+
+    @pytest.mark.asyncio
+    async def test_terminal_chunk_not_guardrailed_twice(self):
+        """A terminal (finish_reason) chunk that is also a sampling boundary must
+        be processed once by the end-of-stream flush, not by a sampled round too."""
+        guardrail = _StreamingTextGuardrail()  # sampling_rate=1
+
+        chunks = [_stream_chunk("aa "), _stream_chunk("bb", finish_reason="stop")]
+
+        await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        # Round 1 (chunk 1) + end-of-stream flush = 2 calls. Without the terminal
+        # skip, chunk 2 would be guardrailed by a sampled round AND the flush (3).
+        assert guardrail.response_calls == 2

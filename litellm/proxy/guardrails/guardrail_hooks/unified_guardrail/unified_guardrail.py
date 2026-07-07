@@ -477,10 +477,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                 request_data=request_data,
                 stream_transform_sink=sink,
             )
-            mutated = endpoint_translation.extract_accumulated_text_per_choice(responses_so_far)
             synthetic = self._build_transform_chunk(
                 reference_chunk=reference_chunk,
-                mutated_text_per_choice=mutated,
+                mutated_text_per_choice=sink.mutated_text_per_choice,
                 emitted_text_per_choice=emitted_text_per_choice,
                 holdback_per_choice=sink.holdback_per_choice,
                 is_final=is_final,
@@ -551,7 +550,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                 chunk_counter += 1
                 responses_so_far.append(item)
                 last_chunk = item
-                if not end_of_stream_only and chunk_counter % sampling_rate == 0:
+                # Skip the sampled round for a terminal chunk: the end-of-stream
+                # flush below processes it once with holdback forced to 0, so a
+                # sampled round here would guardrail the same content twice.
+                if (
+                    not end_of_stream_only
+                    and not self._chunk_has_finish_reason(item)
+                    and chunk_counter % sampling_rate == 0
+                ):
                     async for out in _round(item, is_final=False):
                         yield out
 
@@ -560,6 +566,11 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield out
         except _StreamTerminated:
             return
+
+    @staticmethod
+    def _chunk_has_finish_reason(item: Any) -> bool:
+        choices = getattr(item, "choices", None) or []
+        return any(getattr(choice, "finish_reason", None) is not None for choice in choices)
 
     async def async_post_call_streaming_iterator_hook(
         self,
