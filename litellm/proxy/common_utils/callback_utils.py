@@ -1,4 +1,5 @@
 import copy
+from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
 
 import litellm
@@ -579,13 +580,17 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
 
 
-def encrypt_callback_vars(metadata: Any) -> Any:
+def encrypt_callback_vars(metadata: Any, new_encryption_key: Optional[str] = None) -> Any:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so
     round-trips through edit forms don't double-encrypt.
+
+    ``new_encryption_key`` re-encrypts under a different key than the one
+    currently in memory; master-key rotation passes the new key here so the
+    decrypt-then-encrypt round trip lands ciphertext readable under the new key.
     """
-    return _transform_callback_vars(metadata, _encrypt_if_plaintext)
+    return _transform_callback_vars(metadata, partial(_encrypt_if_plaintext, new_encryption_key=new_encryption_key))
 
 
 def decrypt_callback_vars(metadata: Any) -> Any:
@@ -626,7 +631,7 @@ def is_sensitive_callback_key(
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
 
-def _encrypt_if_plaintext(key: str, value: Any) -> Any:
+def _encrypt_if_plaintext(key: str, value: Any, new_encryption_key: Optional[str] = None) -> Any:
     if not isinstance(value, str) or not value:
         return value
     if not is_sensitive_callback_key(key):
@@ -639,7 +644,7 @@ def _encrypt_if_plaintext(key: str, value: Any) -> Any:
         # plaintext under K2 and wrap them a second time.
         return value
     try:
-        return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value)
+        return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
     except Exception:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
