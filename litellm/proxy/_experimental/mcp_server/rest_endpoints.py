@@ -22,9 +22,12 @@ from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthErr
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
+from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    get_server_prefix,
     merge_mcp_headers,
+    tool_name_length_warnings,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -1308,10 +1311,16 @@ if MCP_AVAILABLE:
             list_tools_response = await client.run_with_session(_list_tools_session_operation)
             list_tools_result: List[MCPTool] = list_tools_response.tools
             model_dumped_tools: List[dict] = [tool.model_dump() for tool in list_tools_result]
+            warnings = tool_name_length_warnings(
+                [tool.name for tool in list_tools_result],
+                get_server_prefix(new_mcp_server_request),
+                MCP_MAX_TOOL_NAME_LENGTH,
+            )
             return {
                 "tools": model_dumped_tools,
                 "error": None,
                 "message": "Successfully retrieved tools",
+                "warnings": warnings,
             }
 
         return await _execute_with_mcp_client(

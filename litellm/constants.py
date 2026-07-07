@@ -115,6 +115,11 @@ MCP_PER_USER_TOKEN_DEFAULT_TTL = int(
 )
 MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
 
+# Providers such as AWS Bedrock, OpenAI, and Gemini reject tool names longer than
+# 64 characters, so MCP tools whose final (prefixed) name exceeds this are excluded
+# from tool listings. Set to 0 or a negative value to disable the exclusion.
+MCP_MAX_TOOL_NAME_LENGTH = int(os.getenv("LITELLM_MCP_MAX_TOOL_NAME_LENGTH", "64"))
+
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))

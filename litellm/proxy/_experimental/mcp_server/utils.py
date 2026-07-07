@@ -5,6 +5,7 @@ MCP Server Utilities
 import json
 import re
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     Iterable,
@@ -12,10 +13,14 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
 )
+
+if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
 
 import hashlib
 import importlib
@@ -264,6 +269,40 @@ def add_server_prefix_to_name(name: str, server_name: str) -> str:
         separator=MCP_TOOL_PREFIX_SEPARATOR,
         tool_name=name,
     )
+
+
+def split_tools_by_name_length(tools: Sequence["MCPTool"], max_length: int) -> Tuple[List["MCPTool"], List["MCPTool"]]:
+    """Split ``tools`` into (kept, dropped) by whether ``tool.name`` fits ``max_length``.
+
+    A ``max_length`` of zero or less disables the check and keeps every tool.
+    """
+    if max_length <= 0:
+        return list(tools), []
+    kept = [tool for tool in tools if len(tool.name) <= max_length]
+    dropped = [tool for tool in tools if len(tool.name) > max_length]
+    return kept, dropped
+
+
+def tool_name_length_warnings(tool_names: Iterable[str], server_prefix: str, max_length: int) -> List[str]:
+    """Warnings for tools whose prefixed name would exceed ``max_length``.
+
+    Used at server add/preview time, before the server is persisted, to flag
+    tool names that the runtime listing will exclude once the server prefix
+    (``<alias>-<tool>``) is applied.
+    """
+    if max_length <= 0:
+        return []
+    prefixed_by_name = [(name, add_server_prefix_to_name(name, server_prefix)) for name in tool_names]
+    return [
+        (
+            f"Tool '{name}' will be listed as '{prefixed}' ({len(prefixed)} characters), which exceeds the "
+            f"{max_length} character tool name limit enforced by providers such as AWS Bedrock, OpenAI, and "
+            f"Gemini. LiteLLM will exclude it from tool listings. Use a shorter server alias or rename the "
+            f"tool on the MCP server."
+        )
+        for name, prefixed in prefixed_by_name
+        if len(prefixed) > max_length
+    ]
 
 
 def get_server_prefix(server: Any) -> str:

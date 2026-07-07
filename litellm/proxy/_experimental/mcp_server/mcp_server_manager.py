@@ -38,6 +38,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
+    MCP_MAX_TOOL_NAME_LENGTH,
     MCP_METADATA_TIMEOUT,
     MCP_NPM_CACHE_DIR,
     MCP_STDIO_ALLOWED_COMMANDS,
@@ -97,6 +98,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     parse_admin_env_vars,
     split_server_prefix_from_name,
+    split_tools_by_name_length,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -2465,14 +2467,14 @@ class MCPServerManager:
                         )
                         for t in tools
                     ]
-                return tools
+                return self._drop_tools_exceeding_name_length(tools, server)
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
 
-            return prefixed_or_original_tools
+            return self._drop_tools_exceeding_name_length(prefixed_or_original_tools, server)
 
         except MCPUpstreamAuthError:
             # Pass-through 401 must surface to single-server routes so the
@@ -3184,6 +3186,29 @@ class MCPServerManager:
             f"{server.server_id} after {self._SHORT_PREFIX_MAX_REHASH_ATTEMPTS} "
             "attempts; the 3-character prefix space is too crowded."
         )
+
+    def _drop_tools_exceeding_name_length(self, tools: list[MCPTool], server: MCPServer) -> list[MCPTool]:
+        """Exclude tools whose final listed name exceeds ``MCP_MAX_TOOL_NAME_LENGTH``.
+
+        Providers such as AWS Bedrock, OpenAI, and Gemini reject tool names longer
+        than 64 characters, so listing them would make every downstream LLM request
+        carrying the full tool list fail. The tools stay callable by name; they are
+        only excluded from listings.
+        """
+        kept, dropped = split_tools_by_name_length(tools, MCP_MAX_TOOL_NAME_LENGTH)
+        if dropped:
+            dropped_names = ", ".join(f"{tool.name} ({len(tool.name)} chars)" for tool in dropped)
+            verbose_logger.warning(
+                "MCP server %s has %d tool(s) whose name exceeds %d characters, which providers such as "
+                "AWS Bedrock, OpenAI, and Gemini reject. Excluding them from tool listings: %s. "
+                "Use a shorter server alias, rename the tools on the MCP server, or set "
+                "LITELLM_MCP_MAX_TOOL_NAME_LENGTH to change the limit.",
+                server.name,
+                len(dropped),
+                MCP_MAX_TOOL_NAME_LENGTH,
+                dropped_names,
+            )
+        return kept
 
     def _create_prefixed_tools(self, tools: list[MCPTool], server: MCPServer, add_prefix: bool = True) -> list[MCPTool]:
         """

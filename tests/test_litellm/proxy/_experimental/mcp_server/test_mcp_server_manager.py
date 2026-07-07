@@ -6324,3 +6324,51 @@ def test_build_mcp_server_table_carries_null_oauth2_flow():
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow is None
+
+
+class TestToolNameLengthExclusion:
+    """LIT-4216: tools whose final listed name exceeds MCP_MAX_TOOL_NAME_LENGTH must not be listed,
+    because providers such as AWS Bedrock, OpenAI, and Gemini reject tool names longer than 64 chars."""
+
+    def _server(self, alias: str) -> MCPServer:
+        return MCPServer(
+            server_id="len-limit",
+            name="len-limit-server",
+            alias=alias,
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+    async def _list_tools(self, server: MCPServer, tool_names: list, add_prefix: bool = True):
+        manager = MCPServerManager()
+        upstream_tools = [MCPTool(name=name, inputSchema={}) for name in tool_names]
+        manager._create_mcp_client = AsyncMock(return_value=object())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=upstream_tools)
+        return await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+
+    @pytest.mark.asyncio
+    async def test_drops_tool_whose_prefixed_name_exceeds_limit(self):
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+        assert len(f"{alias}-{fitting}") == MCP_MAX_TOOL_NAME_LENGTH
+        assert len(f"{alias}-{too_long}") == MCP_MAX_TOOL_NAME_LENGTH + 1
+
+        tools = await self._list_tools(self._server(alias), [fitting, too_long])
+
+        assert [t.name for t in tools] == [f"{alias}-{fitting}"]
+
+    @pytest.mark.asyncio
+    async def test_unprefixed_listing_measures_the_raw_name(self):
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+
+        alias = "network_config_audit"
+        raw_at_limit = "t" * MCP_MAX_TOOL_NAME_LENGTH
+        raw_too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH + 1)
+
+        tools = await self._list_tools(self._server(alias), [raw_at_limit, raw_too_long], add_prefix=False)
+
+        assert [t.name for t in tools] == [raw_at_limit]
