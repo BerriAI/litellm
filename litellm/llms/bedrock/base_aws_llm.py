@@ -1402,11 +1402,13 @@ class BaseAWSLLM:
 
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
-                if header_value is not None:
+                if header_value is not None and header_name.lower() not in SIGV4_COMPUTED_HEADERS:
                     request.headers[header_name] = header_value
 
             if (
-                extra_headers is not None and "Authorization" in extra_headers
+                extra_headers is not None
+                and "Authorization" in extra_headers
+                and not extra_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
             ):  # prevent sigv4 from overwriting the auth header
                 request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
