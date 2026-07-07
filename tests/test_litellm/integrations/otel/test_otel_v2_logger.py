@@ -168,6 +168,43 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.status.status_code is StatusCode.UNSET
 
 
+def test_streaming_span_carries_time_to_first_chunk():
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {"stream": True},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 0, 750000, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.RESPONSE_TIME_TO_FIRST_CHUNK] == pytest.approx(0.75)
+
+
+def test_non_streaming_span_has_no_time_to_first_chunk():
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(),
+        "optional_params": {},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 5, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
+def test_streaming_span_without_timing_omits_time_to_first_chunk():
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {"stream": True},
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
 def test_async_log_failure_event_marks_error_status():
     logger, exporter = _logger()
     payload = _payload(
