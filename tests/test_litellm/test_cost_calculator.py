@@ -3318,3 +3318,60 @@ def test_cost_per_token_per_second_pricing(monkeypatch):
 
     assert prompt_cost == pytest.approx(0.02 * 1.5)
     assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def _batch_cache_usage() -> Usage:
+    return Usage(
+        prompt_tokens=11000,
+        completion_tokens=200,
+        total_tokens=11200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=8000,
+            cache_creation_tokens=2000,
+            text_tokens=1000,
+        ),
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+
+def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
+    """
+    LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
+    Cache creation tokens must be priced at cache_creation_input_token_cost / 2,
+    not folded into the base input rate, and must not also be billed as base
+    input tokens.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "cache_creation_input_token_cost": 3.75e-6,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
+def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
