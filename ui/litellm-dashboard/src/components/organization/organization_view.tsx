@@ -27,7 +27,7 @@ import {
   buildOrganizationUpdateV2Payload,
   OrgMetadataParseError,
   parseMetadata,
-  type OrganizationUpdateV2Body,
+  type OrgSettingsBaseline,
   type OrgSettingsFormValues,
 } from "./organizationUpdatePayload";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -63,6 +63,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isOrgSaving, setIsOrgSaving] = useState(false);
+  const [editBaseline, setEditBaseline] = useState<OrgSettingsBaseline | null>(null);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
 
@@ -138,42 +139,21 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     }
   };
 
-  const handleOrgUpdate = async (
-    values: OrgSettingsFormValues & {
-      vector_stores?: string[];
-      mcp_servers_and_groups?: { servers?: string[]; accessGroups?: string[] };
-    },
-  ) => {
+  const enterEditMode = () => {
+    if (!orgData) return;
+    setEditBaseline(buildOrgSettingsBaseline(orgData));
+    setIsEditing(true);
+  };
+
+  const handleOrgUpdate = async (values: OrgSettingsFormValues) => {
     try {
       if (!accessToken || !orgData) return;
       setIsOrgSaving(true);
 
-      const body: OrganizationUpdateV2Body = buildOrganizationUpdateV2Payload({
+      const body = buildOrganizationUpdateV2Payload({
         values,
-        baseline: buildOrgSettingsBaseline(orgData),
+        baseline: editBaseline ?? buildOrgSettingsBaseline(orgData),
       });
-
-      if (values.vector_stores !== undefined || values.mcp_servers_and_groups !== undefined) {
-        const objectPermission: NonNullable<OrganizationUpdateV2Body["object_permission"]> = {
-          ...(orgData?.object_permission ?? {}),
-          vector_stores: values.vector_stores || [],
-        };
-
-        if (values.mcp_servers_and_groups !== undefined) {
-          const { servers, accessGroups } = values.mcp_servers_and_groups || {
-            servers: [],
-            accessGroups: [],
-          };
-          if (servers && servers.length > 0) {
-            objectPermission.mcp_servers = servers;
-          }
-          if (accessGroups && accessGroups.length > 0) {
-            objectPermission.mcp_access_groups = accessGroups;
-          }
-        }
-
-        body.object_permission = objectPermission;
-      }
 
       await organizationUpdateV2Call(accessToken, organizationId, body);
 
@@ -370,9 +350,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               <Card className="overflow-y-auto max-h-[65vh]">
                 <div className="flex justify-between items-center mb-4">
                   <Title>Organization Settings</Title>
-                  {canEditOrg && !isEditing && (
-                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
-                  )}
+                  {canEditOrg && !isEditing && <TremorButton onClick={enterEditMode}>Edit Settings</TremorButton>}
                 </div>
 
                 {isEditing ? (

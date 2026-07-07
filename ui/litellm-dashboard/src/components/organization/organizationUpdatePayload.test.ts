@@ -17,6 +17,7 @@ const baseline = (overrides: Partial<OrgSettingsBaseline> = {}): OrgSettingsBase
   max_budget: 10,
   budget_duration: "30d",
   metadata: { team: "core" },
+  object_permission: { vector_stores: [], mcp_servers: [], mcp_access_groups: [] },
   ...overrides,
 });
 
@@ -156,6 +157,32 @@ describe("buildOrganizationUpdateV2Payload", () => {
     });
     expect(payload).toEqual({ tpm_limit: null, rpm_limit: 25, metadata: null });
   });
+
+  it("sends object_permission when vector stores change", () => {
+    expect(buildOrganizationUpdateV2Payload({ values: { vector_stores: ["vs-1"] }, baseline: baseline() })).toEqual({
+      object_permission: { vector_stores: ["vs-1"], mcp_servers: [], mcp_access_groups: [] },
+    });
+  });
+
+  it("clears mcp servers with [] while preserving unchanged vector stores", () => {
+    expect(
+      buildOrganizationUpdateV2Payload({
+        values: { vector_stores: ["vs-1"], mcp_servers_and_groups: { servers: [], accessGroups: [] } },
+        baseline: baseline({
+          object_permission: { vector_stores: ["vs-1"], mcp_servers: ["srv-1"], mcp_access_groups: [] },
+        }),
+      }),
+    ).toEqual({ object_permission: { vector_stores: ["vs-1"], mcp_servers: [], mcp_access_groups: [] } });
+  });
+
+  it("omits object_permission when nothing in it changed", () => {
+    expect(
+      buildOrganizationUpdateV2Payload({
+        values: { vector_stores: [], mcp_servers_and_groups: { servers: [], accessGroups: [] } },
+        baseline: baseline(),
+      }),
+    ).toEqual({});
+  });
 });
 
 describe("buildOrgSettingsBaseline", () => {
@@ -166,6 +193,7 @@ describe("buildOrgSettingsBaseline", () => {
         models: ["gpt-4"],
         metadata: { team: "core" },
         litellm_budget_table: { tpm_limit: 100, rpm_limit: 50, max_budget: 10, budget_duration: "30d" },
+        object_permission: { vector_stores: ["vs-1"], mcp_servers: ["srv-1"], mcp_access_groups: ["grp-1"] },
       }),
     ).toEqual({
       organization_alias: "acme",
@@ -175,14 +203,16 @@ describe("buildOrgSettingsBaseline", () => {
       max_budget: 10,
       budget_duration: "30d",
       metadata: { team: "core" },
+      object_permission: { vector_stores: ["vs-1"], mcp_servers: ["srv-1"], mcp_access_groups: ["grp-1"] },
     });
   });
 
-  it("defaults a missing budget table and metadata to null", () => {
+  it("defaults a missing budget table, metadata, and object_permission", () => {
     const result = buildOrgSettingsBaseline({});
     expect(result.tpm_limit).toBeNull();
     expect(result.budget_duration).toBeNull();
     expect(result.metadata).toBeNull();
     expect(result.models).toBeNull();
+    expect(result.object_permission).toEqual({ vector_stores: [], mcp_servers: [], mcp_access_groups: [] });
   });
 });

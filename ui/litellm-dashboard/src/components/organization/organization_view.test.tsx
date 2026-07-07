@@ -238,3 +238,37 @@ test("blocks Save and does not call the update API when metadata JSON is invalid
   });
   expect(organizationUpdateV2Call).not.toHaveBeenCalled();
 });
+
+test("Save sends only the changed fields to the v2 endpoint", async () => {
+  vi.mocked(organizationUpdateV2Call).mockClear();
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as unknown as ReturnType<
+    typeof useOrganization
+  >);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={true}
+      userModels={[]}
+      editOrg={true}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: /Edit Settings/i }));
+
+  const alias = await screen.findByDisplayValue("Acme Corp");
+  await user.clear(alias);
+  await user.type(alias, "Renamed Org");
+  await user.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+  await waitFor(() => {
+    expect(organizationUpdateV2Call).toHaveBeenCalledTimes(1);
+  });
+  expect(organizationUpdateV2Call).toHaveBeenCalledWith("test-token", "org_123", {
+    organization_alias: "Renamed Org",
+  });
+});

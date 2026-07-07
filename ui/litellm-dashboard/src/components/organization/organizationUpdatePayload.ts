@@ -10,6 +10,14 @@ export interface OrgSettingsFormValues {
   max_budget?: number | string | null;
   budget_duration?: string | null;
   metadata?: string;
+  vector_stores?: string[];
+  mcp_servers_and_groups?: { servers?: string[]; accessGroups?: string[] };
+}
+
+export interface OrgObjectPermissionBaseline {
+  vector_stores: string[];
+  mcp_servers: string[];
+  mcp_access_groups: string[];
 }
 
 export interface OrgSettingsBaseline {
@@ -20,6 +28,7 @@ export interface OrgSettingsBaseline {
   max_budget: number | null;
   budget_duration: string | null;
   metadata: Record<string, unknown> | null;
+  object_permission: OrgObjectPermissionBaseline;
 }
 
 export class OrgMetadataParseError extends Error {
@@ -79,6 +88,26 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
 
 const NUMERIC_FIELDS = ["tpm_limit", "rpm_limit", "max_budget"] as const;
 
+const buildObjectPermissionUpdate = (
+  values: OrgSettingsFormValues,
+  baseline: OrgObjectPermissionBaseline,
+): OrganizationUpdateV2Body["object_permission"] | undefined => {
+  if (values.vector_stores === undefined && values.mcp_servers_and_groups === undefined) {
+    return undefined;
+  }
+  const nextVectorStores = values.vector_stores ?? [];
+  const nextServers = values.mcp_servers_and_groups?.servers ?? [];
+  const nextAccessGroups = values.mcp_servers_and_groups?.accessGroups ?? [];
+  const changed =
+    !deepEqual(nextVectorStores, baseline.vector_stores) ||
+    !deepEqual(nextServers, baseline.mcp_servers) ||
+    !deepEqual(nextAccessGroups, baseline.mcp_access_groups);
+  if (!changed) {
+    return undefined;
+  }
+  return { vector_stores: nextVectorStores, mcp_servers: nextServers, mcp_access_groups: nextAccessGroups };
+};
+
 export const buildOrganizationUpdateV2Payload = ({
   values,
   baseline,
@@ -120,6 +149,11 @@ export const buildOrganizationUpdateV2Payload = ({
     }
   }
 
+  const objectPermission = buildObjectPermissionUpdate(values, baseline.object_permission);
+  if (objectPermission !== undefined) {
+    body.object_permission = objectPermission;
+  }
+
   return body;
 };
 
@@ -133,6 +167,11 @@ export interface OrgBaselineSource {
     max_budget?: number | null;
     budget_duration?: string | null;
   } | null;
+  object_permission?: {
+    vector_stores?: string[] | null;
+    mcp_servers?: string[] | null;
+    mcp_access_groups?: string[] | null;
+  } | null;
 }
 
 export const buildOrgSettingsBaseline = (org: OrgBaselineSource): OrgSettingsBaseline => ({
@@ -143,4 +182,9 @@ export const buildOrgSettingsBaseline = (org: OrgBaselineSource): OrgSettingsBas
   max_budget: org.litellm_budget_table?.max_budget ?? null,
   budget_duration: org.litellm_budget_table?.budget_duration ?? null,
   metadata: org.metadata ?? null,
+  object_permission: {
+    vector_stores: org.object_permission?.vector_stores ?? [],
+    mcp_servers: org.object_permission?.mcp_servers ?? [],
+    mcp_access_groups: org.object_permission?.mcp_access_groups ?? [],
+  },
 });
