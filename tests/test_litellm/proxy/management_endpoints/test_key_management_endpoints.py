@@ -14709,6 +14709,15 @@ async def test_rotate_sso_config_reencrypts_all_string_fields(monkeypatch):
     # non-string field passes through unchanged
     assert rotated["role_mappings"] == {"admin": ["proxy_admin"]}
 
+    assert (
+        decrypt_value_helper(
+            rotated["google_client_secret"],
+            key="google_client_secret",
+            exception_type="debug",
+        )
+        != "google-secret"
+    )
+
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", new_key)
     assert (
         decrypt_value_helper(
