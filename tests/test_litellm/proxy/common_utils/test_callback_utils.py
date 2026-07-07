@@ -502,3 +502,42 @@ async def test_rotate_callback_vars_master_key_reencrypts_under_new_key(monkeypa
         recovered["callback_settings"]["callback_vars"]["langsmith_api_key"]
         == "ls-api-key"
     )
+
+
+@pytest.mark.asyncio
+async def test_rotate_callback_vars_master_key_warns_on_undecryptable_value(monkeypatch):
+    """A value that fails to decrypt under the current key stays under the old key
+    instead of being silently reported as rotated, so rotation logs a warning.
+    """
+    old_key = "old-key-aaaaaaaaaaaaaaaaaaaaaaaa"
+    new_key = "new-key-bbbbbbbbbbbbbbbbbbbbbbbb"
+    foreign_key = "foreign-key-cccccccccccccccccccccccc"
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setenv("LITELLM_SALT_KEY", old_key)
+
+    team_meta = encrypt_callback_vars(_sample_metadata(), new_encryption_key=foreign_key)
+    team_row = SimpleNamespace(team_id="team-1", metadata=team_meta)
+
+    client = MagicMock()
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    client.db.litellm_teamtable.update = AsyncMock()
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.update = AsyncMock()
+
+    warn = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.callback_utils.verbose_proxy_logger.warning", warn
+    )
+
+    await rotate_callback_vars_master_key(client, new_master_key=new_key)
+
+    warn.assert_called_once()
+    assert "team-1" in warn.call_args.args
+
+    written = json.loads(
+        client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", new_key)
+    still_stuck = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
+    assert still_stuck["langfuse_secret_key"].startswith("litellm_enc::")

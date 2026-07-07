@@ -4266,7 +4266,7 @@ async def _rotate_master_key(
             prisma_client=prisma_client,
             new_master_key=new_master_key,
         )
-    except prisma.errors.PrismaError as e:
+    except Exception as e:  # noqa: BLE001  # log-and-continue so a callback_vars failure never aborts a full master key rotation, matching the credential step above
         verbose_proxy_logger.warning("Failed to rotate callback_vars: %s", str(e))
 
 

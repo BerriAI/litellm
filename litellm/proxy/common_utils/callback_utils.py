@@ -718,7 +718,15 @@ async def _rotate_callback_vars_table(
         metadata = getattr(row, "metadata", None)
         if not _has_encrypted_callback_vars(metadata):
             continue
-        re_encrypted = encrypt_callback_vars(decrypt_callback_vars(metadata), new_encryption_key=new_master_key)
+        decrypted = decrypt_callback_vars(metadata)
+        if _has_encrypted_callback_vars(decrypted):
+            verbose_proxy_logger.warning(
+                "rotate_callback_vars_master_key: %s %s has callback_vars that failed to decrypt under the "
+                "current key; those values are left encrypted under the old key",
+                table_name,
+                getattr(row, pk),
+            )
+        re_encrypted = encrypt_callback_vars(decrypted, new_encryption_key=new_master_key)
         await table.update(
             where={pk: getattr(row, pk)},
             data={"metadata": json.dumps(re_encrypted)},
