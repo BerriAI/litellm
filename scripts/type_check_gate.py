@@ -131,7 +131,9 @@ def base_counts(ref: str) -> dict[str, int]:
     exe = shutil.which("basedpyright") or "basedpyright"
     with _temp_worktree(ref) as worktree:
         shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
-        proc = subprocess.run([exe, "--outputjson"], cwd=worktree, capture_output=True, text=True)
+        proc = subprocess.run(
+            [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
+        )
         return count_basedpyright(proc.stdout, root=worktree)
 
 
@@ -253,7 +255,9 @@ def evaluate(
     return sorted(breaches)
 
 
-def is_vacuous_run(counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]) -> bool:
+def is_vacuous_run(
+    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
+) -> bool:
     """True when nothing was parsed but the budget expects errors -- the
     signature of a type checker that crashed or produced no output. The CI pipe
     swallows the tool's exit code (`tool || true`), so without this guard an
@@ -275,7 +279,9 @@ def ratcheted_budget(
     not on update.
     """
     return {
-        code: {"limit": max(0, spec["limit"] - max(0, base.get(code, 0) - current.get(code, 0)))}
+        code: {
+            "limit": max(0, spec["limit"] - max(0, base.get(code, 0) - current.get(code, 0)))
+        }
         for code, spec in sorted(budget.items())
     }
 
@@ -293,7 +299,10 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     updated = ratcheted_budget(budget, current, base_counts_cached(base_point))
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
-    print(f"Ratcheted basedpyright limits down by {cleared} errors this branch fixed across {len(updated)} rules")
+    print(
+        f"Ratcheted basedpyright limits down by {cleared} errors this branch fixed "
+        f"across {len(updated)} rules"
+    )
 
 
 def cmd_check(base_ref: str) -> None:
@@ -329,7 +338,9 @@ def cmd_check(base_ref: str) -> None:
         return
     print("FAIL: basedpyright errors exceed the per-rule limit:")
     for breach in breaches:
-        print(f"  {breach.code}: total {breach.total} over limit {breach.cap} (this change added {breach.added})")
+        print(
+            f"  {breach.code}: total {breach.total} over limit {breach.cap} (this change added {breach.added})"
+        )
     print(
         "Reduce the new errors or remove an equal number elsewhere; the ceiling is "
         "the limit in basedpyright-code-budget.json."
@@ -339,31 +350,15 @@ def cmd_check(base_ref: str) -> None:
     raise SystemExit(1)
 
 
-def _resolve_base(ref: str) -> str:
-    """Return *ref* if it resolves; fall back to the upstream/ equivalent."""
-    if subprocess.run(["git", "rev-parse", "--verify", ref], cwd=REPO_ROOT, capture_output=True).returncode == 0:
-        return ref
-    fallback = ref.replace("origin/", "upstream/", 1)
-    if (
-        fallback != ref
-        and subprocess.run(["git", "rev-parse", "--verify", fallback], cwd=REPO_ROOT, capture_output=True).returncode
-        == 0
-    ):
-        print(f"Note: '{ref}' not found, using '{fallback}' as base.", file=sys.stderr)
-        return fallback
-    return ref
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    resolved = _resolve_base(args.base)
     if args.update:
-        cmd_update(count_basedpyright(sys.stdin.read()), resolved)
+        cmd_update(count_basedpyright(sys.stdin.read()), args.base)
     else:
-        cmd_check(resolved)
+        cmd_check(args.base)
 
 
 if __name__ == "__main__":

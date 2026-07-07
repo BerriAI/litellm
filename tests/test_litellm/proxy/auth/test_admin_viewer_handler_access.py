@@ -86,10 +86,6 @@ def _assert_not_role_blocked(response) -> None:
             err = detail.get("error", "")
         else:
             err = str(detail)
-        # err may itself be a nested dict (e.g. when the endpoint raises an
-        # unexpected exception and returns {"error": {"message": ...}})
-        if not isinstance(err, str):
-            err = str(err)
         err_lower = err.lower()
         role_block_signals = (
             "your role=",

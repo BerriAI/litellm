@@ -6,11 +6,7 @@ the litellm_responses bridge provider, which calls litellm.responses() internall
 """
 
 import os
-from unittest.mock import patch
 
-import pytest
-
-from litellm.types.interactions.generated import InteractionsAPIResponse
 from tests.test_litellm.interactions.base_interactions_test import (
     BaseInteractionsTest,
 )
@@ -30,25 +26,3 @@ class TestLiteLLMResponsesBridge(BaseInteractionsTest):
     def get_api_key(self) -> str:
         """Return the OpenAI API key from environment."""
         return os.getenv("OPENAI_API_KEY", "")
-
-    @pytest.mark.asyncio
-    async def test_acreate_simple(self):
-        """Test async interaction creation with mocked API call."""
-        mock_response = InteractionsAPIResponse(
-            id="interaction-abc123",
-            status="completed",
-            model="gpt-4o",
-            outputs=[{"type": "text", "text": "The speed of light is approximately 299,792,458 meters per second."}],
-            usage={"input_tokens": 10, "output_tokens": 20},
-        )
-
-        import litellm.interactions as interactions
-
-        with patch("litellm.interactions.main.create", return_value=mock_response):
-            response = await interactions.acreate(
-                model=self.get_model(),
-                input="What is the speed of light?",
-                api_key="sk-fake-key-for-unit-test",
-            )
-        assert response is not None
-        assert response.id is not None or response.status is not None

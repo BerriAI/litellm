@@ -13,6 +13,7 @@ import responses
 
 from litellm.proxy.client.credentials import CredentialsManagementClient
 from litellm.proxy.client.exceptions import UnauthorizedError
+from litellm.proxy.credential_endpoints.endpoints import CredentialHelperUtils
 from litellm.types.utils import CredentialItem
 
 
@@ -268,18 +269,7 @@ def test_get_unauthorized_error(client):
 
 def test_encrypt_credential_values_does_not_mutate_original(monkeypatch):
     """Ensure encrypt_credential_values returns a new encrypted object"""
-    try:
-        from litellm.proxy.credential_endpoints.endpoints import (
-            CredentialHelperUtils,
-        )
-    except ImportError as e:
-        pytest.skip(f"Proxy dependencies not available: {e}")
-
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-key")
-    monkeypatch.setattr(
-        "litellm.proxy.credential_endpoints.endpoints.encrypt_value_helper",
-        lambda value, key=None: f"encrypted_{value}",
-    )
     credential = CredentialItem(
         credential_name="azure1",
         credential_values={"api_key": "sk-123"},

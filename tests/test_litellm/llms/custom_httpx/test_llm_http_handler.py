@@ -1024,16 +1024,7 @@ def test_sync_delete_responses_omits_body_for_azure():
     captured: dict = {}
     _, fake_sync_delete = _build_delete_response_mock(captured)
 
-    # Patch via the full module path so we always target the *current*
-    # HTTPHandler class in sys.modules, not the one bound at import time.
-    # Using patch.object(HTTPHandler, ...) is fragile when another xdist
-    # worker test (e.g. test_huggingface_embedding_handler) reloads the
-    # http_handler module, creating a new class object: _get_httpx_client
-    # then returns instances of the new class, bypassing the old-class patch.
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.delete",
-        new=fake_sync_delete,
-    ):
+    with patch.object(HTTPHandler, "delete", new=fake_sync_delete):
         litellm.delete_responses(
             response_id="resp_xyz",
             custom_llm_provider="azure",

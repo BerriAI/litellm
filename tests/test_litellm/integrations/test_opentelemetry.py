@@ -2386,7 +2386,6 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
             OTLPMetricExporter,
         )
-        from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
         config = OpenTelemetryConfig(
@@ -2398,11 +2397,6 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
 
         self.assertIsInstance(reader, PeriodicExportingMetricReader)
         self.assertIsInstance(reader._exporter, OTLPMetricExporter)
-
-        # Properly shut down the reader to avoid background thread issues.
-        # The reader must be registered with a MeterProvider before shutdown.
-        meter_provider = MeterProvider(metric_readers=[reader])
-        meter_provider.shutdown()
 
 
 class TestOpenTelemetryExternalSpan(unittest.TestCase):

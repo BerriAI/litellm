@@ -12,7 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import urllib.parse
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import main as litellm_main
@@ -22,93 +22,18 @@ async def _async_fake_bedrock_image_details(image_url):
     return "ZmFrZS1pbWFnZQ==", "image/png"
 
 
-def _check_call_args(mock_client, model: str) -> None:
-    """Inspect the captured HTTP call args and assert request-shaping rules."""
-    print(mock_client.call_args.kwargs)
-
-    if "data" in mock_client.call_args.kwargs:
-        json_str = mock_client.call_args.kwargs["data"]
-    else:
-        json_str = json.dumps(mock_client.call_args.kwargs.get("json", {}))
-
-    if isinstance(json_str, bytes):
-        json_str = json_str.decode("utf-8")
-
-    print(f"type of json_str: {type(json_str)}")
-
-    # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
-    # bedrock/invoke models use Anthropic messages API which supports URLs
-    if model.startswith("bedrock/invoke/"):
-        # bedrock/invoke should convert URLs to base64 (doesn't support URL references)
-        # URL should NOT be in the JSON (it should be converted to base64)
-        assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
-        # Should have base64 data in the source (type="base64", not type="url")
-        assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
-        # Should have "data" field containing base64 content
-        assert '"data"' in json_str
-    elif model.startswith("bedrock/"):
-        # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
-        # URL should NOT be in the JSON (it should be converted to base64)
-        assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
-        # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
-        assert '"bytes"' in json_str or '"bytes":' in json_str
-    elif model.startswith("anthropic/"):
-        # Direct Anthropic models should pass HTTPS URLs directly (HTTP URLs are converted to base64)
-        # Since we're using HTTPS URL, it should be passed as-is
-        assert "https://awsmp-logos.s3.amazonaws.com" in json_str
-        # For Anthropic, URL references use "url" type, not base64
-        assert '"type":"url"' in json_str or '"type": "url"' in json_str
-    else:
-        # For other models, check format parameter is respected
-        assert "png" in json_str
-        assert "jpeg" not in json_str
-
-
 @pytest.fixture(autouse=True)
 def clear_client_cache():
     """
-    Clear (and replace) the HTTP client cache before each test to ensure mocks
-    are used.  This prevents cached real clients from being reused across tests.
-
-    Under xdist, tests from *other* files can run in the same worker process
-    and leave litellm.in_memory_llm_clients_cache in a broken state (e.g.
-    a previous test may have replaced it with a MagicMock or otherwise
-    corrupted it).  To guard against this we always replace the cache with a
-    fresh LLMClientCache instance rather than just flushing the existing one.
-    We also clear the image-URL in-memory cache so stale URL→base64 mappings
-    from other tests cannot interfere.
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
     """
-    from litellm.caching.llm_caching_handler import LLMClientCache
-
-    # Always install a fresh, known-good cache object.
-    fresh_cache = LLMClientCache()
-    setattr(litellm, "in_memory_llm_clients_cache", fresh_cache)
-
-    # Also flush the image-URL cache that lives in image_handling.py.
-    try:
-        from litellm.litellm_core_utils.prompt_templates.image_handling import (
-            in_memory_cache as _image_cache,
-        )
-
-        _image_cache.flush_cache()
-    except Exception:
-        pass
-
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
     yield
-
-    # Flush both caches on teardown too.
-    try:
-        fresh_cache.flush_cache()
-    except Exception:
-        pass
-    try:
-        from litellm.litellm_core_utils.prompt_templates.image_handling import (
-            in_memory_cache as _image_cache,
-        )
-
-        _image_cache.flush_cache()
-    except Exception:
-        pass
+    if cache is not None:
+        cache.flush_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -242,63 +167,27 @@ def test_completion_missing_role(openai_api_response):
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_url_with_format_param(model, sync_mode, monkeypatch):  # noqa: PLR0912
+async def test_url_with_format_param(model, sync_mode, monkeypatch):
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory
 
-    # This test is about request shaping, not live image downloads.  Stub the
-    # URL->image conversion helpers at *every* level so that no matter which
-    # code path is taken (factory.py, image_handling.py, or the bedrock
-    # transformation module) we never make a real network call.  This is
-    # especially important under xdist where a previous test in the same
-    # worker process may have left any of these module-level attributes in an
-    # unexpected state.
-    fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
+    if sync_mode:
+        client = HTTPHandler()
+    else:
+        client = AsyncHTTPHandler()
 
-    # Patch the reference that lives in factory.py (used by anthropic_messages_pt
-    # -> create_anthropic_image_param for the bedrock/invoke code path).
+    # This test is about request shaping, not live image downloads. Stub the
+    # URL->image conversion helpers so suite-level network/client state from
+    # earlier tests cannot prevent the mocked provider client from being hit.
+    fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
     monkeypatch.setattr(
         prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image
     )
-
-    # Define the async stub here so it is always in scope for both try-blocks
-    # that follow (even if either import fails).
-    async def _fake_async_convert(url: str) -> str:
-        return fake_base64_image
-
-    # Patch the original functions in image_handling so that any direct import
-    # of those names (e.g. in anthropic_claude3_transformation.py) is also
-    # intercepted.  We do this defensively even for code paths that should not
-    # be reached with the current test input.
-    try:
-        import litellm.litellm_core_utils.prompt_templates.image_handling as _ih
-
-        monkeypatch.setattr(_ih, "convert_url_to_base64", lambda url: fake_base64_image)
-        monkeypatch.setattr(_ih, "async_convert_url_to_base64", _fake_async_convert)
-    except Exception:
-        pass
-
-    # Patch the references that were imported at module load time inside the
-    # bedrock anthropic transformation module.
-    try:
-        import litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation as _act
-
-        monkeypatch.setattr(
-            _act, "convert_url_to_base64", lambda url: fake_base64_image
-        )
-        monkeypatch.setattr(
-            _act, "async_convert_url_to_base64", _fake_async_convert
-        )
-    except Exception:
-        pass
-
-    # Patch BedrockImageProcessor helpers (used by the converse/bedrock-native
-    # code paths for the bedrock/us.* and bedrock/converse/* models).
     monkeypatch.setattr(
         prompt_factory.BedrockImageProcessor,
         "get_image_details",
-        staticmethod(lambda image_url: ("ZmFrZS1tbWFnZQ==", "image/png")),
+        staticmethod(lambda image_url: ("ZmFrZS1pbWFnZQ==", "image/png")),
     )
     monkeypatch.setattr(
         prompt_factory.BedrockImageProcessor,
@@ -326,59 +215,56 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):  # noqa: PL
     }
     if model.startswith("gemini/"):
         args["api_key"] = "test-api-key"
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            if sync_mode:
+                response = completion(**args, client=client)
+            else:
+                response = await acompletion(**args, client=client)
+            print(response)
+        except Exception as e:
+            pass
 
-    if sync_mode:
-        # ------------------------------------------------------------------ #
-        # Sync path: patch HTTPHandler.post at the *class* level.
-        #
-        # Rationale: same as the async path below — if a previous xdist
-        # worker test left the HTTPHandler class reference in a broken state,
-        # the isinstance(client, HTTPHandler) check inside the provider
-        # handler fails and the framework creates a fresh internal client,
-        # bypassing the instance-level mock entirely.  A class-level patch
-        # covers both the explicitly-passed client and any freshly-created
-        # internal client, making the test robust to xdist pollution.
-        # ------------------------------------------------------------------ #
-        with patch.object(HTTPHandler, "post", new_callable=MagicMock) as mock_client:
-            try:
-                response = completion(**args)
-                print(response)
-            except Exception as e:
-                pass
+        mock_client.assert_called()
 
-            mock_client.assert_called()
-            _check_call_args(mock_client, model)
-    else:
-        # ------------------------------------------------------------------ #
-        # Async path: patch AsyncHTTPHandler.post at the *class* level using
-        # AsyncMock instead of patching a single instance.
-        #
-        # Rationale: BaseLLMHTTPHandler.completion checks
-        #   isinstance(client, AsyncHTTPHandler)
-        # before deciding whether to forward the caller-supplied client.  If
-        # that check fails for any reason (e.g. another xdist worker test left
-        # the AsyncHTTPHandler name in a different state), the framework falls
-        # back to creating a fresh client via get_async_httpx_client().  A
-        # class-level patch covers *both* the explicit client and any freshly
-        # created internal client, so the mock is always called regardless of
-        # what happened to the AsyncHTTPHandler reference.
-        #
-        # Using AsyncMock (instead of MagicMock) also avoids the
-        #   TypeError: object MagicMock can't be used in 'await' expression
-        # that would otherwise propagate through the error-handling stack in
-        # ways that differ across Python / asyncio versions.
-        # ------------------------------------------------------------------ #
-        with patch.object(
-            AsyncHTTPHandler, "post", new_callable=AsyncMock
-        ) as mock_client:
-            try:
-                response = await acompletion(**args)
-                print(response)
-            except Exception as e:
-                pass
+        print(mock_client.call_args.kwargs)
 
-            mock_client.assert_called()
-            _check_call_args(mock_client, model)
+        if "data" in mock_client.call_args.kwargs:
+            json_str = mock_client.call_args.kwargs["data"]
+        else:
+            json_str = json.dumps(mock_client.call_args.kwargs["json"])
+
+        if isinstance(json_str, bytes):
+            json_str = json_str.decode("utf-8")
+
+        print(f"type of json_str: {type(json_str)}")
+
+        # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
+        # bedrock/invoke models use Anthropic messages API which supports URLs
+        if model.startswith("bedrock/invoke/"):
+            # bedrock/invoke should convert URLs to base64 (doesn't support URL references)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            # Should have base64 data in the source (type="base64", not type="url")
+            assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
+            # Should have "data" field containing base64 content
+            assert '"data"' in json_str
+        elif model.startswith("bedrock/"):
+            # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
+            assert '"bytes"' in json_str or '"bytes":' in json_str
+        elif model.startswith("anthropic/"):
+            # Direct Anthropic models should pass HTTPS URLs directly (HTTP URLs are converted to base64)
+            # Since we're using HTTPS URL, it should be passed as-is
+            assert "https://awsmp-logos.s3.amazonaws.com" in json_str
+            # For Anthropic, URL references use "url" type, not base64
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        else:
+            # For other models, check format parameter is respected
+            assert "png" in json_str
+            assert "jpeg" not in json_str
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])

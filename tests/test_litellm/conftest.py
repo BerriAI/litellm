@@ -117,53 +117,6 @@ def _run_coroutine_if_needed(result):
         pass
 
 
-def _shutdown_opentelemetry_providers():
-    """
-    Shutdown OpenTelemetry providers to stop background metric collection threads.
-
-    This prevents the "Cannot call collect on a MetricReader until it is
-    registered on a MeterProvider" error that occurs when a PeriodicExportingMetricReader
-    is created but not properly registered/shutdown.
-    """
-    try:
-        from opentelemetry import metrics, trace, _logs
-        from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
-        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
-        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
-
-        # Shutdown MeterProvider if it's an SDK provider
-        meter_provider = metrics.get_meter_provider()
-        if isinstance(meter_provider, SDKMeterProvider):
-            try:
-                meter_provider.shutdown()
-            except Exception:
-                pass
-
-        # Shutdown TracerProvider if it's an SDK provider
-        tracer_provider = trace.get_tracer_provider()
-        if isinstance(tracer_provider, SDKTracerProvider):
-            try:
-                tracer_provider.shutdown()
-            except Exception:
-                pass
-
-        # Shutdown LoggerProvider if it's an SDK provider
-        try:
-            logger_provider = _logs.get_logger_provider()
-            if isinstance(logger_provider, SDKLoggerProvider):
-                try:
-                    logger_provider.shutdown()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    except ImportError:
-        # OpenTelemetry not installed
-        pass
-    except Exception:
-        pass
-
-
 def _close_handler_if_needed(handler):
     if handler is None:
         return
@@ -509,7 +462,7 @@ def strict_isolation():
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Close any globally cached HTTP clients and shutdown OpenTelemetry providers so xdist workers exit cleanly."""
+    """Close any globally cached HTTP clients so xdist workers exit cleanly."""
     _close_handler_if_needed(litellm.__dict__.get("module_level_client"))
     _close_handler_if_needed(litellm.__dict__.get("module_level_aclient"))
     litellm.__dict__.pop("module_level_client", None)
@@ -519,5 +472,3 @@ def pytest_sessionfinish(session, exitstatus):
     _close_handler_if_needed(getattr(litellm, "aclient", None))
     _close_handler_if_needed(getattr(litellm, "client", None))
     _run_coroutine_if_needed(close_litellm_async_clients())
-    # Shutdown OpenTelemetry providers to stop background metric collection threads
-    _shutdown_opentelemetry_providers()

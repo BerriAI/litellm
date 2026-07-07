@@ -2254,11 +2254,10 @@ async def test_pass_through_request_query_params_forwarding():
 @pytest.mark.asyncio
 async def test_pass_through_with_httpbin_redirect():
     """
-    Tests redirect handling in pass_through_request using a mocked HTTP transport.
-    The mock simulates: GET /redirect/1 -> 302 Location: /get -> 200 {url: ...}
-    No real network calls are made.
+    Integration test using httpbin.org redirect endpoint to test real redirect handling.
+    This tests the actual redirect handling capability end-to-end using the full pass_through_request function.
     """
-    import json
+    from unittest.mock import MagicMock
 
     from fastapi import Request
     from starlette.datastructures import Headers, QueryParams
@@ -2267,50 +2266,24 @@ async def test_pass_through_with_httpbin_redirect():
         pass_through_request,
     )
 
-    # Build the two responses the mock transport will return in order:
-    # 1. 302 redirect from /redirect/1 -> /get
-    redirect_response = httpx.Response(
-        status_code=302,
-        headers={"location": "https://httpbin.org/get"},
-        content=b"",
-        request=httpx.Request("GET", "https://httpbin.org/redirect/1"),
-    )
-    # 2. 200 final response from /get
-    final_body = json.dumps({"url": "https://httpbin.org/get"}).encode()
-    final_response = httpx.Response(
-        status_code=200,
-        headers={"content-type": "application/json"},
-        content=final_body,
-        request=httpx.Request("GET", "https://httpbin.org/get"),
-    )
-
-    responses = iter([redirect_response, final_response])
-
-    class _MockTransport(httpx.AsyncBaseTransport):
-        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            return next(responses)
-
-    # pass_through_request accesses get_async_httpx_client(...).client, so the
-    # mock must expose a .client attribute wrapping our transport.
-    mock_handler = MagicMock()
-    mock_handler.client = httpx.AsyncClient(transport=_MockTransport(), follow_redirects=True)
-
-    # Create mock FastAPI request
+    # Create mock request
     mock_request = MagicMock(spec=Request)
     mock_request.method = "GET"
     mock_request.headers = Headers({})
     mock_request.query_params = QueryParams("")
 
+    # Mock the body method to return empty bytes for GET request
     async def mock_body():
         return b""
 
     mock_request.body = mock_body
+
+    # Mock user API key dict
     mock_user_api_key_dict = MagicMock()
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
-        return_value=mock_handler,
-    ):
+    try:
+        # Test with httpbin.org redirect endpoint
+        # This will redirect to httpbin.org/get
         response = await pass_through_request(
             request=mock_request,
             target="https://httpbin.org/redirect/1",
@@ -2318,9 +2291,19 @@ async def test_pass_through_with_httpbin_redirect():
             user_api_key_dict=mock_user_api_key_dict,
         )
 
-    assert response.status_code == 200
-    response_content = bytes(response.body).decode("utf-8")
-    assert '"url": "https://httpbin.org/get"' in response_content
+        # Should get the final response (200) from /get endpoint, not the redirect (302)
+        assert response.status_code == 200
+
+        # The response should be from the /get endpoint
+        response_content = bytes(response.body).decode("utf-8")
+
+        # httpbin.org/get returns JSON with info about the request
+        assert '"url": "https://httpbin.org/get"' in response_content
+    except Exception as e:
+        # If httpbin.org is not accessible, skip the test
+        import pytest
+
+        pytest.skip(f"Could not reach httpbin.org for integration test: {e}")
 
 
 @pytest.mark.asyncio

@@ -32,7 +32,8 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         return response.json()
     except Exception as e:  # pragma: no cover - defensive, env-dependent
         pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - unable to load spec from {OPENAPI_SPEC_URL}: {e}"
+            f"Skipping Google Interactions OpenAPI compliance tests - "
+            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
         )
 
 
@@ -120,7 +121,9 @@ class TestRequestCompliance:
             # Discriminator without explicit mapping — verify via oneOf
             one_of = content_schema.get("oneOf", [])
             ref_names = [opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt]
-            assert "TextContent" in ref_names, f"TextContent not found in oneOf refs: {ref_names}"
+            assert (
+                "TextContent" in ref_names
+            ), f"TextContent not found in oneOf refs: {ref_names}"
             print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
 
     def test_text_content_schema(self, spec_dict):
@@ -203,7 +206,9 @@ class TestResponseCompliance:
         expected_fields = ["total_input_tokens", "total_output_tokens", "total_tokens"]
 
         for field in expected_fields:
-            assert field in usage_schema["properties"], f"Usage field '{field}' not in spec"
+            assert (
+                field in usage_schema["properties"]
+            ), f"Usage field '{field}' not in spec"
             print(f"✓ Usage field '{field}' exists")
 
 
@@ -222,7 +227,9 @@ class TestToolsCompliance:
         """Verify FunctionDeclaration schema for function tools."""
         if "FunctionDeclaration" in spec_dict["components"]["schemas"]:
             func_schema = spec_dict["components"]["schemas"]["FunctionDeclaration"]
-            assert "name" in func_schema.get("properties", {}) or "name" in func_schema.get("required", [])
+            assert "name" in func_schema.get(
+                "properties", {}
+            ) or "name" in func_schema.get("required", [])
             print("✓ FunctionDeclaration schema found")
         else:
             print("⚠ FunctionDeclaration schema not found (may be nested)")
@@ -288,4 +295,6 @@ if __name__ == "__main__":
             if method in ["get", "post", "delete", "put", "patch"]:
                 print(f"  {method.upper()} {path}")
 
-    print(f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}...")
+    print(
+        f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}..."
+    )

@@ -45,7 +45,6 @@ class TestUpdateLlmRouterResilience:
         mock_proxy_logging = MagicMock()
 
         with (
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
             patch.object(
                 proxy_config,
                 "get_config",
@@ -63,7 +62,6 @@ class TestUpdateLlmRouterResilience:
             patch("litellm.proxy.proxy_server.master_key", "sk-test"),
             patch("litellm.proxy.proxy_server.llm_model_list", []),
             patch("litellm.proxy.proxy_server.general_settings", {}),
-            patch("litellm.proxy.proxy_server.prisma_client", None),
         ):
             await proxy_config._update_llm_router(
                 new_models=db_models,
@@ -87,7 +85,6 @@ class TestUpdateLlmRouterResilience:
         mock_proxy_logging = MagicMock()
 
         with (
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
             patch.object(
                 proxy_config,
                 "get_config",
@@ -105,7 +102,6 @@ class TestUpdateLlmRouterResilience:
             patch("litellm.proxy.proxy_server.master_key", "sk-test"),
             patch("litellm.proxy.proxy_server.llm_model_list", []),
             patch("litellm.proxy.proxy_server.general_settings", {}),
-            patch("litellm.proxy.proxy_server.prisma_client", None),
         ):
             await proxy_config._update_llm_router(
                 new_models=db_models,

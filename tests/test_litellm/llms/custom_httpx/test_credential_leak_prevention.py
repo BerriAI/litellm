@@ -200,32 +200,8 @@ class TestSafeResponseHelpers:
         assert result == b""
 
 
-def _http_handler_symbols():
-    """
-    Re-import the relevant symbols from the current (possibly reloaded) version
-    of http_handler so that class-identity checks (isinstance / pytest.raises)
-    always use the same class object that _raise_masked_*_error will raise.
-
-    Background: test_huggingface_embedding_handler.py calls
-    ``importlib.reload(litellm.llms.custom_httpx.http_handler)`` which
-    replaces the module-level ``MaskedHTTPStatusError`` class with a fresh
-    object.  Functions defined in that module look up ``MaskedHTTPStatusError``
-    via their ``__globals__`` (the module dict) at call time, so they raise the
-    NEW class.  But tests that captured the OLD class at import time cannot
-    match it via ``pytest.raises`` or ``isinstance``.  Fetching the class fresh
-    here avoids the mismatch.
-    """
-    import litellm.llms.custom_httpx.http_handler as _m
-    return (
-        _m.MaskedHTTPStatusError,
-        _m._raise_masked_sync_error,
-        _m._raise_masked_async_error,
-    )
-
-
 class TestRaiseMaskedError:
     def test_sync_non_stream(self):
-        MaskedHTTPStatusError, _raise_masked_sync_error, _ = _http_handler_symbols()
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="error body"
         )
@@ -238,7 +214,6 @@ class TestRaiseMaskedError:
         assert err.text == "error body"
 
     def test_sync_stream(self):
-        MaskedHTTPStatusError, _raise_masked_sync_error, _ = _http_handler_symbols()
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="stream body"
         )
@@ -250,7 +225,6 @@ class TestRaiseMaskedError:
         assert err.message is not None
 
     def test_sync_breaks_exception_chain(self):
-        MaskedHTTPStatusError, _raise_masked_sync_error, _ = _http_handler_symbols()
         orig = _make_httpx_status_error()
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             _raise_masked_sync_error(orig, stream=False)
@@ -259,7 +233,6 @@ class TestRaiseMaskedError:
 
     @pytest.mark.asyncio
     async def test_async_non_stream(self):
-        MaskedHTTPStatusError, _, _raise_masked_async_error = _http_handler_symbols()
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="async error"
         )
@@ -273,7 +246,6 @@ class TestRaiseMaskedError:
 
     @pytest.mark.asyncio
     async def test_async_stream(self):
-        MaskedHTTPStatusError, _, _raise_masked_async_error = _http_handler_symbols()
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="async stream"
         )
@@ -286,7 +258,6 @@ class TestRaiseMaskedError:
 
     @pytest.mark.asyncio
     async def test_async_breaks_chain(self):
-        MaskedHTTPStatusError, _, _raise_masked_async_error = _http_handler_symbols()
         orig = _make_httpx_status_error()
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             await _raise_masked_async_error(orig, stream=False)
@@ -311,7 +282,6 @@ class TestHTTPHandlerErrorPaths:
 
     @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
     def test_sync_raises_masked_error(self, sync_handler, method):
-        MaskedHTTPStatusError, _, __ = _http_handler_symbols()
         with patch.object(
             sync_handler.client,
             "send",
@@ -328,7 +298,6 @@ class TestHTTPHandlerErrorPaths:
     @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
     @pytest.mark.asyncio
     async def test_async_raises_masked_error(self, async_handler, method):
-        MaskedHTTPStatusError, _, __ = _http_handler_symbols()
         with patch.object(
             async_handler.client,
             "send",

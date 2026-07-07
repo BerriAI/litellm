@@ -1,7 +1,6 @@
 """
 Enterprise specific logging utils
 """
-
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingMetadata
 
 

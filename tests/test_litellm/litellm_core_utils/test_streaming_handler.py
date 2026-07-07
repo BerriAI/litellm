@@ -2642,7 +2642,7 @@ def test_gemini_legacy_vertex_stop_finish_reason_normalised():
     # Ensure the chunk is not treated as a ModelResponseStream
     mock_chunk.__class__ = type("FakeProtoChunk", (), {})
 
-    with patch.dict("sys.modules", {"proto": MagicMock()}):
+    with patch("litellm.litellm_core_utils.streaming_handler.proto", create=True):
         wrapper.chunk_creator(chunk=mock_chunk)
 
     assert wrapper.received_finish_reason == "stop", (
@@ -2673,7 +2673,7 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
     mock_chunk.candidates = [mock_candidate]
     mock_chunk.__class__ = type("FakeProtoChunk", (), {})
 
-    with patch.dict("sys.modules", {"proto": MagicMock()}):
+    with patch("litellm.litellm_core_utils.streaming_handler.proto", create=True):
         wrapper.chunk_creator(chunk=mock_chunk)
 
     # Signal that tool_calls were present in the stream

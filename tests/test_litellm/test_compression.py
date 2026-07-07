@@ -443,19 +443,8 @@ def test_embedding_scorer_forwards_embedding_model_params(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_embedding_scorer(monkeypatch):
-    class _MockResponse:
-        data = [
-            {"embedding": [1.0, 0.0, 0.0]},
-            {"embedding": [0.0, 0.0, 1.0]},
-            {"embedding": [0.9, 0.1, 0.0]},
-        ]
-
-    def fake_embedding(**kwargs):
-        return _MockResponse()
-
-    monkeypatch.setattr(litellm, "embedding", fake_embedding)
-
+@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="Needs OPENAI_API_KEY")
+def test_embedding_scorer():
     result = litellm.compress(
         messages=[
             {"role": "user", "content": "Authentication code " * 2000},

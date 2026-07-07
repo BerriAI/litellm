@@ -39,31 +39,13 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
     import importlib
     import sys
 
-    # Save and restore the modules we evict so that subsequent tests in the
-    # same xdist worker are not left with a freshly-reimported module object.
-    # If we leave these entries absent, the next import creates a *new* module
-    # object, orphaning any function's __globals__ dict that still points at
-    # the old one — which silently breaks unittest.mock.patch on those names.
-    saved = {
-        mod: sys.modules.get(mod)
-        for mod in [
-            "litellm.proxy.utils",
-            "litellm.proxy.management_endpoints.common_utils",
-            "litellm.llms.base_llm.managed_resources.isolation",
-        ]
-    }
-    for mod in saved:
+    for mod in [
+        "litellm.proxy.utils",
+        "litellm.proxy.management_endpoints.common_utils",
+        "litellm.llms.base_llm.managed_resources.isolation",
+    ]:
         sys.modules.pop(mod, None)
 
-    try:
-        importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
-        assert "litellm.proxy.utils" not in sys.modules
-        assert "litellm.proxy.management_endpoints.common_utils" not in sys.modules
-    finally:
-        # Restore original module objects so later tests see a consistent
-        # sys.modules and their pre-imported names remain valid.
-        for mod, original in saved.items():
-            if original is not None:
-                sys.modules[mod] = original
-            else:
-                sys.modules.pop(mod, None)
+    importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
+    assert "litellm.proxy.utils" not in sys.modules
+    assert "litellm.proxy.management_endpoints.common_utils" not in sys.modules

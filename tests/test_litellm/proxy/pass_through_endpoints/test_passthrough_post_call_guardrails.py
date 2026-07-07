@@ -294,24 +294,9 @@ class TestUnifiedGuardrailCallTypeResolution:
 
         response_body = {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
 
-        _UNIFIED_MOD = "litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail"
-
-        # The module caches the translation mappings in a module-level global
-        # (`endpoint_guardrail_translation_mappings`). When tests run in parallel
-        # under xdist, a previously executed test in the same worker can populate
-        # that global with the *real* mapping before this test runs. The cache
-        # guard (`if … is None`) then skips calling `load_guardrail_translation_mappings`
-        # entirely, so the patch below would have no effect and
-        # `process_output_response` would never be awaited.
-        #
-        # Resetting the global to `None` inside the patch context forces the
-        # guard to fire and ensures the mock mapping is always used.
         with patch(
-            f"{_UNIFIED_MOD}.load_guardrail_translation_mappings"
-        ) as mock_load, patch(
-            f"{_UNIFIED_MOD}.endpoint_guardrail_translation_mappings",
-            None,
-        ):
+            "litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail.load_guardrail_translation_mappings"
+        ) as mock_load:
             mock_handler_instance = AsyncMock()
             mock_handler_instance.process_output_response = AsyncMock(
                 return_value=response_body

@@ -62,7 +62,12 @@ def head_violations() -> list:
     out = []
     for item in _ruff_json(REPO_ROOT, STRICT_CONFIG):
         name = Path(item["filename"])
-        rel = (name if name.is_absolute() else REPO_ROOT / name).resolve().relative_to(REPO_ROOT).as_posix()
+        rel = (
+            (name if name.is_absolute() else REPO_ROOT / name)
+            .resolve()
+            .relative_to(REPO_ROOT)
+            .as_posix()
+        )
         out.append(Violation(rel, item["location"]["row"], item["code"]))
     return out
 
@@ -137,11 +142,15 @@ def cmd_check(base: str) -> None:
         return
     new = introduced(
         head,
-        parse_changed_lines(_run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])),
+        parse_changed_lines(
+            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
+        ),
     )
     print(f"FAIL: strict-rule totals exceed their limit (base {base}):")
     for breach in breaches:
-        print(f"  {breach.rule}: total {breach.total} over limit {breach.cap} (this change added {breach.added})")
+        print(
+            f"  {breach.rule}: total {breach.total} over limit {breach.cap} (this change added {breach.added})"
+        )
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
@@ -158,7 +167,9 @@ def ratcheted_budget(budget: dict, current: dict, base: dict) -> dict:
     stays put), so the limit only ever falls.
     """
     return {
-        rule: {"limit": max(0, spec["limit"] - max(0, base.get(rule, 0) - current.get(rule, 0)))}
+        rule: {
+            "limit": max(0, spec["limit"] - max(0, base.get(rule, 0) - current.get(rule, 0)))
+        }
         for rule, spec in sorted(budget.items())
     }
 
@@ -172,25 +183,12 @@ def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
     """
     budget = json.loads(BUDGET_PATH.read_text())
     base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
-    updated = ratcheted_budget(budget, count_by_rule(head_violations()), base_counts(base_point))
+    updated = ratcheted_budget(
+        budget, count_by_rule(head_violations()), base_counts(base_point)
+    )
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[rule]["limit"] - updated[rule]["limit"] for rule in updated)
     print(f"Ratcheted strict-rule limits down by {cleared} violations this branch fixed")
-
-
-def _resolve_base(ref: str) -> str:
-    """Return *ref* if it resolves; fall back to the upstream/ equivalent."""
-    if subprocess.run(["git", "rev-parse", "--verify", ref], cwd=REPO_ROOT, capture_output=True).returncode == 0:
-        return ref
-    fallback = ref.replace("origin/", "upstream/", 1)
-    if (
-        fallback != ref
-        and subprocess.run(["git", "rev-parse", "--verify", fallback], cwd=REPO_ROOT, capture_output=True).returncode
-        == 0
-    ):
-        print(f"Note: '{ref}' not found, using '{fallback}' as base.", file=sys.stderr)
-        return fallback
-    return ref
 
 
 def main() -> None:
@@ -198,8 +196,7 @@ def main() -> None:
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    resolved = _resolve_base(args.base)
-    cmd_update(resolved) if args.update else cmd_check(resolved)
+    cmd_update(args.base) if args.update else cmd_check(args.base)
 
 
 if __name__ == "__main__":

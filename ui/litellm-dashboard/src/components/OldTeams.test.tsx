@@ -17,8 +17,6 @@ vi.mock("./networking", () => ({
   v2TeamListCall: vi.fn(),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
-  vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
-  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -793,9 +791,7 @@ describe("OldTeams - access_group_ids in team create", () => {
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     const createTeamSubmitButton = createTeamSubmitButtons[createTeamSubmitButtons.length - 1];
-    await act(async () => {
-      fireEvent.click(createTeamSubmitButton);
-    });
+    fireEvent.click(createTeamSubmitButton);
 
     await waitFor(() => {
       expect(teamCreateCall).toHaveBeenCalledWith(

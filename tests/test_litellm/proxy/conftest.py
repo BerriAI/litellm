@@ -17,30 +17,7 @@ from fastapi.testclient import TestClient
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
-    "user_config_file_path",
-    "general_settings",
-    "llm_router",
-    "llm_model_list",
-    "premium_user",
-    "store_model_in_db",
-    "proxy_logging_obj",
-    "redis_usage_cache",
 )
-
-# Known-good defaults to set at the START of every test so a corrupt
-# snapshot from a previous worker run cannot propagate further.
-_PROXY_MODULE_GLOBALS_RESET = {
-    "master_key": None,
-    "prisma_client": None,
-    "user_config_file_path": None,
-    "general_settings": {},
-    "llm_router": None,
-    "llm_model_list": [],
-    "store_model_in_db": False,
-    # Prevent _FakeRedisCache leakage from test_redis_auth_cache_flag tests
-    # that call _init_cache with a mock Redis and don't restore redis_usage_cache.
-    "redis_usage_cache": None,
-}
 
 
 class StubClientNotConnectedError(Exception):
@@ -74,10 +51,9 @@ def _isolate_proxy_module_globals():
     Snapshot and restore module-level globals on litellm.proxy.proxy_server
     that tests sometimes mutate via raw setattr (not monkeypatch).
 
-    We also force a known-good initial state *before* yielding so that a
-    corrupt snapshot from a previous worker test cannot cascade into the
-    current test (snapshot/restore alone does not help when the pre-test
-    state is already wrong).
+    Without this, a leaked value — e.g. master_key set by a sibling test —
+    flips the auth short-circuit in user_api_key_auth and causes unrelated
+    tests in the same xdist worker to return 401 instead of 200.
     """
     from litellm.proxy import proxy_server
 
@@ -86,26 +62,6 @@ def _isolate_proxy_module_globals():
         name: getattr(proxy_server, name, sentinel)
         for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
     }
-
-    # Force clean defaults for the subset we know how to reset safely.
-    for name, default in _PROXY_MODULE_GLOBALS_RESET.items():
-        setattr(proxy_server, name, default)
-
-    # Reset litellm_config_cache redis backend — a _FakeRedisCache from
-    # test_redis_auth_cache_flag can leak here via _init_cache's direct
-    # litellm_config_cache.redis_cache = redis_usage_cache assignment, even
-    # though _init_cache is only called when the config has cache:true.
-    try:
-        from litellm.proxy.utils import litellm_config_cache
-        litellm_config_cache.redis_cache = None
-    except Exception:
-        pass
-
-    # Also clear any stale FastAPI dependency overrides left by previous tests.
-    from litellm.proxy.proxy_server import app
-    saved_overrides = dict(app.dependency_overrides)
-    app.dependency_overrides.clear()
-
     try:
         yield
     finally:
@@ -115,9 +71,6 @@ def _isolate_proxy_module_globals():
                     delattr(proxy_server, name)
             else:
                 setattr(proxy_server, name, value)
-        # Restore dependency overrides to pre-test state.
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(saved_overrides)
 
 
 @pytest.fixture(autouse=True)

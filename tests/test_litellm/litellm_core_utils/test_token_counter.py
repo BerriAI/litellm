@@ -363,7 +363,7 @@ def test_load_test_token_counter(model):
 
     total_time = end_time - start_time
     print("model={}, total test time={}".format(model, total_time))
-    assert total_time < 30, f"Total encoding time > 30s, {total_time}"
+    assert total_time < 10, f"Total encoding time > 10s, {total_time}"
 
 
 def test_openai_token_with_image_and_text():

@@ -103,7 +103,7 @@ format-check: install-dev
 # Single fetch of the PR base so the delta-based gates below share one network round
 # trip instead of each re-fetching when chained from `lint`.
 lint-fetch-base:
-	git fetch origin litellm_internal_staging 2>/dev/null || true
+	git fetch origin litellm_internal_staging
 
 # Mirror test-linting.yml's lint job environment: the proxy-dev group plus a generated
 # Prisma client, so basedpyright resolves the same modules CI does (without the generated
@@ -162,7 +162,7 @@ lint-ruff-FULL-dev: install-dev
 	else echo "No changed .py files to check."; fi
 
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
 
 # Type-discipline budget (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.
@@ -175,9 +175,6 @@ lint-basedpyright-budget-update: install-dev lint-fetch-base
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-format: format-check
-
-lint-strict-budget: install-dev
-	$(UV_RUN) python scripts/ruff_strict_gate.py
 
 lint-ruff-budget: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py
@@ -230,7 +227,7 @@ test: install-test-deps
 	$(UV_RUN) pytest tests/
 
 test-unit: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4 --reruns 2 --reruns-delay 1
+	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps
