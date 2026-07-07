@@ -40,6 +40,12 @@ class MCPAuth(str, enum.Enum):
     oauth2_token_exchange = "oauth2_token_exchange"
 
 
+# RFC 8693 default subject_token_type. A NULL column / omitted config key means
+# "use this default"; it is applied at every egress build site via this single
+# constant rather than a DB-level DEFAULT (Prisma writes explicit values on
+# insert, so a column default would rarely apply anyway).
+DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
 MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
@@ -122,18 +128,31 @@ class MCPCredentials(TypedDict, total=False):
 
     audience: Optional[str]
     """
-    Target audience for OAuth 2.0 Token Exchange (RFC 8693)
+    Target audience for OAuth 2.0 Token Exchange (RFC 8693).
+
+    Legacy input shape: this setting has a dedicated ``audience`` column, which is
+    authoritative. A value sent here is accepted for back-compat (the pre-column
+    REST shape, released since 2026-05), lifted into the column on write, and
+    stripped from the stored blob. Prefer the top-level request field.
     """
 
     token_exchange_endpoint: Optional[str]
     """
-    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693)
+    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693).
+
+    Legacy input shape: lifted into the dedicated ``token_exchange_endpoint``
+    column on write and stripped from the stored blob; the column is
+    authoritative. Prefer the top-level request field.
     """
 
     subject_token_type: Optional[str]
     """
     Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
-    Default: urn:ietf:params:oauth:token-type:access_token
+    Default: DEFAULT_SUBJECT_TOKEN_TYPE (urn:ietf:params:oauth:token-type:access_token).
+
+    Legacy input shape: lifted into the dedicated ``subject_token_type`` column on
+    write and stripped from the stored blob; the column is authoritative. Prefer
+    the top-level request field.
     """
 
     token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]

@@ -20,6 +20,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
@@ -44,7 +45,12 @@ interface MCPServerEditProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [
+  ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
+  AUTH_TYPE.OAUTH2,
+  AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+  AUTH_TYPE.AWS_SIGV4,
+];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
@@ -75,6 +81,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
@@ -639,6 +646,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Remove UI-only fields
         stdio_config: undefined,
         env_json: undefined,
+        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
+          ? { authorization_url: null, token_url: null, registration_url: null }
+          : {}),
+        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
+        restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
+          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null }
+          : {}),
         server_id: mcpServer.server_id,
         mcp_info: {
           ...(mcpServer.mcp_info ?? {}),
@@ -717,7 +731,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream),
         });
         try {
-          if (oauthMode === "obo") {
+          if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
             await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, {
               access_token: oauthTokenResponse.access_token,
@@ -848,6 +862,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
+                  <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                   <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                 </Select>
               </Form.Item>
@@ -1139,6 +1154,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </div>
               </>
             )}
+
+            {!isStdioTransport && isTokenExchangeAuthType && <TokenExchangeFormFields isEditing />}
 
             {!isStdioTransport && isAwsSigV4AuthType && (
               <>
