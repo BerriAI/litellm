@@ -95,6 +95,15 @@ def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> Non
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 
 
+def _ensure_dict_at(container: dict[str, Any], key: str) -> dict[str, Any]:
+    existing = container.get(key)
+    if isinstance(existing, dict):
+        return existing
+    fresh: dict[str, Any] = {}
+    container[key] = fresh
+    return fresh
+
+
 async def _record_streaming_client_disconnect_if_needed(
     request: Request | None,
     request_data: dict,
@@ -112,13 +121,12 @@ async def _record_streaming_client_disconnect_if_needed(
 
     logging_obj = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
-        litellm_params = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
-        _apply_client_disconnect_metadata(logging_obj.model_call_details.setdefault("metadata", {}))
+        logging_litellm_params = _ensure_dict_at(logging_obj.model_call_details, "litellm_params")
+        _apply_client_disconnect_metadata(_ensure_dict_at(logging_litellm_params, "metadata"))
+        _apply_client_disconnect_metadata(_ensure_dict_at(logging_obj.model_call_details, "metadata"))
 
-    _apply_client_disconnect_metadata(request_data.setdefault("metadata", {}))
-    litellm_params = request_data.setdefault("litellm_params", {})
-    _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
+    _apply_client_disconnect_metadata(_ensure_dict_at(request_data, "metadata"))
+    _apply_client_disconnect_metadata(_ensure_dict_at(_ensure_dict_at(request_data, "litellm_params"), "metadata"))
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
@@ -2439,11 +2447,17 @@ class ProxyBaseLLMRequestProcessing:
             should_record_client_disconnect = client_disconnected or (not stream_completed)
             recorded_client_disconnect = False
             if should_record_client_disconnect:
-                recorded_client_disconnect = await _record_streaming_client_disconnect_if_needed(
-                    request,
-                    request_data,
-                    client_disconnected,
-                )
+                try:
+                    recorded_client_disconnect = await _record_streaming_client_disconnect_if_needed(
+                        request,
+                        request_data,
+                        client_disconnected,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    verbose_proxy_logger.debug(
+                        "async_streaming_data_generator: error recording client disconnect: %s",
+                        e,
+                    )
             if recorded_client_disconnect:
                 ProxyLogging._fire_deferred_stream_logging(request_data)
 

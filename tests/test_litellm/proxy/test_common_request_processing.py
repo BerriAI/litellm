@@ -3305,6 +3305,52 @@ class TestStreamingClientDisconnectLogging:
         assert "client_disconnected" not in request_data["metadata"]
 
     @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_when_metadata_is_none(self):
+        """Regression: a mid-stream client disconnect must not crash when
+        ``metadata``/``litellm_params`` are present but explicitly ``None``.
+
+        ``dict.setdefault("metadata", {})`` returns the existing ``None`` when the
+        key is present, so the disconnect recorder used to raise
+        ``TypeError: 'NoneType' object does not support item assignment`` and tear
+        the ASGI stream down (surfacing to clients as ECONNRESET mid-response).
+        This exercises the exact shape Claude Code drives on the native
+        ``/v1/messages`` path, where these values arrive as ``None``.
+        """
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"litellm_params": None, "metadata": None}
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "litellm_logging_obj": mock_logging_obj,
+            "metadata": None,
+            "litellm_params": {"metadata": None},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert request_data["metadata"]["error_information"]["error_code"] == "499"
+        assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
+        assert (
+            mock_logging_obj.model_call_details["metadata"]["client_disconnected"]
+            is True
+        )
+        assert (
+            mock_logging_obj.model_call_details["litellm_params"]["metadata"][
+                "error_information"
+            ]["error_code"]
+            == "499"
+        )
+
+    @pytest.mark.asyncio
     async def test_finalize_streaming_generator_cleanup_fires_deferred_logging(
         self, monkeypatch
     ):
@@ -3337,6 +3383,38 @@ class TestStreamingClientDisconnectLogging:
         fire_spy.assert_called_once_with(request_data)
         mock_response.aclose.assert_awaited_once()
         assert request_data["metadata"]["error_information"]["error_code"] == "499"
+
+    @pytest.mark.asyncio
+    async def test_finalize_streaming_generator_cleanup_survives_recording_error(
+        self, monkeypatch
+    ):
+        """A failure while recording the client disconnect must never propagate
+        out of cleanup, otherwise it tears down the ASGI response and the client
+        sees an ECONNRESET mid-stream. The response must still be closed.
+        """
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        async def _boom(*args, **kwargs):
+            raise TypeError("'NoneType' object does not support item assignment")
+
+        monkeypatch.setattr(crp, "_record_streaming_client_disconnect_if_needed", _boom)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+        request_data = {"metadata": {}}
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=mock_request,
+            request_data=request_data,
+            response=mock_response,
+        )
+
+        mock_response.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_finalize_streaming_generator_cleanup_skips_disconnect_after_completion(
