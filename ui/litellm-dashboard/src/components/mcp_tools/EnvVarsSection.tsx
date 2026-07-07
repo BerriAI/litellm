@@ -43,7 +43,7 @@ const EnvVarsSection: React.FC = () => {
       </div>
       <Text className="text-xs text-gray-600 block mb-3">
         Reference these in Static Headers or Authentication as <code>{"${VAR_NAME}"}</code>. For example:{" "}
-        <code className="bg-white px-1 rounded border border-gray-200">
+        <code className="bg-white px-1 rounded-sm border border-gray-200">
           {"${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}"}
         </code>
       </Text>

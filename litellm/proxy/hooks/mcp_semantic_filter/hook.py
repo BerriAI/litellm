@@ -24,6 +24,18 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
+def _truncate_csv_at_tool_name_boundary(tool_names_csv: str, max_length: int) -> str:
+    """Cap a CSV of tool names to max_length, dropping any name that does not fit whole."""
+    if len(tool_names_csv) <= max_length:
+        return tool_names_csv
+
+    head = tool_names_csv[: max_length + 1]
+    if "," not in head:
+        return ""
+
+    return head.rsplit(",", 1)[0]
+
+
 class SemanticToolFilterHook(CustomLogger):
     """
     Pre-call hook that filters MCP tools semantically.
@@ -327,11 +339,12 @@ class SemanticToolFilterHook(CustomLogger):
 
         # Add CSV of filtered tool names (nginx-safe length)
         tool_names_csv = metadata.get("litellm_semantic_filter_tools", "")
-        if tool_names_csv:
-            if len(tool_names_csv) > MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH:
-                tool_names_csv = tool_names_csv[: MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH - 3] + "..."
-
-            headers["x-litellm-semantic-filter-tools"] = tool_names_csv
+        header_safe_csv = _truncate_csv_at_tool_name_boundary(
+            tool_names_csv=tool_names_csv,
+            max_length=MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH,
+        )
+        if header_safe_csv:
+            headers["x-litellm-semantic-filter-tools"] = header_safe_csv
 
         return headers
 

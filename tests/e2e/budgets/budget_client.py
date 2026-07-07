@@ -17,6 +17,7 @@ from pydantic import AliasPath, BaseModel, Field, RootModel
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import NoBody, StreamingResponse, Success, unwrap
 from models import (
+    AnthropicMessagesBody,
     BudgetWindow,
     ChatBody,
     ChatMessage,
@@ -171,6 +172,7 @@ class BudgetClient:
         user_id: str | None = None,
         team_id: str | None = None,
         model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        budget_fallbacks: dict[str, list[str]] | None = None,
         budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
         return self.gateway.generate_key(
@@ -183,6 +185,7 @@ class BudgetClient:
                 user_id=user_id,
                 team_id=team_id,
                 model_max_budget=model_max_budget,
+                budget_fallbacks=budget_fallbacks,
                 budget_limits=budget_limits,
             )
         )
@@ -214,6 +217,24 @@ class BudgetClient:
                 max_tokens=max_tokens,
                 user=user,
                 metadata=ChatMetadata(tags=tags) if tags else None,
+            ),
+        )
+
+    def messages(
+        self,
+        key: str,
+        model: str,
+        content: str,
+        *,
+        max_tokens: int = 16,
+    ) -> StreamingResponse:
+        return self.gateway.transport.send(
+            "/v1/messages",
+            headers=self.gateway.transport.bearer(key),
+            json=AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=content)],
+                max_tokens=max_tokens,
             ),
         )
 

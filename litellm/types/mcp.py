@@ -75,6 +75,10 @@ class MCPPublicServer(BaseModel):
     mcp_info: Optional[Dict[str, Any]] = None
 
 
+# OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
+MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"]
+
+
 class MCPCredentials(TypedDict, total=False):
     auth_value: Optional[str]
     """
@@ -157,6 +161,19 @@ class MCPCredentials(TypedDict, total=False):
     client_assertion_signing_alg: Optional[str]
     """
     Signing algorithm for the client_assertion JWT. Default: RS256
+    """
+
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]
+    """
+    How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
+    sends HTTP Basic; defaults to "client_secret_post" when unset.
+    """
+
+    token_exchange_profile: Optional[str]
+    """
+    Token exchange wire dialect: "rfc8693" (default, the standard token-exchange grant) or
+    "entra_obo" (Microsoft Entra On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use
+    extension). Not a secret; stored unencrypted.
     """
 
 

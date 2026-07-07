@@ -110,7 +110,7 @@ def adapt_messages_to_cohere_standard(
         tool_calls: Optional[List[CohereToolCall]] = None
         if role == "assistant" and msg.get("tool_calls"):  # type: ignore[union-attr,typeddict-item]
             tool_calls = []
-            for tc in msg["tool_calls"]:  # type: ignore[union-attr,typeddict-item]
+            for tc in msg["tool_calls"]:  # pyright: ignore[reportOptionalIterable]  # truthiness check above rules out None
                 raw_arguments: Any = tc.get("function", {}).get("arguments", {})
                 if isinstance(raw_arguments, str):
                     try:

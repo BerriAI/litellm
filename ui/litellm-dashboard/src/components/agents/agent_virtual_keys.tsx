@@ -22,7 +22,7 @@ const AgentVirtualKeys: React.FC<AgentVirtualKeysProps> = ({ keys, isLoading, on
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {keys.map((key) => (
-            <div key={key.token} className="flex items-center gap-3 border border-gray-100 rounded px-3 py-2">
+            <div key={key.token} className="flex items-center gap-3 border border-gray-100 rounded-sm px-3 py-2">
               <KeyOutlined className="text-gray-400" />
               <span className="font-medium">{key.key_alias || "Unnamed key"}</span>
               {key.key_name && <span className="font-mono text-xs text-gray-500">{key.key_name}</span>}

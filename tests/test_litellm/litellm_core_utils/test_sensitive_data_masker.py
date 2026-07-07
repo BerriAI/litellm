@@ -197,3 +197,46 @@ def test_cost_per_token_fields_not_masked():
     # Actual secrets must still be masked
     assert "*" in masked["api_key"]
     assert "*" in masked["access_token"]
+
+
+def test_mask_sensitive_structure_passes_through_plain_topology_names():
+    """Fallback groups are usually lists of model-group name strings; those
+    carry no secrets and must survive verbatim so opt-in debug output stays useful."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    assert mask_sensitive_structure(["gpt-4", "claude-3-haiku"]) == ["gpt-4", "claude-3-haiku"]
+    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [
+        {"gpt-3.5-turbo": ["claude-3-haiku"]}
+    ]
+    assert mask_sensitive_structure(None) is None
+
+
+def test_mask_sensitive_structure_masks_credentials_in_inline_fallback_dicts():
+    """An inline-dict fallback can carry provider credentials; those values must be
+    masked before the structure is embedded in a client-facing error message."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    secret = "sk-INLINEFALLBACKSECRET1234567890"
+    aws_secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYSECRETKEY"
+    masked = mask_sensitive_structure(
+        [{"model": "openai/gpt-4", "api_key": secret, "aws_secret_access_key": aws_secret}]
+    )
+
+    rendered = str(masked)
+    assert secret not in rendered
+    assert aws_secret not in rendered
+    # Non-secret keys stay visible so the fallback wiring remains debuggable
+    assert masked[0]["model"] == "openai/gpt-4"
+    assert "*" in masked[0]["api_key"]
+    assert "*" in masked[0]["aws_secret_access_key"]
+
+
+def test_mask_sensitive_structure_masks_credentials_nested_in_config_shape():
+    """Credentials nested inside the {group: [fallbacks]} config shape must also be masked."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    secret = "sk-NESTEDINLINESECRET0987654321"
+    masked = mask_sensitive_structure(
+        [{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}]
+    )
+    assert secret not in str(masked)

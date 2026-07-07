@@ -97,14 +97,14 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input.Password
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             ) : paramType === "number" ? (
               <Input
                 type="number"
                 size="large"
                 placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
                 min={0}
                 max={1}
                 step={0.1}
@@ -113,7 +113,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             )}
           </FormItem>
@@ -171,7 +171,7 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                   <img
                     src={logoSrc}
                     alt={`${callbackConfig.displayName} logo`}
-                    className="w-6 h-6 rounded object-contain"
+                    className="w-6 h-6 rounded-sm object-contain"
                     onError={(e) => {
                       e.currentTarget.style.display = "none";
                     }}
