@@ -7,6 +7,7 @@ Omitting a field must NOT reset it to its Pydantic schema default (e.g.
 would silently overwrite the existing DB row.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -134,14 +135,10 @@ async def test_partial_update_writes_explicitly_provided_fields():
 @pytest.mark.asyncio
 async def test_partial_update_can_explicitly_reset_allow_all_keys():
     """Caller can still reset a field to its default by sending it explicitly."""
-    enabled = await _run_update(
-        UpdateMCPServerRequest(server_id="s", allow_all_keys=True)
-    )
+    enabled = await _run_update(UpdateMCPServerRequest(server_id="s", allow_all_keys=True))
     assert enabled["allow_all_keys"] is True
 
-    disabled = await _run_update(
-        UpdateMCPServerRequest(server_id="s", allow_all_keys=False)
-    )
+    disabled = await _run_update(UpdateMCPServerRequest(server_id="s", allow_all_keys=False))
     assert disabled["allow_all_keys"] is False
 
 
@@ -289,3 +286,184 @@ async def test_create_still_writes_defaults():
     # audit fields set by create_mcp_server.
     assert data_dict["created_by"] == "test-user"
     assert data_dict["updated_by"] == "test-user"
+
+
+# ── token-exchange blob → column normalization ────────────────────────────────
+#
+# token_exchange_endpoint / audience / subject_token_type have dedicated columns;
+# their MCPCredentials copies are a legacy shape. Writes must lift blob values
+# into the columns and strip them from the stored blob so the read-time
+# ``column or blob`` fallback can never resurrect a stale blob value after the
+# column is cleared.
+
+
+@pytest.fixture(autouse=True)
+def _salt_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+
+
+def _existing_row(auth_type: str, credentials: dict | None = None):
+    existing = MagicMock()
+    existing.auth_type = auth_type
+    existing.credentials = json.dumps(credentials) if credentials is not None else None
+    existing.token_exchange_endpoint = None
+    existing.audience = None
+    existing.subject_token_type = None
+    return existing
+
+
+@pytest.mark.asyncio
+async def test_create_lifts_blob_token_exchange_settings_into_columns():
+    """The legacy REST shape (TE settings inside ``credentials``) must land in
+    the dedicated columns, and the stored blob must not keep a copy."""
+    mock_prisma = _mock_prisma()
+    data = NewMCPServerRequest(
+        server_id="te-server",
+        url="https://example.com/mcp",
+        transport="http",
+        auth_type="oauth2_token_exchange",
+        credentials={
+            "client_id": "cid",
+            "client_secret": "sec",
+            "token_exchange_endpoint": "https://idp.example.com/oauth2/token",
+            "audience": "api://upstream",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+        },
+    )
+
+    await create_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
+    assert data_dict["audience"] == "api://upstream"
+    assert data_dict["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
+    stored_blob = json.loads(data_dict["credentials"])
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type"):
+        assert te_field not in stored_blob
+    assert "client_id" in stored_blob
+
+
+@pytest.mark.asyncio
+async def test_create_explicit_column_wins_over_blob_copy():
+    mock_prisma = _mock_prisma()
+    data = NewMCPServerRequest(
+        server_id="te-server",
+        url="https://example.com/mcp",
+        transport="http",
+        auth_type="oauth2_token_exchange",
+        token_exchange_endpoint="https://top-level.example.com/token",
+        credentials={"client_id": "cid", "token_exchange_endpoint": "https://blob.example.com/token"},
+    )
+
+    await create_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://top-level.example.com/token"
+    assert "token_exchange_endpoint" not in json.loads(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_credentials_merge_migrates_legacy_blob_te_settings():
+    """A same-auth credentials update on a legacy row (TE settings in the blob,
+    columns null) must move the settings to the columns and drop them from the
+    merged blob."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={
+            "client_id": "enc-old-cid",
+            "token_exchange_endpoint": "https://legacy-idp.example.com/token",
+            "audience": "api://legacy",
+        },
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="te-server",
+        auth_type="oauth2_token_exchange",
+        credentials={"client_id": "new-cid"},
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://legacy-idp.example.com/token"
+    assert data_dict["audience"] == "api://legacy"
+    merged_blob = json.loads(data_dict["credentials"])
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type"):
+        assert te_field not in merged_blob
+
+
+@pytest.mark.asyncio
+async def test_cleared_column_is_not_resurrected_by_legacy_blob_value():
+    """The Greptile scenario: explicitly clearing the column (to re-enable
+    RFC 9728/8414 discovery) while the legacy blob still holds an endpoint must
+    NOT resurrect the blob value — the explicit null wins and the blob copy is
+    stripped."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://dead-idp.example.com/token"},
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="te-server",
+        auth_type="oauth2_token_exchange",
+        token_exchange_endpoint=None,
+        credentials={"client_id": "new-cid"},
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] is None
+    assert "token_exchange_endpoint" not in json.loads(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_merge_strips_blob_te_copy_when_column_already_set():
+    """When the row already has a column value, the blob copy is shadowed at
+    read time anyway — the merge must strip it rather than carry it forward."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://blob-copy.example.com/token"},
+    )
+    existing.token_exchange_endpoint = "https://column.example.com/token"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="te-server",
+        auth_type="oauth2_token_exchange",
+        credentials={"client_id": "new-cid"},
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    # Column untouched by this update (not in payload), blob copy gone.
+    assert "token_exchange_endpoint" not in data_dict
+    assert "token_exchange_endpoint" not in json.loads(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_clears_flow_fields_with_external_fields_set():
+    """The management endpoint passes ``fields_set`` explicitly (PUT
+    /v1/mcp/server). The auth-switch clearing must fire on that path too — it is
+    gated on ``data.auth_type``/the existing row, not on how fields_set arrives."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row("oauth2")
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", auth_type="oauth2_token_exchange")
+    await update_mcp_server(mock_prisma, data, "test-user", fields_set=set(data.fields_set()))
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    for stale_field in (
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+    ):
+        assert data_dict[stale_field] is None, f"{stale_field} must be cleared via the fields_set path"
