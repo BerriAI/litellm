@@ -307,6 +307,81 @@ describe("MCPServerEdit (delegate auth)", () => {
   });
 });
 
+describe("MCPServerEdit (auth type switch)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("clears stale oauth2 endpoint overrides when switching to token exchange", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth2_token_exchange",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://old-idp.example.com/oauth/token",
+          authorization_url: "https://old-idp.example.com/oauth/authorize",
+          registration_url: "https://old-idp.example.com/oauth/register",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2_token_exchange");
+    expect(payload.token_url).toBeNull();
+    expect(payload.authorization_url).toBeNull();
+    expect(payload.registration_url).toBeNull();
+  });
+
+  it("keeps oauth2 endpoint overrides when the auth type is unchanged", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://idp.example.com/oauth/token",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2");
+    expect(payload.token_url).toBe("https://idp.example.com/oauth/token");
+  });
+});
+
 describe("MCPServerEdit (tool allowlist)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

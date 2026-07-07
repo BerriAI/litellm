@@ -350,6 +350,61 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toBeUndefined();
     });
 
+    it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "TE_Server");
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://upstream.example.com/mcp");
+
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://idp.example.com/oauth2/token")).toBeInTheDocument();
+      });
+
+      await user.type(
+        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
+        "https://idp.example.com/oauth2/token",
+      );
+      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "te-client-id");
+      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "te-client-secret");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-te",
+        server_name: "TE_Server",
+        alias: "TE_Server",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2_token_exchange",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("oauth2_token_exchange");
+      expect(payload.token_exchange_endpoint).toBe("https://idp.example.com/oauth2/token");
+      expect(payload.credentials).toMatchObject({
+        client_id: "te-client-id",
+        client_secret: "te-client-secret",
+      });
+    });
+
     it("enforces the allowlist when the user explicitly deselects every tool", async () => {
       await selectHttpTransport();
 

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 from litellm.types.mcp import (
+    DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
@@ -68,7 +69,7 @@ class MCPServer(BaseModel):
     # Token Exchange (OBO) fields
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
-    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
     # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
     # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
     token_exchange_profile: str = "rfc8693"

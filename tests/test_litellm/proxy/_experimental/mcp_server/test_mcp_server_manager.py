@@ -4387,6 +4387,102 @@ class TestMCPServerTimestamps:
         assert "0.01s" in exc_info.value.detail["message"]
 
 
+class TestMCPServerTokenExchangeColumns:
+    """Token-exchange (RFC 8693) config persists through the dedicated columns added for the
+    create/update REST + DB path, mirroring how ``token_url`` is stored. The credentials JSON
+    blob is kept as a read-fallback so servers persisted before the columns existed still load."""
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_exchange_columns(self):
+        """The DB->runtime loader must read the three fields from the dedicated columns. Before the
+        columns existed it only read the credentials blob, so column values would be dropped."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-cols",
+            server_name="te_cols",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+            audience="https://upstream.example.com",
+            subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+        assert mcp_server.audience == "https://upstream.example.com"
+        assert mcp_server.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_falls_back_to_credentials_blob(self):
+        """Backwards compatibility: a server whose token-exchange config lives only in the
+        credentials blob (no columns) must still load with those values."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-blob",
+            server_name="te_blob",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={
+                "token_exchange_endpoint": "https://idp.example.com/legacy/token",
+                "audience": "legacy-audience",
+                "subject_token_type": "urn:ietf:params:oauth:token-type:saml2",
+            },
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_endpoint == "https://idp.example.com/legacy/token"
+        assert mcp_server.audience == "legacy-audience"
+        assert mcp_server.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_subject_token_type_defaults(self):
+        """subject_token_type falls back to the RFC 8693 access_token URN when unset."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-default",
+            server_name="te_default",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+    @pytest.mark.asyncio
+    async def test_round_trip_token_exchange_columns_preserved(self):
+        """The three fields survive LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable.
+        Before the table builder wrote them back, a registry round-trip dropped them."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-rt",
+            server_name="te_rt",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+            audience="https://upstream.example.com",
+            subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+
+        assert rebuilt_table.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+        assert rebuilt_table.audience == "https://upstream.example.com"
+        assert rebuilt_table.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
+
+
 class TestInternalDelegatePkceWarningLog:
     @pytest.mark.asyncio
     async def test_build_mcp_server_logs_on_internal_delegate_interactive(self, caplog):

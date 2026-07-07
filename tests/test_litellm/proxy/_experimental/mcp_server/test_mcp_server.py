@@ -5184,6 +5184,9 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     legacy_server.server_id = "legacy-m2m-id"
     legacy_server.auth_type = MCPAuth.oauth2
     legacy_server.oauth2_flow = None  # Legacy: field not set in DB
+    legacy_server.token_exchange_endpoint = None
+    legacy_server.audience = None
+    legacy_server.subject_token_type = None
     legacy_server.token_url = "https://oauth.example.com/token"
     legacy_server.authorization_url = None
     legacy_server.client_id = "client-id"
