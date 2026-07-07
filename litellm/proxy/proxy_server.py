@@ -940,6 +940,26 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## [Xcity] Auto-register the wallet KWH billing callback (XCT-322 / S3).
+    ## Prod config is DB-managed and the admin UI can't add a custom Python
+    ## callback, so register it here in code — gated purely on the wallet env
+    ## being set. No-op otherwise; idempotent across hot reloads.
+    if os.getenv("WALLET_BASE_URL") and os.getenv("WALLET_SERVICE_TOKEN"):
+        try:
+            from litellm.integrations.xcity_wallet import (
+                xcity_wallet_billing_instance,
+            )
+
+            if xcity_wallet_billing_instance not in litellm.callbacks:
+                litellm.callbacks.append(xcity_wallet_billing_instance)
+                verbose_proxy_logger.info(
+                    "[xcity_wallet] KWH billing callback registered (env-gated)"
+                )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"[xcity_wallet] failed to register billing callback: {e}"
+            )
+
     # End of startup event
     yield
 
