@@ -45,6 +45,8 @@ else:
 
 router = APIRouter()
 
+SPEND_LOGS_PAGINATION_COUNT_CAP = 10000
+
 
 @router.get(
     "/spend/keys",
@@ -1958,6 +1960,20 @@ async def ui_view_spend_logs(
         else:
             _order_expr = order_column
 
+        count_query = f"""
+            SELECT COUNT(*) AS total_count
+            FROM (
+                SELECT 1
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                LIMIT ${p}
+            ) AS bounded_matches
+        """
+        count_rows = await prisma_client.db.query_raw(count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1)
+        raw_total = int(count_rows[0]["total_count"]) if count_rows else 0
+        total_is_capped = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
+        total_records = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
+
         sql_query = f"""
             SELECT
                 request_id, call_type, api_key, spend, total_tokens,
@@ -1967,8 +1983,7 @@ async def ui_view_spend_logs(
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms,
-                COUNT(*) OVER () AS total_count
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
             ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
@@ -1978,34 +1993,13 @@ async def ui_view_spend_logs(
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
-        # `COUNT(*) OVER ()` folds the total-match count into the same scan as the
-        # page data; a standalone `COUNT(*)` is a distributed RPC on sharded
-        # engines like YugabyteDB that contacts every tablet and times out
-        # regardless of row count (LIT-4027). The hot path (page 1 and in-range
-        # pages) always carries the count on its rows, so the count round trip is
-        # gone there. Only an out-of-range page overshoots the last row and comes
-        # back empty; fall back to a direct count there so total/total_pages stay
-        # accurate rather than collapsing to zero.
-        if data:
-            total_records = int(data[0]["total_count"])
-        elif page > 1:
-            total_records = int(
-                await SpendLogsRepository(prisma_client).table.count(
-                    where=where_conditions,
-                )
-            )
-        else:
-            total_records = 0
-
         # query_raw returns the JSONB `metadata` column as a string (the Prisma
         # serialiser bypasses the model-layer JSON hydration we get on the ORM
         # path). The UI reads `metadata.status` / `metadata.error_information`
         # as object fields, so failure rows looked like successes (#29674).
-        # Re-hydrate to dict here. Also drop the window-function `total_count`
-        # helper column so it does not leak into the serialised rows.
+        # Re-hydrate to dict here.
         for row in data:
             if isinstance(row, dict):
-                row.pop("total_count", None)
                 md = row.get("metadata")
                 if isinstance(md, str):
                     try:
@@ -2026,6 +2020,7 @@ async def ui_view_spend_logs(
             page_size,
             total_pages,
             enrich_session_counts=not is_v2,
+            total_is_capped=total_is_capped,
         )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
@@ -3334,6 +3329,7 @@ async def _build_ui_spend_logs_response(
     page_size: int,
     total_pages: int,
     enrich_session_counts: bool = True,
+    total_is_capped: bool = False,
 ) -> dict:
     """
     Build the paginated response for the UI spend-logs endpoint.
@@ -3358,10 +3354,12 @@ async def _build_ui_spend_logs_response(
         total_pages: Total number of pages.
         enrich_session_counts: Whether to add ``session_total_count`` to each
             row.  Defaults to ``True``.
+        total_is_capped: Whether ``total_records`` was clamped to the
+            pagination count cap (there are more matching rows than the cap).
 
     Returns:
         A dict with ``data`` (enriched rows), ``total``, ``page``,
-        ``page_size``, and ``total_pages``.
+        ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
     count_map: dict[str, int] = {}
     if enrich_session_counts:
@@ -3451,6 +3449,7 @@ async def _build_ui_spend_logs_response(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+        "total_is_capped": total_is_capped,
     }
 
 

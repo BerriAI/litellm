@@ -66,13 +66,14 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     Rebuild the Prisma-style ``where`` dict the filter_fns below expect from the
     raw SQL + params the endpoint emits.
 
-    ``ui_view_spend_logs`` folds the total into the page query via
-    ``COUNT(*) OVER ()`` and no longer issues a separate ``count(where=...)``
-    call, so the mock derives the active filter from the one query it sees
-    instead of from the (now absent) count call.
+    ``ui_view_spend_logs`` computes the total with a bounded
+    ``SELECT COUNT(*) FROM (SELECT 1 ... LIMIT $cap+1)`` query and fetches the
+    page with a separate ``ORDER BY ... LIMIT/OFFSET`` query. Both carry the
+    same WHERE clause, so the terminator can be ``ORDER BY`` (page query) or
+    ``LIMIT`` (bounded count query).
     """
     where: dict = {}
-    clause = re.search(r"WHERE (.*) ORDER BY", sql_query, re.DOTALL)
+    clause = re.search(r"WHERE (.*?)\s+(?:ORDER BY|LIMIT)", sql_query, re.DOTALL)
     if clause is None:
         return where
 
@@ -163,13 +164,13 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
 
         async def query_raw(self, sql_query, *params):
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
+            total = len(filtered)
+            if "COUNT(*)" in sql_query:
+                cap_plus_one = params[-1]
+                return [{"total_count": min(total, cap_plus_one)}]
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
-            total = len(filtered)
-            return [
-                {**row, "total_count": total}
-                for row in filtered[skip : skip + page_size]
-            ]
+            return [row for row in filtered[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -684,6 +685,8 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         # Endpoint uses raw SQL with ORDER BY startTime DESC; mock returns sorted data
         order = (
             {"startTime": "desc"}
@@ -693,10 +696,7 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
         sorted_logs = _sort_logs(base_logs, order)
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return [
-            {**row, "total_count": len(base_logs)}
-            for row in sorted_logs[skip : skip + page_size]
-        ]
+        return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -830,16 +830,15 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         reverse = "DESC" in sql_query
         sorted_logs = sorted(
             base_logs, key=lambda x: x.get("request_duration_ms", 0), reverse=reverse
         )
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return [
-            {**row, "total_count": len(base_logs)}
-            for row in sorted_logs[skip : skip + page_size]
-        ]
+        return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -926,6 +925,8 @@ async def test_ui_view_spend_logs_sort_by_model(
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         assert "model" in sql_query
         # model is non-nullable in the schema, so NULLS LAST should NOT be
         # appended — only ttft_ms gets that clause. This guards against
@@ -937,10 +938,7 @@ async def test_ui_view_spend_logs_sort_by_model(
         )
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return [
-            {**row, "total_count": len(base_logs)}
-            for row in sorted_logs[skip : skip + page_size]
-        ]
+        return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -1040,6 +1038,8 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         # Endpoint must compute TTFT inline and use NULLS LAST.
         assert "completionStartTime" in sql_query
         assert "NULLS LAST" in sql_query
@@ -1051,10 +1051,7 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
         return [
-            {
-                **{k: v for k, v in row.items() if k != "_ttft_ms"},
-                "total_count": len(base_logs),
-            }
+            {k: v for k, v in row.items() if k != "_ttft_ms"}
             for row in sorted_logs[skip : skip + page_size]
         ]
 
