@@ -188,6 +188,7 @@ def test_completion_forwards_aws_creds_into_bridge_litellm_params():
             aws_secret_access_key="secretexample",
         )
 
+    assert captured, "responses_api_bridge.completion was never called"
     litellm_params = captured.get("litellm_params") or {}
     assert litellm_params.get("aws_region_name") == "us-east-2"
     assert litellm_params.get("aws_access_key_id") == "AKIAEXAMPLE"
