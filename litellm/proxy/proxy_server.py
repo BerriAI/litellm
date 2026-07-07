@@ -432,13 +432,15 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_object_audit_log,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
-from litellm.proxy.plugin_routes import (
-    router as plugin_router,
-    register_plugins_from_config,
-)
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
     BillingRecorder,
+)
+from litellm.proxy.plugin_routes import (
+    register_plugins_from_config,
+)
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
 )
 
 try:
@@ -468,12 +470,10 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
+    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
-)
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -559,21 +559,18 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
-)
-from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import (
     RouterGeneralSettings,
     SearchToolTypedDict,
     updateDeployment,
 )
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
+from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -969,11 +966,11 @@ async def proxy_startup_event(app: FastAPI):
         if is_otel_v2_enabled():
             from opentelemetry import trace as _otel_trace
 
-            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
             from litellm.integrations.otel.logger import (
                 OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
 
             registered = open_telemetry_logger if isinstance(open_telemetry_logger, OpenTelemetryV2) else None
             publish_global_otel_v2_provider(

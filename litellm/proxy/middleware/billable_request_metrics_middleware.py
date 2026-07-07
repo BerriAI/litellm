@@ -9,7 +9,7 @@ middleware is a transparent pass-through.
 """
 
 from enum import Enum
-from typing import Callable, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import Callable, Optional, Protocol, Sequence, runtime_checkable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -34,7 +34,7 @@ _MODEL_ID_HEADER = b"x-litellm-model-id"
 # number. LLM routes are POST-only inference calls; GET reads on the same
 # resources (list/status/content) are not billable and are excluded by the
 # method gate in classify_billable_request.
-_LLM_ROUTE_SUFFIXES: Tuple[str, ...] = (
+_LLM_ROUTE_SUFFIXES: tuple[str, ...] = (
     "/chat/completions",
     "/completions",
     "/embeddings",
@@ -60,7 +60,7 @@ def _classify_llm_route(path: str) -> Optional[str]:
     return next((suffix for suffix in _LLM_ROUTE_SUFFIXES if path == suffix or path.endswith(suffix)), None)
 
 
-def classify_billable_request(path: str, method: str = "POST") -> Optional[Tuple[BillableCategory, str]]:
+def classify_billable_request(path: str, method: str = "POST") -> Optional[tuple[BillableCategory, str]]:
     """Map a request path to its (category, normalized route), or None if not billable."""
     normalized = path.rstrip("/") or "/"
 
@@ -84,7 +84,7 @@ def classify_billable_request(path: str, method: str = "POST") -> Optional[Tuple
     return None
 
 
-def _extract_model_id(headers: Sequence[Tuple[bytes, bytes]]) -> Optional[str]:
+def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> Optional[str]:
     return next(
         (value.decode("latin-1") for name, value in headers if name.lower() == _MODEL_ID_HEADER and value),
         None,

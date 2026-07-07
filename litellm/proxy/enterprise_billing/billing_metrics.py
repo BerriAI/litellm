@@ -15,7 +15,7 @@ payload; the secret license key is never sent as an attribute or header.
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Counter
@@ -24,7 +24,9 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
+from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    BillableCategory,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
@@ -60,24 +62,24 @@ def _metrics_endpoint(endpoint: str) -> str:
     return trimmed if trimmed.endswith(_METRICS_PATH) else f"{trimmed}{_METRICS_PATH}"
 
 
-def _resource_attributes(config: BillingMetricsConfig) -> Dict[str, AttributeValue]:
-    base: Dict[str, AttributeValue] = {
+def _resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValue]:
+    base: dict[str, AttributeValue] = {
         "service.name": "litellm-proxy",
         "litellm.version": config.litellm_version,
     }
-    license_attr: Dict[str, AttributeValue] = {"litellm.license.id": config.license_id} if config.license_id else {}
+    license_attr: dict[str, AttributeValue] = {"litellm.license.id": config.license_id} if config.license_id else {}
     return {**base, **license_attr}
 
 
 def _billable_attributes(
     category: BillableCategory, route: str, status_code: int, model_id: Optional[str]
-) -> Dict[str, AttributeValue]:
-    base: Dict[str, AttributeValue] = {
+) -> dict[str, AttributeValue]:
+    base: dict[str, AttributeValue] = {
         "litellm.endpoint.category": category.value,
         "http.route": route,
         "http.response.status_code": status_code,
     }
-    model_attr: Dict[str, AttributeValue] = {"litellm.model_id": model_id} if model_id else {}
+    model_attr: dict[str, AttributeValue] = {"litellm.model_id": model_id} if model_id else {}
     return {**base, **model_attr}
 
 
@@ -187,6 +189,6 @@ def build_billing_metrics_recorder(
 
     try:
         return BillingMetricsRecorder(build_mtls_meter_provider(config))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- metering must never break proxy startup
         verbose_proxy_logger.warning("Enterprise billing metrics disabled: failed to initialize exporter: %s", exc)
         return None
