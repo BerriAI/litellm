@@ -13,6 +13,8 @@ from typing import Callable, Optional, Protocol, Sequence, runtime_checkable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm.proxy._types import LiteLLMRoutes
+
 
 class BillableCategory(str, Enum):
     LLM = "llm"
@@ -51,13 +53,32 @@ _LLM_ROUTE_SUFFIXES: tuple[str, ...] = (
     "/videos",  # create; GET list is excluded by the POST gate
     "/remix",  # /v1/videos/{id}/remix
     "/ocr",
+    "/search",  # /v1/search and /v1/vector_stores/{id}/search
+    "/rag/query",
+    "/rag/ingest",
     ":generateContent",  # Gemini-native /v1beta/models/{model}:generateContent
     ":streamGenerateContent",
 )
 
+# Provider passthrough prefixes (e.g. /bedrock/..., /vertex-ai/...) carry real
+# inference calls that write SpendLogs rows, so they bill. Anchored to the
+# routes enum so new providers are picked up without touching this module.
+# /langfuse forwards observability traffic, not inference: it writes no
+# SpendLogs row and must not bill.
+_NON_BILLABLE_PASSTHROUGH_PREFIXES = frozenset({"/langfuse"})
+_PASSTHROUGH_PREFIXES: tuple[str, ...] = tuple(
+    prefix
+    for prefix in LiteLLMRoutes.mapped_pass_through_routes.value
+    if prefix not in _NON_BILLABLE_PASSTHROUGH_PREFIXES
+)
+
 
 def _classify_llm_route(path: str) -> Optional[str]:
-    return next((suffix for suffix in _LLM_ROUTE_SUFFIXES if path == suffix or path.endswith(suffix)), None)
+    suffix_match = next((suffix for suffix in _LLM_ROUTE_SUFFIXES if path == suffix or path.endswith(suffix)), None)
+    if suffix_match is not None:
+        return suffix_match
+    # Deep passthrough paths only: the bare prefix itself is not an inference call.
+    return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)
 
 
 def classify_billable_request(path: str, method: str = "POST") -> Optional[tuple[BillableCategory, str]]:

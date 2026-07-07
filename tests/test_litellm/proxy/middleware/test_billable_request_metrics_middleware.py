@@ -92,6 +92,17 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/v1/ocr", (BillableCategory.LLM, "/ocr")),
         ("/v1beta/models/gemini-2.5-pro:generateContent", (BillableCategory.LLM, ":generateContent")),
         ("/v1beta/models/gemini-2.5-pro:streamGenerateContent", (BillableCategory.LLM, ":streamGenerateContent")),
+        # SpendLogs-producing routes surfaced by the route-inventory audit
+        ("/v1/search", (BillableCategory.LLM, "/search")),
+        ("/v1/vector_stores/vs_1/search", (BillableCategory.LLM, "/search")),
+        ("/v1/rag/query", (BillableCategory.LLM, "/rag/query")),
+        ("/rag/ingest", (BillableCategory.LLM, "/rag/ingest")),
+        # Provider passthrough carries real inference and writes SpendLogs
+        ("/bedrock/model/anthropic.claude-v2/invoke", (BillableCategory.LLM, "/bedrock")),
+        ("/vertex-ai/publishers/google/models/gemini:predict", (BillableCategory.LLM, "/vertex-ai")),
+        ("/cohere/v2/chat", (BillableCategory.LLM, "/cohere")),
+        # Passthrough path ending in a known suffix keeps the finer-grained label
+        ("/anthropic/v1/messages", (BillableCategory.LLM, "/messages")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
@@ -120,6 +131,10 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1/files",
         # tokenization helper, not an inference call
         "/v1/messages/count_tokens",
+        # observability passthrough writes no SpendLogs row
+        "/langfuse/api/public/ingestion",
+        # a bare provider prefix is not an inference call
+        "/bedrock",
     ],
 )
 def test_classify_non_billable_returns_none(path: str):
