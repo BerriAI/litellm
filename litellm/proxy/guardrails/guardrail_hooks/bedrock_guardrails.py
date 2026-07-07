@@ -1435,6 +1435,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
             except ModifyResponseException as e:
+                # Preserve upstream usage from the LLM call we already
+                # consumed. Non-streaming blocks carry it via
+                # ModifyResponseException.original_response +
+                # _blocked_response_usage; streaming has to do the copy
+                # itself since the exception can't escape this generator.
+                _original_usage = getattr(assembled_model_response, "usage", None)
                 assembled_model_response = ModelResponse(
                     choices=[
                         Choices(
@@ -1445,6 +1451,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     ],
                     model=e.model,
                 )
+                if _original_usage is not None:
+                    assembled_model_response.usage = _original_usage
                 output_guardrail_response = None
 
             #########################################################################

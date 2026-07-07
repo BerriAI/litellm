@@ -3112,3 +3112,63 @@ async def test_streaming_post_call_block_yields_synthetic_stream_not_raise():
     )
     assert assembled_content == "Sorry, the model cannot answer this question."
     assert chunks[-1].choices[0].finish_reason == "content_filter"
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_block_preserves_upstream_usage():
+    """LIT-4186: streaming block must report the usage the upstream LLM call
+    actually consumed. Non-streaming blocks carry it via original_response +
+    _blocked_response_usage in the endpoint handler; streaming has to copy it
+    onto the synthetic ModelResponse directly since the exception can't escape
+    the SSE generator. Without this, clients see accurate billing on
+    non-streaming blocks and zero on streaming blocks -- silent revenue leak."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    async def _stream_with_usage():
+        # Terminal chunk carrying usage, as OpenAI-style streams do with
+        # stream_options={"include_usage": True}. stream_chunk_builder
+        # aggregates this into the assembled ModelResponse's .usage.
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="Coffee is delicious"))]
+        )
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+            usage=Usage(prompt_tokens=42, completion_tokens=17, total_tokens=59),
+        )
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        chunks = [
+            c
+            async for c in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_stream_with_usage(),
+                request_data={"model": "bedrock-nova-micro"},
+            )
+        ]
+
+    # Find the chunk carrying usage (MockResponseIterator emits it on the
+    # terminating chunk when the source ModelResponse has .usage set)
+    usage_chunks = [c for c in chunks if getattr(c, "usage", None) is not None]
+    assert usage_chunks, "streaming block should carry the upstream call's usage on at least one chunk"
+    reported_usage = usage_chunks[-1].usage
+    assert reported_usage.prompt_tokens == 42
+    assert reported_usage.completion_tokens == 17
+    assert reported_usage.total_tokens == 59
