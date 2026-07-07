@@ -31,6 +31,18 @@ spec:
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}
     scheme: http
+    {{- if .authSecret.enabled }}
+    authorization:
+      type: Bearer
+      credentials:
+        {{- if .authSecret.name }}
+        name: {{ .authSecret.name }}
+        key: {{ required "serviceMonitor.authSecret.key is required when serviceMonitor.authSecret.name is set" .authSecret.key }}
+        {{- else }}
+        name: {{ $.Values.masterkeySecretName | default (printf "%s-masterkey" (include "litellm.fullname" $)) }}
+        key: {{ $.Values.masterkeySecretKey | default "masterkey" }}
+        {{- end }}
+    {{- end }}
   {{- if .relabelings }}
     relabelings:
 {{- toYaml .relabelings | nindent 4 }}

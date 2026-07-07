@@ -1,0 +1,65 @@
+suite: test service monitor
+templates:
+  - servicemonitor.yaml
+release:
+  name: my-release
+tests:
+  - it: should not render a ServiceMonitor when disabled
+    set:
+      serviceMonitor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: should authenticate scrapes with the generated masterkey secret by default
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: spec.endpoints[0].authorization.type
+          value: Bearer
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.name
+          value: my-release-litellm-masterkey
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.key
+          value: masterkey
+  - it: should authenticate scrapes with masterkeySecretName and masterkeySecretKey when set
+    set:
+      serviceMonitor.enabled: true
+      masterkeySecretName: my-masterkey-secret
+      masterkeySecretKey: my-key
+    asserts:
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.name
+          value: my-masterkey-secret
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.key
+          value: my-key
+  - it: should authenticate scrapes with a custom auth secret when set
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.authSecret.name: metrics-token
+      serviceMonitor.authSecret.key: token
+    asserts:
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.name
+          value: metrics-token
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.key
+          value: token
+  - it: should fail when a custom auth secret name is set without a key
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.authSecret.name: metrics-token
+    asserts:
+      - failedTemplate:
+          errorMessage: serviceMonitor.authSecret.key is required when serviceMonitor.authSecret.name is set
+  - it: should not send credentials when authSecret is disabled
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.authSecret.enabled: false
+    asserts:
+      - notExists:
+          path: spec.endpoints[0].authorization

@@ -417,6 +417,10 @@ serviceMonitor:
     # kubernetes.io/test: test
   interval: 15s
   scrapeTimeout: 10s
+  authSecret:
+    enabled: true
+    name: ""
+    key: ""
   relabelings: []
   # - targetLabel: __meta_kubernetes_pod_node_name
   #   replacement: $1
