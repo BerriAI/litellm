@@ -46,6 +46,7 @@ func resourceLiteLLMVectorStore() *schema.Resource {
 			"litellm_params": {
 				Type:        schema.TypeMap,
 				Optional:    true,
+				Sensitive:   true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "Additional LiteLLM parameters",
 			},
