@@ -142,36 +142,23 @@ def build_organization_update_plan(
 
 
 async def _apply_organization_budget_updates(
-    existing_budget_id: Optional[str],
+    budget_id: str,
     budget_updates: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[str]:
+) -> None:
     """
-    Apply budget writes and return a newly-created budget_id to link on the org row, else None.
+    Apply budget writes to the organization's existing budget row.
 
-    Passing a field explicitly as ``None`` clears it (``update_budget`` persists every field it
-    receives via ``exclude_unset``). When the org has no budget row yet, create one - unless every
-    sent value is null, in which case there is nothing to clear.
+    Passing a field explicitly as ``None`` clears it, since ``update_budget`` persists every field
+    it receives via ``exclude_unset``. Every organization always has a ``budget_id`` (non-nullable FK).
     """
     if not budget_updates:
-        return None
+        return
 
-    if existing_budget_id is not None:
-        await update_budget(
-            budget_obj=BudgetNewRequest.model_validate({"budget_id": existing_budget_id, **budget_updates}),
-            user_api_key_dict=user_api_key_dict,
-        )
-        return None
-
-    if not any(value is not None for value in budget_updates.values()):
-        return None
-
-    new_budget_id = str(uuid.uuid4())
-    await new_budget(
-        budget_obj=BudgetNewRequest.model_validate({"budget_id": new_budget_id, **budget_updates}),
+    await update_budget(
+        budget_obj=BudgetNewRequest.model_validate({"budget_id": budget_id, **budget_updates}),
         user_api_key_dict=user_api_key_dict,
     )
-    return new_budget_id
 
 
 def handle_nested_budget_structure_in_organization_update_request(
@@ -676,6 +663,17 @@ async def update_organization_v2(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
 
+    if "organization_alias" in data.model_fields_set and data.organization_alias is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "organization_alias cannot be cleared; it is required"},
+        )
+    if "models" in data.model_fields_set and data.models is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "models cannot be set to null; send [] to clear it"},
+        )
+
     await _verify_org_access(
         organization_id=organization_id,
         user_api_key_dict=user_api_key_dict,
@@ -693,13 +691,12 @@ async def update_organization_v2(
 
     plan = build_organization_update_plan(present_keys=data.model_fields_set, validated_data=data)
 
-    new_budget_id = await _apply_organization_budget_updates(
-        existing_budget_id=existing_organization_row.budget_id,
+    await _apply_organization_budget_updates(
+        budget_id=existing_organization_row.budget_id,
         budget_updates=plan.budget_updates,
         user_api_key_dict=user_api_key_dict,
     )
 
-    linked_budget_write: Mapping[str, object] = {"budget_id": new_budget_id} if new_budget_id is not None else {}
     object_permission_write: Mapping[str, object] = (
         {"object_permission": data.object_permission.model_dump(exclude_none=True)}
         if data.object_permission is not None
@@ -709,7 +706,6 @@ async def update_organization_v2(
     organization_write_data = prisma_client.jsonify_object(
         {
             **plan.org_column_updates,
-            **linked_budget_write,
             **object_permission_write,
             "updated_by": user_api_key_dict.user_id,
         }

@@ -827,48 +827,22 @@ async def test_v2_update_metadata_replaces_not_merges(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v2_update_creates_budget_when_org_has_none(monkeypatch):
-    """An org with no budget_id that receives a limit gets a new budget created and linked."""
-    update_budget_mock = AsyncMock()
-    new_budget_mock = AsyncMock()
+async def test_v2_rejects_null_clear_of_non_nullable_fields(monkeypatch):
+    """organization_alias and models are non-nullable columns, so a null clear is a 400, not a 500."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
 
-    prisma = await _run_update_organization_v2(
-        monkeypatch,
-        body={"tpm_limit": 5},
-        existing_budget_id=None,
-        existing_metadata={},
-        update_budget_mock=update_budget_mock,
-        new_budget_mock=new_budget_mock,
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
 
-    new_budget_mock.assert_awaited_once()
-    created = new_budget_mock.await_args.kwargs["budget_obj"]
-    assert created.tpm_limit == 5
-    assert created.budget_id is not None
-    update_budget_mock.assert_not_awaited()
-    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
-    assert write_data["budget_id"] == created.budget_id
-
-
-@pytest.mark.asyncio
-async def test_v2_update_all_null_budget_creates_nothing(monkeypatch):
-    """Clearing a limit on an org with no budget row creates nothing and links no budget_id."""
-    update_budget_mock = AsyncMock()
-    new_budget_mock = AsyncMock()
-
-    prisma = await _run_update_organization_v2(
-        monkeypatch,
-        body={"tpm_limit": None},
-        existing_budget_id=None,
-        existing_metadata={},
-        update_budget_mock=update_budget_mock,
-        new_budget_mock=new_budget_mock,
-    )
-
-    new_budget_mock.assert_not_awaited()
-    update_budget_mock.assert_not_awaited()
-    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
-    assert "budget_id" not in write_data
+    for body in ({"organization_alias": None}, {"models": None}):
+        with pytest.raises(HTTPException) as exc:
+            await update_organization_v2(
+                organization_id="org-1",
+                data=OrganizationUpdateRequestV2.model_validate(body),
+                user_api_key_dict=auth,
+            )
+        assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
