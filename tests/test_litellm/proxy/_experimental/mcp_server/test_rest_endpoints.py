@@ -1426,6 +1426,40 @@ class TestListToolsRestAPI:
 class TestCallToolRestAPI:
     pytestmark = pytest.mark.asyncio
 
+    async def test_rejects_missing_server_id(self):
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"name": "demo-tool", "arguments": {}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "missing_parameter"
+        assert "server_id" in exc_info.value.detail["message"]
+
+    async def test_rejects_missing_tool_name(self):
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "arguments": {}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "missing_parameter"
+        assert "name" in exc_info.value.detail["message"]
+
     async def test_rejects_disallowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]

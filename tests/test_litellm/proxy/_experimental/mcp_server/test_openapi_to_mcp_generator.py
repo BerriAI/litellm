@@ -410,6 +410,50 @@ class TestBuildInputSchema:
         # Required should include original names
         assert "repository-id" in schema["required"]
 
+    def test_required_request_body_marked_in_schema(self):
+        """OpenAPI requestBody.required=True should add 'body' to top-level required."""
+        operation = {
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"title": {"type": "string"}},
+                            "required": ["title"],
+                        }
+                    }
+                },
+            }
+        }
+
+        schema = build_input_schema(operation)
+
+        assert "body" in schema["properties"]
+        assert "body" in schema["required"]
+        assert "title" in schema["properties"]["body"]["properties"]
+
+    def test_optional_request_body_not_in_required(self):
+        """OpenAPI requestBody.required=False should not add 'body' to required."""
+        operation = {
+            "requestBody": {
+                "required": False,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"note": {"type": "string"}},
+                        }
+                    }
+                },
+            }
+        }
+
+        schema = build_input_schema(operation)
+
+        assert "body" in schema["properties"]
+        assert "body" not in schema["required"]
+
 
 class TestExtractParameters:
     """Test parameter extraction from OpenAPI operations."""

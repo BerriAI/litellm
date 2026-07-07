@@ -244,7 +244,12 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
 
 
 def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
-    """Build MCP input schema from OpenAPI operation."""
+    """Build MCP input schema from OpenAPI operation.
+
+    OpenAPI 3.x ``requestBody`` is exposed as a top-level ``body`` property.
+    When ``requestBody.required`` is true, ``body`` is listed in the schema's
+    ``required`` array so MCP clients know the parameter must be supplied.
+    """
     properties = {}
     required = []
 
