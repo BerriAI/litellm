@@ -1685,3 +1685,63 @@ async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
     assert captured["content_type"] == "application/json"
     assert captured["body"] == {"config": {"model": "test-model"}, "content": "YXVkaW8="}
     assert response.text == "transcribed"
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_file_content_raises_on_http_error():
+    """
+    LIT-4008 regression: a provider error response (e.g. Anthropic's 400
+    "File id must have `file_` prefix") must raise instead of being wrapped
+    as file content, which downstream batch cost tracking would parse as an
+    empty results file and bill $0.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(
+        return_value=httpx.Response(
+            status_code=400,
+            content=b'{"type":"error","error":{"type":"invalid_request_error","message":"File id must have `file_` prefix."}}',
+        )
+    )
+
+    with pytest.raises(AnthropicError) as exc_info:
+        await handler.async_retrieve_file_content(
+            file_content_request={"file_id": "msgbatch_123"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "file_" in str(exc_info.value)
+
+
+def test_sync_retrieve_file_content_raises_on_http_error():
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=HTTPHandler)
+    client.get = Mock(
+        return_value=httpx.Response(
+            status_code=404,
+            content=b'{"type":"error","error":{"type":"not_found_error","message":"not found"}}',
+        )
+    )
+
+    with pytest.raises(AnthropicError) as exc_info:
+        handler.retrieve_file_content(
+            file_content_request={"file_id": "file-abc"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 404
