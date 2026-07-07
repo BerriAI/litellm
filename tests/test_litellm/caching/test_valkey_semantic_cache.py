@@ -328,6 +328,32 @@ async def test_async_set_cache_passes_only_metadata_to_get_async_embedding():
 
 
 @pytest.mark.asyncio
+async def test_async_get_cache_passes_only_metadata_to_get_async_embedding():
+    async_client = AsyncMock()
+    async_client.ft = _async_ft(0.05)
+    cache = _make_cache(async_client=async_client)
+    captured: dict[str, object] = {}
+
+    async def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(metadata) if metadata is not None else None
+        return [0.1, 0.2, 0.3]
+
+    cache._get_async_embedding = spy_embedding
+
+    result = await cache.async_get_cache(
+        key="cache-key",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert result == {"content": "Paris"}
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
+
+
+@pytest.mark.asyncio
 async def test_async_get_cache_misses_below_threshold():
     async_client = AsyncMock()
     async_client.ft = _async_ft(0.4)
