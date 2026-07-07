@@ -16,7 +16,10 @@ from typing import (
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
+from litellm.proxy._experimental.mcp_server.utils import (
+    split_server_prefix_from_name,
+    strip_known_server_prefix,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -628,6 +631,9 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _resolve_display_name_to_original,
+        )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         tool_results = []
@@ -654,11 +660,13 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 server_name = tool_server_map[tool_name]
 
-                # Remove the server name prefix if the tool name includes it.
-                sanitized_tool_name = tool_name
-                unprefixed_name, prefixed_server_name = split_server_prefix_from_name(tool_name)
-                if prefixed_server_name and prefixed_server_name == server_name and unprefixed_name:
-                    sanitized_tool_name = unprefixed_name
+                mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name
+                ) or global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+                resolved_tool_name = (
+                    _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
+                )
+                sanitized_tool_name = strip_known_server_prefix(resolved_tool_name, mcp_server)
 
                 start_time = datetime.now()
                 logging_input = [
@@ -741,7 +749,6 @@ class LiteLLM_Proxy_MCP_Handler:
                     "arguments": parsed_arguments,
                     "namespaced_tool_name": tool_name,
                 }
-                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
                 if mcp_server:
                     mcp_info = mcp_server.mcp_info or {}
                     standard_logging_mcp_tool_call["mcp_server_name"] = (
