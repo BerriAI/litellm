@@ -176,5 +176,12 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "gonkarouter": {
+    "base_url": "https://api.gonkarouter.io/v1",
+    "api_key_env": "GONKAROUTER_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
