@@ -44,8 +44,46 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Compression toggle.
+#
+# Headroom compression is opt-out, controlled at two levels:
+#
+#   1. Global default via the ``HEADROOM_COMPRESSION_ENABLED`` env var. Unset
+#      or truthy (1/true/yes/on) -> compression on (preserves prior behaviour);
+#      falsy (0/false/no/off) -> off cluster-wide.
+#   2. Per-request override via the ``x-headroom-compress`` request header,
+#      which wins over the env default for that single call. Same truthy/falsy
+#      vocabulary. Absent header -> fall back to the env default.
+#
+# The callback stays registered either way; these flags only govern whether
+# ``_local_compress`` actually runs, so compression can be flipped per request
+# without redeploying and the ModernBERT pipeline stays pre-warmed.
+# ---------------------------------------------------------------------------
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"0", "false", "no", "off"})
+_COMPRESS_HEADER = "x-headroom-compress"
+
+
+def _parse_bool(value: str | None, default: bool) -> bool:
+    """Parse a truthy/falsy string; return ``default`` if unrecognised/None."""
+    if value is None:
+        return default
+    v = value.strip().lower()
+    if v in _TRUTHY:
+        return True
+    if v in _FALSY:
+        return False
+    return default
+
+
+def _compression_enabled_by_env() -> bool:
+    """Global default from ``HEADROOM_COMPRESSION_ENABLED`` (default: on)."""
+    return _parse_bool(os.environ.get("HEADROOM_COMPRESSION_ENABLED"), default=True)
 
 # ---------------------------------------------------------------------------
 # Step 0: surface the headroom.* loggers on the proxy's stdout/stderr.
@@ -220,8 +258,24 @@ class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
         if not messages:
             return data
 
-        model = data.get("model", "")
         logger = logging.getLogger("headroom")
+
+        # Toggle: per-request header overrides the global env default.
+        headers = data.get("proxy_server_request", {}).get("headers", {}) or {}
+        header_val = headers.get(_COMPRESS_HEADER)
+        if header_val is None:
+            # Header lookup is case-insensitive; proxy_server_request headers
+            # are usually lower-cased already, but don't rely on it.
+            for k, v in headers.items():
+                if k.lower() == _COMPRESS_HEADER:
+                    header_val = v
+                    break
+        if not _parse_bool(header_val, default=_compression_enabled_by_env()):
+            source = "header" if header_val is not None else "env"
+            logger.info("Headroom: compression disabled (%s), passing through", source)
+            return data
+
+        model = data.get("model", "")
 
         try:
             result = await asyncio.to_thread(
