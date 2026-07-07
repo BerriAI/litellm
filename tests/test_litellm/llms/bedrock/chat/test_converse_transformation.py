@@ -643,6 +643,38 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
+def test_parallel_tool_calls_config_kept_for_sonnet_4_6():
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-4-6",
+            non_default_params={"parallel_tool_calls": False},
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-4-6",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert data["additionalModelRequestFields"]["tool_choice"] == {
+            "disable_parallel_tool_use": True
+        }
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
 def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
