@@ -27,6 +27,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 # module while common_utils may pull proxy_server during init, which can leave
 # those names undefined. Import the helpers locally where they are used.
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    get_spend_by_team,
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
@@ -1133,68 +1134,7 @@ async def get_global_spend_report(
                 start_date_obj, end_date_obj, team_id, customer_id, prisma_client
             )
         if group_by == "team":
-            # first get data from spend logs -> SpendByModelApiKey
-            # then read data from "SpendByModelApiKey" to format the response obj
-            sql_query = """
-
-            WITH SpendByModelApiKey AS (
-                SELECT
-                    date_trunc('day', sl."startTime") AS group_by_day,
-                    COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
-                    sl.model,
-                    sl.api_key,
-                    SUM(sl.spend) AS model_api_spend,
-                    SUM(sl.total_tokens) AS model_api_tokens
-                FROM 
-                    "LiteLLM_SpendLogs" sl
-                LEFT JOIN 
-                    "LiteLLM_TeamTable" tt 
-                ON 
-                    sl.team_id = tt.team_id
-                WHERE
-                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-                GROUP BY
-                    date_trunc('day', sl."startTime"),
-                    tt.team_alias,
-                    sl.model,
-                    sl.api_key
-            )
-                SELECT
-                    group_by_day,
-                    jsonb_agg(jsonb_build_object(
-                        'team_name', team_name,
-                        'total_spend', total_spend,
-                        'metadata', metadata
-                    )) AS teams
-                FROM (
-                    SELECT
-                        group_by_day,
-                        team_name,
-                        SUM(model_api_spend) AS total_spend,
-                        jsonb_agg(jsonb_build_object(
-                            'model', model,
-                            'api_key', api_key,
-                            'spend', model_api_spend,
-                            'total_tokens', model_api_tokens
-                        )) AS metadata
-                    FROM 
-                        SpendByModelApiKey
-                    GROUP BY
-                        group_by_day,
-                        team_name
-                ) AS aggregated
-                GROUP BY
-                    group_by_day
-                ORDER BY
-                    group_by_day;
-                """
-
-            db_response = await prisma_client.db.query_raw(sql_query, start_date_obj, end_date_obj)
-            if db_response is None:
-                return []
-
-            return db_response
+            return await get_spend_by_team(start_date_obj, end_date_obj, team_id, prisma_client)
 
         elif group_by == "customer":
             sql_query = """
@@ -3442,12 +3382,59 @@ async def _build_ui_spend_logs_response(
             )
             count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
+    mcp_spend_map: dict[str, dict[str, Union[int, float]]] = {}
+    if enrich_session_counts and session_ids:
+        from prisma.errors import PrismaError
+
+        try:
+            # Collect api_keys already present in the authorized page rows so the
+            # aggregate is scoped to the same ownership as the main query — prevents
+            # cross-tenant disclosure via a colliding session_id.
+            authorized_api_keys = list(
+                {
+                    (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                    for row in data
+                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                }
+            )
+            rows = await prisma_client.db.query_raw(
+                """
+                SELECT session_id,
+                       COUNT(*)::int AS mcp_tool_call_count,
+                       COALESCE(SUM(spend), 0)::double precision AS mcp_tool_call_spend
+                FROM "LiteLLM_SpendLogs"
+                WHERE session_id = ANY($1::text[])
+                  AND api_key = ANY($2::text[])
+                  AND call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                GROUP BY session_id
+                """,
+                session_ids,
+                authorized_api_keys,
+            )
+            mcp_spend_map = {
+                row["session_id"]: {
+                    "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
+                    "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
+                }
+                for row in rows
+                if row.get("session_id")
+            }
+        except PrismaError:
+            verbose_proxy_logger.debug(
+                "Failed to enrich MCP session spend aggregates for spend logs UI",
+                exc_info=True,
+            )
+
     if enrich_session_counts:
         enriched: List[dict] = []
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
+            mcp_stats = mcp_spend_map.get(sid) if sid else None
+            if mcp_stats:
+                row_dict["mcp_tool_call_count"] = mcp_stats["mcp_tool_call_count"]
+                row_dict["mcp_tool_call_spend"] = mcp_stats["mcp_tool_call_spend"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:
