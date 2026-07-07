@@ -889,3 +889,49 @@ class TestMcpRateLimitServerNameSurfacing:
                     )
 
         assert captured["kwargs"]["mcp_rate_limit_server_name"] == "gh"
+
+
+class TestOpenApiByokCallTool:
+    @pytest.mark.asyncio
+    async def test_call_tool_openapi_byok_injects_request_auth_contextvar(self):
+        """Playground/responses call call_tool directly; BYOK must reach OpenAPI handlers."""
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="byok-openapi",
+            name="firecrawl_byok_test",
+            server_name="firecrawl_byok_test",
+            url="https://api.firecrawl.dev",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            spec_path="https://example.com/openapi.json",
+            is_byok=True,
+        )
+        user_auth = UserAPIKeyAuth(user_id="default_user_id", api_key="sk-dashboard")
+        captured_auth: dict[str, Optional[str]] = {}
+
+        async def fake_openapi_handler(_server, _name, _arguments):
+            captured_auth["value"] = _request_auth_header.get()
+            return MagicMock()
+
+        with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager._resolve_byok_mcp_auth_header",
+                new=AsyncMock(return_value="fc-test-key"),
+            ):
+                with patch.object(
+                    manager,
+                    "_call_openapi_tool_handler",
+                    side_effect=fake_openapi_handler,
+                ):
+                    await manager.call_tool(
+                        server_name=server.server_name,
+                        name="scrapeandextractfromurl",
+                        arguments={"body": {"url": "https://example.com"}},
+                        user_api_key_auth=user_auth,
+                    )
+
+        assert captured_auth["value"] == "ApiKey fc-test-key"

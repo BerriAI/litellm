@@ -253,6 +253,78 @@ def _without_authorization(
     return filtered or None
 
 
+def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
+    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
+    if mcp_server.auth_type == MCPAuth.api_key:
+        return f"ApiKey {mcp_auth_header}"
+    if mcp_server.auth_type == MCPAuth.basic:
+        return f"Basic {mcp_auth_header}"
+    return f"Bearer {mcp_auth_header}"
+
+
+def _openapi_forwarded_extra_headers(
+    mcp_server: MCPServer,
+    raw_headers: Optional[dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Optional[dict[str, str]]:
+    if not mcp_server.extra_headers or not raw_headers:
+        return None
+    normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
+    skip_caller_authorization = _should_strip_caller_authorization(
+        mcp_server=mcp_server,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+    )
+    forwarded: dict[str, str] = {}
+    for header_name in mcp_server.extra_headers:
+        if not isinstance(header_name, str):
+            continue
+        if skip_caller_authorization and header_name.lower() == "authorization":
+            continue
+        value = normalized_raw.get(header_name.lower())
+        if value is not None:
+            forwarded[header_name] = value
+    return forwarded or None
+
+
+async def _resolve_byok_mcp_auth_header(
+    mcp_server: MCPServer,
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+    mcp_auth_header: Optional[str],
+) -> Optional[str]:
+    """Resolve BYOK credential for tool calls that bypass ``execute_mcp_tool``."""
+    if not mcp_server.is_byok:
+        return mcp_auth_header
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        _check_byok_credential,
+        _get_byok_credential,
+    )
+
+    if not mcp_auth_header:
+        byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
+        if byok_cred is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": (
+                        "No stored credential found for this BYOK server. "
+                        "Complete the OAuth authorization flow to provide your API key."
+                    ),
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+        return byok_cred
+
+    await _check_byok_credential(mcp_server, user_api_key_auth)
+    return mcp_auth_header
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
@@ -3893,6 +3965,12 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
+        mcp_auth_header = await _resolve_byok_mcp_auth_header(
+            mcp_server,
+            user_api_key_auth,
+            mcp_auth_header,
+        )
+
         oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
@@ -3907,9 +3985,25 @@ class MCPServerManager:
                     server_name,
                 )
 
+            auth_header_value = (
+                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            )
+            forwarded_headers = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+
             async def _call_openapi_via_handler():
-                async with self._limit_outbound_concurrency(mcp_server):
-                    return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                    _request_auth_header,
+                    _request_extra_headers,
+                )
+
+                auth_token = _request_auth_header.set(auth_header_value)
+                extra_token = _request_extra_headers.set(forwarded_headers)
+                try:
+                    async with self._limit_outbound_concurrency(mcp_server):
+                        return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                finally:
+                    _request_auth_header.reset(auth_token)
+                    _request_extra_headers.reset(extra_token)
 
             tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
