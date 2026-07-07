@@ -336,6 +336,14 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class ModelListEntry(BaseModel):
+    id: str
+
+
+class ModelListResponse(BaseModel):
+    data: list[ModelListEntry] = []
+
+
 class FileEntry(BaseModel):
     id: str
 

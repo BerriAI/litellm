@@ -17,6 +17,7 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+ALL_TEAM_MODELS_SENTINEL = "all-team-models"
 
 
 @dataclass(frozen=True, slots=True)
