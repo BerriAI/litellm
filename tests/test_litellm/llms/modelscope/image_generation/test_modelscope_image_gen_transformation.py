@@ -144,7 +144,7 @@ class TestModelScopeImageGenerationTransformation:
         mock_get_secret.return_value = None
         headers = {}
 
-        with pytest.raises(ValueError, match='MODELSCOPE_API_KEY is not set\\. Please set it via') as exc_info:
+        with pytest.raises(ValueError, match="MODELSCOPE_API_KEY is not set\\. Please set it via") as exc_info:
             self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -270,6 +270,33 @@ class TestModelScopeImageGenerationTransformation:
         assert "extra_query" not in result
         assert "secret-value" not in str(result)
 
+    def test_transform_image_generation_request_rejects_extra_body_model_override(self):
+        """A client-controlled extra_body must not override the routed model or
+        prompt; otherwise a caller authorized for one model could make the
+        provider run a different, unauthorized one."""
+        prompt = "a cute baby sea otter"
+        optional_params = {
+            "size": "1024x1024",
+            "extra_body": {
+                "model": "Qwen/Different-Model",
+                "prompt": "override prompt",
+                "negative_prompt": "lowres",
+            },
+        }
+
+        result = self.config.transform_image_generation_request(
+            model="modelscope/Qwen/Qwen-Image-2512",
+            prompt=prompt,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["model"] == "modelscope/Qwen/Qwen-Image-2512"
+        assert result["prompt"] == prompt
+        assert result["negative_prompt"] == "lowres"
+        assert "extra_body" not in result
+
     def test_transform_image_generation_response_with_url_images(self):
         """Test that transform_image_generation_response extracts output_images URLs."""
         response_data = {
@@ -318,7 +345,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ModelScopeError, match="ModelScope image generation task failed") as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -377,7 +404,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception, match='litellm\\.BadRequestError: ModelScope error: Invalid prompt') as exc_info:
+        with pytest.raises(ModelScopeError, match="ModelScope error: Invalid prompt") as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -403,7 +430,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception, match='litellm\\.InternalServerError: Error parsing ModelScope') as exc_info:
+        with pytest.raises(ModelScopeError, match="Error parsing ModelScope") as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -600,17 +627,20 @@ class TestModelScopeImageGenerationHandler:
         mock_client.post.return_value = submit_resp
         mock_client.get.side_effect = [running_resp, succeed_resp]
 
-        result = self.handler.image_generation(
-            model=self.model,
-            prompt=self.prompt,
-            model_response=ImageResponse(data=[]),
-            optional_params={},
-            litellm_params={"api_key": "ms-test", "api_base": None},
-            logging_obj=self.logging_obj,
-            timeout=30,
-            client=mock_client,
-            aimg_generation=False,
-        )
+        with patch(  # test-quality-ok: avoid real sleep delay in sync polling test
+            "litellm.llms.modelscope.image_generation.handler.time.sleep"
+        ):
+            result = self.handler.image_generation(
+                model=self.model,
+                prompt=self.prompt,
+                model_response=ImageResponse(data=[]),
+                optional_params={},
+                litellm_params={"api_key": "ms-test", "api_base": None},
+                logging_obj=self.logging_obj,
+                timeout=30,
+                client=mock_client,
+                aimg_generation=False,
+            )
 
         assert len(result.data) == 1
         assert result.data[0].url == "https://example.com/otter.png"
@@ -770,3 +800,46 @@ class TestModelScopeImageGenerationHandler:
             )
 
         assert exc_info.value.status_code == 408
+
+
+class TestModelScopeImageGenerationDispatch:
+    """Tests for the modelscope dispatch branch in images/main.py."""
+
+    def test_api_base_override_without_api_key_raises(self):
+        """Security: caller-controlled api_base must not receive deployment key."""
+        import litellm
+
+        with pytest.raises(Exception, match="api_key must be provided when api_base is overridden"):
+            litellm.image_generation(
+                prompt="test",
+                model="modelscope/Qwen/Qwen-Image-2512",
+                api_base="https://evil.example.com/v1",
+                api_key=None,
+            )
+
+    def test_dispatch_passes_api_key_and_api_base(self):
+        """Deployment credentials are forwarded to the handler."""
+        import litellm.images.main as img_main
+        from litellm.types.utils import ImageResponse
+
+        captured: dict = {}
+
+        original = img_main.modelscope_image_generation.image_generation
+
+        def spy(**kwargs):
+            captured.update(kwargs)
+            return ImageResponse(data=[])
+
+        with patch.object(  # test-quality-ok: verify dispatch wiring without real HTTP
+            img_main.modelscope_image_generation, "image_generation", spy
+        ):
+            img_main.image_generation(
+                prompt="test",
+                model="modelscope/Qwen/Qwen-Image-2512",
+                api_key="ms-deploy-key",
+                api_base="https://api-inference.modelscope.cn/v1",
+                custom_llm_provider="modelscope",
+            )
+
+        assert captured["litellm_params"]["api_key"] == "ms-deploy-key"
+        assert captured["litellm_params"]["api_base"] == "https://api-inference.modelscope.cn/v1"

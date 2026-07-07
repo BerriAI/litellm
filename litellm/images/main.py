@@ -426,10 +426,12 @@ def image_generation(
                 aimg_generation=aimg_generation,
             )
         elif custom_llm_provider == "modelscope":
-            # ModelScope image gen is async: submit returns a task_id that
-            # must be polled until SUCCEED/FAILED.
             if model is None:
                 raise Exception("Model needs to be set for modelscope")
+            if api_base is not None and api_key is None:
+                raise ValueError("api_key must be provided when api_base is overridden for modelscope")
+            litellm_params_dict["api_key"] = api_key
+            litellm_params_dict["api_base"] = api_base
             return modelscope_image_generation.image_generation(
                 model=model,
                 prompt=prompt,

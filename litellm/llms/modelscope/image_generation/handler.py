@@ -9,8 +9,9 @@ API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
 import asyncio
+import json
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Final
 
 import httpx
 
@@ -20,7 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    _get_httpx_client,  # pyright: ignore[reportPrivateUsage]  # litellm internal client factory, same pattern as BFL handler
     get_async_httpx_client,
 )
 from litellm.llms.modelscope.common_utils import (
@@ -37,29 +38,24 @@ from .transformation import ModelScopeImageGenerationConfig
 
 
 class ModelScopeImageGeneration:
-    """
-    ModelScope image generation handler.
+    """ModelScope image generation handler."""
 
-    Owns the submit + poll HTTP flow; request/response shaping is delegated to
-    ModelScopeImageGenerationConfig.
-    """
-
-    def __init__(self):
-        self.config = ModelScopeImageGenerationConfig()
+    def __init__(self) -> None:
+        self.config: Final = ModelScopeImageGenerationConfig()
 
     def image_generation(
         self,
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,  # mutable-ok: litellm override signature
+        litellm_params: GenericLiteLLMParams | dict,  # mutable-ok: litellm override signature
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, str] | None = None,  # mutable-ok: litellm override signature
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimg_generation: bool = False,
-    ) -> Union[ImageResponse, Any]:
+    ) -> ImageResponse:
         if aimg_generation:
             return self.async_image_generation(
                 model=model,
@@ -73,29 +69,30 @@ class ModelScopeImageGeneration:
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
             )
 
-        if isinstance(litellm_params, dict):
-            api_key = litellm_params.get("api_key")
-            api_base = litellm_params.get("api_base")
-            litellm_params_dict = litellm_params
-        else:
-            api_key = litellm_params.api_key
-            api_base = litellm_params.api_base
-            litellm_params_dict = dict(litellm_params)
+        api_key: Final = litellm_params.get("api_key") if isinstance(litellm_params, dict) else litellm_params.api_key
+        api_base: Final = (
+            litellm_params.get("api_base") if isinstance(litellm_params, dict) else litellm_params.api_base
+        )
+        litellm_params_dict: Final = (
+            litellm_params
+            if isinstance(litellm_params, dict)
+            else dict(litellm_params)  # mutable-ok: litellm passes a mutable dict
+        )
 
-        sync_client = client if isinstance(client, HTTPHandler) else _get_httpx_client()
+        sync_client: Final = client if isinstance(client, HTTPHandler) else _get_httpx_client()
 
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
-            headers={},
+            headers={},  # mutable-ok: validate_environment returns a new dict
             model=model,
-            messages=[],
+            messages=[],  # mutable-ok: required by base class signature
             optional_params=optional_params,
             litellm_params=litellm_params_dict,
         )
         if extra_headers:
             headers.update(extra_headers)
 
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -103,7 +100,7 @@ class ModelScopeImageGeneration:
             litellm_params=litellm_params_dict,
         )
 
-        data = self.config.transform_image_generation_request(
+        data: Final = self.config.transform_image_generation_request(
             model=model,
             prompt=prompt,
             optional_params=optional_params,
@@ -114,7 +111,7 @@ class ModelScopeImageGeneration:
         logging_obj.pre_call(
             input=prompt,
             api_key="",
-            additional_args={
+            additional_args={  # mutable-ok: litellm logging contract
                 "complete_input_dict": data,
                 "api_base": complete_url,
                 "headers": headers,
@@ -122,20 +119,20 @@ class ModelScopeImageGeneration:
         )
 
         try:
-            response = sync_client.post(
+            response: Final = sync_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
                 timeout=timeout,
             )
-        except Exception as e:
+        except httpx.HTTPError as e:
             raise ModelScopeError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
-        final_response = self._poll_for_result_sync(
-            initial_response=response,
+        final_response: Final = self._poll_for_result_sync(
+            initial_response=response,  # pyright: ignore[reportArgumentType]  # post() returns Response | None; None raises HTTPError above
             api_base=api_base,
             headers=headers,
             sync_client=sync_client,
@@ -158,38 +155,39 @@ class ModelScopeImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,  # mutable-ok: litellm override signature
+        litellm_params: GenericLiteLLMParams | dict,  # mutable-ok: litellm override signature
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, str] | None = None,  # mutable-ok: litellm override signature
+        client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
-        if isinstance(litellm_params, dict):
-            api_key = litellm_params.get("api_key")
-            api_base = litellm_params.get("api_base")
-            litellm_params_dict = litellm_params
-        else:
-            api_key = litellm_params.api_key
-            api_base = litellm_params.api_base
-            litellm_params_dict = dict(litellm_params)
+        api_key: Final = litellm_params.get("api_key") if isinstance(litellm_params, dict) else litellm_params.api_key
+        api_base: Final = (
+            litellm_params.get("api_base") if isinstance(litellm_params, dict) else litellm_params.api_base
+        )
+        litellm_params_dict: Final = (
+            litellm_params
+            if isinstance(litellm_params, dict)
+            else dict(litellm_params)  # mutable-ok: litellm passes a mutable dict
+        )
 
-        async_client = client or get_async_httpx_client(
+        async_client: Final = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.MODELSCOPE,
         )
 
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
-            headers={},
+            headers={},  # mutable-ok: validate_environment returns a new dict
             model=model,
-            messages=[],
+            messages=[],  # mutable-ok: required by base class signature
             optional_params=optional_params,
             litellm_params=litellm_params_dict,
         )
         if extra_headers:
             headers.update(extra_headers)
 
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -197,7 +195,7 @@ class ModelScopeImageGeneration:
             litellm_params=litellm_params_dict,
         )
 
-        data = self.config.transform_image_generation_request(
+        data: Final = self.config.transform_image_generation_request(
             model=model,
             prompt=prompt,
             optional_params=optional_params,
@@ -208,7 +206,7 @@ class ModelScopeImageGeneration:
         logging_obj.pre_call(
             input=prompt,
             api_key="",
-            additional_args={
+            additional_args={  # mutable-ok: litellm logging contract
                 "complete_input_dict": data,
                 "api_base": complete_url,
                 "headers": headers,
@@ -216,20 +214,20 @@ class ModelScopeImageGeneration:
         )
 
         try:
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
                 timeout=timeout,
             )
-        except Exception as e:
+        except httpx.HTTPError as e:
             raise ModelScopeError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
-        final_response = await self._poll_for_result_async(
-            initial_response=response,
+        final_response: Final = await self._poll_for_result_async(
+            initial_response=response,  # pyright: ignore[reportArgumentType]  # post() returns Response | None; None raises HTTPError above
             api_base=api_base,
             headers=headers,
             async_client=async_client,
@@ -250,12 +248,12 @@ class ModelScopeImageGeneration:
     def _poll_for_result_sync(
         self,
         initial_response: httpx.Response,
-        api_base: Optional[str],
-        headers: dict,
+        api_base: str | None,
+        headers: dict,  # mutable-ok: caller passes a mutable dict
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         if initial_response.status_code >= 400:
             raise ModelScopeError(
@@ -264,8 +262,8 @@ class ModelScopeImageGeneration:
             )
 
         try:
-            response_data = initial_response.json()
-        except Exception as e:
+            response_data: Final = initial_response.json()
+        except json.JSONDecodeError as e:
             raise ModelScopeError(
                 status_code=initial_response.status_code,
                 message=f"Error parsing submit response: {e}",
@@ -277,18 +275,18 @@ class ModelScopeImageGeneration:
                 message=f"ModelScope error: {response_data['errors']}",
             )
 
-        task_id = response_data.get("task_id")
+        task_id: Final = response_data.get("task_id")
         if not task_id:
             raise ModelScopeError(
                 status_code=500,
                 message="No task_id in ModelScope submit response",
             )
 
-        polling_url = self.config.get_task_status_url(api_base, task_id)
-        polling_headers = self.config.get_polling_headers(headers)
+        polling_url: Final = self.config.get_task_status_url(api_base, task_id)
+        polling_headers: Final = self.config.get_polling_headers(headers)
 
-        start_time = time.time()
-        verbose_logger.debug(f"ModelScope starting sync polling at {polling_url}")
+        start_time: Final = time.time()
+        verbose_logger.debug("ModelScope starting sync polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = sync_client.get(
@@ -305,13 +303,13 @@ class ModelScopeImageGeneration:
 
             try:
                 data = response.json()
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 raise ModelScopeError(
                     status_code=response.status_code,
                     message=f"Error parsing poll response: {e}",
                 )
             status = data.get("task_status")
-            verbose_logger.debug(f"ModelScope poll status: {status}")
+            verbose_logger.debug("ModelScope poll status: %s", status)
 
             if status == TASK_STATUS_SUCCEED:
                 return response
@@ -331,12 +329,12 @@ class ModelScopeImageGeneration:
     async def _poll_for_result_async(
         self,
         initial_response: httpx.Response,
-        api_base: Optional[str],
-        headers: dict,
+        api_base: str | None,
+        headers: dict,  # mutable-ok: caller passes a mutable dict
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         if initial_response.status_code >= 400:
             raise ModelScopeError(
@@ -345,8 +343,8 @@ class ModelScopeImageGeneration:
             )
 
         try:
-            response_data = initial_response.json()
-        except Exception as e:
+            response_data: Final = initial_response.json()
+        except json.JSONDecodeError as e:
             raise ModelScopeError(
                 status_code=initial_response.status_code,
                 message=f"Error parsing submit response: {e}",
@@ -358,18 +356,18 @@ class ModelScopeImageGeneration:
                 message=f"ModelScope error: {response_data['errors']}",
             )
 
-        task_id = response_data.get("task_id")
+        task_id: Final = response_data.get("task_id")
         if not task_id:
             raise ModelScopeError(
                 status_code=500,
                 message="No task_id in ModelScope submit response",
             )
 
-        polling_url = self.config.get_task_status_url(api_base, task_id)
-        polling_headers = self.config.get_polling_headers(headers)
+        polling_url: Final = self.config.get_task_status_url(api_base, task_id)
+        polling_headers: Final = self.config.get_polling_headers(headers)
 
-        start_time = time.time()
-        verbose_logger.debug(f"ModelScope starting async polling at {polling_url}")
+        start_time: Final = time.time()
+        verbose_logger.debug("ModelScope starting async polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = await async_client.get(
@@ -386,13 +384,13 @@ class ModelScopeImageGeneration:
 
             try:
                 data = response.json()
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 raise ModelScopeError(
                     status_code=response.status_code,
                     message=f"Error parsing poll response: {e}",
                 )
             status = data.get("task_status")
-            verbose_logger.debug(f"ModelScope poll status: {status}")
+            verbose_logger.debug("ModelScope poll status: %s", status)
 
             if status == TASK_STATUS_SUCCEED:
                 return response
@@ -410,5 +408,4 @@ class ModelScopeImageGeneration:
         )
 
 
-# Singleton instance for use in images/main.py
-modelscope_image_generation = ModelScopeImageGeneration()
+modelscope_image_generation: Final = ModelScopeImageGeneration()
