@@ -1610,14 +1610,14 @@ jobs:
       - run:
           name: Run helm lint
           command: |
-            helm lint ./deploy/charts/litellm-helm
+            helm lint ./helm/litellm-helm
 
       # Run helm tests
       - run:
           name: Run helm tests
           command: |
             IMAGE_TAG=${CIRCLE_SHA1:-ci}
-            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml \
+            helm install litellm ./helm/litellm-helm -f ./helm/litellm-helm/ci/test-values.yaml \
               --set image.repository=litellm-ci \
               --set image.tag=${IMAGE_TAG} \
               --set image.pullPolicy=Never
