@@ -3810,17 +3810,21 @@ class MCPServerManager:
             # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
             # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
             # single call below.
-            tool_call_coro = self._obo_call_tool_with_retry(
-                client=client,
-                call_tool_params=call_tool_params,
-                host_progress_callback=host_progress_callback,
-                mcp_server=mcp_server,
-                server_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
-            )
+            async def _obo_call_tool_limited():
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await self._obo_call_tool_with_retry(
+                        client=client,
+                        call_tool_params=call_tool_params,
+                        host_progress_callback=host_progress_callback,
+                        mcp_server=mcp_server,
+                        server_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        stdio_env=stdio_env,
+                        subject_token=subject_token,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+            tool_call_coro = _obo_call_tool_limited()
         else:
 
             async def _call_tool_via_client(client, params):
