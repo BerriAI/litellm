@@ -17,13 +17,33 @@ sys.path.insert(
 
 from unittest.mock import MagicMock, patch
 
-from litellm.proxy.utils import get_custom_url, join_paths
+from litellm.proxy.utils import get_cookie_path_from_server_root_path, get_custom_url, join_paths
 
 
 def test_get_custom_url(monkeypatch):
     monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
     custom_url = get_custom_url(request_base_url="http://0.0.0.0:4000", route="ui/")
     assert custom_url == "http://0.0.0.0:4000/litellm/ui/"
+
+
+@pytest.mark.parametrize(
+    "server_root_path, expected",
+    [
+        (None, "/"),
+        ("", "/"),
+        ("/", "/"),
+        ("/litellm", "/litellm"),
+        ("litellm", "/litellm"),
+        ("/litellm/", "/litellm"),
+        ("/team/a", "/team/a"),
+    ],
+)
+def test_get_cookie_path_from_server_root_path(monkeypatch, server_root_path, expected):
+    if server_root_path is None:
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    else:
+        monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+    assert get_cookie_path_from_server_root_path() == expected
 
 
 def test_proxy_only_error_true_for_llm_route():

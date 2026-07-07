@@ -107,6 +107,7 @@ from litellm.proxy.management_endpoints.types import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
+    get_cookie_path_from_server_root_path,
     get_custom_url,
     get_server_root_path,
 )
@@ -3208,7 +3209,7 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        redirect_response.set_cookie(key="token", value=jwt_token, path=get_cookie_path_from_server_root_path())
         return redirect_response
 
     @staticmethod
