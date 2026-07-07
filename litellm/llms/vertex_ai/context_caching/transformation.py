@@ -62,23 +62,27 @@ def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Option
         if not is_cached_message(message):
             continue
 
-        content = message.get("content")
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
         if not content or isinstance(content, str):
             continue
 
         for content_item in content:
-            # Type check to ensure content_item is a dictionary before calling .get()
-            if not isinstance(content_item, dict):
+            # Check if content_item is dict or object model
+            if isinstance(content_item, dict):
+                cache_control = content_item.get("cache_control")
+            else:
+                cache_control = getattr(content_item, "cache_control", None)
+
+            if not cache_control:
                 continue
 
-            cache_control = content_item.get("cache_control")
-            if not cache_control or not isinstance(cache_control, dict):
+            cc_type = (
+                cache_control.get("type") if isinstance(cache_control, dict) else getattr(cache_control, "type", None)
+            )
+            if cc_type != "ephemeral":
                 continue
 
-            if cache_control.get("type") != "ephemeral":
-                continue
-
-            ttl = cache_control.get("ttl")
+            ttl = cache_control.get("ttl") if isinstance(cache_control, dict) else getattr(cache_control, "ttl", None)
             if ttl and _is_valid_ttl_format(ttl):
                 return str(ttl)
 

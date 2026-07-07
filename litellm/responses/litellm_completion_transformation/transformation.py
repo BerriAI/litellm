@@ -892,26 +892,38 @@ class LiteLLMCompletionResponsesConfig:
                 function_call=input_item
             )
         else:
-            content = input_item.get("content")
+            content = (
+                input_item.get("content") if isinstance(input_item, dict) else getattr(input_item, "content", None)
+            )
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [
-                GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
-                )
-            ]
+
+            role = input_item.get("role") if isinstance(input_item, dict) else getattr(input_item, "role", None)
+            cache_control = (
+                input_item.get("cache_control")
+                if isinstance(input_item, dict)
+                else getattr(input_item, "cache_control", None)
+            )
+
+            msg = GenericChatCompletionMessage(
+                role=role or "user",
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            if cache_control is not None:
+                msg["cache_control"] = cache_control
+            return [msg]
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
         """
         Check if the input item is a tool call output
         """
-        return input_item.get("type") in [
+        val = input_item.get("type") if isinstance(input_item, dict) else getattr(input_item, "type", None)
+        return val in [
             "function_call_output",
             "custom_tool_call_output",
             "web_search_call",
@@ -926,7 +938,8 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        val = input_item.get("type") if isinstance(input_item, dict) else getattr(input_item, "type", None)
+        return val in ("function_call", "custom_tool_call")
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
@@ -1156,6 +1169,31 @@ class LiteLLMCompletionResponsesConfig:
         return ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
 
     @staticmethod
+    def _normalize_responses_api_object_to_dict(item: Any) -> dict[str, Any]:
+        """
+        Normalize a Responses API object (Pydantic model or custom class) to a dictionary
+        """
+        if hasattr(item, "model_dump"):
+            return item.model_dump()
+        elif hasattr(item, "dict"):
+            return item.dict()
+
+        item_dict = {}
+        for attr in [
+            "type",
+            "text",
+            "cache_control",
+            "file_id",
+            "file_data",
+            "file_url",
+            "image_url",
+            "detail",
+        ]:
+            if hasattr(item, attr):
+                item_dict[attr] = getattr(item, attr)
+        return item_dict
+
+    @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: Any,
     ) -> str | list[str | dict[str, Any]]:
@@ -1176,7 +1214,10 @@ class LiteLLMCompletionResponsesConfig:
             for item in content:
                 if isinstance(item, str):
                     content_list.append(item)
-                elif isinstance(item, dict):
+                elif isinstance(item, dict) or (item is not None and not isinstance(item, (str, int, float, bool))):
+                    if not isinstance(item, dict):
+                        item = LiteLLMCompletionResponsesConfig._normalize_responses_api_object_to_dict(item)
+
                     if item.get("type") == "input_file":
                         content_list.append(
                             LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)

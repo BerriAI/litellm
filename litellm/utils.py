@@ -7209,36 +7209,51 @@ def is_cached_message(message: AllMessageValues) -> bool:
         return False
 
     # Check message-level cache_control (set by cache_control_injection_points hook for string content)
-    message_level_cache_control = message.get("cache_control")
-    if (
-        message_level_cache_control is not None
-        and isinstance(message_level_cache_control, dict)
-        and message_level_cache_control.get("type") == "ephemeral"
-    ):
-        return True
+    message_level_cache_control = (
+        message.get("cache_control")
+        if isinstance(message, dict)
+        else getattr(message, "cache_control", None)
+    )
+    if message_level_cache_control is not None:
+        cc_type = (
+            message_level_cache_control.get("type")
+            if isinstance(message_level_cache_control, dict)
+            else getattr(message_level_cache_control, "type", None)
+        )
+        if cc_type == "ephemeral":
+            return True
 
-    if "content" not in message:
-        return False
-
-    content = message["content"]
+    if isinstance(message, dict):
+        if "content" not in message:
+            return False
+        content = message["content"]
+    else:
+        content = getattr(message, "content", None)
 
     # Handle non-list content types (None, str, etc.)
     if not isinstance(content, list):
         return False
 
     for content_item in content:
-        # Ensure content_item is a dictionary before accessing keys
-        if not isinstance(content_item, dict):
-            continue
+        # Check if content_item is dict or object model
+        if isinstance(content_item, dict):
+            cache_control = content_item.get("cache_control")
+            item_type = content_item.get("type")
+        else:
+            cache_control = getattr(content_item, "cache_control", None)
+            item_type = getattr(content_item, "type", None)
 
-        cache_control = content_item.get("cache_control")
         if (
-            content_item.get("type") == "text"
+            item_type == "text"
             and cache_control is not None
-            and isinstance(cache_control, dict)
-            and cache_control.get("type") == "ephemeral"
         ):
-            return True
+            cc_type = (
+                cache_control.get("type")
+                if isinstance(cache_control, dict)
+                else getattr(cache_control, "type", None)
+            )
+            if cc_type == "ephemeral":
+                return True
 
     return False
 
