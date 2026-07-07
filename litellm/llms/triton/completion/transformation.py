@@ -191,8 +191,12 @@ class TritonGenerateConfig(TritonConfig):
     ) -> dict:
         inference_params = optional_params.copy()
         stream = inference_params.pop("stream", False)
+        # chat_template_kwargs is a LiteLLM-level param: apply it here when
+        # rendering the prompt text. Triton (TritonSamplingParams) has no
+        # knowledge of this argument and will raise if it reaches the server.
+        chat_template_kwargs: dict = inference_params.pop("chat_template_kwargs", {}) or {}
         data_for_triton: Dict[str, Any] = {
-            "text_input": prompt_factory(model=model, messages=messages),
+            "text_input": prompt_factory(model=model, messages=messages, chat_template_kwargs=chat_template_kwargs),
             "parameters": {
                 "max_tokens": int(optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)),
             },
@@ -249,8 +253,9 @@ class TritonInferConfig(TritonConfig):
             ]
         }
 
+        _LITELLM_ONLY_PARAMS = {"stream", "max_retries", "chat_template_kwargs"}
         for k, v in optional_params.items():
-            if not (k == "stream" or k == "max_retries"):
+            if k not in _LITELLM_ONLY_PARAMS:
                 datatype = "INT32" if isinstance(v, int) else "BYTES"
                 datatype = "FP32" if isinstance(v, float) else datatype
                 data_for_triton["inputs"].append({"name": k, "shape": [1], "datatype": datatype, "data": [v]})
