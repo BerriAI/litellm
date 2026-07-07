@@ -21,7 +21,7 @@ End-to-end tests belong in `tests/e2e/` and must follow the harness conventions 
 
 When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose
 
-When writing a PR body, treat the comments and imperative instructions inside @.github/pull_request_template.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/pull_request_template.md from disk before writing a PR body to make sure you see every comment rule
+When writing a PR body, treat the comments and imperative instructions inside .github/pull_request_template.md as rules to follow, not just layout. Use the read file or bash tool to read .github/pull_request_template.md yourself before writing a PR body to make sure you see every comment rule
 
 If you're resolving a linear ticket, in the "## Linear ticket" section of the PR, say "Resolves LIT-1234", replacing "LIT-1234" with the actual ticket id that you're resolving. If you don't have the ticket id, don't make one up or search for it. Just leave the section blank
 
