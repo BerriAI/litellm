@@ -98,7 +98,7 @@ export function DataTable<TData, TValue>({
         </TableHeader>
         <TableBody>
           {isLoading ? (
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-muted-foreground">
                   <p>{loadingMessage}</p>
@@ -124,7 +124,7 @@ export function DataTable<TData, TValue>({
                 </TableRow>
 
                 {supportsExpansion && row.getIsExpanded() && renderSubComponent && (
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableCell colSpan={row.getVisibleCells().length} className="p-0">
                       <div className="w-full max-w-full overflow-hidden box-border">{renderSubComponent({ row })}</div>
                     </TableCell>
@@ -133,7 +133,7 @@ export function DataTable<TData, TValue>({
               </Fragment>
             ))
           ) : (
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-muted-foreground">
                   <p>{noDataMessage}</p>

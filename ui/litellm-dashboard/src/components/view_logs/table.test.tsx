@@ -82,6 +82,27 @@ describe("DataTable states", () => {
     expect(screen.getByText("No results")).toBeInTheDocument();
   });
 
+  it("suppresses the primitive's row hover on loading, empty, and expansion placeholder rows", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
+    expect(screen.getByText("Loading...").closest("tr")).toHaveClass("hover:bg-transparent");
+
+    rerender(<DataTable data={[]} columns={unsizedColumns} />);
+    expect(screen.getByText("No results").closest("tr")).toHaveClass("hover:bg-transparent");
+
+    rerender(
+      <DataTable
+        data={data}
+        columns={[expanderColumn, ...unsizedColumns]}
+        getRowCanExpand={() => true}
+        renderSubComponent={({ row }) => <div>details for {row.original.request_id}</div>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "expand r1" }));
+    expect(screen.getByText("details for r1").closest("tr")).toHaveClass("hover:bg-transparent");
+    expect(screen.getByText("alpha").closest("tr")).not.toHaveClass("hover:bg-transparent");
+  });
+
   it("renders row data through plain TanStack column defs, including custom cell renderers", () => {
     const columns: ColumnDef<Row>[] = [
       { header: "A", accessorKey: "a" },
