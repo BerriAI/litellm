@@ -107,7 +107,6 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
 vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
-vi.mock("@/components/view_users", () => ({ default: stub("view-users") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
 vi.mock("@/components/organizations", () => ({
   default: stub("organizations"),
@@ -149,7 +148,7 @@ vi.mock("@/lib/cva.config", () => ({
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import CreateKeyPage from "@/app/page";
+import CreateKeyPage from "@/app/(dashboard)/page";
 import { AuthProvider } from "@/contexts/AuthContext";
 
 // The page consumes auth state via useAuth(). Wrap it so the hook resolves
@@ -242,7 +241,7 @@ describe("CreateKeyPage auth behavior", () => {
     expect(wroteDeletion).toBe(true);
   });
 
-  it("does NOT redirect when token is valid and renders the app chrome", async () => {
+  it("does NOT redirect when token is valid and renders the page content", async () => {
     // Arrange: valid token in cookie
     setCookie("token=validtoken");
 
@@ -269,9 +268,9 @@ describe("CreateKeyPage auth behavior", () => {
       expect(window.location.replace).not.toHaveBeenCalled();
     });
 
-    // And some top-level UI appears (Navbar stub)
+    // And the default page content appears (UserDashboard stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("navbar")).toBeInTheDocument();
+      expect(screen.getByTestId("user-dashboard")).toBeInTheDocument();
     });
   });
 

@@ -51,6 +51,8 @@ export const OAUTH_FLOW = {
 // from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
 export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
 
+export const MCP_OAUTH2_FLOW_INTERACTIVE = "authorization_code";
+
 export type McpOAuthMode = "m2m" | "passthrough" | "obo";
 
 // Classify an OAuth2 MCP server into the mode that decides how the tool list is

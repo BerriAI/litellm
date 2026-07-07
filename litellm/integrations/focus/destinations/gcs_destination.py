@@ -41,22 +41,16 @@ class FocusGCSDestination(GCSBucketBase, FocusDestination):
         filename: str,
     ) -> None:
         object_name = self._build_object_key(time_window=time_window, filename=filename)
-        headers = await self.construct_request_headers(
-            service_account_json=self.path_service_account_json
-        )
+        headers = await self.construct_request_headers(service_account_json=self.path_service_account_json)
         headers["Content-Type"] = "application/octet-stream"
         encoded_name = encode_gcs_object_name_for_url(object_name)
         url = (
             f"https://storage.googleapis.com/upload/storage/v1/b/"
             f"{self.BUCKET_NAME}/o?uploadType=media&name={encoded_name}"
         )
-        response = await self.async_httpx_client.post(
-            url=url, headers=headers, data=content
-        )
+        response = await self.async_httpx_client.post(url=url, headers=headers, data=content)
         if response.status_code != 200:
-            raise RuntimeError(
-                f"GCS upload failed: status={response.status_code} body={response.text}"
-            )
+            raise RuntimeError(f"GCS upload failed: status={response.status_code} body={response.text}")
         verbose_logger.debug(
             "Focus GCS: uploaded %d bytes to gs://%s/%s",
             len(content),

@@ -107,6 +107,7 @@ async def google_stream_generate_content(
     data["stream"] = True
     # google-genai SDK (?alt=sse) must not receive OpenAI's data: [DONE] terminator.
     data["_litellm_skip_openai_stream_done"] = True
+    data["_litellm_raw_sse_stream"] = True
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -172,11 +173,7 @@ async def google_count_tokens(request: Request, model_name: str):
     from litellm.proxy._types import TokenCountRequest
 
     # Translate contents to openai format messages using the adapter
-    messages = (
-        GoogleGenAIAdapter()
-        .translate_generate_content_to_completion(model_name, contents)
-        .get("messages", [])
-    )
+    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
 
     token_request = TokenCountRequest(
         model=model_name,

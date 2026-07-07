@@ -585,6 +585,50 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
 
 
 @pytest.mark.asyncio
+async def test_logging_only_does_not_mask_pre_call_request(
+    mock_user_api_key, mock_cache
+):
+    """
+    A guardrail configured with `logging_only` must only mask PII for logs/traces,
+    never for the request sent to the model. `async_pre_call_hook` should leave the
+    request untouched so the model receives (and replies based on) the real input.
+
+    Regression test for the case where the pre-call hook masked the live request,
+    causing the model's response to contain anonymization tokens (e.g. <PERSON>)
+    instead of the real output.
+    """
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={PiiEntityType.PHONE_NUMBER: PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("555-123-4567", "[PHONE]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    original_text = "My phone is 555-123-4567"
+    test_data = {
+        "messages": [{"role": "user", "content": original_text}],
+        "model": "gpt-4",
+    }
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    # The live request must be unchanged: PII reaches the model intact.
+    assert result["messages"][0]["content"] == original_text
+    assert "[PHONE]" not in result["messages"][0]["content"]
+
+    print("✓ logging_only leaves the pre-call request unmasked")
+
+
+@pytest.mark.asyncio
 async def test_presidio_sets_guardrail_information_in_request_data():
     """
     Test that Presidio populates guardrail information into request_data metadata.
@@ -2327,6 +2371,164 @@ async def test_apply_to_output_streaming_bytes_only_logs_warning():
         mock_logger.warning.assert_called_once()
         warning_msg = mock_logger.warning.call_args[0][0]
         assert "Output PII masking was skipped" in warning_msg
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_events_passthrough(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and pii_tokens exist, /v1/responses
+    streaming events must pass through instead of being dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    response_events = [
+        {"type": "response.created", "response": {"id": "resp_1"}},
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "status": "completed"},
+        },
+    ]
+
+    async def mock_stream():
+        for event in response_events:
+            yield event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == response_events
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
+    mock_user_api_key,
+):
+    """
+    When output_parse_pii=True, a /v1/responses ``response.completed`` event
+    (a Pydantic ResponseCompletedEvent, as produced in production) must have its
+    output text unmasked in-place before being forwarded to the client.
+    """
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    completed_event = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            output=[
+                GenericResponseOutputItem(
+                    type="message",
+                    id="msg_1",
+                    status="completed",
+                    role="assistant",
+                    content=[
+                        OutputText(
+                            type="output_text",
+                            text="Reach me at <EMAIL_ADDRESS_1> today.",
+                            annotations=[],
+                        )
+                    ],
+                )
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+    async def mock_stream():
+        yield completed_event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [completed_event]
+    assert (
+        collected[0].response.output[0].content[0].text
+        == "Reach me at john@example.com today."
+    )
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and a stream mixes buffered
+    ModelResponseStream chunks with a /v1/responses event, the buffered chat
+    chunks must still be forwarded (in order) instead of being dropped at the
+    saw_non_chat_chunk early return.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-mixed-unmask-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+    response_completed = FakeResponsesEvent("response.completed")
+
+    async def mock_stream():
+        yield model_chunk
+        yield response_completed
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [model_chunk, response_completed]
 
 
 @pytest.mark.asyncio
