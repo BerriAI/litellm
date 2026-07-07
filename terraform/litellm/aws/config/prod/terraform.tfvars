@@ -51,17 +51,11 @@ proxy_config = {
     },
   ]
   general_settings = {
-    master_key           = "os.environ/LITELLM_MASTER_KEY"
-    database_url         = "os.environ/DATABASE_URL"
-    alerting             = ["email", "slack_budget_alerts", "slack"]
-    alert_types          = ["budget_alerts", "spend_reports"]
-    alerting_threshold   = 300
-    supported_db_objects = ["mcp"]
-    virtual_key_naming = {
-      mode : "enforce"
-      regex : "^[a-z0-9-]{8,32}$"
-      error_message : "Key alias must be between 8 and 32 characters (lowercase letters, numbers, hyphen)."
-    }
+    master_key         = "os.environ/LITELLM_MASTER_KEY"
+    database_url       = "os.environ/DATABASE_URL"
+    alerting           = ["email", "slack_budget_alerts", "slack"]
+    alert_types        = ["budget_alerts", "spend_reports"]
+    alerting_threshold = 300
     alerting_args = {
       daily_report_frequency       = 43200 # 12 hours in seconds
       report_check_interval        = 3600  # 1 hour in seconds
