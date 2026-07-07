@@ -71,7 +71,7 @@ export function DataTable<TData, TValue>({
   const tableStyle = hasExplicitColumnSizes ? { minWidth: table.getCenterTotalSize() } : { minWidth: "400px" };
 
   return (
-    <div className="rounded-lg custom-border w-full max-w-full box-border">
+    <div className="rounded-lg custom-border overflow-hidden w-full max-w-full box-border">
       <Table className={tableClassName} style={tableStyle}>
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (

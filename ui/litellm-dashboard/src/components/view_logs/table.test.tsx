@@ -114,6 +114,13 @@ describe("DataTable states", () => {
     expect(screen.getByText("custom:beta")).toBeInTheDocument();
   });
 
+  it("clips the table to the rounded wrapper so the header band cannot bleed past the corners", () => {
+    const { container } = render(<DataTable data={data} columns={unsizedColumns} />);
+
+    const wrapper = container.firstElementChild;
+    expect(wrapper).toHaveClass("rounded-lg", "overflow-hidden");
+  });
+
   it("right-aligns headers and cells with tabular figures for numeric meta columns", () => {
     const columns: ColumnDef<Row>[] = [
       { header: "A", accessorKey: "a" },

@@ -271,7 +271,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const seconds = (ms / 1000).toFixed(2);
       return (
         <Tooltip title={`${ms}ms`}>
-          <span className="max-w-[15ch] truncate block">{seconds}</span>
+          <span className="max-w-[15ch] truncate inline-block">{seconds}</span>
         </Tooltip>
       );
     },
@@ -301,7 +301,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const ttftSeconds = (ttftMs / 1000).toFixed(2);
       return (
         <Tooltip title={`${ttftMs}ms`}>
-          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
+          <span className="max-w-[15ch] truncate inline-block">{ttftSeconds}</span>
         </Tooltip>
       );
     },
