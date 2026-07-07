@@ -3254,6 +3254,106 @@ async def test_get_team_object_permission_with_core_auth_auto_loading():
 
 
 @pytest.mark.asyncio
+async def test_get_team_object_permission_ui_session_team_skips_db_lookup():
+    """
+    UI session tokens carry the virtual team_id "litellm-dashboard" (UI_TEAM_ID),
+    which is never persisted. The lookup must short-circuit to None without
+    calling get_team_object; otherwise every MCP tools listing from the
+    dashboard logs a "Team doesn't exist in db" warning per server.
+    """
+    from litellm.proxy._types import UI_TEAM_ID
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=UI_TEAM_ID,
+    )
+
+    mock_prisma = MagicMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+            result = await MCPRequestHandler._get_team_object_permission(
+                mock_user_auth
+            )
+
+            assert result is None
+            mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "helper_name,expected",
+    [
+        ("_get_allowed_mcp_servers_for_team", []),
+        ("_get_mcp_access_groups_for_team", []),
+    ],
+)
+async def test_team_mcp_helpers_ui_session_team_skip_db_lookup(helper_name, expected):
+    """
+    The server-permission and access-group helpers hit get_team_object with the
+    session's team_id too; for the virtual UI team each used to 404 into its
+    own swallowed warning per MCP listing. They must short-circuit without a
+    DB lookup.
+    """
+    from litellm.proxy._types import UI_TEAM_ID
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=UI_TEAM_ID,
+    )
+
+    mock_prisma = MagicMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+            helper = getattr(MCPRequestHandler, helper_name)
+            result = await helper(mock_user_auth)
+
+            assert result == expected
+            mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_tools_for_server_ui_session_team_keeps_key_restrictions():
+    """
+    Regression: the 404 raised by get_team_object for the virtual UI team used
+    to escape into get_allowed_tools_for_server's blanket except, dropping
+    key-level tool restrictions (fail-open) and logging a warning. With the
+    short-circuit, key restrictions still apply for UI sessions.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UI_TEAM_ID
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=UI_TEAM_ID,
+    )
+    key_perm = MagicMock()
+    key_perm.mcp_tool_permissions = {"server_1": ["tool_a"]}
+
+    mock_prisma = MagicMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            side_effect=HTTPException(
+                status_code=404,
+                detail={"error": "Team doesn't exist in db. Team=litellm-dashboard."},
+            ),
+        ):
+            with patch.object(
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+            ):
+                result = await MCPRequestHandler.get_allowed_tools_for_server(
+                    server_id="server_1",
+                    user_api_key_auth=user_api_key_auth,
+                )
+
+                assert result == ["tool_a"]
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_for_team_uses_helper():
     """
     Test that _get_allowed_mcp_servers_for_team resolves both legacy
