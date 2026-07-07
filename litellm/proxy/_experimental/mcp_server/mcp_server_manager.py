@@ -3198,12 +3198,17 @@ class MCPServerManager:
         kept, dropped = split_tools_by_name_length(tools, MCP_MAX_TOOL_NAME_LENGTH)
         if dropped:
             dropped_names = ", ".join(f"{tool.name} ({len(tool.name)} chars)" for tool in dropped)
+            server_label = (
+                server.name
+                if not server.alias or server.alias == server.name
+                else f"{server.name} (alias {server.alias})"
+            )
             verbose_logger.warning(
                 "MCP server %s has %d tool(s) whose name exceeds %d characters, which providers such as "
                 "AWS Bedrock, OpenAI, and Gemini reject. Excluding them from tool listings: %s. "
                 "Use a shorter server alias, rename the tools on the MCP server, or set "
                 "LITELLM_MCP_MAX_TOOL_NAME_LENGTH to change the limit.",
-                server.name,
+                server_label,
                 len(dropped),
                 MCP_MAX_TOOL_NAME_LENGTH,
                 dropped_names,

@@ -26,6 +26,7 @@ from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
     get_server_prefix,
+    is_short_mcp_tool_prefix_enabled,
     merge_mcp_headers,
     tool_name_length_warnings,
 )
@@ -1311,10 +1312,17 @@ if MCP_AVAILABLE:
             list_tools_response = await client.run_with_session(_list_tools_session_operation)
             list_tools_result: List[MCPTool] = list_tools_response.tools
             model_dumped_tools: List[dict] = [tool.model_dump() for tool in list_tools_result]
-            warnings = tool_name_length_warnings(
-                [tool.name for tool in list_tools_result],
-                get_server_prefix(new_mcp_server_request),
-                MCP_MAX_TOOL_NAME_LENGTH,
+            # In short-prefix mode the 3-char prefix derives from the server_id
+            # assigned at create time, so without one the final length is
+            # unknowable; skip speculative warnings (runtime exclusion still warns).
+            warnings = (
+                []
+                if is_short_mcp_tool_prefix_enabled() and not new_mcp_server_request.server_id
+                else tool_name_length_warnings(
+                    [tool.name for tool in list_tools_result],
+                    get_server_prefix(new_mcp_server_request),
+                    MCP_MAX_TOOL_NAME_LENGTH,
+                )
             )
             return {
                 "tools": model_dumped_tools,

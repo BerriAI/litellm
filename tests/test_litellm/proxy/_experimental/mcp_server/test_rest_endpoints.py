@@ -644,6 +644,50 @@ class TestTestToolsList:
         assert len(result["warnings"]) == 1
         assert f"{alias}-{too_long}" in result["warnings"][0]
 
+    async def test_no_speculative_warnings_in_short_prefix_mode(self, monkeypatch):
+        """In short-prefix mode without a server_id the 3-char runtime prefix is not
+        knowable yet, so the preview must not warn based on the full alias."""
+        from types import SimpleNamespace
+
+        from mcp.types import Tool as MCPTool
+
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.proxy._types import LitellmUserRoles
+
+        alias = "network_config_audit"
+        fits_short_prefix_only = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+
+        class FakeClient:
+            async def run_with_session(self, operation):
+                return SimpleNamespace(tools=[MCPTool(name=fits_short_prefix_only, inputSchema={})])
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(FakeClient())
+
+        monkeypatch.setattr(
+            rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False
+        )
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "1")
+
+        result = await rest_endpoints.test_tools_list(
+            _build_request(),
+            NewMCPServerRequest(
+                server_name="example",
+                alias=alias,
+                url="https://example.com",
+                auth_type=MCPAuth.none,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["warnings"] == []
+
 
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
