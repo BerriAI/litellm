@@ -111,7 +111,7 @@ class TestKeyRoutes:
         key = _generate_key(
             client,
             resources,
-            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424_242),
+            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242),
         )
 
         info = client.gateway.key_info(key)
@@ -119,7 +119,7 @@ class TestKeyRoutes:
         assert info.models == ["gemini-2.5-flash"], (
             f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
-        assert info.tpm_limit == 424_242, (
+        assert info.tpm_limit == 424242, (
             f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
         )
 
