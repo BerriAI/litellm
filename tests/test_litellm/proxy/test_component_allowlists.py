@@ -47,8 +47,19 @@ from backend.routes.allowlist import (
     BACKEND_MOUNT_PATHS,
     BACKEND_PATH_PREFIXES,
 )
-from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+from gateway.routes.allowlist import (
+    GATEWAY_EXACT_PATHS,
+    GATEWAY_MOUNT_PATHS,
+    GATEWAY_PATH_PREFIXES,
+)
 from litellm.proxy.proxy_server import app
+
+# Importing gateway.main wraps the shared app's lifespan_context; save and
+# restore it so the wrapper does not leak into the other tests in this module.
+_PRE_IMPORT_LIFESPAN = app.router.lifespan_context
+from gateway.main import _is_gateway_route
+
+app.router.lifespan_context = _PRE_IMPORT_LIFESPAN
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:
@@ -133,3 +144,37 @@ def test_backend_drops_non_allowlisted_mounts():
     for mount_path in non_backend_mounts:
         assert mount_path not in BACKEND_MOUNT_PATHS, \
             f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
+
+
+def test_gateway_mount_paths_defined():
+    """GATEWAY_MOUNT_PATHS constant must exist and be a frozenset."""
+    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), \
+        f"GATEWAY_MOUNT_PATHS must be a frozenset, got {type(GATEWAY_MOUNT_PATHS)}"
+    assert len(GATEWAY_MOUNT_PATHS) > 0, \
+        "GATEWAY_MOUNT_PATHS must contain at least one Mount path"
+
+
+def test_metrics_mount_in_gateway_allowlist():
+    """The /metrics Mount must be in GATEWAY_MOUNT_PATHS."""
+    assert "/metrics" in GATEWAY_MOUNT_PATHS, \
+        "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
+
+
+async def _asgi_noop(scope, receive, send) -> None:
+    return None
+
+
+def test_gateway_keeps_prometheus_metrics_mount():
+    """Regression for #30291.
+
+    Prometheus registers /metrics as a Mount (``make_asgi_app``), not an
+    APIRoute. The gateway trim used to drop every Mount, so /metrics returned
+    404 on ``gateway.main`` even though the allowlist lists it.
+    """
+    assert _is_gateway_route(Mount("/metrics", app=_asgi_noop)) is True
+
+
+def test_gateway_drops_non_allowlisted_mounts():
+    """Keeping /metrics must not leak the UI static or MCP catch-all Mounts."""
+    for path in ("/", "/ui", "/_next", "/swagger", "/mcp", "/sse"):
+        assert _is_gateway_route(Mount(path, app=_asgi_noop)) is False, path

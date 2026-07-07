@@ -25,7 +25,11 @@ DatabaseURLSettings.from_env().apply_to_env()
 
 from litellm.proxy.proxy_server import app
 
-from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+from gateway.routes.allowlist import (
+    GATEWAY_EXACT_PATHS,
+    GATEWAY_MOUNT_PATHS,
+    GATEWAY_PATH_PREFIXES,
+)
 
 
 def _is_gateway_route(route) -> bool:
@@ -34,8 +38,10 @@ def _is_gateway_route(route) -> bool:
     if path is None:
         return False
     if isinstance(route, Mount):
-        # Gateway never serves the static UI or its asset bundles.
-        return False
+        # The static UI mounts are served by the dedicated UI container. Only
+        # Mounts in the gateway allowlist (e.g. the Prometheus /metrics scrape,
+        # registered via make_asgi_app) remain on the gateway.
+        return path in GATEWAY_MOUNT_PATHS
     if path in GATEWAY_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)

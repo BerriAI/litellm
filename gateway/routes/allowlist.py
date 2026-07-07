@@ -120,3 +120,9 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/test",
     }
 )
+
+GATEWAY_MOUNT_PATHS: frozenset[str] = frozenset(
+    {
+        "/metrics",  # Prometheus scrape endpoint, registered as an ASGI Mount
+    }
+)
