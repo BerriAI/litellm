@@ -3338,17 +3338,24 @@ async def _get_model_max_budget_current_spend(
     budget_config: BudgetConfig,
     user_api_key_cache: UserApiKeyCache,
 ) -> float:
-    virtual_key_model_spend_cache_key = (
-        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model}:{budget_config.budget_duration}"
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        current_model_budget_window,
+        _windowed_cache_key,
+    )
+
+    window_epoch = current_model_budget_window(str(budget_config.budget_duration)).epoch
+    virtual_key_model_spend_cache_key = _windowed_cache_key(
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model}:{budget_config.budget_duration}",
+        window_epoch,
     )
     current_spend: float | None = await user_api_key_cache.async_get_cache(
         key=virtual_key_model_spend_cache_key,
     )
     if current_spend is None:
         model_without_prefix = model.split("/")[-1] if "/" in model else model
-        virtual_key_model_spend_cache_key = (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
-            f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
+        virtual_key_model_spend_cache_key = _windowed_cache_key(
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}",
+            window_epoch,
         )
         current_spend = await user_api_key_cache.async_get_cache(
             key=virtual_key_model_spend_cache_key,

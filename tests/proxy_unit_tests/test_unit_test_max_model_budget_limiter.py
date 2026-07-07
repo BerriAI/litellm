@@ -175,7 +175,7 @@ async def test_increment_model_budget_spend_tracks_per_key_for_service_account_t
 
     budget_config = GenericBudgetInfo(budget_limit=20.0, time_period="1d")
     with patch.object(
-        budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock
+        budget_limiter, "_increment_windowed_spend", new_callable=AsyncMock
     ) as increment_mock:
         await budget_limiter._increment_model_budget_spend(
             response_cost=0.5,
@@ -189,7 +189,7 @@ async def test_increment_model_budget_spend_tracks_per_key_for_service_account_t
         )
         increment_mock.assert_awaited_once()
         spend_key = increment_mock.call_args.kwargs["spend_key"]
-        assert spend_key == f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-hash:claude-sonnet-4-6:1d"
+        assert spend_key.startswith(f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-hash:claude-sonnet-4-6:1d:w")
 
 
 @pytest.mark.asyncio
@@ -275,7 +275,7 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
     }
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_windowed_spend",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -284,8 +284,8 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
+        assert spend_key.startswith(
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}:w"
         )
         assert call_kwargs["response_cost"] == 0.05
 
@@ -388,7 +388,7 @@ async def test_async_log_success_event_uses_model_group_for_cache_key(budget_lim
     }
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_windowed_spend",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -398,8 +398,8 @@ async def test_async_log_success_event_uses_model_group_for_cache_key(budget_lim
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
         # The cache key must use the model_group name, NOT the deployment name
-        assert spend_key == (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model_group}:{budget_duration}"
+        assert spend_key.startswith(
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model_group}:{budget_duration}:w"
         )
         assert call_kwargs["response_cost"] == 0.10
 
@@ -437,7 +437,7 @@ async def test_async_log_success_event_falls_back_to_model_when_no_model_group(
     }
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_windowed_spend",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -446,8 +446,8 @@ async def test_async_log_success_event_falls_back_to_model_when_no_model_group(
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
+        assert spend_key.startswith(
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}:w"
         )
 
 
@@ -484,7 +484,7 @@ async def test_async_log_success_event_end_user_uses_model_group(budget_limiter)
     }
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_windowed_spend",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -493,8 +493,8 @@ async def test_async_log_success_event_end_user_uses_model_group(budget_limiter)
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group}:{budget_duration}"
+        assert spend_key.startswith(
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group}:{budget_duration}:w"
         )
 
 
@@ -530,7 +530,7 @@ async def test_async_log_success_event_uses_end_user_model_budget_duration(
     }
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_windowed_spend",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -539,8 +539,8 @@ async def test_async_log_success_event_uses_end_user_model_budget_duration(
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}"
+        assert spend_key.startswith(
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}:w"
         )
         assert call_kwargs["response_cost"] == 0.05
 
@@ -570,7 +570,7 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
             },
         },
     }
-    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock):
+    with patch.object(limiter, "_increment_windowed_spend", new_callable=AsyncMock):
         with patch.object(
             limiter,
             "_push_in_memory_increments_to_redis",
@@ -601,7 +601,7 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
             },
         },
     }
-    with patch.object(budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock):
+    with patch.object(budget_limiter, "_increment_windowed_spend", new_callable=AsyncMock):
         with patch.object(
             budget_limiter,
             "_push_in_memory_increments_to_redis",

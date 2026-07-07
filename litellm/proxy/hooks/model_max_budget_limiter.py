@@ -1,10 +1,12 @@
 import json
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
 from litellm.proxy._types import UserAPIKeyAuth
@@ -19,6 +21,91 @@ from litellm.types.utils import (
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX = "end_user_model_spend"
 TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX = "team_member_model_spend"
+
+MODEL_BUDGET_WINDOW_TTL_BUFFER_SECONDS = 3600
+
+
+@dataclass(frozen=True, slots=True)
+class ModelBudgetWindow:
+    """A calendar-aligned budget window for a given duration.
+
+    ``window_start`` and ``reset_at`` are the inclusive start and exclusive end
+    of the current window in the configured budget-reset timezone (UTC by
+    default). ``epoch`` is the integer ``window_start`` timestamp used to key the
+    spend counter so it rolls over deterministically at each boundary without a
+    first-request anchor or a scheduled reset job.
+    """
+
+    window_start: datetime
+    reset_at: datetime
+    epoch: int
+
+
+def current_model_budget_window(budget_duration: str) -> ModelBudgetWindow:
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    reset_at = get_budget_reset_time(budget_duration=budget_duration)
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    window_start = reset_at - timedelta(seconds=duration_in_seconds(budget_duration))
+    return ModelBudgetWindow(window_start=window_start, reset_at=reset_at, epoch=int(window_start.timestamp()))
+
+
+def _windowed_cache_key(base_key: str, window_epoch: int) -> str:
+    return f"{base_key}:w{window_epoch}"
+
+
+def _window_ttl_seconds(reset_at: datetime) -> int:
+    remaining = int((reset_at - datetime.now(timezone.utc)).total_seconds())
+    return max(remaining, 1) + MODEL_BUDGET_WINDOW_TTL_BUFFER_SECONDS
+
+
+async def _sum_model_window_spend_logs(
+    *,
+    group_field: str,
+    entity_where: dict,
+    model: str,
+    window_start: datetime,
+) -> Optional[float]:
+    """Authoritative spend for (entity, model) since ``window_start`` from spend logs.
+
+    Returns the summed spend (including 0.0 when there is no matching spend),
+    or None when the DB is unavailable or the query fails, so callers can leave
+    the counter cold rather than seed a wrong value.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    if prisma_client is None:
+        return None
+
+    where: dict = {
+        **entity_where,
+        "startTime": {"gte": window_start},
+        "OR": [{"model_group": model}, {"model": model}],
+    }
+    try:
+        response = await SpendLogsRepository(prisma_client).table.group_by(
+            by=[group_field],
+            where=where,  # type: ignore[arg-type]
+            sum={"spend": True},
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "model_max_budget reconcile: spend-log aggregation failed for %s model=%s",
+            entity_where,
+            model,
+        )
+        return None
+
+    if not response:
+        return 0.0
+    total = 0.0
+    for row in response:
+        sum_row = row.get("_sum") if isinstance(row, dict) else getattr(row, "_sum", None)
+        spend = sum_row.get("spend") if isinstance(sum_row, dict) else getattr(sum_row, "spend", None)
+        total += float(spend or 0.0)
+    return total
 
 ModelBudgetSpendScope = Literal["key", "team_member", "team"]
 ModelMaxBudgetResolutionSource = Literal["flat_metadata", "user_api_key_auth", "db_fallback", "empty"]
@@ -98,6 +185,31 @@ def _log_model_max_budget_spend_trace(event: str, **fields: object) -> None:
 
 
 def _compute_spend_cache_key(
+    *,
+    scope: ModelBudgetSpendScope,
+    model: str,
+    budget_duration: str,
+    virtual_key: Optional[str],
+    team_id: Optional[str],
+    user_id: Optional[str],
+    end_user_id: Optional[str],
+    window_epoch: int,
+) -> Optional[str]:
+    base = _compute_spend_cache_key_base(
+        scope=scope,
+        model=model,
+        budget_duration=budget_duration,
+        virtual_key=virtual_key,
+        team_id=team_id,
+        user_id=user_id,
+        end_user_id=end_user_id,
+    )
+    if base is None:
+        return None
+    return _windowed_cache_key(base, window_epoch)
+
+
+def _compute_spend_cache_key_base(
     *,
     scope: ModelBudgetSpendScope,
     model: str,
@@ -373,6 +485,7 @@ def log_key_info_usage_reads(
             team_id=team_id,
             user_id=user_id,
             end_user_id=None,
+            window_epoch=current_model_budget_window(time_period).epoch,
         )
         _log_model_max_budget_spend_trace(
             "key_info_usage_read",
@@ -442,13 +555,18 @@ async def build_effective_model_max_budget_usage(
         budget_limit = float(budget_config.max_budget)
         spend_value = float(current_spend or 0.0)
         percent_used = min(round((spend_value / budget_limit) * 100, 1), 999.9) if budget_limit > 0 else 0.0
-        result[model] = {
+        entry: dict[str, object] = {
             "current_spend": round(spend_value, 4),
             "budget_limit": budget_limit,
             "time_period": budget_config.budget_duration,
             "scope": display_scope,
             "percent_used": percent_used,
         }
+        if budget_config.budget_duration:
+            window = current_model_budget_window(budget_config.budget_duration)
+            entry["window_start"] = window.window_start.isoformat()
+            entry["reset_at"] = window.reset_at.isoformat()
+        result[model] = entry
     return result
 
 
@@ -644,25 +762,68 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    async def _windowed_counter_get(self, cache_key: str) -> Optional[float]:
+        redis_cache = self.dual_cache.redis_cache
+        if redis_cache is not None:
+            try:
+                val = await redis_cache.async_get_cache(key=cache_key)
+                return float(val) if val is not None else None
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "model_max_budget: Redis read failed for %s, falling back to in-memory", cache_key
+                )
+        val = await self.dual_cache.async_get_cache(key=cache_key)
+        return float(val) if val is not None else None
+
+    async def _get_windowed_model_spend(
+        self,
+        *,
+        base_keys: List[str],
+        budget_config: BudgetConfig,
+        reconcile: Callable[[datetime], Awaitable[Optional[float]]],
+    ) -> Optional[float]:
+        if not budget_config.budget_duration:
+            return None
+        window = current_model_budget_window(budget_config.budget_duration)
+        for base in base_keys:
+            hit = await self._windowed_counter_get(_windowed_cache_key(base, window.epoch))
+            if hit is not None:
+                return hit
+
+        reconciled = await reconcile(window.window_start)
+        if reconciled is None:
+            return None
+        await self.dual_cache.async_set_cache(
+            key=_windowed_cache_key(base_keys[0], window.epoch),
+            value=reconciled,
+            ttl=_window_ttl_seconds(window.reset_at),
+        )
+        return reconciled
+
     async def _get_end_user_spend_for_model(
         self,
         end_user_id: str,
         model: str,
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
-        end_user_model_spend_cache_key = (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
-        )
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=end_user_model_spend_cache_key,
-        )
-
-        if _current_spend is None:
-            end_user_model_spend_cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=end_user_model_spend_cache_key,
+        stripped = self._get_model_without_custom_llm_provider(model)
+        base_keys = [f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"]
+        if stripped != model:
+            base_keys.append(
+                f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{stripped}:{key_budget_config.budget_duration}"
             )
-        return _current_spend
+
+        async def reconcile(window_start: datetime) -> Optional[float]:
+            return await _sum_model_window_spend_logs(
+                group_field="end_user",
+                entity_where={"end_user": end_user_id},
+                model=model,
+                window_start=window_start,
+            )
+
+        return await self._get_windowed_model_spend(
+            base_keys=base_keys, budget_config=key_budget_config, reconcile=reconcile
+        )
 
     async def _get_team_member_model_spend_for_model(
         self,
@@ -671,17 +832,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
-        team_member_model_spend_cache_key = f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{model}:{key_budget_config.budget_duration}"
-        current_spend = await self.dual_cache.async_get_cache(
-            key=team_member_model_spend_cache_key,
-        )
-
-        if current_spend is None:
-            team_member_model_spend_cache_key = f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            current_spend = await self.dual_cache.async_get_cache(
-                key=team_member_model_spend_cache_key,
+        stripped = self._get_model_without_custom_llm_provider(model)
+        base_keys = [
+            f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{model}:{key_budget_config.budget_duration}"
+        ]
+        if stripped != model:
+            base_keys.append(
+                f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{user_id}:{stripped}:{key_budget_config.budget_duration}"
             )
-        return current_spend
+
+        async def reconcile(window_start: datetime) -> Optional[float]:
+            return await _sum_model_window_spend_logs(
+                group_field="team_id",
+                entity_where={"team_id": team_id, "user": user_id},
+                model=model,
+                window_start=window_start,
+            )
+
+        return await self._get_windowed_model_spend(
+            base_keys=base_keys, budget_config=key_budget_config, reconcile=reconcile
+        )
 
     async def _get_virtual_key_spend_for_model(
         self,
@@ -690,26 +860,39 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
         """
-        Get the current spend for a virtual key for a model
+        Get the current spend for a virtual key for a model in the current
+        calendar-aligned window.
+
+        Reads the window-keyed counter (Redis-first for cross-pod truth). On a
+        clean miss the counter is reseeded from spend logs for the current
+        window so a cache/Redis loss or redeploy cannot silently zero spend.
 
         Lookup model in this order:
             1. model: directly look up `model`
-            2. If 1, does not exist, check if passed as {custom_llm_provider}/model
+            2. If 1 does not exist, check if passed as {custom_llm_provider}/model
         """
-
-        virtual_key_model_spend_cache_key = (
+        stripped = self._get_model_without_custom_llm_provider(model)
+        base_keys = [
             f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
-        )
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=virtual_key_model_spend_cache_key,
-        )
-
-        if _current_spend is None:
-            virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=virtual_key_model_spend_cache_key,
+        ]
+        if stripped != model:
+            base_keys.append(
+                f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{stripped}:{key_budget_config.budget_duration}"
             )
-        return _current_spend
+
+        async def reconcile(window_start: datetime) -> Optional[float]:
+            if not user_api_key_hash:
+                return None
+            return await _sum_model_window_spend_logs(
+                group_field="api_key",
+                entity_where={"api_key": user_api_key_hash},
+                model=model,
+                window_start=window_start,
+            )
+
+        return await self._get_windowed_model_spend(
+            base_keys=base_keys, budget_config=key_budget_config, reconcile=reconcile
+        )
 
     def _get_request_model_budget_config(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
@@ -749,34 +932,33 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> List[dict]:
         return healthy_deployments
 
-    async def _increment_spend_for_key_with_trace(
+    async def _increment_windowed_spend(
         self,
         *,
-        budget_config: BudgetConfig,
         spend_key: str,
-        start_time_key: str,
         response_cost: float,
+        reset_at: datetime,
         litellm_call_id: Optional[str],
+        budget_duration: Optional[str],
     ) -> None:
-        current_spend = await self.dual_cache.async_get_cache(key=spend_key)
+        current_spend = await self._windowed_counter_get(spend_key)
         _log_model_max_budget_spend_trace(
             "spend_key_read_before",
             litellm_call_id=litellm_call_id,
             spend_key=spend_key,
             current_spend=current_spend,
         )
-        await self._increment_spend_for_key(
-            budget_config=budget_config,
+        await self._increment_spend_in_current_window(
             spend_key=spend_key,
-            start_time_key=start_time_key,
             response_cost=response_cost,
+            ttl=_window_ttl_seconds(reset_at),
         )
         _log_model_max_budget_spend_trace(
             "spend_key_write",
             litellm_call_id=litellm_call_id,
             spend_key=spend_key,
             delta=response_cost,
-            budget_duration=budget_config.budget_duration,
+            budget_duration=budget_duration,
         )
 
     async def _increment_model_budget_spend(
@@ -790,7 +972,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         team_id: Optional[str],
         user_id: Optional[str],
         end_user_id: Optional[str],
-        litellm_call_id: Optional[str],
+        litellm_call_id: Optional[str] = None,
     ) -> None:
         if not budget_config.budget_duration:
             _log_model_max_budget_spend_trace(
@@ -802,6 +984,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
+        window = current_model_budget_window(budget_config.budget_duration)
         spend_key = _compute_spend_cache_key(
             scope=scope,
             model=model,
@@ -810,6 +993,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             team_id=team_id,
             user_id=user_id,
             end_user_id=end_user_id,
+            window_epoch=window.epoch,
         )
         if spend_key is None:
             _log_model_max_budget_spend_trace(
@@ -829,81 +1013,21 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             response_cost=response_cost,
             spend_key=spend_key,
         )
-
-        if scope == "key" and virtual_key is not None:
-            start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
-            await self._increment_spend_for_key_with_trace(
-                budget_config=budget_config,
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                response_cost=response_cost,
-                litellm_call_id=litellm_call_id,
-            )
-            _log_model_max_budget_spend_trace(
-                "increment_done",
-                litellm_call_id=litellm_call_id,
-                spend_key=spend_key,
-                response_cost=response_cost,
-                scope=scope,
-                budget_duration=budget_config.budget_duration,
-            )
-            return
-
-        if scope in ("team_member", "team") and team_id is not None and user_id is not None:
-            start_time_key = f"team_member_model_budget_start_time:{team_id}:{user_id}"
-            await self._increment_spend_for_key_with_trace(
-                budget_config=budget_config,
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                response_cost=response_cost,
-                litellm_call_id=litellm_call_id,
-            )
-            _log_model_max_budget_spend_trace(
-                "increment_done",
-                litellm_call_id=litellm_call_id,
-                spend_key=spend_key,
-                response_cost=response_cost,
-                scope=scope,
-                budget_duration=budget_config.budget_duration,
-            )
-            return
-
-        if scope in ("team_member", "team") and virtual_key is not None:
-            start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
-            await self._increment_spend_for_key_with_trace(
-                budget_config=budget_config,
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                response_cost=response_cost,
-                litellm_call_id=litellm_call_id,
-            )
-            _log_model_max_budget_spend_trace(
-                "increment_done",
-                litellm_call_id=litellm_call_id,
-                spend_key=spend_key,
-                response_cost=response_cost,
-                scope=scope,
-                budget_duration=budget_config.budget_duration,
-            )
-            return
-
-        if end_user_id is not None:
-            end_user_start_time_key = f"end_user_budget_start_time:{end_user_id}"
-            await self._increment_spend_for_key_with_trace(
-                budget_config=budget_config,
-                spend_key=spend_key,
-                start_time_key=end_user_start_time_key,
-                response_cost=response_cost,
-                litellm_call_id=litellm_call_id,
-            )
-            _log_model_max_budget_spend_trace(
-                "increment_done",
-                litellm_call_id=litellm_call_id,
-                spend_key=spend_key,
-                response_cost=response_cost,
-                scope="key",
-                budget_duration=budget_config.budget_duration,
-            )
+        await self._increment_windowed_spend(
+            spend_key=spend_key,
+            response_cost=response_cost,
+            reset_at=window.reset_at,
+            litellm_call_id=litellm_call_id,
+            budget_duration=budget_config.budget_duration,
+        )
+        _log_model_max_budget_spend_trace(
+            "increment_done",
+            litellm_call_id=litellm_call_id,
+            spend_key=spend_key,
+            response_cost=response_cost,
+            scope=scope,
+            budget_duration=budget_config.budget_duration,
+        )
 
     async def _increment_layered_budget_from_maps(
         self,
@@ -958,16 +1082,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return False
 
         cache_model = budget_model or ctx.model
-        end_user_spend_key = (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{ctx.end_user_id}:{cache_model}:{key_budget_config.budget_duration}"
+        window = current_model_budget_window(key_budget_config.budget_duration)
+        end_user_spend_key = _windowed_cache_key(
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{ctx.end_user_id}:{cache_model}:{key_budget_config.budget_duration}",
+            window.epoch,
         )
-        end_user_start_time_key = f"end_user_budget_start_time:{ctx.end_user_id}"
-        await self._increment_spend_for_key_with_trace(
-            budget_config=key_budget_config,
+        await self._increment_windowed_spend(
             spend_key=end_user_spend_key,
-            start_time_key=end_user_start_time_key,
             response_cost=ctx.response_cost,
+            reset_at=window.reset_at,
             litellm_call_id=ctx.litellm_call_id,
+            budget_duration=key_budget_config.budget_duration,
         )
         return True
 

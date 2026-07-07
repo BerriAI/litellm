@@ -13007,6 +13007,7 @@ def _install_test_model_max_budget_limiter(
         return None
 
     mock_dual_cache = AsyncMock()
+    mock_dual_cache.redis_cache = None
     mock_dual_cache.async_get_cache = AsyncMock(side_effect=async_get_cache)
     limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=mock_dual_cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.model_max_budget_limiter", limiter)
@@ -13588,6 +13589,58 @@ def test_internal_user_cannot_set_model_max_budget_on_update():
     assert exc_info.value.status_code == 403
 
 
+def test_internal_user_cannot_set_model_max_budget_on_own_personal_key_update():
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _enforce_model_max_budget_caller_permission,
+    )
+
+    data = UpdateKeyRequest.model_validate(
+        {
+            "key": "sk-test",
+            "model_max_budget": {
+                "claude-sonnet-4-6": {"budget_limit": 100.0, "time_period": "1d"},
+            },
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_model_max_budget_caller_permission(
+            data,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+            team_table=None,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_internal_user_cannot_clear_model_max_budget_on_update():
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _enforce_model_max_budget_caller_permission,
+    )
+
+    data = UpdateKeyRequest.model_validate(
+        {
+            "key": "sk-test",
+            "model_max_budget": {},
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_model_max_budget_caller_permission(
+            data,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+            team_table=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
 def test_proxy_admin_can_set_model_max_budget_on_generate():
     from unittest.mock import MagicMock
 
@@ -13715,9 +13768,16 @@ async def test_build_model_max_budget_usage_reads_current_cache_window():
         user_api_key_cache=mock_user_api_key_cache,
     )
 
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _windowed_cache_key,
+        current_model_budget_window,
+    )
+
     assert result["gpt-4o"]["current_spend"] == 0.30
     mock_user_api_key_cache.async_get_cache.assert_awaited_once_with(
-        key="virtual_key_spend:some-hash:gpt-4o:30d"
+        key=_windowed_cache_key(
+            "virtual_key_spend:some-hash:gpt-4o:30d", current_model_budget_window("30d").epoch
+        )
     )
 
 

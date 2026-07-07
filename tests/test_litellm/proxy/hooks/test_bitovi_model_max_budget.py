@@ -115,7 +115,7 @@ async def test_async_log_success_event_team_default_increments_bedrock_model_ali
 
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_spend_in_current_window",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -123,9 +123,8 @@ async def test_async_log_success_event_team_default_increments_bedrock_model_ali
         )
 
     mock_increment.assert_awaited_once()
-    assert (
-        mock_increment.call_args.kwargs["spend_key"]
-        == "virtual_key_spend:sa-key-hash:claude-sonnet-4-6:1d"
+    assert mock_increment.call_args.kwargs["spend_key"].startswith(
+        "virtual_key_spend:sa-key-hash:claude-sonnet-4-6:1d:w"
     )
 
 
@@ -156,7 +155,7 @@ async def test_async_log_success_event_reads_team_budget_from_litellm_metadata(b
 
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_spend_in_current_window",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -164,9 +163,8 @@ async def test_async_log_success_event_reads_team_budget_from_litellm_metadata(b
         )
 
     mock_increment.assert_awaited_once()
-    assert (
-        mock_increment.call_args.kwargs["spend_key"]
-        == "virtual_key_spend:sa-key-hash:claude-sonnet-4-6:1d"
+    assert mock_increment.call_args.kwargs["spend_key"].startswith(
+        "virtual_key_spend:sa-key-hash:claude-sonnet-4-6:1d:w"
     )
 
 
@@ -188,7 +186,7 @@ async def test_async_log_success_event_skips_when_budget_metadata_missing_from_b
 
     with patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_spend_in_current_window",
         new_callable=AsyncMock,
     ) as mock_increment, patch(
         "litellm.proxy.hooks.model_max_budget_limiter.resolve_budget_maps_for_increment",
@@ -238,7 +236,7 @@ async def test_async_log_success_event_falls_back_to_user_api_key_auth_budgets(b
         return_value=ResolvedModelBudgetMaps(None, team_budget, None, "user_api_key_auth"),
     ), patch.object(
         budget_limiter,
-        "_increment_spend_for_key",
+        "_increment_spend_in_current_window",
         new_callable=AsyncMock,
     ) as mock_increment:
         await budget_limiter.async_log_success_event(
@@ -246,9 +244,8 @@ async def test_async_log_success_event_falls_back_to_user_api_key_auth_budgets(b
         )
 
     mock_increment.assert_awaited_once()
-    assert (
-        mock_increment.call_args.kwargs["spend_key"]
-        == "virtual_key_spend:auth-key-hash:claude-sonnet-4-6:1d"
+    assert mock_increment.call_args.kwargs["spend_key"].startswith(
+        "virtual_key_spend:auth-key-hash:claude-sonnet-4-6:1d:w"
     )
 
 
@@ -594,6 +591,8 @@ async def test_service_account_two_keys_have_independent_spend_pools(budget_limi
     from litellm.proxy.hooks.model_max_budget_limiter import (
         TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX,
         VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+        _windowed_cache_key,
+        current_model_budget_window,
     )
 
     team_budget = _team_model_budget()
@@ -684,11 +683,145 @@ async def test_service_account_two_keys_have_independent_spend_pools(budget_limi
     assert usage_on_key_a_after_b["claude-sonnet-4-6"]["current_spend"] == sa_key_a_spend
     assert usage_on_key_b_after_b["claude-sonnet-4-6"]["current_spend"] == sa_key_b_spend
 
-    team_member_key = (
-        f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:team-1:user-1:claude-sonnet-4-6:1d"
+    window_epoch = current_model_budget_window("1d").epoch
+    team_member_key = _windowed_cache_key(
+        f"{TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX}:team-1:user-1:claude-sonnet-4-6:1d", window_epoch
     )
-    sa_key_a_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-a:claude-sonnet-4-6:1d"
-    sa_key_b_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-b:claude-sonnet-4-6:1d"
+    sa_key_a_spend_key = _windowed_cache_key(
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-a:claude-sonnet-4-6:1d", window_epoch
+    )
+    sa_key_b_spend_key = _windowed_cache_key(
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-b:claude-sonnet-4-6:1d", window_epoch
+    )
     assert await budget_limiter.dual_cache.async_get_cache(key=team_member_key) is None
     assert await budget_limiter.dual_cache.async_get_cache(key=sa_key_a_spend_key) == sa_key_a_spend
     assert await budget_limiter.dual_cache.async_get_cache(key=sa_key_b_spend_key) == sa_key_b_spend
+
+
+def test_current_model_budget_window_is_calendar_aligned_utc() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy.hooks.model_max_budget_limiter import current_model_budget_window
+
+    window = current_model_budget_window("1d")
+
+    assert window.reset_at.tzinfo is not None
+    assert window.reset_at.utcoffset() == timedelta(0)
+    assert (window.reset_at.hour, window.reset_at.minute, window.reset_at.second) == (0, 0, 0)
+    assert window.reset_at - window.window_start == timedelta(days=1)
+    assert window.epoch == int(window.window_start.timestamp())
+
+    now = datetime.now(timezone.utc)
+    assert window.window_start <= now < window.reset_at
+
+
+@pytest.mark.asyncio
+async def test_blocked_user_unblocks_when_calendar_window_rolls(budget_limiter):
+    from datetime import datetime, timedelta, timezone
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks import model_max_budget_limiter as mod
+
+    team_budget = _team_model_budget()
+    budget_config = _budget_config_for_model()
+
+    day1_start = datetime(2026, 7, 7, tzinfo=timezone.utc)
+    day1 = mod.ModelBudgetWindow(
+        window_start=day1_start,
+        reset_at=day1_start + timedelta(days=1),
+        epoch=int(day1_start.timestamp()),
+    )
+    day2_start = day1_start + timedelta(days=1)
+    day2 = mod.ModelBudgetWindow(
+        window_start=day2_start,
+        reset_at=day2_start + timedelta(days=1),
+        epoch=int(day2_start.timestamp()),
+    )
+
+    user_api_key = UserAPIKeyAuth(token="key-a", team_id="team-1", user_id="user-1", model_max_budget={})
+
+    with patch.object(mod, "current_model_budget_window", return_value=day1):
+        await budget_limiter._increment_model_budget_spend(
+            response_cost=25.0,
+            model="claude-sonnet-4-6",
+            budget_config=budget_config,
+            scope="team",
+            virtual_key="key-a",
+            team_id="team-1",
+            user_id="user-1",
+            end_user_id=None,
+            litellm_call_id=None,
+        )
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_key_within_model_budget(
+                user_api_key,
+                "claude-sonnet-4-6",
+                team_model_max_budget=team_budget,
+            )
+
+    with patch.object(mod, "current_model_budget_window", return_value=day2):
+        assert (
+            await budget_limiter.is_key_within_model_budget(
+                user_api_key,
+                "claude-sonnet-4-6",
+                team_model_max_budget=team_budget,
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_cold_cache_reseeds_model_spend_from_spend_logs(budget_limiter):
+    from litellm.proxy.hooks import model_max_budget_limiter as mod
+
+    team_budget = _team_model_budget()
+
+    reconcile = AsyncMock(return_value=18.0)
+    with patch.object(mod, "_sum_model_window_spend_logs", reconcile):
+        usage = await build_effective_model_max_budget_usage(
+            budget_limiter,
+            api_key_hash="key-a",
+            team_id="team-1",
+            user_id="user-1",
+            key_model_max_budget={},
+            team_model_max_budget=team_budget,
+            team_member_model_max_budget=None,
+        )
+        assert usage["claude-sonnet-4-6"]["current_spend"] == 18.0
+
+        usage_again = await build_effective_model_max_budget_usage(
+            budget_limiter,
+            api_key_hash="key-a",
+            team_id="team-1",
+            user_id="user-1",
+            key_model_max_budget={},
+            team_model_max_budget=team_budget,
+            team_member_model_max_budget=None,
+        )
+        assert usage_again["claude-sonnet-4-6"]["current_spend"] == 18.0
+
+    assert reconcile.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_usage_view_reports_calendar_window_boundaries(budget_limiter):
+    from datetime import datetime, timedelta
+
+    team_budget = _team_model_budget()
+
+    usage = await build_effective_model_max_budget_usage(
+        budget_limiter,
+        api_key_hash="key-a",
+        team_id="team-1",
+        user_id="user-1",
+        key_model_max_budget={},
+        team_model_max_budget=team_budget,
+        team_member_model_max_budget=None,
+    )
+
+    entry = usage["claude-sonnet-4-6"]
+    reset_at = datetime.fromisoformat(str(entry["reset_at"]))
+    window_start = datetime.fromisoformat(str(entry["window_start"]))
+    assert (reset_at.hour, reset_at.minute, reset_at.second) == (0, 0, 0)
+    assert reset_at - window_start == timedelta(days=1)
