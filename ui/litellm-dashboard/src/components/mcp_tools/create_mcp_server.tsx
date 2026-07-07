@@ -95,6 +95,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const {
     tools,
+    toolsWarnings,
     isLoadingTools,
     toolsError,
     toolsErrorStatus,
@@ -1169,6 +1170,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <MCPConnectionStatus
               formValues={formValues}
               tools={tools}
+              toolsWarnings={toolsWarnings}
               isLoadingTools={isLoadingTools}
               toolsError={toolsError}
               toolsErrorStatus={toolsErrorStatus}

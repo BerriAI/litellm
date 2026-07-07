@@ -148,6 +148,10 @@ export interface MCPTool {
   description?: string;
   inputSchema: InputSchema | string; // API returns string "tool_input_schema" or the actual schema
   mcp_info: MCPInfo;
+  // True when the tool's prefixed name exceeds the provider tool-name length
+  // limit; the tool is excluded from LLM-facing listings and calls are rejected
+  disabled?: boolean;
+  disabled_reason?: string | null;
   // Function to select a tool (added in the component)
   onToolSelect?: (tool: MCPTool) => void;
 }

@@ -2496,3 +2496,35 @@ class TestToolResponseMcpInfoEnrichment:
             "server_id": "server-uuid",
             "alias": None,
         }
+
+
+class TestToolResponseDisabledAnnotation:
+    """LIT-4216: the UI listing keeps over-limit tools visible but flags them disabled."""
+
+    def test_marks_overlong_tool_disabled_with_reason(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+        server = MCPServer(
+            server_id="len-limit",
+            name="len-limit-server",
+            alias=alias,
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+        )
+
+        objects = rest_endpoints._create_tool_response_objects(
+            [MCPTool(name=fitting, inputSchema={}), MCPTool(name=too_long, inputSchema={})],
+            server,
+        )
+
+        assert [o.disabled for o in objects] == [False, True]
+        assert objects[0].disabled_reason is None
+        assert f"{alias}-{too_long}" in objects[1].disabled_reason
+        assert "direct calls" in objects[1].disabled_reason

@@ -6372,3 +6372,70 @@ class TestToolNameLengthExclusion:
         tools = await self._list_tools(self._server(alias), [raw_at_limit, raw_too_long], add_prefix=False)
 
         assert [t.name for t in tools] == [raw_at_limit]
+
+    @pytest.mark.asyncio
+    async def test_ui_listing_keeps_overlong_tools_when_drop_disabled(self):
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+
+        alias = "network_config_audit"
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=object())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[MCPTool(name=too_long, inputSchema={})])
+        tools = await manager._get_tools_from_server(
+            server=self._server(alias), add_prefix=False, drop_overlong_names=False
+        )
+
+        assert [t.name for t in tools] == [too_long]
+
+    @pytest.mark.asyncio
+    async def test_call_tool_rejects_overlong_tool_with_clean_error(self):
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+
+        alias = "network_config_audit"
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+        prefixed = f"{alias}-{too_long}"
+        assert len(prefixed) == MCP_MAX_TOOL_NAME_LENGTH + 1
+
+        manager = MCPServerManager()
+        server = self._server(alias)
+        manager.registry = {server.server_id: server}
+        manager.tool_name_to_mcp_server_name_mapping[too_long] = alias
+        manager.tool_name_to_mcp_server_name_mapping[prefixed] = alias
+        manager._create_mcp_client = AsyncMock(
+            side_effect=AssertionError("must reject before connecting upstream")
+        )
+
+        for call_name in (too_long, prefixed):
+            with pytest.raises(HTTPException) as exc_info:
+                await manager.call_tool(server_name=alias, name=call_name, arguments={})
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.detail["error"] == "tool_name_too_long"
+            assert "exceeds the 64 character tool name limit" in exc_info.value.detail["message"]
+
+    @pytest.mark.asyncio
+    async def test_call_tool_allows_tool_at_the_limit(self):
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        prefixed = f"{alias}-{fitting}"
+        assert len(prefixed) == MCP_MAX_TOOL_NAME_LENGTH
+
+        manager = MCPServerManager()
+        server = self._server(alias)
+        manager.registry = {server.server_id: server}
+        manager.tool_name_to_mcp_server_name_mapping[fitting] = alias
+        manager.tool_name_to_mcp_server_name_mapping[prefixed] = alias
+
+        mock_client = AsyncMock()
+        call_result = MagicMock(spec=CallToolResult)
+        call_result.isError = False
+        call_result.content = []
+        mock_client.call_tool = AsyncMock(return_value=call_result)
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        result = await manager.call_tool(server_name=alias, name=fitting, arguments={})
+
+        assert result.isError is False

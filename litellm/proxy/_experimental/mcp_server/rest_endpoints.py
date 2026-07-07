@@ -25,9 +25,12 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    add_server_prefix_to_name,
     get_server_prefix,
     is_short_mcp_tool_prefix_enabled,
     merge_mcp_headers,
+    strip_known_server_prefix,
+    tool_name_length_disabled_reason,
     tool_name_length_warnings,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -262,14 +265,24 @@ if MCP_AVAILABLE:
             "server_id": server.server_id,
             "alias": server.alias,
         }
+        server_prefix = get_server_prefix(server)
+        disabled_reasons = [
+            tool_name_length_disabled_reason(
+                add_server_prefix_to_name(strip_known_server_prefix(tool.name, server), server_prefix),
+                MCP_MAX_TOOL_NAME_LENGTH,
+            )
+            for tool in tools
+        ]
         return [
             ListMCPToolsRestAPIResponseObject(
                 name=tool.name,
                 description=tool.description,
                 inputSchema=tool.inputSchema,
                 mcp_info=enriched_mcp_info,
+                disabled=reason is not None,
+                disabled_reason=reason,
             )
-            for tool in tools
+            for tool, reason in zip(tools, disabled_reasons)
         ]
 
     def _extract_mcp_headers_from_request(
@@ -412,6 +425,7 @@ if MCP_AVAILABLE:
             add_prefix=False,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
+            drop_overlong_names=False,
         )
 
         if not apply_tool_filters:
