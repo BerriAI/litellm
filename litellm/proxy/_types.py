@@ -2640,6 +2640,29 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
         return values
 
 
+class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
+    """
+    Typed PATCH body for ``/v2/organization/{organization_id}``.
+
+    Presence is read from ``model_fields_set``: a field present in the request (even as
+    null) is written, an omitted field is left untouched. A ``null``/``[]``/``{}`` value
+    clears; any other value sets. There is no additive metadata merge - sending ``metadata``
+    replaces it wholesale.
+    """
+
+    organization_alias: Optional[str] = None
+    models: Optional[List[str]] = None
+    metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    model_max_budget: Optional[dict] = None
+    budget_duration: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+
+
 from litellm.models.organization import (  # noqa: E402
     LiteLLM_OrganizationTable as LiteLLM_OrganizationTable,
 )

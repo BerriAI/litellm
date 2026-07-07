@@ -18786,6 +18786,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/organization/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization V2
+         * @description Partial update of an organization (RESTful PATCH).
+         *
+         *     A field present in the request body is written - a ``null``/``[]``/``{}`` value clears it,
+         *     any other value sets it - and an omitted field is left untouched. Presence is read from
+         *     ``model_fields_set``, so clearing a limit or the metadata now persists instead of being
+         *     dropped as though it were never sent.
+         */
+        patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
+        trace?: never;
+    };
     "/v2/rerank": {
         parameters: {
             query?: never;
@@ -28321,6 +28346,42 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
+        };
+        /**
+         * OrganizationUpdateRequestV2
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}``.
+         *
+         *     Presence is read from ``model_fields_set``: a field present in the request (even as
+         *     null) is written, an omitted field is left untouched. A ``null``/``[]``/``{}`` value
+         *     clears; any other value sets. There is no additive metadata merge - sending ``metadata``
+         *     replaces it wholesale.
+         */
+        OrganizationUpdateRequestV2: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PaginatedAuditLogResponse
@@ -57028,6 +57089,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_v2_v2_organization__organization_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdateRequestV2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
                 };
             };
             /** @description Validation Error */
