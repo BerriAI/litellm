@@ -6282,3 +6282,24 @@ class TestRequestTimeOauth2FlowBackstop:
         assert "no persisted oauth2_flow" in joined
         assert "next proxy boot" not in joined
         assert "will NOT self-heal" in joined
+
+
+def test_build_mcp_server_table_carries_oauth2_flow():
+    """GET /v1/mcp/server (list and by-id) serves registry servers through this
+    conversion; dropping oauth2_flow here blinds the dashboard to the persisted
+    flow, so the edit page cannot prefill and M2M gating never activates."""
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="flow-table-server",
+        name="flow_table_server",
+        server_name="flow_table_server",
+        alias="flow_table_server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+    )
+
+    table = manager._build_mcp_server_table(server)
+
+    assert table.oauth2_flow == "client_credentials"
