@@ -11,6 +11,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
+    cast,
     get_args,
 )
 
@@ -272,7 +273,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
-    current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
+    current_content_block_type: Literal[
+        "text", "tool_use", "thinking", "redacted_thinking"
+    ] = "text"
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -287,6 +290,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         applied_edits: list[AppliedEdit] | None = None,
         compaction_block: CompactionBlock | None = None,
         iterations_usage: list[UsageIteration] | None = None,
+        thinking_disabled: bool = False,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -300,6 +304,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
+        self.thinking_disabled = thinking_disabled
         self.sent_compaction_block: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
@@ -492,7 +497,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
-    def __next__(self):
+    def __next__(self):  # noqa: PLR0915
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -551,6 +556,29 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 elif should_start_new_block:
                     self._increment_content_block_index()
 
+                is_final_chunk = chunk.choices[0].finish_reason is not None
+
+                # Guard fired in _should_start_new_content_block: a
+                # non-substantial (empty/role-only) chunk arrived while a
+                # thinking block is open, and the guard suppressed the block
+                # TRANSITION (correctly, no spurious text block opens) but the
+                # chunk would still be translated below into an empty
+                # text_delta and emitted INSIDE the open thinking block — a
+                # block-type/delta-type mismatch, the exact class of bug this
+                # patch series exists to prevent. Suppress the chunk entirely.
+                # Exclude the finish chunk (it ALSO has should_start_new_block
+                # == False, per _should_start_new_content_block's own early
+                # `if chunk.choices[0].finish_reason is not None: return False`
+                # guard) — it must still flow through to close the block and
+                # emit message_delta/message_stop, not be silently dropped.
+                if (
+                    not should_start_new_block
+                    and not is_final_chunk
+                    and self.current_content_block_type in ("thinking", "redacted_thinking")
+                    and not self._chunk_has_substantial_content(chunk, thinking_disabled=self.thinking_disabled)
+                ):
+                    continue
+
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
                 # intermediate chunk. For the hold-and-merge path below,
@@ -561,11 +589,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                    applied_edits=(
+                        self.applied_edits
+                        if is_final_chunk and not will_merge_into_held
+                        else None
+                    ),
+                    thinking_disabled=self.thinking_disabled,
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -627,20 +659,24 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
 
                 if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
-                    # Queue both the content_block_stop and the message_delta
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": self.current_content_block_index,
-                        }
-                    )
+                    # Empty responses legitimately have no content block. Only
+                    # close a block if one was actually opened.
+                    if self.sent_content_block_start:
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
                     self.sent_content_block_finish = True
                     if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                         self.holding_stop_reason_chunk = processed_chunk
                     else:
                         processed_chunk = self._augment_message_delta_usage(processed_chunk)
                         self.chunk_queue.append(processed_chunk)
-                    return self.chunk_queue.popleft()
+                    if self.chunk_queue:
+                        return self.chunk_queue.popleft()
+                    continue
                 elif self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     if processed_chunk.get("type") == "message_delta":
@@ -672,7 +708,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # valid Anthropic order (... -> content_block_stop ->
                     # message_delta). Emit ``content_block_stop`` here if
                     # the active content block was not already closed.
-                    if not self.sent_content_block_finish:
+                    if self.sent_content_block_start and not self.sent_content_block_finish:
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -701,7 +737,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Anthropic SSE ordering is preserved (content_block_stop ->
             # message_delta).
             if self.holding_stop_reason_chunk is not None:
-                if not self.sent_content_block_finish:
+                if self.sent_content_block_start and not self.sent_content_block_finish:
                     self.sent_content_block_finish = True
                     self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
                     self.holding_stop_reason_chunk = None
@@ -779,6 +815,29 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 elif should_start_new_block:
                     self._increment_content_block_index()
 
+                is_final_chunk = chunk.choices[0].finish_reason is not None
+
+                # Guard fired in _should_start_new_content_block: a
+                # non-substantial (empty/role-only) chunk arrived while a
+                # thinking block is open, and the guard suppressed the block
+                # TRANSITION (correctly, no spurious text block opens) but the
+                # chunk would still be translated below into an empty
+                # text_delta and emitted INSIDE the open thinking block — a
+                # block-type/delta-type mismatch, the exact class of bug this
+                # patch series exists to prevent. Suppress the chunk entirely.
+                # Exclude the finish chunk (it ALSO has should_start_new_block
+                # == False, per _should_start_new_content_block's own early
+                # `if chunk.choices[0].finish_reason is not None: return False`
+                # guard) — it must still flow through to close the block and
+                # emit message_delta/message_stop, not be silently dropped.
+                if (
+                    not should_start_new_block
+                    and not is_final_chunk
+                    and self.current_content_block_type in ("thinking", "redacted_thinking")
+                    and not self._chunk_has_substantial_content(chunk, thinking_disabled=self.thinking_disabled)
+                ):
+                    continue
+
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
                 # intermediate chunk. For the hold-and-merge path below,
@@ -789,11 +848,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                    applied_edits=(
+                        self.applied_edits
+                        if is_final_chunk and not will_merge_into_held
+                        else None
+                    ),
+                    thinking_disabled=self.thinking_disabled,
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -850,20 +913,24 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         continue
 
                     if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
-                        # Queue both the content_block_stop and the holding chunk
-                        self.chunk_queue.append(
-                            {
-                                "type": "content_block_stop",
-                                "index": self.current_content_block_index,
-                            }
-                        )
+                        # Empty responses legitimately have no content block. Only
+                        # close a block if one was actually opened.
+                        if self.sent_content_block_start:
+                            self.chunk_queue.append(
+                                {
+                                    "type": "content_block_stop",
+                                    "index": self.current_content_block_index,
+                                }
+                            )
                         self.sent_content_block_finish = True
                         if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
                             processed_chunk = self._augment_message_delta_usage(processed_chunk)
                             self.chunk_queue.append(processed_chunk)
-                        return self.chunk_queue.popleft()
+                        if self.chunk_queue:
+                            return self.chunk_queue.popleft()
+                        continue
                     elif self.holding_chunk is not None:
                         # Queue both chunks
                         self.chunk_queue.append(self.holding_chunk)
@@ -896,7 +963,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # valid Anthropic order (... -> content_block_stop ->
                     # message_delta). Emit ``content_block_stop`` here if
                     # the active content block was not already closed.
-                    if not self.sent_content_block_finish:
+                    if self.sent_content_block_start and not self.sent_content_block_finish:
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -930,7 +997,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Anthropic SSE ordering is preserved (content_block_stop ->
             # message_delta).
             if self.holding_stop_reason_chunk is not None:
-                if not self.sent_content_block_finish:
+                if self.sent_content_block_start and not self.sent_content_block_finish:
                     self.sent_content_block_finish = True
                     self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
                     self.holding_stop_reason_chunk = None
@@ -1016,7 +1083,36 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         delta_type: Final = delta.get("type")
         if delta_type not in _STREAMING_DELTA_TYPES:
             return False
-        return bool(delta.get(_delta_payload_field(delta_type)))
+        # The membership test above is the runtime guard; the cast tells the type
+        # checker what it already proved, so the exhaustive match in
+        # _delta_payload_field keeps its compile-time value.
+        return bool(delta.get(_delta_payload_field(cast(StreamingContentBlockDeltaType, delta_type))))
+
+    @staticmethod
+    def _chunk_has_substantial_content(chunk: "ModelResponseStream", thinking_disabled: bool = False) -> bool:
+        """Return True when the chunk carries content that should determine or
+        continue a content block. Delegates to the shared classifier
+        (ADR-0022) so this check can never diverge from the block-type
+        classifier or delta emitter's own notion of substantiality — the
+        root cause of the CTG-85 corrected bug was exactly this kind of
+        divergence (this function previously used a truthy check while the
+        classifier used .strip()).
+
+        Remains a @staticmethod with an explicit thinking_disabled parameter
+        (default False) rather than becoming an instance method, because two
+        pre-existing tests (test_empty_chunk_is_not_substantial,
+        test_reasoning_chunk_is_substantial) call it unbound as
+        AnthropicStreamWrapper._chunk_has_substantial_content(chunk) — converting
+        to an instance method would break those calls."""
+        from .transformation import LiteLLMAnthropicMessagesAdapter
+
+        return (
+            LiteLLMAnthropicMessagesAdapter._classify_streaming_chunk(
+                choices=chunk.choices,  # type: ignore
+                thinking_disabled=thinking_disabled,
+            )
+            != "skip"
+        )
 
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
@@ -1055,7 +1151,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             block_type,
             content_block_start,
         ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=chunk.choices
+            choices=chunk.choices,  # type: ignore
+            thinking_disabled=self.thinking_disabled,
         )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit
@@ -1073,6 +1170,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:
+            if (
+                block_type == "text"
+                and self.current_content_block_type in ("thinking", "redacted_thinking")
+                and not self._chunk_has_substantial_content(chunk, thinking_disabled=self.thinking_disabled)
+            ):
+                return False
             self.current_content_block_type = block_type
             self.current_content_block_start = content_block_start
             return True
