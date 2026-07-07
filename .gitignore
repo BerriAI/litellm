@@ -2,7 +2,8 @@
 .venv
 .venv_policy_test
 .env
-.claude
+.claude/*
+!.claude/skills/
 .newenv
 newenv/*
 litellm/proxy/myenv/*
