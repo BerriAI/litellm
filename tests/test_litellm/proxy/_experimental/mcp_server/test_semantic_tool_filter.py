@@ -1050,3 +1050,64 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_headers_hook_emits_only_complete_tool_names():
+    """
+    Regression test for LIT-4215.
+
+    The x-litellm-semantic-filter-tools header used to be sliced mid-name at
+    MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH with a "..." suffix, so the UI
+    rendered a chopped tool name as the last entry. The header must only ever
+    contain complete tool names, in their original order, within the cap.
+    """
+    from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=10,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    hook = SemanticToolFilterHook(filter_instance)
+
+    tool_names = [f"metrics_mcp-very_long_tool_name_for_header_{i:02d}" for i in range(8)]
+    data = {
+        "metadata": {
+            "litellm_semantic_filter_stats": "40->8",
+            "litellm_semantic_filter_tools": ",".join(tool_names),
+        }
+    }
+
+    headers = await hook.async_post_call_response_headers_hook(
+        data=data,
+        user_api_key_dict=Mock(),
+        response=None,
+    )
+
+    assert headers is not None
+    assert headers["x-litellm-semantic-filter"] == "40->8"
+
+    tools_header = headers["x-litellm-semantic-filter-tools"]
+    assert len(tools_header) <= MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
+    emitted_names = tools_header.split(",")
+    assert emitted_names == tool_names[: len(emitted_names)]
+    assert 0 < len(emitted_names) < len(tool_names)
+
+
+def test_truncate_csv_at_tool_name_boundary_edges():
+    from litellm.proxy.hooks.mcp_semantic_filter.hook import (
+        _truncate_csv_at_tool_name_boundary,
+    )
+
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="a,b,c", max_length=150) == "a,b,c"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="abc,def", max_length=3) == "abc"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="ab,cd,ef", max_length=5) == "ab,cd"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="ab,cd,ef", max_length=4) == "ab"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="single_name_longer_than_cap", max_length=10) == ""

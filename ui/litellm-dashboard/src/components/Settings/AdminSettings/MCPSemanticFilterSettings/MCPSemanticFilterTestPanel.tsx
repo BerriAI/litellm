@@ -103,6 +103,11 @@ export default function MCPSemanticFilterTestPanel({
                           </li>
                         ))}
                       </ul>
+                      {testResult.selectedTools > testResult.tools.length && (
+                        <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+                          +{testResult.selectedTools - testResult.tools.length} more selected tools not shown
+                        </Typography.Text>
+                      )}
                     </div>
                   </div>
                 )}
