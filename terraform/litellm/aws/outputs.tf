@@ -33,6 +33,26 @@ output "s3_bucket" {
   value       = aws_s3_bucket.this.bucket
 }
 
+output "gateway_ecr_repository_url" {
+  description = "ECR repository URL for the gateway image."
+  value       = aws_ecr_repository.gateway.repository_url
+}
+
+output "backend_ecr_repository_url" {
+  description = "ECR repository URL for the backend image."
+  value       = aws_ecr_repository.backend.repository_url
+}
+
+output "ui_ecr_repository_url" {
+  description = "ECR repository URL for the UI image."
+  value       = aws_ecr_repository.ui.repository_url
+}
+
+output "migrations_ecr_repository_url" {
+  description = "ECR repository URL for the migrations image."
+  value       = aws_ecr_repository.migrations.repository_url
+}
+
 output "master_key_secret_arn" {
   description = "Secrets Manager ARN holding LITELLM_MASTER_KEY. Fetch with `aws secretsmanager get-secret-value --secret-id <arn>`."
   value       = aws_secretsmanager_secret.master_key.arn

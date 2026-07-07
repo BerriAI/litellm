@@ -10,7 +10,6 @@ route53_zone_id             = "Z046271219OMVB01WCCVM"
 s3_force_destroy    = false
 skip_final_snapshot = false
 
-
 # ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
 proxy_config = {
   model_list = [

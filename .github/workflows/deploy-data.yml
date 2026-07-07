@@ -8,46 +8,111 @@ on:
 
 permissions:
   id-token: write
-  contents: read 
+  contents: read
 
 defaults:
   run:
     shell: bash
     working-directory: ./terraform/litellm/aws/
 
+env:
+  AWS_REGION: eu-central-1
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   terraform:
     name: Terraform Deploy
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           audience: sts.amazonaws.com
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-oidc-provider-role
           role-session-name: github-actions
-          aws-region: eu-central-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.15.7"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Terraform Init
         run: terraform init -backend-config=config/prod/backend.tfbackend
 
-
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Plan
-        run: terraform plan -var-file=config/prod/terraform.tfvars -out=tfplan
+      - name: Bootstrap ECR repositories
+        run: |
+          terraform apply -auto-approve \
+            -var-file=config/prod/terraform.tfvars \
+            -target=aws_ecr_repository.gateway \
+            -target=aws_ecr_repository.backend \
+            -target=aws_ecr_repository.ui \
+            -target=aws_ecr_repository.migrations
 
+      - name: Read ECR repository URLs
+        id: ecr
+        run: |
+          {
+            echo "gateway_repo=$(terraform output -raw gateway_ecr_repository_url)"
+            echo "backend_repo=$(terraform output -raw backend_ecr_repository_url)"
+            echo "ui_repo=$(terraform output -raw ui_ecr_repository_url)"
+            echo "migrations_repo=$(terraform output -raw migrations_ecr_repository_url)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@4625ce35226a7557230889aae2f52eb50ec3dcda # v2.0.1
+
+      - name: Build and push gateway image
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: .
+          file: ./gateway/Dockerfile
+          push: true
+          tags: ${{ steps.ecr.outputs.gateway_repo }}:${{ env.IMAGE_TAG }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: .
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.ecr.outputs.backend_repo }}:${{ env.IMAGE_TAG }}
+
+      - name: Build and push UI image
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: .
+          file: ./ui/Dockerfile
+          push: true
+          tags: ${{ steps.ecr.outputs.ui_repo }}:${{ env.IMAGE_TAG }}
+
+      - name: Build and push migrations image
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: .
+          file: ./migrations/Dockerfile
+          push: true
+          tags: ${{ steps.ecr.outputs.migrations_repo }}:${{ env.IMAGE_TAG }}
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file=config/prod/terraform.tfvars \
+            -var="gateway_image=${{ steps.ecr.outputs.gateway_repo }}:${IMAGE_TAG}" \
+            -var="backend_image=${{ steps.ecr.outputs.backend_repo }}:${IMAGE_TAG}" \
+            -var="ui_image=${{ steps.ecr.outputs.ui_repo }}:${IMAGE_TAG}" \
+            -var="migrations_image=${{ steps.ecr.outputs.migrations_repo }}:${IMAGE_TAG}" \
+            -out=tfplan
 
       - name: Terraform Apply
         if: github.ref == 'refs/heads/datareply/prod'
