@@ -42,3 +42,9 @@ def test_static_header_auth_masks_credential_from_introspection():
     auth = StaticHeaderAuth("Bearer super-secret-token")
     assert "super-secret-token" not in repr(auth)
     assert "super-secret-token" not in str(vars(auth))
+
+
+def test_static_header_auth_header_value_unwraps_credential():
+    auth = StaticHeaderAuth("Bearer probe-token")
+    assert auth.header_value() == "Bearer probe-token"
+    assert "probe-token" not in repr(auth)

@@ -61,6 +61,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mc
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
     Ok,
+    StaticHeaderAuth,
     UpstreamCredentialProvider,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
@@ -3770,6 +3771,35 @@ class MCPServerManager:
         if spec is None:
             return False
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
+
+    async def resolve_user_oauth_authorization_header(
+        self, server: MCPServer, user_api_key_auth: Optional[UserAPIKeyAuth]
+    ) -> Optional[str]:
+        """The stored per-user ``Authorization`` value the egress would send for this server, or None.
+
+        The transport-edge preflight probe (``_check_oauth2_upstream_auth``) tests this exact
+        credential against the upstream. Routed through the v2 resolver for servers it owns
+        (``authorization_code``) so the probe reads the same store, cache, and refresh chain as
+        the call path; a server the resolver does not own (delegate/BYOK, a None spec) falls back
+        to the v1 lookup. A missing token maps to None, never a raise: the missing-token challenge
+        belongs to the preemptive existence check, not the probe.
+        """
+        spec = to_server_spec(server)
+        if spec is None or not isinstance(spec.config, AuthorizationCodeConfig):
+            from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                _get_user_oauth_extra_headers_from_db,
+            )
+
+            stored_headers = await _get_user_oauth_extra_headers_from_db(
+                server=server,
+                user_api_key_auth=user_api_key_auth,
+            )
+            return (stored_headers or {}).get("Authorization")
+        match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, None), spec):
+            case Ok(StaticHeaderAuth() as auth):
+                return auth.header_value()
+            case _:
+                return None
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,

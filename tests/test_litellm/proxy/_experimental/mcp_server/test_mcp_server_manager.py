@@ -2799,6 +2799,109 @@ class TestMCPServerManager:
         assert calls == []  # short-circuited on the None spec, never hit the resolver
 
     @pytest.mark.asyncio
+    async def test_resolve_user_oauth_authorization_header_reads_v2_resolver(self):
+        """A v2-owned server's stored token comes from the resolver, keyed by the caller's
+        user_id, and the v1 store is never read."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+            Ok,
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        calls: list = []
+
+        class _Provider:
+            async def resolve_credentials(self, subject, spec):
+                calls.append((subject.subject_id, spec.server_id))
+                return Ok(StaticHeaderAuth("Bearer v2-stored-token"))
+
+        manager = MCPServerManager(cred_provider=_Provider())
+        server = MCPServer(
+            server_id="authz-srv",
+            name="authz",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer v1-row"}),
+        ) as v1_lookup:
+            result = await manager.resolve_user_oauth_authorization_header(server, user_auth)
+
+        assert result == "Bearer v2-stored-token"
+        assert calls == [("alice", "authz-srv")]
+        v1_lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_resolve_user_oauth_authorization_header_missing_token_maps_to_none(self):
+        """A resolver challenge (no stored token) reads as None, never a raise, and the v1
+        store is not consulted as a fallback for a server the resolver owns."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+            CredError,
+            Error,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _Provider:
+            async def resolve_credentials(self, subject, spec):
+                return Error(CredError.of_unauthorized("complete the OAuth flow"))
+
+        manager = MCPServerManager(cred_provider=_Provider())
+        server = MCPServer(
+            server_id="authz-srv",
+            name="authz",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer v1-row"}),
+        ) as v1_lookup:
+            result = await manager.resolve_user_oauth_authorization_header(server, user_auth)
+
+        assert result is None
+        v1_lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_resolve_user_oauth_authorization_header_falls_back_to_v1_for_unmigrated(self):
+        """A server the resolver does not own (delegate -> None spec) reads the v1 store."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        calls: list = []
+
+        class _Provider:
+            async def resolve_credentials(self, subject, spec):
+                calls.append(spec)
+                return None
+
+        manager = MCPServerManager(cred_provider=_Provider())
+        server = MCPServer(
+            server_id="delegate-srv",
+            name="delegate",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer v1-token"}),
+        ) as v1_lookup:
+            result = await manager.resolve_user_oauth_authorization_header(server, user_auth)
+
+        assert result == "Bearer v1-token"
+        assert calls == []
+        v1_lookup.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_no_user_id(self):
         """Skip lookup entirely when user_api_key_auth has no user_id."""
         from litellm.proxy._types import UserAPIKeyAuth

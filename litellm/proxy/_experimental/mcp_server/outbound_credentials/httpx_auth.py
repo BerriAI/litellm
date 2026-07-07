@@ -36,6 +36,11 @@ class StaticHeaderAuth(httpx.Auth):
         self.header_name = header_name
         self._header_value = SecretStr(header_value)
 
+    def header_value(self) -> str:
+        """The unwrapped credential, for a caller that must send it outside an ``httpx.Auth``
+        flow (the transport-edge preflight probe builds its request headers by hand)."""
+        return self._header_value.get_secret_value()
+
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
         request.headers[self.header_name] = self._header_value.get_secret_value()
         yield request

@@ -5465,11 +5465,16 @@ class TestCheckOauth2UpstreamAuth:
         return MCPServer(**defaults)
 
     @staticmethod
-    def _patches(db_headers, probe_result):
+    def _patches(stored_auth, probe_result):
+        from litellm.proxy._experimental.mcp_server.server import (
+            global_mcp_server_manager,
+        )
+
         return (
-            patch(
-                "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
-                new=AsyncMock(return_value=db_headers),
+            patch.object(
+                global_mcp_server_manager,
+                "resolve_user_oauth_authorization_header",
+                new=AsyncMock(return_value=stored_auth),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
@@ -5553,7 +5558,7 @@ class TestCheckOauth2UpstreamAuth:
         )
 
         db, probe = self._patches(
-            {"Authorization": "Bearer db-fresh-token"},
+            "Bearer db-fresh-token",
             (200, None),
         )
         with db, probe as mock_probe:
@@ -5578,7 +5583,7 @@ class TestCheckOauth2UpstreamAuth:
             'Bearer error="invalid_token", resource_metadata="https://upstream/x"'
         )
         db, probe = self._patches(
-            {"Authorization": "Bearer stale-db-token"},
+            "Bearer stale-db-token",
             (401, upstream_www),
         )
         with db, probe as mock_probe:
@@ -5678,9 +5683,14 @@ class TestCheckOauth2UpstreamAuth:
             await all_probes_started.wait()
             return probe_results_by_url[url]
 
+        from litellm.proxy._experimental.mcp_server.server import (
+            global_mcp_server_manager,
+        )
+
         with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            patch.object(
+                global_mcp_server_manager,
+                "resolve_user_oauth_authorization_header",
                 new=AsyncMock(return_value=None),
             ),
             patch(

@@ -3680,10 +3680,12 @@ if MCP_AVAILABLE:
         (from _get_allowed_mcp_servers) so only servers the caller's key is
         authorized to reach are probed.
 
-        The stored per-user token takes precedence over the caller's
-        ``Authorization`` header, mirroring the call path so a stale client
-        token (e.g. an editor's cached bearer) cannot trigger a spurious 401
-        for a request that would have used the fresh DB token.
+        The stored per-user token is resolved the way the call path resolves
+        it (``resolve_user_oauth_authorization_header``: the v2 resolver for
+        servers it owns, the v1 store otherwise) and takes precedence over the
+        caller's ``Authorization`` header, so a stale client token (e.g. an
+        editor's cached bearer) cannot trigger a spurious 401 for a request
+        that would have used the fresh stored token.
         """
         candidate_servers = tuple(
             server
@@ -3698,12 +3700,11 @@ if MCP_AVAILABLE:
         async def _probe_oauth2_server(
             server: MCPServer,
         ) -> tuple[MCPServer, int, str | None] | None:
-            stored_headers = await _get_user_oauth_extra_headers_from_db(
+            stored_auth = await global_mcp_server_manager.resolve_user_oauth_authorization_header(
                 server=server,
                 user_api_key_auth=user_api_key_auth,
             )
-            preflight_headers = stored_headers or oauth2_headers
-            auth_header = (preflight_headers or {}).get("Authorization")
+            auth_header = stored_auth or (oauth2_headers or {}).get("Authorization")
             if not auth_header:
                 return None
             probe_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", auth_header)
