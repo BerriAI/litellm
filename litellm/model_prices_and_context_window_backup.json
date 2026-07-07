@@ -23505,6 +23505,7 @@
     },
     "gpt-realtime-2.1": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image": 5e-06,
