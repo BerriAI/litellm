@@ -1,6 +1,8 @@
 """
 Xcity wallet billing callback (XCT-322 / S3).
 
+Canonical system reference: xct-wallet `docs/kwh-credit-system.md`.
+
 Debits the xct-wallet KWH ledger on every successful model call. KWH is a
 display layer over the wallet's integer `credit` unit (1 KWH = 100 credits =
 $0.10). The per-call charge carries a flat markup over upstream cost:
