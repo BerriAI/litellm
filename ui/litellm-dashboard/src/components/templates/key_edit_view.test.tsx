@@ -962,5 +962,31 @@ describe("KeyEditView", () => {
       expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
       expect(screen.queryAllByText("all-proxy-models")).toHaveLength(0);
     });
+
+    it("should not offer all-team-models for a team key whose team has not loaded yet", async () => {
+      const teamKeyData = { ...MOCK_KEY_DATA, team_id: "team-1" };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={teamKeyData}
+          teams={[]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
+      expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
+    });
   });
 });

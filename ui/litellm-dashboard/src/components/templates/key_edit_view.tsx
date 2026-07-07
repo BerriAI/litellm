@@ -361,7 +361,7 @@ export function KeyEditView({
                   onChange={(value) => setFieldValue("models", value)}
                 >
                   {keyData.team_id != null ? (
-                    <Select.Option value="all-team-models">All Team Models</Select.Option>
+                    team != null && <Select.Option value="all-team-models">All Team Models</Select.Option>
                   ) : (
                     <Select.Option value="all-proxy-models">All Proxy Models</Select.Option>
                   )}
