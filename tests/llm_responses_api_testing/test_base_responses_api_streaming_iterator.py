@@ -2,12 +2,12 @@
 Unit tests for BaseResponsesAPIStreamingIterator
 
 Tests core functionality including:
-1. Processing chunks and handling ResponseCompletedEvent 
+1. Processing chunks and handling ResponseCompletedEvent
 2. Ensuring _update_responses_api_response_id_with_model_id is called for final chunk
 3. Verifying ID update is NOT called for non-final chunks (delta events)
 4. Edge case handling for invalid JSON, empty chunks, and [DONE] markers
 
-These tests ensure the streaming iterator correctly processes response chunks 
+These tests ensure the streaming iterator correctly processes response chunks
 and applies model ID updates only to completed responses, as required for proper
 response tracking and logging.
 """
@@ -432,8 +432,11 @@ class TestBaseResponsesAPIStreamingIterator:
         except StopAsyncIteration:
             pass  # This is expected
 
-        # Verify we got the chunk
-        assert len(chunks_received) == 1
+        # The provider delta is delivered as the final event. Since #20975 the live
+        # iterator also synthesizes the missing lifecycle wrapper events ahead of a
+        # bare delta, so it is no longer necessarily the only chunk.
+        assert mock_delta_event in chunks_received
+        assert chunks_received[-1] is mock_delta_event
 
         # CRITICAL: Verify that failure handlers were NOT called
         # StopAsyncIteration is a normal end of stream, not a failure
@@ -493,8 +496,11 @@ class TestBaseResponsesAPIStreamingIterator:
         except StopIteration:
             pass  # This is expected
 
-        # Verify we got the chunk
-        assert len(chunks_received) == 1
+        # The provider delta is delivered as the final event. Since #20975 the live
+        # iterator also synthesizes the missing lifecycle wrapper events ahead of a
+        # bare delta, so it is no longer necessarily the only chunk.
+        assert mock_delta_event in chunks_received
+        assert chunks_received[-1] is mock_delta_event
 
         # CRITICAL: Verify that failure handlers were NOT called
         # StopIteration is a normal end of stream, not a failure
