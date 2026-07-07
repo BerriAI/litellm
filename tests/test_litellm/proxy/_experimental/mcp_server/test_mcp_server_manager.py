@@ -293,6 +293,86 @@ class TestMCPServerManager:
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
 
+    def _oauth2_config(self, **overrides):
+        base = {
+            "url": "https://example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.oauth2,
+            "token_url": "https://idp.example.com/token",
+            "client_id": "cid",
+            "client_secret": "csec",
+        }
+        base.update(overrides)
+        return {"m2mserver": base}
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_requires_oauth2_flow(self):
+        """auth_type oauth2 without an explicit oauth2_flow is a config error: the
+        credential shape is ambiguous (a DCR interactive server looks identical to M2M),
+        so the config must assert the flow instead of the proxy guessing it."""
+
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            await manager.load_servers_from_config(self._oauth2_config())
+
+        assert "oauth2_flow: client_credentials" in str(exc_info.value)
+        assert "oauth2_flow: authorization_code" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_unknown_oauth2_flow(self):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="m2m"))
+
+        assert "got 'm2m'" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_explicit_client_credentials(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="client_credentials"))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow == "client_credentials"
+        assert server.has_client_credentials is True
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_explicit_authorization_code(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="authorization_code"))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow == "authorization_code"
+        assert server.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_non_oauth2_needs_no_flow(self):
+        manager = MCPServerManager()
+        config = {
+            "apiserver": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.api_key,
+                "auth_value": "sk-upstream",
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth2_flow is None
+
     @pytest.mark.asyncio
     async def test_load_servers_from_config_coerces_cost_string_to_float(self):
         """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
@@ -1637,6 +1717,7 @@ class TestMCPServerManager:
                 "url": "https://example.com/mcp",
                 "transport": MCPTransport.http,
                 "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
                 "scopes": ["config"],
                 "authorization_url": "https://config.example.com/auth",
             }
@@ -1700,6 +1781,7 @@ class TestMCPServerManager:
                 "url": "https://example.com/mcp",
                 "transport": MCPTransport.http,
                 "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
                 "scopes": ["config"],
                 "authorization_url": "https://config.example.com/auth",
             }
@@ -6076,3 +6158,127 @@ async def test_aggregate_list_still_absorbs_step_up_challenged_server():
     result = await manager.list_tools()
 
     assert [t.name for t in result] == ["good-do_thing"]
+
+
+class TestDbBuildReadsOauth2FlowColumnVerbatim:
+    """The DB build must not re-infer the flow from field shape: rows are stamped at
+    write time and by the startup backfill, and a DCR-registered interactive server
+    has the exact M2M shape (client creds + token_url, no persisted authorization_url)
+    whenever discovery is unavailable. Inference survives only for config-loaded
+    servers and the request-time backstop in _get_allowed_mcp_servers."""
+
+    def _row(self, oauth2_flow):
+        return LiteLLM_MCPServerTable(
+            server_id="flow-column-row",
+            alias="flow_column_row",
+            description="",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow=oauth2_flow,
+            token_url="https://idp.example.com/token",
+            credentials={"client_id": "cid", "client_secret": "csec"},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_null_flow_m2m_shape_row_is_not_inferred_m2m(self):
+        manager = MCPServerManager()
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(self._row(None), credentials_are_encrypted=False)
+
+        assert built.oauth2_flow is None
+        assert built.has_client_credentials is False
+        assert built.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_flow_column_is_read_verbatim(self):
+        manager = MCPServerManager()
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(
+                self._row("client_credentials"), credentials_are_encrypted=False
+            )
+
+        assert built.oauth2_flow == "client_credentials"
+        assert built.has_client_credentials is True
+        assert built.needs_user_oauth_token is False
+
+    @pytest.mark.asyncio
+    async def test_authorization_code_flow_column_is_read_verbatim(self):
+        manager = MCPServerManager()
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(
+                self._row("authorization_code"), credentials_are_encrypted=False
+            )
+
+        assert built.oauth2_flow == "authorization_code"
+        assert built.has_client_credentials is False
+        assert built.needs_user_oauth_token is True
+
+
+class TestRequestTimeOauth2FlowBackstop:
+    """The single request-time resolution helpers every security site shares:
+    effective_oauth2_flow (the enum/boolean decision) and
+    resolve_oauth2_flow_for_request (the egress object copy)."""
+
+    def _oauth2_server(self, **overrides):
+        base = dict(
+            server_id="flow-server",
+            name="flow_server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        base.update(overrides)
+        return MCPServer(**base)
+
+    def test_effective_flow_stamped_values_returned_verbatim(self):
+        assert (
+            MCPServerManager.effective_oauth2_flow(self._oauth2_server(oauth2_flow="client_credentials"))
+            == "client_credentials"
+        )
+        assert (
+            MCPServerManager.effective_oauth2_flow(self._oauth2_server(oauth2_flow="authorization_code"))
+            == "authorization_code"
+        )
+
+    def test_effective_flow_null_m2m_shape_resolves_client_credentials(self):
+        server = self._oauth2_server(
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        assert MCPServerManager.effective_oauth2_flow(server) == "client_credentials"
+
+    def test_effective_flow_null_pure_pkce_resolves_none(self):
+        assert MCPServerManager.effective_oauth2_flow(self._oauth2_server(oauth2_flow=None)) is None
+
+    def test_resolve_for_request_stamped_row_is_unchanged_identity(self):
+        server = self._oauth2_server(oauth2_flow="client_credentials")
+        assert MCPServerManager.resolve_oauth2_flow_for_request(server) is server
+
+    def test_resolve_for_request_null_pure_pkce_is_unchanged_identity(self):
+        server = self._oauth2_server(oauth2_flow=None)
+        assert MCPServerManager.resolve_oauth2_flow_for_request(server) is server
+
+    def test_resolve_for_request_null_m2m_shape_copies_client_credentials(self, caplog):
+        import logging
+
+        server = self._oauth2_server(
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            resolved = MCPServerManager.resolve_oauth2_flow_for_request(server)
+
+        assert resolved is not server
+        assert resolved.oauth2_flow == "client_credentials"
+        assert server.oauth2_flow is None  # original untouched
+        # Finding 2: the warning must NOT promise the backfill will stamp this row.
+        joined = " ".join(caplog.messages)
+        assert "no persisted oauth2_flow" in joined
+        assert "next proxy boot" not in joined
+        assert "will NOT self-heal" in joined

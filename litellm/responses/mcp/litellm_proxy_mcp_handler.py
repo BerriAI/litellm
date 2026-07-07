@@ -20,7 +20,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -705,6 +704,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 if request_tags:
                     logging_request_data["metadata"]["tags"] = request_tags
                 if user_api_key_auth is not None:
+                    from litellm.proxy.litellm_pre_call_utils import (
+                        LiteLLMProxyRequestSetup,
+                    )
+
                     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                         data=logging_request_data,
                         user_api_key_dict=user_api_key_auth,
