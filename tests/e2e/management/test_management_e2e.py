@@ -92,6 +92,21 @@ def _poll_chat_denied(client: ManagementClient, key: str, model: str) -> None:
     )
 
 
+def _poll_model_access_granted(client: ManagementClient, key: str, model: str) -> None:
+    """The key's model-access check stopped denying `model`: any outcome other than
+    the key_model_access_denied 403 (a 200, or an upstream error) proves the flip.
+    Requiring a 200 would couple the assertion to `model` being a healthy routable
+    upstream, which is not the enforcement contract under test."""
+
+    def attempt() -> bool | None:
+        outcome = client.chat_status(key, model, f"say hi {unique_marker()}")
+        if _is_model_denial(outcome) or outcome.status_code == 401:
+            return None
+        return True
+
+    _ = _poll(client, attempt, f"model-access denial on {model} never lifted before the deadline")
+
+
 class TestKeyRoutes:
     @pytest.mark.covers("mgmt.key.generate.persists")
     def test_generate_persists_to_key_info_and_scopes_chat(
@@ -135,11 +150,15 @@ class TestKeyRoutes:
             f"/key/info reports models {info.models} after /key/update to [{DISALLOWED_MODEL!r}]"
         )
 
-        _poll_chat_ok(client, key, DISALLOWED_MODEL)
+        _poll_model_access_granted(client, key, DISALLOWED_MODEL)
         _poll_chat_denied(client, key, ALLOWED_MODEL)
 
     @pytest.mark.covers("mgmt.key.delete.persists")
     def test_delete_revokes_the_key_on_chat(self, client: ManagementClient, resources: ResourceManager) -> None:
+        """The teardown's deferred delete fires again on the already-deleted key by
+        design: the deferred cleanup must survive this test failing before the
+        in-body delete, and a repeat /key/delete is a cheap no-op the warn-only
+        teardown absorbs."""
         key = _generate_key(client, resources, KeyGenerateBody(models=[ALLOWED_MODEL]))
         _poll_chat_ok(client, key, ALLOWED_MODEL)
 
@@ -153,7 +172,7 @@ class TestKeyRoutes:
 
 
 class TestTeamRoutes:
-    @pytest.mark.covers("mgmt.team.new.persists")
+    @pytest.mark.covers("management.team.new.persists")
     def test_new_persists_to_team_info_and_binds_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
