@@ -204,6 +204,7 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
+        "token_exchange_profile",
     ):
         assert data_dict[stale_field] is None, f"{stale_field} must be cleared on auth_type switch"
     assert data_dict["credentials"] is None
@@ -235,6 +236,7 @@ async def test_auth_type_switch_back_to_oauth2_clears_token_exchange_fields():
     assert data_dict["token_exchange_endpoint"] is None
     assert data_dict["audience"] is None
     assert data_dict["subject_token_type"] is None
+    assert data_dict["token_exchange_profile"] is None
 
 
 @pytest.mark.asyncio
@@ -257,6 +259,7 @@ async def test_unchanged_auth_type_does_not_clear_flow_fields():
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
+        "token_exchange_profile",
     ):
         assert flow_field not in data_dict
 
@@ -309,6 +312,7 @@ def _existing_row(auth_type: str, credentials: dict | None = None):
     existing.token_exchange_endpoint = None
     existing.audience = None
     existing.subject_token_type = None
+    existing.token_exchange_profile = None
     return existing
 
 
@@ -328,6 +332,7 @@ async def test_create_lifts_blob_token_exchange_settings_into_columns():
             "token_exchange_endpoint": "https://idp.example.com/oauth2/token",
             "audience": "api://upstream",
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_exchange_profile": "entra_obo",
         },
     )
 
@@ -337,8 +342,9 @@ async def test_create_lifts_blob_token_exchange_settings_into_columns():
     assert data_dict["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
     assert data_dict["audience"] == "api://upstream"
     assert data_dict["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
+    assert data_dict["token_exchange_profile"] == "entra_obo"
     stored_blob = json.loads(data_dict["credentials"])
-    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type"):
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type", "token_exchange_profile"):
         assert te_field not in stored_blob
     assert "client_id" in stored_blob
 
@@ -374,6 +380,7 @@ async def test_credentials_merge_migrates_legacy_blob_te_settings():
             "client_id": "enc-old-cid",
             "token_exchange_endpoint": "https://legacy-idp.example.com/token",
             "audience": "api://legacy",
+            "token_exchange_profile": "entra_obo",
         },
     )
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
@@ -388,8 +395,9 @@ async def test_credentials_merge_migrates_legacy_blob_te_settings():
 
     assert data_dict["token_exchange_endpoint"] == "https://legacy-idp.example.com/token"
     assert data_dict["audience"] == "api://legacy"
+    assert data_dict["token_exchange_profile"] == "entra_obo"
     merged_blob = json.loads(data_dict["credentials"])
-    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type"):
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type", "token_exchange_profile"):
         assert te_field not in merged_blob
 
 
@@ -465,6 +473,7 @@ async def test_auth_type_switch_clears_flow_fields_with_external_fields_set():
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
+        "token_exchange_profile",
     ):
         assert data_dict[stale_field] is None, f"{stale_field} must be cleared via the fields_set path"
 

@@ -55,6 +55,7 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
+        "token_exchange_profile",
     }
 )
 
@@ -70,6 +71,7 @@ _TOKEN_EXCHANGE_COLUMN_FIELDS: frozenset = frozenset(
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
+        "token_exchange_profile",
     }
 )
 

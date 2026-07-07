@@ -1773,6 +1773,66 @@ class TestMCPServerManager:
         assert result.error.tag == "misconfigured"
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_reads_all_token_exchange_fields(self):
+        """Every token-exchange setting is configurable through config.yaml as a top-level
+        key (the config counterpart of the REST/UI columns) and reaches the resolver spec;
+        omitted keys resolve to their documented defaults. token_exchange servers need no
+        oauth2_flow (that requirement is oauth2-only)."""
+        from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
+
+        manager = MCPServerManager()
+        config = {
+            "te_full": {
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "token_exchange_endpoint": "https://idp.example.com/oauth2/token",
+                "audience": "api://upstream",
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "token_exchange_profile": "entra_obo",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "scopes": ["api://upstream/.default"],
+            },
+            "te_minimal": {
+                "url": "https://up2.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "token_exchange_endpoint": "https://idp2.example.com/oauth2/token",
+                "client_id": "cid2",
+                "client_secret": "csec2",
+            },
+        }
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(config)
+
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+
+        full = by_name["te_full"]
+        assert full.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+        assert full.audience == "api://upstream"
+        assert full.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
+        assert full.token_exchange_profile == "entra_obo"
+
+        minimal = by_name["te_minimal"]
+        assert minimal.audience is None
+        assert minimal.subject_token_type == DEFAULT_SUBJECT_TOKEN_TYPE
+        assert minimal.token_exchange_profile == "rfc8693"
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+
+        spec = to_server_spec(full)
+        assert spec is not None
+        assert spec.config.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+        assert spec.config.profile == "entra_obo"
+
+        minimal_spec = to_server_spec(minimal)
+        assert minimal_spec is not None
+        assert minimal_spec.config.subject_token_type == DEFAULT_SUBJECT_TOKEN_TYPE
+        assert minimal_spec.config.profile == "rfc8693"
+
+    @pytest.mark.asyncio
     async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
         manager = MCPServerManager()
 
@@ -4481,6 +4541,81 @@ class TestMCPServerTokenExchangeColumns:
         assert rebuilt_table.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
         assert rebuilt_table.audience == "https://upstream.example.com"
         assert rebuilt_table.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_exchange_profile_column(self):
+        """The profile dialect selector (rfc8693 vs entra_obo) is read from its dedicated column
+        so a server created via the REST API/UI as entra_obo resolves to the Entra dialect."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile",
+            server_name="te_profile",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+            token_exchange_profile="entra_obo",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_profile == "entra_obo"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_token_exchange_profile_defaults_rfc8693(self):
+        """token_exchange_profile falls back to rfc8693 when neither column nor blob sets it."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile-default",
+            server_name="te_profile_default",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_profile == "rfc8693"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_token_exchange_profile_blob_fallback(self):
+        """Backwards compatibility: a server with the profile only in the credentials blob still loads."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile-blob",
+            server_name="te_profile_blob",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={"token_exchange_profile": "entra_obo"},
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_profile == "entra_obo"
+
+    @pytest.mark.asyncio
+    async def test_round_trip_token_exchange_profile_preserved(self):
+        """token_exchange_profile survives LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile-rt",
+            server_name="te_profile_rt",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_profile="entra_obo",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+
+        assert rebuilt_table.token_exchange_profile == "entra_obo"
 
 
 class TestInternalDelegatePkceWarningLog:

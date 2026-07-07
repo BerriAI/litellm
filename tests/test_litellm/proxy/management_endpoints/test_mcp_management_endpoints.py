@@ -3775,6 +3775,7 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     server.token_exchange_endpoint = "https://idp/token-exchange"
     server.audience = "https://upstream/api"
     server.subject_token_type = "urn:ietf:params:oauth:token-type:jwt"
+    server.token_exchange_profile = "entra_obo"
 
     sanitized = _sanitize_mcp_server_for_non_admin(server)
 
@@ -3795,6 +3796,7 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     assert sanitized.token_exchange_endpoint is None
     assert sanitized.audience is None
     assert sanitized.subject_token_type is None
+    assert sanitized.token_exchange_profile is None
 
     # Identity / metadata fields are preserved so the UI can list the
     # server without exposing secrets.
@@ -3858,6 +3860,7 @@ def test_sanitize_virtual_key_clears_token_exchange_endpoint_and_audience():
     server.token_exchange_endpoint = "https://idp/token-exchange"
     server.audience = "https://upstream/api"
     server.subject_token_type = "urn:ietf:params:oauth:token-type:jwt"
+    server.token_exchange_profile = "entra_obo"
 
     sanitized = mgmt._sanitize_mcp_server_for_virtual_key(server)
 
@@ -3865,6 +3868,7 @@ def test_sanitize_virtual_key_clears_token_exchange_endpoint_and_audience():
     assert sanitized.token_exchange_endpoint is None
     assert sanitized.audience is None
     assert sanitized.subject_token_type is None
+    assert sanitized.token_exchange_profile is None
 
 
 def _server_with_env_vars(server_id: str = "srv-env"):
