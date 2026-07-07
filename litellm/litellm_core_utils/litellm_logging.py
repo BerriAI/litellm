@@ -3161,15 +3161,9 @@ class Logging(LiteLLMLoggingBaseClass):
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
         ):
             response = result.response
-            usage = (
-                response.get("usage") if isinstance(response, dict) else response.usage
-            )
+            usage = response.get("usage") if isinstance(response, dict) else response.usage
             if isinstance(usage, ResponseAPIUsage):
-                transformed_usage = (
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        usage
-                    )
-                )
+                transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
                 usage_dict = (
                     transformed_usage.model_dump()
                     if hasattr(transformed_usage, "model_dump")
