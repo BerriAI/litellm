@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to 
 
 from unittest.mock import MagicMock
 
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
 
 
 @pytest.mark.parametrize(
@@ -171,6 +171,74 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
         await route_request(data, None, "gpt-3.5-turbo", "acompletion")
 
         mock_completion.assert_called_once_with(**data)
+
+
+def _router_without_model():
+    llm_router = MagicMock()
+    llm_router.router_general_settings.pass_through_all_models = False
+    llm_router.default_deployment = None
+    llm_router.pattern_router.patterns = []
+    llm_router.model_names = []
+    llm_router.has_model_id.return_value = False
+    llm_router.model_group_alias = None
+    llm_router.deployment_names = []
+    return llm_router
+
+
+@pytest.mark.asyncio
+async def test_route_request_reloads_db_models_once_on_router_miss(monkeypatch):
+    import litellm.proxy.route_llm_request as route_llm_request
+
+    data = {
+        "model": "db-backed-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    llm_router = _router_without_model()
+    llm_router.acompletion.return_value = "success"
+
+    async def reload_db_models():
+        llm_router.model_names = ["db-backed-model"]
+        return llm_router
+
+    monkeypatch.setattr(
+        route_llm_request,
+        "_reload_db_models_on_router_miss",
+        reload_db_models,
+    )
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    llm_router.acompletion.assert_called_once_with(**data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_does_not_reload_db_models_more_than_once(monkeypatch):
+    import litellm.proxy.route_llm_request as route_llm_request
+
+    data = {
+        "model": "unknown-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    llm_router = _router_without_model()
+    reload_calls = 0
+
+    async def reload_db_models():
+        nonlocal reload_calls
+        reload_calls += 1
+        return llm_router
+
+    monkeypatch.setattr(
+        route_llm_request,
+        "_reload_db_models_on_router_miss",
+        reload_db_models,
+    )
+
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(data, llm_router, None, "acompletion")
+
+    assert reload_calls == 1
+    llm_router.acompletion.assert_not_called()
 
 
 @pytest.mark.asyncio

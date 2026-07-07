@@ -5,6 +5,7 @@ import httpx
 from fastapi import HTTPException, status
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 
 # Router-internal mock_testing_* flag names — kept in sync with
@@ -246,6 +247,38 @@ async def add_shared_session_to_data(data: dict) -> None:
             pass
 
 
+async def _reload_db_models_on_router_miss() -> Optional[LitellmRouter]:
+    """
+    Reload DB-backed models into this pod's router after a model miss.
+
+    Models created through /model/new are persisted in the DB, but routing uses
+    each proxy process's in-memory router. In multi-pod deployments, another pod
+    can receive traffic before it has loaded the newly-created DB model.
+    """
+    try:
+        from litellm.proxy.proxy_server import (
+            llm_router,
+            prisma_client,
+            proxy_config,
+            proxy_logging_obj,
+            store_model_in_db,
+        )
+
+        if store_model_in_db is not True or prisma_client is None:
+            return llm_router
+
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        return llm_router
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to reload DB-backed models after router miss: %s", str(e)
+        )
+        return None
+
+
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -348,6 +381,7 @@ async def route_request(
         "adelete_run",
     ],
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    _skip_model_db_reload: bool = False,
 ):
     """
     Common helper to route the request
@@ -594,6 +628,18 @@ async def route_request(
         return getattr(litellm, f"{route_type}")(**data)
     elif route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**data)
+
+    if not _skip_model_db_reload and llm_router is not None and data.get("model"):
+        refreshed_router = await _reload_db_models_on_router_miss()
+        if refreshed_router is not None:
+            return await route_request(
+                data=data,
+                llm_router=refreshed_router,
+                user_model=user_model,
+                route_type=route_type,
+                user_api_key_dict=user_api_key_dict,
+                _skip_model_db_reload=True,
+            )
 
     # if no route found then it's a bad request
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
