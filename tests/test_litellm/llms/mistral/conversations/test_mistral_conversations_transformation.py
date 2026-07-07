@@ -213,6 +213,60 @@ def test_transform_request_maps_random_seed():
     assert body["completion_args"] == {"random_seed": 7}
 
 
+def test_transform_request_flattens_content_part_lists():
+    """OpenAI content-parts messages must flatten to their text; non-text parts
+    and malformed entries are dropped, not crashed on."""
+    cfg = MistralConversationsConfig()
+    body = cfg.transform_request(
+        model="mistral-medium-latest",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "Be brief."}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is "},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+                    "not-a-dict",
+                    {"type": "text", "text": "the weather?"},
+                ],
+            },
+        ],
+        optional_params={"web_search_options": {}},
+        litellm_params={},
+        headers={},
+    )
+    assert body["instructions"] == "Be brief."
+    assert body["inputs"] == [{"role": "user", "content": "What is the weather?"}]
+
+
+def test_transform_request_assistant_null_content_with_tool_calls():
+    """The OpenAI SDK emits assistant tool-call turns with content=None; that must
+    map to a function.call entry with no empty assistant message entry."""
+    cfg = MistralConversationsConfig()
+    body = cfg.transform_request(
+        model="mistral-medium-latest",
+        messages=[
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "18C"},
+        ],
+        optional_params={"web_search_options": {}},
+        litellm_params={},
+        headers={},
+    )
+    assert body["inputs"] == [
+        {"role": "user", "content": "weather?"},
+        {"type": "function.call", "tool_call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+        {"type": "function.result", "tool_call_id": "call_1", "result": "18C"},
+    ]
+
+
 def test_get_complete_url():
     cfg = MistralConversationsConfig()
     assert (
@@ -345,6 +399,18 @@ def test_transform_response_without_message_output_is_graceful():
         encoding=None,
     )
     assert mr.choices[0].message.content is None
+
+
+def test_transform_response_null_message_content_is_graceful():
+    mr = _transform(
+        {
+            "conversation_id": "conv_1",
+            "outputs": [{"type": "message.output", "role": "assistant", "content": None}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+        }
+    )
+    assert mr.choices[0].message.content is None
+    assert getattr(mr.choices[0].message, "annotations", None) is None
 
 
 @pytest.mark.parametrize(

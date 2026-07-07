@@ -207,6 +207,22 @@ class TestCheckToolsAllowlist:
         assert "web_search" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
+    async def test_non_dict_tool_entries_skipped_without_masking_real_tools(self):
+        """Malformed tool entries must not crash extraction or shadow the real
+        tools that still need allowlist checking."""
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {"tools": ["junk", 42, {"type": "web_search"}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "web_search" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
     async def test_builtin_web_search_allowed_when_listed(self):
         token = _token(metadata={"allowed_tools": ["web_search"]})
         await check_tools_allowlist(
