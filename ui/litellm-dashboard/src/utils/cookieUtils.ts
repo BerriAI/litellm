@@ -38,6 +38,13 @@ export function clearTokenCookies() {
   const uiCookiePath = getUiCookiePath();
   const paths = ["/", uiCookiePath];
 
+  // Clear at the server root path (e.g. "/litellm") too, since the server-set
+  // auth cookie is scoped there when SERVER_ROOT_PATH is configured.
+  const serverRootPath = uiCookiePath.replace(/\/ui$/, "");
+  if (serverRootPath && !paths.includes(serverRootPath)) {
+    paths.push(serverRootPath);
+  }
+
   // Add the current path directory if it's different from root and /ui
   if (currentPath && currentPath !== "/" && !currentPath.startsWith("/ui")) {
     const dirPath = currentPath.substring(0, currentPath.lastIndexOf("/") + 1);
