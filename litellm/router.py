@@ -2361,7 +2361,20 @@ class Router:
                 return self
 
             async def __anext__(self):
-                chunk = await self._async_generator.__anext__()
+                try:
+                    chunk = await self._async_generator.__anext__()
+                except StopAsyncIteration:
+                    # The inner generator is exhausted. If we never sniffed a
+                    # terminal event off a chunk (the bridge path emits the
+                    # final response.completed via common_done_event_logic,
+                    # which raises StopAsyncIteration after returning it),
+                    # fall back to whatever the source iterator latched so
+                    # the proxy's container-ownership hook still sees a
+                    # completed_response instead of logging a spurious
+                    # "no completed_response" warning.
+                    if self.completed_response is None:
+                        self.completed_response = getattr(source_iterator, "completed_response", None)
+                    raise
                 # Sniff the terminal stream event off each forwarded chunk
                 # so ``self.completed_response`` is populated regardless of
                 # which inner iterator produced it (source_iterator,
