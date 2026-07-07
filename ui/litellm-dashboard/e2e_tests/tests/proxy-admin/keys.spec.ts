@@ -137,11 +137,10 @@ test.describe("Proxy Admin - Keys", () => {
     // No team selection — leave team dropdown empty so the key is owned by the admin user
 
     // Select models — open the multi-select and pick the all-models meta-option.
-    // The Create Key modal labels this "All Team Models" even when no team is selected
-    // (see src/components/organisms/create_key_button.tsx:944), unlike the team/user
-    // settings screens which use "All Proxy Models".
+    // With no team selected the modal offers "All Proxy Models"; the team-scoped
+    // "All Team Models" option only appears once a team is picked.
     await page.locator(".ant-select-selection-overflow").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Team Models").click();
+    await page.locator(".ant-select-dropdown:visible").getByText("All Proxy Models").click();
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
