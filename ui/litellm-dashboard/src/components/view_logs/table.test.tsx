@@ -2,7 +2,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { DataTable, SKELETON_ROW_COUNT } from "./table";
+import { DataTable } from "./table";
 
 type Row = { request_id: string; a: string; b: string };
 
@@ -61,34 +61,11 @@ describe("DataTable column sizing", () => {
 });
 
 describe("DataTable states", () => {
-  it("renders skeleton rows mirroring the column layout while loading", () => {
-    const { container } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
+  it("shows the loading message instead of rows while loading", () => {
+    render(<DataTable data={data} columns={unsizedColumns} isLoading loadingMessage="Fetching things" />);
 
-    const skeletons = container.querySelectorAll('[data-slot="skeleton"]');
-    expect(skeletons).toHaveLength(SKELETON_ROW_COUNT * unsizedColumns.length);
+    expect(screen.getByText("Fetching things")).toBeInTheDocument();
     expect(screen.queryByText("alpha")).not.toBeInTheDocument();
-  });
-
-  it("shapes skeleton cells from column meta: pill, numeric, and text variants", () => {
-    const columns: ColumnDef<Row>[] = [
-      { header: "A", accessorKey: "a", meta: { skeleton: { variant: "pill" } } },
-      { header: "B", accessorKey: "b", meta: { numeric: true } },
-      { header: "C", accessorKey: "a" },
-    ];
-    const { container } = render(<DataTable data={data} columns={columns} isLoading />);
-
-    const firstRowSkeletons = container.querySelectorAll("tbody tr:first-child [data-slot='skeleton']");
-    expect(firstRowSkeletons[0]).toHaveClass("rounded-full");
-    expect(firstRowSkeletons[1]).toHaveClass("ml-auto");
-    expect(firstRowSkeletons[2]).toHaveClass("w-2/3");
-  });
-
-  it("keeps stale rows visible with a fade instead of skeletons while refetching", () => {
-    const { container } = render(<DataTable data={data} columns={unsizedColumns} isRefetching />);
-
-    expect(screen.getByText("alpha")).toBeInTheDocument();
-    expect(container.querySelector('[data-slot="skeleton"]')).not.toBeInTheDocument();
-    expect(container.querySelector("tbody")).toHaveClass("opacity-60");
   });
 
   it("shows the no-data message when there are no rows", () => {
@@ -97,15 +74,18 @@ describe("DataTable states", () => {
     expect(screen.getByText("Nothing here")).toBeInTheDocument();
   });
 
-  it("falls back to the generic empty default", () => {
-    render(<DataTable data={[]} columns={unsizedColumns} />);
+  it("falls back to generic loading and empty defaults", () => {
+    const { rerender } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+
+    rerender(<DataTable data={[]} columns={unsizedColumns} />);
     expect(screen.getByText("No results")).toBeInTheDocument();
   });
 
   it("suppresses the primitive's row hover on loading, empty, and expansion placeholder rows", async () => {
     const user = userEvent.setup();
-    const { rerender, container } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
-    expect(container.querySelector('[data-slot="skeleton"]')?.closest("tr")).toHaveClass("hover:bg-transparent");
+    const { rerender } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
+    expect(screen.getByText("Loading...").closest("tr")).toHaveClass("hover:bg-transparent");
 
     rerender(<DataTable data={[]} columns={unsizedColumns} />);
     expect(screen.getByText("No results").closest("tr")).toHaveClass("hover:bg-transparent");

@@ -511,6 +511,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
         columns={columns}
         isLoading={isLoading}
         noDataMessage="No toolsets yet. Click 'New Toolset' to create one."
+        loadingMessage="Loading toolsets..."
         enableSorting={true}
       />
 

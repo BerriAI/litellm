@@ -12,41 +12,11 @@ import {
 } from "@tanstack/react-table";
 
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
-import { Skeleton } from "@/components/ui/skeleton";
 
 declare module "@tanstack/react-table" {
   interface ColumnMeta<TData extends RowData, TValue> {
     numeric?: boolean;
-    skeleton?: SkeletonMeta;
   }
-}
-
-type SkeletonMeta = {
-  variant?: "text" | "pill" | "number" | "avatar";
-  width?: string;
-};
-
-export const SKELETON_ROW_COUNT = 8;
-
-function SkeletonCell({ numeric, skeleton }: { numeric?: boolean; skeleton?: SkeletonMeta }) {
-  const variant = skeleton?.variant ?? (numeric ? "number" : "text");
-  const width = skeleton?.width;
-
-  if (variant === "pill") {
-    return <Skeleton className={`h-5 rounded-full ${width ?? "w-16"}`} />;
-  }
-  if (variant === "number") {
-    return <Skeleton className={`h-4 ml-auto ${width ?? "w-12"}`} />;
-  }
-  if (variant === "avatar") {
-    return (
-      <div className="flex items-center gap-2">
-        <Skeleton className="h-4 w-4 rounded-full" />
-        <Skeleton className={`h-4 ${width ?? "w-24"}`} />
-      </div>
-    );
-  }
-  return <Skeleton className={`h-4 ${width ?? "w-2/3"}`} />;
 }
 
 interface DataTableProps<TData, TValue> {
@@ -58,8 +28,7 @@ interface DataTableProps<TData, TValue> {
   renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
   getRowCanExpand?: (row: Row<TData>) => boolean;
   isLoading?: boolean;
-  /** Stale rows stay visible with a subtle fade while fresh data loads (no skeleton wipe) */
-  isRefetching?: boolean;
+  loadingMessage?: string;
   noDataMessage?: string;
   /** Enable client-side column sorting (defaults to false to avoid conflicts with server-side sorting) */
   enableSorting?: boolean;
@@ -73,7 +42,7 @@ export function DataTable<TData, TValue>({
   renderSubComponent,
   getRowCanExpand,
   isLoading = false,
-  isRefetching = false,
+  loadingMessage = "Loading...",
   noDataMessage = "No results",
   enableSorting = false,
 }: DataTableProps<TData, TValue>) {
@@ -137,21 +106,15 @@ export function DataTable<TData, TValue>({
             </TableRow>
           ))}
         </TableHeader>
-        <TableBody className={isRefetching && !isLoading ? "opacity-60 transition-opacity" : ""}>
+        <TableBody>
           {isLoading ? (
-            Array.from({ length: SKELETON_ROW_COUNT }).map((_, rowIndex) => (
-              <TableRow key={`skeleton-${rowIndex}`} className="h-8 hover:bg-transparent">
-                {table.getVisibleLeafColumns().map((column) => (
-                  <TableCell
-                    key={column.id}
-                    className="py-0.5 first:pl-4 last:pr-4"
-                    style={hasExplicitColumnSizes ? { width: column.getSize() } : undefined}
-                  >
-                    <SkeletonCell numeric={column.columnDef.meta?.numeric} skeleton={column.columnDef.meta?.skeleton} />
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={columns.length} className="h-8 text-center">
+                <div className="text-center text-muted-foreground">
+                  <p>{loadingMessage}</p>
+                </div>
+              </TableCell>
+            </TableRow>
           ) : table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>

@@ -289,8 +289,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     data={deferredData}
                     getRowId={(row) => row.request_id}
                     onRowClick={handleRowClick}
-                    isLoading={logsQuery.isLoading}
-                    isRefetching={isRefiltering}
+                    isLoading={isLogsLoading}
                   />
                 </div>
               </>

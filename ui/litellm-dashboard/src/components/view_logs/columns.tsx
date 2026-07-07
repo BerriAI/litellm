@@ -120,14 +120,12 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       : "Time",
     accessorKey: "startTime",
     size: 200,
-    meta: { skeleton: { width: "w-36" } },
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
     header: "Type",
     id: "type",
     size: 90,
-    meta: { skeleton: { variant: "pill", width: "w-12" } },
     cell: (info: any) => {
       const row = info.row.original;
       const sessionCount = row.session_total_count || 1;
@@ -173,7 +171,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Status",
     accessorKey: "metadata.status",
     size: 100,
-    meta: { skeleton: { variant: "pill" } },
     cell: (info: any) => {
       const status = info.getValue() || "Success";
       const isSuccess = status.toLowerCase() !== "failure";
@@ -193,7 +190,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Session ID",
     accessorKey: "session_id",
     size: 120,
-    meta: { skeleton: { variant: "pill", width: "w-20" } },
     cell: (info: any) => {
       const value = String(info.getValue() || "");
       const onSessionClick = info.row.original.onSessionClick;
@@ -364,7 +360,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       : "Model",
     accessorKey: "model",
     size: 200,
-    meta: { skeleton: { variant: "avatar" } },
     cell: (info: any) => {
       const row = info.row.original;
       const provider = row.custom_llm_provider;
