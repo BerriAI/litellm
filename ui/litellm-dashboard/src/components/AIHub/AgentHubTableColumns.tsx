@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { StatusBadge } from "@/components/shared/table_cells";
 
 export interface AgentHubData {
   agent_id?: string;
@@ -194,17 +195,9 @@ export const getAgentHubTableColumns = (
         return publicA - publicB;
       },
       cell: ({ row }) => {
-        const agent = row.original;
+        const isPublic = row.original.is_public === true;
 
-        return agent.is_public === true ? (
-          <Badge color="green" size="xs">
-            Yes
-          </Badge>
-        ) : (
-          <Badge color="gray" size="xs">
-            No
-          </Badge>
-        );
+        return <StatusBadge tone={isPublic ? "success" : "neutral"} label={isPublic ? "Yes" : "No"} />;
       },
       meta: {
         className: "hidden md:table-cell",

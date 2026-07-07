@@ -3,6 +3,7 @@ import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
 import { Team } from "@/components/key_team_helpers/key_list";
+import { IdCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 
 interface HealthCheckData {
   model_name: string;
@@ -20,6 +21,18 @@ interface HealthCheckData {
   health_error?: string;
   health_full_error?: string;
 }
+
+const HEALTH_STATUS_TONES: Record<string, StatusTone> = {
+  healthy: "success",
+  unhealthy: "error",
+  checking: "info",
+  none: "neutral",
+};
+
+const healthStatusBadge = (status: string): JSX.Element => {
+  const tone = HEALTH_STATUS_TONES[status];
+  return tone ? <StatusBadge tone={tone} label={status} /> : <StatusBadge tone="neutral" label="unknown" />;
+};
 
 interface HealthStatus {
   status: string;
@@ -72,14 +85,7 @@ export const healthCheckColumns = (
             onChange={(e) => handleModelSelection(modelId, e.target.checked)}
             onClick={(e) => e.stopPropagation()}
           />
-          <Tooltip title={model.model_info.id}>
-            <div
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-              onClick={() => setSelectedModelId && setSelectedModelId(model.model_info.id)}
-            >
-              {model.model_info.id}
-            </div>
-          </Tooltip>
+          <IdCell value={model.model_info.id} onClick={setSelectedModelId} />
         </div>
       );
     },
@@ -175,7 +181,7 @@ export const healthCheckColumns = (
 
       return (
         <div className="flex items-center space-x-2">
-          {getStatusBadge(healthStatus.status)}
+          {healthStatusBadge(healthStatus.status)}
           {hasSuccessResponse && showSuccessModal && (
             <Tooltip title="View response details" placement="top">
               <button

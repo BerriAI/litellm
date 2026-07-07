@@ -548,4 +548,3 @@ export type AuditLogEntry = {
   before_value: Record<string, any>;
   updated_values: Record<string, any>;
 };
-

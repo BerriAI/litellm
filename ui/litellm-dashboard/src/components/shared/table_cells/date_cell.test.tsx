@@ -3,8 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { DateCell, formatCellDate, formatFullTimestamp } from "./date_cell";
 
-const localIso = (y: number, m: number, d: number, hh = 0, mm = 0, ss = 0) =>
-  new Date(y, m, d, hh, mm, ss).toISOString();
+const localIso = new Date(2026, 6, 7, 9, 50, 13).toISOString();
 
 describe("formatCellDate", () => {
   it("formats datetime precision as 'MMM D, HH:mm:ss' without a year", () => {
@@ -29,12 +28,12 @@ describe("formatFullTimestamp", () => {
 
 describe("DateCell", () => {
   it("renders the datetime format by default", () => {
-    render(<DateCell value={localIso(2026, 6, 7, 9, 50, 13)} />);
+    render(<DateCell value={localIso} />);
     expect(screen.getByText("Jul 7, 09:50:13")).toBeInTheDocument();
   });
 
   it("renders date-only when precision is 'date'", () => {
-    render(<DateCell value={localIso(2026, 6, 7, 9, 50, 13)} precision="date" />);
+    render(<DateCell value={localIso} precision="date" />);
     expect(screen.getByText("Jul 7, 2026")).toBeInTheDocument();
   });
 

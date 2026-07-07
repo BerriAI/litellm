@@ -1383,7 +1383,7 @@
   },
   "src/components/guardrails/guardrail_table.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/guardrails/tool_permission/ToolPermissionRulesEditor.tsx": {
@@ -2062,11 +2062,6 @@
   "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
     "react-hooks/immutability": {
       "count": 2
-    }
-  },
-  "src/components/view_logs/columns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_logs/index.tsx": {
