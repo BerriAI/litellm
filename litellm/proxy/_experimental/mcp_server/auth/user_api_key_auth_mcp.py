@@ -389,20 +389,12 @@ class MCPRequestHandler:
             # stamped still carries the M2M credential shape (client_id/secret +
             # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
             # row as non-M2M here would reopen the anonymous bypass the explicit
-            # column no longer closes on its own. Mirrors the request-time backstop
-            # in server.py::_get_allowed_mcp_servers; both fail closed on the
-            # ambiguous shape and are removed together once no null rows remain. A
-            # pure-PKCE delegate server (no stored credentials) resolves to a
+            # column no longer closes on its own. Shares the one resolution helper
+            # with the egress backstop and the anonymous-delegate allowlist; all fail
+            # closed on the ambiguous shape and are removed together once no null rows
+            # remain. A pure-PKCE delegate server (no stored credentials) resolves to a
             # non-M2M flow and keeps its bypass.
-            resolved_flow = MCPServerManager._resolve_oauth2_flow(
-                auth_type=server.auth_type,
-                oauth2_flow=server.oauth2_flow,
-                token_url=server.token_url,
-                authorization_url=server.authorization_url,
-                client_id=server.client_id,
-                client_secret=server.client_secret,
-            )
-            if resolved_flow == "client_credentials":
+            if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
                 return False
         return True
 

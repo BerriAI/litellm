@@ -2332,6 +2332,56 @@ class TestMCPDelegateAuthToUpstream:
         assert "pkce-server" in result
         assert "m2m-server" not in result
 
+    async def test_get_allowed_servers_excludes_unstamped_m2m_shape_delegate(self):
+        """
+        The anonymous allow-list must also exclude an M2M-shape delegate server whose
+        oauth2_flow was never stamped (null column, verbatim-read as non-M2M). Reading
+        the bare has_client_credentials here would surface it to anonymous callers; the
+        resolved-flow check fails closed on the shape, matching the auth gate.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        pkce_server = MCPServer(
+            server_id="pkce-server",
+            name="pkce_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=True,
+        )
+        unstamped_m2m = MCPServer(
+            server_id="unstamped-m2m",
+            name="unstamped_m2m",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        assert unstamped_m2m.has_client_credentials is False
+        manager.registry = {
+            pkce_server.server_id: pkce_server,
+            unstamped_m2m.server_id: unstamped_m2m,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert "pkce-server" in result
+        assert "unstamped-m2m" not in result
+
     async def test_get_allowed_servers_includes_internal_delegate(self):
         """
         Internal-only (available_on_public_internet=False) delegate servers

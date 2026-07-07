@@ -6197,3 +6197,70 @@ class TestDbBuildReadsOauth2FlowColumnVerbatim:
         assert built.oauth2_flow == "authorization_code"
         assert built.has_client_credentials is False
         assert built.needs_user_oauth_token is True
+
+
+class TestRequestTimeOauth2FlowBackstop:
+    """The single request-time resolution helpers every security site shares:
+    effective_oauth2_flow (the enum/boolean decision) and
+    resolve_oauth2_flow_for_request (the egress object copy)."""
+
+    def _oauth2_server(self, **overrides):
+        base = dict(
+            server_id="flow-server",
+            name="flow_server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        base.update(overrides)
+        return MCPServer(**base)
+
+    def test_effective_flow_stamped_values_returned_verbatim(self):
+        assert (
+            MCPServerManager.effective_oauth2_flow(self._oauth2_server(oauth2_flow="client_credentials"))
+            == "client_credentials"
+        )
+        assert (
+            MCPServerManager.effective_oauth2_flow(self._oauth2_server(oauth2_flow="authorization_code"))
+            == "authorization_code"
+        )
+
+    def test_effective_flow_null_m2m_shape_resolves_client_credentials(self):
+        server = self._oauth2_server(
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        assert MCPServerManager.effective_oauth2_flow(server) == "client_credentials"
+
+    def test_effective_flow_null_pure_pkce_resolves_none(self):
+        assert MCPServerManager.effective_oauth2_flow(self._oauth2_server(oauth2_flow=None)) is None
+
+    def test_resolve_for_request_stamped_row_is_unchanged_identity(self):
+        server = self._oauth2_server(oauth2_flow="client_credentials")
+        assert MCPServerManager.resolve_oauth2_flow_for_request(server) is server
+
+    def test_resolve_for_request_null_pure_pkce_is_unchanged_identity(self):
+        server = self._oauth2_server(oauth2_flow=None)
+        assert MCPServerManager.resolve_oauth2_flow_for_request(server) is server
+
+    def test_resolve_for_request_null_m2m_shape_copies_client_credentials(self, caplog):
+        import logging
+
+        server = self._oauth2_server(
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.example.com/token",
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            resolved = MCPServerManager.resolve_oauth2_flow_for_request(server)
+
+        assert resolved is not server
+        assert resolved.oauth2_flow == "client_credentials"
+        assert server.oauth2_flow is None  # original untouched
+        # Finding 2: the warning must NOT promise the backfill will stamp this row.
+        joined = " ".join(caplog.messages)
+        assert "no persisted oauth2_flow" in joined
+        assert "next proxy boot" not in joined
+        assert "will NOT self-heal" in joined
