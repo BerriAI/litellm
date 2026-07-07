@@ -1094,7 +1094,7 @@ if MCP_AVAILABLE:
                         )
                     )
                 )
-                if is_interactive_authz_code
+                if is_interactive_authz_code and forwarded_authorization is not None
                 else None
             )
 
