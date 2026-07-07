@@ -412,8 +412,10 @@ def _enable_debugging():
 
 def print_verbose(print_statement):
     try:
+        redacted_statement = redact_secrets(str(print_statement))
+        verbose_logger.debug(redacted_statement)
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+            print(redacted_statement)  # noqa: T201
     except Exception:
         pass
 
