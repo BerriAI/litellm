@@ -447,7 +447,9 @@ def _render_chat_template(
                             else:
                                 new_messages.append({"role": "user", "content": ""})
                     new_messages.append(reformatted_messages[-1])
-                    rendered_text = template.render(bos_token=bos_token, eos_token=eos_token, messages=new_messages, **extra)
+                    rendered_text = template.render(
+                        bos_token=bos_token, eos_token=eos_token, messages=new_messages, **extra
+                    )
 
         return rendered_text
     except Exception as e:

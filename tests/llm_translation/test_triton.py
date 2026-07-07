@@ -9,9 +9,7 @@ load_dotenv()
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 
@@ -30,9 +28,7 @@ def test_split_embedding_by_shape_passes():
                 "data": [1, 2, 3, 4, 5, 6],
             }
         ]
-        split_output_data = TritonEmbeddingConfig.split_embedding_by_shape(
-            data[0]["data"], data[0]["shape"]
-        )
+        split_output_data = TritonEmbeddingConfig.split_embedding_by_shape(data[0]["data"], data[0]["shape"])
         assert split_output_data == [[1, 2, 3], [4, 5, 6]]
     except Exception as e:
         pytest.fail(f"An exception occured: {e}")
@@ -46,9 +42,7 @@ def test_split_embedding_by_shape_fails_with_shape_value_error():
         }
     ]
     with pytest.raises(ValueError):
-        TritonEmbeddingConfig.split_embedding_by_shape(
-            data[0]["data"], data[0]["shape"]
-        )
+        TritonEmbeddingConfig.split_embedding_by_shape(data[0]["data"], data[0]["shape"])
 
 
 def test_triton_embedding_response_sets_usage_with_token_counter():
@@ -333,9 +327,7 @@ def test_completion_triton_infer_api():
             assert request_data["inputs"][0]["name"] == "text_input"
             assert request_data["inputs"][0]["shape"] == [1]
             assert request_data["inputs"][0]["datatype"] == "BYTES"
-            assert request_data["inputs"][0]["data"] == [
-                "0004900005025 0004900005026 0004900005027"
-            ]
+            assert request_data["inputs"][0]["data"] == ["0004900005025 0004900005026 0004900005027"]
 
             assert request_data["inputs"][1]["shape"] == [1]
             assert request_data["inputs"][1]["datatype"] == "INT32"
@@ -390,3 +382,66 @@ def test_triton_generate_raw_request():
         assert "stop_words" not in json.dumps(raw_request["raw_request_body"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_triton_generate_chat_template_kwargs_not_forwarded_to_triton():
+    """
+    chat_template_kwargs must be consumed by LiteLLM when rendering text_input
+    and must NOT appear in the parameters dict sent to Triton.
+
+    Triton's TritonSamplingParams raises on unknown kwargs:
+      Unexpected keyword argument 'chat_template_kwargs'
+    """
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    messages = [{"role": "user", "content": "hello"}]
+    optional_params = {
+        "max_tokens": 50,
+        "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    result = config.transform_request(
+        model="llama-3-8b-instruct",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={"api_base": "http://localhost:8000/generate"},
+        headers={},
+    )
+
+    # chat_template_kwargs must never reach Triton's parameters
+    assert "chat_template_kwargs" not in result["parameters"], (
+        "chat_template_kwargs leaked into Triton parameters; it must be consumed by LiteLLM when building text_input"
+    )
+    # Scalar params that Triton understands must still be forwarded
+    assert result["parameters"]["max_tokens"] == 50
+
+
+def test_triton_infer_chat_template_kwargs_not_forwarded_to_triton():
+    """
+    chat_template_kwargs must not appear in the inputs list sent to Triton's
+    /infer endpoint either.
+    """
+    from litellm.llms.triton.completion.transformation import TritonInferConfig
+
+    config = TritonInferConfig()
+    messages = [{"role": "user", "content": "hello"}]
+    optional_params = {
+        "max_tokens": 20,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    result = config.transform_request(
+        model="llama-3-8b-instruct",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={"api_base": "http://localhost:8000/infer"},
+        headers={},
+    )
+
+    input_names = [inp["name"] for inp in result["inputs"]]
+    assert "chat_template_kwargs" not in input_names, (
+        "chat_template_kwargs leaked into Triton inputs; "
+        "it is a LiteLLM-only param and must not reach the Triton server"
+    )
