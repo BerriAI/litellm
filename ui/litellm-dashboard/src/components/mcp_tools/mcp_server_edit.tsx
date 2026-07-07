@@ -21,7 +21,7 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars, normalizeToolOverrideMap } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -257,8 +257,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (hasExistingToolAllowlist) {
       setAllowedTools(mcpServer.allowed_tools ?? []);
     }
-    setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
-    setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
+    setToolNameToDisplayName(normalizeToolOverrideMap(mcpServer.tool_name_to_display_name));
+    setToolNameToDescription(normalizeToolOverrideMap(mcpServer.tool_name_to_description));
   }, [mcpServer, hasExistingToolAllowlist]);
 
   useEffect(() => {

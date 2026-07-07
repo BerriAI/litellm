@@ -77,6 +77,7 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
+        _apply_toolset_scope,
         _fire_mcp_success_logging,
         _tool_name_matches,
         execute_mcp_tool,
@@ -545,6 +546,10 @@ if MCP_AVAILABLE:
     async def list_tool_rest_api(
         request: Request,
         server_id: Optional[str] = Query(None, description="The server id to list tools for"),
+        mcp_server_name: Optional[str] = Query(
+            None, description="Filter tools to a single MCP server by name or alias"
+        ),
+        toolset_name: Optional[str] = Query(None, description="Filter tools to a single toolset by name"),
         include_disabled_tools: bool = Query(
             False,
             description=(
@@ -582,11 +587,33 @@ if MCP_AVAILABLE:
         )
 
         try:
+            if not isinstance(mcp_server_name, str):
+                mcp_server_name = None
+            if not isinstance(toolset_name, str):
+                toolset_name = None
+
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
             apply_tool_filters = not (
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
+
+            if toolset_name:
+                from litellm.proxy.utils import get_prisma_client_or_throw
+
+                prisma_client = get_prisma_client_or_throw(
+                    "Database not available. Connect a database to your proxy"
+                )
+                toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name)
+                if toolset is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Toolset '{toolset_name}' not found",
+                    )
+                user_api_key_dict = await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
+
+            if server_id is None:
+                server_id = mcp_server_name
 
             if apply_tool_filters and getattr(
                 getattr(user_api_key_dict, "object_permission", None),

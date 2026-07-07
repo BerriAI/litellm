@@ -77,3 +77,22 @@ export const normalizeEnvVars = (list: unknown): MCPEnvVar[] => {
   }
   return out;
 };
+
+/** Normalize tool override maps from API/DB (dict or JSON string) for form state. */
+export const normalizeToolOverrideMap = (
+  value: Record<string, string> | string | null | undefined,
+): Record<string, string> => {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, string>;
+      }
+    } catch {
+      return {};
+    }
+    return {};
+  }
+  return value;
+};

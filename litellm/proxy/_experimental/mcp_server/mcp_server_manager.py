@@ -4553,6 +4553,8 @@ class MCPServerManager:
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
+            tool_name_to_display_name=server.tool_name_to_display_name,
+            tool_name_to_description=server.tool_name_to_description,
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,

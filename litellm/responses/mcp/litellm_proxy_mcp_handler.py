@@ -631,6 +631,9 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _resolve_display_name_to_original,
+        )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         tool_results = []
@@ -657,8 +660,13 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 server_name = tool_server_map[tool_name]
 
-                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
-                sanitized_tool_name = strip_known_server_prefix(tool_name, mcp_server)
+                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                    tool_name
+                ) or global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                resolved_tool_name = (
+                    _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
+                )
+                sanitized_tool_name = strip_known_server_prefix(resolved_tool_name, mcp_server)
 
                 start_time = datetime.now()
                 logging_input = [
