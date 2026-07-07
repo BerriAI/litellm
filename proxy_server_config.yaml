@@ -157,7 +157,10 @@ litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True
   success_callback: ["prometheus"]
-  # max_budget: 100 
+  # Xcity wallet KWH billing (XCT-322 / S3): debits the credit ledger per call
+  # at a 1.8x markup. No-op unless WALLET_BASE_URL + WALLET_SERVICE_TOKEN are set.
+  callbacks: litellm.integrations.xcity_wallet.xcity_wallet_billing_instance
+  # max_budget: 100
   # budget_duration: 30d
   num_retries: 5
   request_timeout: 600
