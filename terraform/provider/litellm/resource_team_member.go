@@ -97,6 +97,7 @@ func resourceLiteLLMTeamMemberUpdate(d *schema.ResourceData, m interface{}) erro
 		"user_id":            d.Get("user_id").(string),
 		"user_email":         d.Get("user_email").(string),
 		"team_id":            d.Get("team_id").(string),
+		"role":               d.Get("role").(string),
 		"max_budget_in_team": d.Get("max_budget_in_team").(float64),
 	}
 

@@ -152,8 +152,8 @@ The following arguments are supported:
 * `auth_type` - (Optional) Authentication type. Valid values: `none`, `bearer`, `basic`. Defaults to `none`.
 * `mcp_access_groups` - (Optional) List of access groups that can use this MCP server.
 * `command` - (Optional) Command to run for stdio transport.
-* `args` - (Optional) List of arguments for the command (stdio transport only).
-* `env` - (Optional) Map of environment variables for the command (stdio transport only).
+* `args` - (Optional) List of arguments for the command (stdio transport only). Do not pass secrets as arguments; args are shown in plans, stored unencrypted in state, and visible in the server's process list.
+* `env` - (Optional, Sensitive) Map of environment variables for the command (stdio transport only). Hidden from plan output but still stored unencrypted in state; secure your state backend when configuring tokens here.
 
 ### MCP Info Block
 

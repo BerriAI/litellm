@@ -134,11 +134,6 @@ func updateSchemaFromResponse(d *schema.ResourceData, resp *MCPServerResponse) e
 		d.Set("args", resp.Args)
 	}
 
-	// Set env
-	if resp.Env != nil {
-		d.Set("env", resp.Env)
-	}
-
 	// Set mcp_info
 	if resp.MCPInfo != nil {
 		mcpInfoList := make([]map[string]interface{}, 1)

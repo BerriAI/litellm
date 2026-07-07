@@ -80,6 +80,7 @@ func resourceLiteLLMMCPServer() *schema.Resource {
 			"env": {
 				Type:        schema.TypeMap,
 				Optional:    true,
+				Sensitive:   true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "Environment variables for the command (stdio transport)",
 			},
