@@ -582,17 +582,24 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
-    def test_gpt_5_4_returns_config_even_when_mode_is_chat(self, mock_get_info):
+    def test_gpt_5_4_returns_config_even_when_mode_is_chat(self) -> None:
         """gpt-5.4+ is responses-capable and overrides the ``mode=chat`` opt-out.
 
         Regression for https://github.com/BerriAI/litellm/issues/23156. The catalog
         default for gpt-5.4 is ``mode=chat``, but tools + reasoning_effort must be
         bridgeable to /v1/responses; without this the completion() responses bridge
         would receive a None config and bounce the request back to /v1/chat/completions."""
-        mock_get_info.return_value = {"mode": "chat"}
+        litellm.register_model(
+            {
+                "github_copilot/gpt-5.4": {
+                    "litellm_provider": "github_copilot",
+                    "max_tokens": 128000,
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                    "mode": "chat",
+                }
+            }
+        )
         config = ProviderConfigManager.get_provider_responses_api_config(
             model="github_copilot/gpt-5.4",
             provider=LlmProviders.GITHUB_COPILOT,
