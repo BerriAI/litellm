@@ -8,6 +8,7 @@ from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
@@ -726,6 +727,9 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
 
+        if user_api_key_auth.team_id == UI_TEAM_ID:
+            return None
+
         # Get the team object (which has object_permission already loaded)
         team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
             team_id=user_api_key_auth.team_id,
@@ -1019,6 +1023,9 @@ class MCPRequestHandler:
             )
 
             if user_api_key_auth is None or not user_api_key_auth.team_id or prisma_client is None:
+                return []
+
+            if user_api_key_auth.team_id == UI_TEAM_ID:
                 return []
 
             team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
@@ -1501,6 +1508,9 @@ class MCPRequestHandler:
 
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
+            return []
+
+        if user_api_key_auth.team_id == UI_TEAM_ID:
             return []
 
         try:
