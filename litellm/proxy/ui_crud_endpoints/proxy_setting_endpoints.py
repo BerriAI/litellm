@@ -780,7 +780,9 @@ async def get_sso_settings():
     # Build SSO config from database values, falling back to the environment so
     # env-configured SSO still populates the UI. Stored DB values win on overlap.
     env_fallback = {
-        field: os.environ[env_var] for field, env_var in _SSO_FIELD_TO_ENV_VAR.items() if os.environ.get(env_var)
+        field: val
+        for field, env_var in _SSO_FIELD_TO_ENV_VAR.items()
+        if (val := os.environ.get(env_var))
     }
     merged_sso_settings = {**env_fallback, **decrypted_sso_settings_dict}
 
