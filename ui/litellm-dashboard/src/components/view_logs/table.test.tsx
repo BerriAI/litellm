@@ -69,6 +69,28 @@ describe("DataTable states", () => {
     expect(screen.queryByText("alpha")).not.toBeInTheDocument();
   });
 
+  it("shapes skeleton cells from column meta: pill, numeric, and text variants", () => {
+    const columns: ColumnDef<Row>[] = [
+      { header: "A", accessorKey: "a", meta: { skeleton: { variant: "pill" } } },
+      { header: "B", accessorKey: "b", meta: { numeric: true } },
+      { header: "C", accessorKey: "a" },
+    ];
+    const { container } = render(<DataTable data={data} columns={columns} isLoading />);
+
+    const firstRowSkeletons = container.querySelectorAll("tbody tr:first-child [data-slot='skeleton']");
+    expect(firstRowSkeletons[0]).toHaveClass("rounded-full");
+    expect(firstRowSkeletons[1]).toHaveClass("ml-auto");
+    expect(firstRowSkeletons[2]).toHaveClass("w-2/3");
+  });
+
+  it("keeps stale rows visible with a fade instead of skeletons while refetching", () => {
+    const { container } = render(<DataTable data={data} columns={unsizedColumns} isRefetching />);
+
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="skeleton"]')).not.toBeInTheDocument();
+    expect(container.querySelector("tbody")).toHaveClass("opacity-60");
+  });
+
   it("shows the no-data message when there are no rows", () => {
     render(<DataTable data={[]} columns={unsizedColumns} noDataMessage="Nothing here" />);
 
