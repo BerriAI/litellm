@@ -55,6 +55,13 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
+def _hash_api_key_for_spend_log(api_key: str) -> str:
+    stripped = api_key[7:] if api_key[:7].lower() == "bearer " else api_key
+    if stripped.startswith("sk-"):
+        return hash_token(stripped)
+    return stripped
+
+
 def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
@@ -120,6 +127,9 @@ def _get_spend_logs_metadata(
             key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
         }
     )
+    raw_user_api_key = clean_metadata.get("user_api_key")
+    if raw_user_api_key is not None and isinstance(raw_user_api_key, str):
+        clean_metadata["user_api_key"] = _hash_api_key_for_spend_log(raw_user_api_key)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
@@ -281,9 +291,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     if api_key is not None and isinstance(api_key, str):
-        if api_key.startswith("sk-"):
-            # hash the api_key
-            api_key = hash_token(api_key)
+        api_key = _hash_api_key_for_spend_log(api_key)
 
     if (
         standard_logging_payload is not None
@@ -483,6 +491,74 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
     """Helper to ensure datetime is in UTC"""
     timestamp = timestamp.astimezone(timezone.utc)
     return timestamp
+
+
+async def get_spend_by_team(
+    start_date: dt,
+    end_date: dt,
+    team_id: Optional[str],
+    prisma_client: PrismaClient,
+):
+    sql_query = """
+    WITH SpendByModelApiKey AS (
+        SELECT
+            date_trunc('day', sl."startTime") AS group_by_day,
+            COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+            sl.model,
+            sl.api_key,
+            SUM(sl.spend) AS model_api_spend,
+            SUM(sl.total_tokens) AS model_api_tokens
+        FROM
+            "LiteLLM_SpendLogs" sl
+        LEFT JOIN
+            "LiteLLM_TeamTable" tt
+        ON
+            sl.team_id = tt.team_id
+        WHERE
+            sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+            AND ($3::text IS NULL OR sl.team_id = $3)
+        GROUP BY
+            date_trunc('day', sl."startTime"),
+            tt.team_alias,
+            sl.model,
+            sl.api_key
+    )
+        SELECT
+            group_by_day,
+            jsonb_agg(jsonb_build_object(
+                'team_name', team_name,
+                'total_spend', total_spend,
+                'metadata', metadata
+            )) AS teams
+        FROM (
+            SELECT
+                group_by_day,
+                team_name,
+                SUM(model_api_spend) AS total_spend,
+                jsonb_agg(jsonb_build_object(
+                    'model', model,
+                    'api_key', api_key,
+                    'spend', model_api_spend,
+                    'total_tokens', model_api_tokens
+                )) AS metadata
+            FROM
+                SpendByModelApiKey
+            GROUP BY
+                group_by_day,
+                team_name
+        ) AS aggregated
+        GROUP BY
+            group_by_day
+        ORDER BY
+            group_by_day;
+    """
+
+    db_response = await prisma_client.db.query_raw(sql_query, start_date, end_date, team_id)
+    if db_response is None:
+        return []
+
+    return db_response
 
 
 async def get_spend_by_team_and_customer(

@@ -13,6 +13,7 @@ import {
   TRANSPORT,
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
+  MCP_OAUTH2_FLOW_INTERACTIVE,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -24,7 +25,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars, TOOL_DISPLAY_NAME_PATTERN } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -325,6 +326,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   }, [isModalVisible, prefillData, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
+    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
+      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+    );
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
+      );
+      return;
+    }
     setIsLoading(true);
     try {
       const {
@@ -442,6 +452,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         oauth_passthrough: Boolean(oauthPassthroughRaw),
+        ...(restValues.auth_type === AUTH_TYPE.OAUTH2
+          ? {
+              oauth2_flow:
+                values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
+            }
+          : {}),
         static_headers: staticHeaders,
         env_vars: envVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),

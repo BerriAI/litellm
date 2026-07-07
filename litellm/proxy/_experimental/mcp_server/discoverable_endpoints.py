@@ -1,6 +1,7 @@
 import asyncio
 import html as _html
 import json
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
@@ -8,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
@@ -135,6 +136,72 @@ def decode_state_hash(encrypted_state: str) -> dict:
 
     state_data = json.loads(decrypted_json)
     return state_data
+
+
+# LIT-4197: some upstream authorization servers reject an over-long ``state``
+# (the encrypted OAuth session blob routinely exceeds their limit). The upstream
+# only needs an opaque value it echoes back on ``/callback``, so we forward a
+# short random handle and keep the encrypted session in a per-flow HttpOnly
+# cookie bound to that handle. The browser carries the cookie across the
+# upstream round trip, so the flow stays correct with no server-side session
+# store (works across proxy replicas, unlike an in-process map).
+_OAUTH_STATE_COOKIE_PREFIX = "mcp_oauth_state_"
+_OAUTH_STATE_COOKIE_TTL_SECONDS = 600
+_OAUTH_STATE_HANDLE_BYTES = 32
+
+
+def _oauth_state_cookie_name(relay_state: str) -> str:
+    return f"{_OAUTH_STATE_COOKIE_PREFIX}{relay_state}"
+
+
+def _oauth_state_cookie_path_and_secure(request: Request) -> tuple[str, bool]:
+    parsed = urlparse(get_request_base_url(request))
+    return parsed.path or "/", parsed.scheme == "https"
+
+
+def _set_oauth_state_cookie(
+    response: Response,
+    request: Request,
+    relay_state: str,
+    encoded_state: str,
+) -> None:
+    path, secure = _oauth_state_cookie_path_and_secure(request)
+    response.set_cookie(
+        key=_oauth_state_cookie_name(relay_state),
+        value=encoded_state,
+        max_age=_OAUTH_STATE_COOKIE_TTL_SECONDS,
+        path=path,
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _resolve_encoded_oauth_state(request: Request, state: str) -> str:
+    """Return the encrypted OAuth session for a ``/callback`` request.
+
+    New flows carry it in a per-flow cookie keyed by the short handle we
+    forwarded upstream (the IdP echoes that handle back as ``state``). Flows
+    started before this change - or in flight across a deploy - carry the
+    encrypted blob directly in ``state``, so fall back to it when the cookie
+    is absent.
+    """
+    cookie_value = request.cookies.get(_oauth_state_cookie_name(state))
+    return cookie_value if cookie_value else state
+
+
+def _clear_oauth_state_cookie(response: Response, request: Request, state: str) -> None:
+    cookie_name = _oauth_state_cookie_name(state)
+    if cookie_name not in request.cookies:
+        return
+    path, secure = _oauth_state_cookie_path_and_secure(request)
+    response.delete_cookie(
+        key=cookie_name,
+        path=path,
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 def _get_validated_client_redirect_uri(request: Request, state_data: Dict[str, Any]) -> str:
@@ -462,11 +529,12 @@ async def authorize_with_server(
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
     )
+    relay_state = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
     params = {
         "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
         "redirect_uri": f"{request_base_url}/callback",
-        "state": encoded_state,
+        "state": relay_state,
         "response_type": response_type or "code",
     }
     if scope:
@@ -483,7 +551,9 @@ async def authorize_with_server(
     existing_params = dict(parse_qsl(parsed_auth_url.query))
     existing_params.update(params)
     final_url = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
-    return RedirectResponse(final_url)
+    response = RedirectResponse(final_url)
+    _set_oauth_state_cookie(response, request, relay_state, encoded_state)
+    return response
 
 
 async def exchange_token_with_server(
@@ -772,6 +842,7 @@ async def _persist_dcr_client_registration(
             data=UpdateMCPServerRequest(
                 server_id=mcp_server.server_id,
                 credentials=credentials,
+                oauth2_flow="authorization_code",
                 **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
             ),
             touched_by="mcp_oauth_dcr",
@@ -1016,17 +1087,19 @@ async def callback(
             error_description,
         )
         if state:
+            encoded_state = _resolve_encoded_oauth_state(request, state)
             try:
-                state_data = decode_state_hash(state)
+                state_data = decode_state_hash(encoded_state)
                 original_state = state_data.get("original_state")
                 redirect_uri = _get_validated_client_redirect_uri(request, state_data)
-            except HTTPException:
-                # Untrusted/invalid client redirect_uri — surface inline rather
-                # than blindly forwarding the error to an attacker-controlled URL.
-                return _render_oauth_error_html(error, error_description)
             except Exception:
-                # State could not be decrypted (expired key, tampered, etc.).
-                return _render_oauth_error_html(error, error_description)
+                # Untrusted/invalid client redirect_uri (HTTPException), or an
+                # undecryptable state (expired key, tampered): surface the IdP
+                # error inline rather than forwarding it to an attacker-controlled
+                # URL, and drop the one-time cookie we can no longer consume.
+                response = _render_oauth_error_html(error, error_description)
+                _clear_oauth_state_cookie(response, request, state)
+                return response
 
             params: Dict[str, str] = {"error": error}
             if error_description:
@@ -1036,7 +1109,9 @@ async def callback(
             if original_state is not None:
                 params["state"] = original_state
             complete_returned_url = _append_query_params(redirect_uri, params)
-            return RedirectResponse(url=complete_returned_url, status_code=302)
+            response = RedirectResponse(url=complete_returned_url, status_code=302)
+            _clear_oauth_state_cookie(response, request, state)
+            return response
 
         # No state — nothing to round-trip to. Show the user the error.
         return _render_oauth_error_html(error, error_description)
@@ -1052,7 +1127,8 @@ async def callback(
 
     # 3. Successful authorization response.
     try:
-        state_data = decode_state_hash(state)
+        encoded_state = _resolve_encoded_oauth_state(request, state)
+        state_data = decode_state_hash(encoded_state)
         original_state = state_data["original_state"]
 
         # Re-validate the client redirect URI at the sink. /authorize
@@ -1065,14 +1141,18 @@ async def callback(
 
         params = {"code": code, "state": original_state}
         complete_returned_url = _append_query_params(redirect_uri, params)
-        return RedirectResponse(url=complete_returned_url, status_code=302)
+        response = RedirectResponse(url=complete_returned_url, status_code=302)
+        _clear_oauth_state_cookie(response, request, state)
+        return response
 
     except HTTPException:
         # Re-raise so a non-loopback base_url surfaces as 400 instead of
         # a generic "authentication incomplete" redirect.
         raise
     except Exception:
-        return HTMLResponse("<html><body>Authentication incomplete. You can close this window.</body></html>")
+        response = HTMLResponse("<html><body>Authentication incomplete. You can close this window.</body></html>")
+        _clear_oauth_state_cookie(response, request, state)
+        return response
 
 
 # ------------------------------

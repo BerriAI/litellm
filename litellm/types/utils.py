@@ -3048,6 +3048,17 @@ class CustomPricingLiteLLMParams(BaseModel):
     regional_processing_uplift_multiplier_eu: Optional[float] = None
     regional_processing_uplift_multiplier_us: Optional[float] = None
 
+    @classmethod
+    def strip_custom_pricing_fields(cls, model_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of ``model_info`` without per-deployment custom pricing fields.
+
+        Used when registering a deployment's info under the shared
+        ``{provider}/{model}`` key in ``litellm.model_cost``, so one deployment's
+        pricing overrides don't pollute sibling deployments that share the same
+        backend model. Full pricing stays under the deployment's unique model id.
+        """
+        return {k: v for k, v in model_info.items() if k not in cls.model_fields}
+
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
 # (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
@@ -3120,6 +3131,8 @@ all_litellm_params = (
         "client",
         "rpm",
         "tpm",
+        "itpm",
+        "otpm",
         "max_parallel_requests",
         "input_cost_per_token",
         "output_cost_per_token",

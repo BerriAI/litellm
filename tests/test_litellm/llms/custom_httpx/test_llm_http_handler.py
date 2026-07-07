@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
@@ -12,6 +13,11 @@ from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
+    BaseAudioTranscriptionConfig,
+)
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -19,6 +25,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import TranscriptionResponse
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -1594,3 +1601,248 @@ async def test_realtime_backend_open_does_not_retry_auth_failure(rejection):
         await BaseLLMHTTPHandler._open_realtime_backend_ws(fake, "wss://backend.example/live", {}, None)
 
     assert fake.attempts == 1
+
+
+class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+        return optional_params
+
+    def validate_environment(
+        self,
+        headers,
+        model,
+        messages,
+        optional_params,
+        litellm_params,
+        api_key=None,
+        api_base=None,
+    ):
+        return {**headers, "Authorization": "Bearer test-token"}
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return "https://transcription.example/recognize"
+
+    def transform_audio_transcription_request(self, model, audio_file, optional_params, litellm_params):
+        return AudioTranscriptionRequestData(data={"config": {"model": model}, "content": "YXVkaW8="})
+
+    def transform_audio_transcription_response(self, raw_response):
+        return TranscriptionResponse(text=raw_response.json()["text"])
+
+    def get_error_class(self, error_message, status_code, headers):
+        return BaseLLMException(message=error_message, status_code=status_code, headers=headers)
+
+
+def _json_transcription_call_kwargs(provider_config):
+    return {
+        "model": "test-model",
+        "audio_file": b"raw-audio",
+        "optional_params": {},
+        "litellm_params": {},
+        "model_response": TranscriptionResponse(),
+        "timeout": 10.0,
+        "max_retries": 0,
+        "logging_obj": Mock(),
+        "api_key": None,
+        "api_base": None,
+        "custom_llm_provider": "custom",
+        "headers": {},
+        "provider_config": provider_config,
+    }
+
+
+def _capture_json_transcription_request(captured):
+    def respond(request):
+        captured["content_type"] = request.headers.get("content-type")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"text": "transcribed"})
+
+    return respond
+
+
+def test_audio_transcriptions_sends_dict_data_as_json_body():
+    """Regression: dict request data was passed to httpx's data= param, which
+    form-encodes it and silently ignores json=; JSON-body providers (e.g.
+    Google Speech-to-Text) need an application/json body."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured))))
+
+    response = BaseLLMHTTPHandler().audio_transcriptions(
+        client=client,
+        atranscription=False,
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+    )
+
+    assert captured["content_type"] == "application/json"
+    assert captured["body"] == {"config": {"model": "test-model"}, "content": "YXVkaW8="}
+    assert response.text == "transcribed"
+
+
+@pytest.mark.asyncio
+async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
+    captured = {}
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+
+    response = await BaseLLMHTTPHandler().async_audio_transcriptions(
+        client=client,
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+    )
+
+    assert captured["content_type"] == "application/json"
+    assert captured["body"] == {"config": {"model": "test-model"}, "content": "YXVkaW8="}
+    assert response.text == "transcribed"
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_file_content_raises_on_http_error():
+    """
+    LIT-4008 regression: a provider error response (e.g. Anthropic's 400
+    "File id must have `file_` prefix") must raise instead of being wrapped
+    as file content, which downstream batch cost tracking would parse as an
+    empty results file and bill $0.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(
+        return_value=httpx.Response(
+            status_code=400,
+            content=b'{"type":"error","error":{"type":"invalid_request_error","message":"File id must have `file_` prefix."}}',
+        )
+    )
+
+    with pytest.raises(AnthropicError) as exc_info:
+        await handler.async_retrieve_file_content(
+            file_content_request={"file_id": "msgbatch_123"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "file_" in str(exc_info.value)
+
+
+def test_sync_retrieve_file_content_raises_on_http_error():
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=HTTPHandler)
+    client.get = Mock(
+        return_value=httpx.Response(
+            status_code=404,
+            content=b'{"type":"error","error":{"type":"not_found_error","message":"not found"}}',
+        )
+    )
+
+    with pytest.raises(AnthropicError) as exc_info:
+        handler.retrieve_file_content(
+            file_content_request={"file_id": "file-abc"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+_UPSTREAM_NOT_FOUND_BODY = {
+    "error": {
+        "message": "Response with id 'resp_abc' not found.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": None,
+    }
+}
+
+
+def _async_handler_returning(status_code: int, body: dict) -> AsyncHTTPHandler:
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=body))
+    )
+    return handler
+
+
+def _sync_handler_returning(status_code: int, body: dict) -> HTTPHandler:
+    handler = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=body)))
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_aget_responses_surfaces_upstream_error_status_instead_of_500():
+    client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        await litellm.aget_responses(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+def test_get_responses_surfaces_upstream_error_status_instead_of_500():
+    client = _sync_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        litellm.get_responses(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+def test_list_input_items_surfaces_upstream_error_status():
+    client = _sync_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        litellm.list_input_items(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_alist_input_items_surfaces_upstream_error_status():
+    client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        await litellm.alist_input_items(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404

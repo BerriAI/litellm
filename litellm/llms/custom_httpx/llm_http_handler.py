@@ -1300,16 +1300,15 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the POST request - clean and simple, always use data and files
             response = client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1373,16 +1372,15 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the async POST request - clean and simple, always use data and files
             response = await async_httpx_client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -2914,6 +2912,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=data)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -2985,9 +2984,9 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=data)
-
+            response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving response: {e}")
+            verbose_logger.debug(f"Error retrieving response: {e}")
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
@@ -3078,6 +3077,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -3151,6 +3151,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -4737,6 +4738,13 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
         return provider_config.transform_file_content_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -4792,6 +4800,13 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
 
         return provider_config.transform_file_content_response(
             raw_response=response,
