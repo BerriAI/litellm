@@ -427,6 +427,7 @@ function NavItem({
 
   const content = (
     <a
+      role="menuitem"
       href={href}
       target={isExternal ? "_blank" : undefined}
       rel={isExternal ? "noopener noreferrer" : undefined}
@@ -498,6 +499,7 @@ function CollapsibleNavItem({
       <CollapsibleTrigger asChild>
         <button
           type="button"
+          role="menuitem"
           className={cn(
             "flex items-center gap-2 h-8 py-1.5 px-2 rounded-md text-[13px] transition-colors w-full",
             "hover:bg-sidebar-accent text-sidebar-foreground/70",
