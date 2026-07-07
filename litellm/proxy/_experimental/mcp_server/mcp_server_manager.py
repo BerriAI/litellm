@@ -115,7 +115,7 @@ from litellm.proxy.common_utils.user_api_key_cache import get_management_object_
 from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPStdioConfig
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
@@ -972,7 +972,7 @@ class MCPServerManager:
                 audience=server_config.get("audience", None),
                 subject_token_type=server_config.get(
                     "subject_token_type",
-                    "urn:ietf:params:oauth:token-type:access_token",
+                    DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
@@ -1357,7 +1357,7 @@ class MCPServerManager:
             audience=mcp_server.audience or (credentials_dict.get("audience") if credentials_dict else None),
             subject_token_type=mcp_server.subject_token_type
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
-            or "urn:ietf:params:oauth:token-type:access_token",
+            or DEFAULT_SUBJECT_TOKEN_TYPE,
             token_exchange_profile=(credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),

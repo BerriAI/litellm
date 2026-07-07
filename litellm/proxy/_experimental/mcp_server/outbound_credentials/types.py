@@ -34,6 +34,8 @@ from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import assert_never
 
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
+
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -215,7 +217,7 @@ class TokenExchangeConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
     profile: Literal["rfc8693", "entra_obo"] = "rfc8693"
-    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
     token_exchange_endpoint: str | None = None
     audience: str | None = None
     client_id: str | None = None

@@ -83,7 +83,11 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
-    # Token Exchange (OBO) fields — RFC 8693
+    # Token Exchange (OBO) fields — RFC 8693. ``audience`` is named for the RFC's
+    # request parameter (token-exchange only); RFC 8707 resource indicators are a
+    # separate concept named ``resource`` in the v2 egress types. A null
+    # ``subject_token_type`` means DEFAULT_SUBJECT_TOKEN_TYPE (litellm.types.mcp),
+    # applied at the egress build sites.
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: Optional[str] = None
