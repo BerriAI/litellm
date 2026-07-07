@@ -569,3 +569,53 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
         for k, v in originals.items():
             setattr(proxy_server, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/health/liveliness",
+        "/health/readiness",
+        "/key/info",
+        "/metrics",
+    ],
+)
+async def test_master_key_budget_early_return_for_non_llm_routes(route):
+    """Branch coverage for ``_maybe_enforce_master_key_end_user_model_max_budget``.
+
+    The flag and master-key guards in the helper are exercised by the
+    builder-level tests above; this test pins the third guard — the
+    ``is_llm_api_route`` early return — so a future refactor that
+    accidentally runs the budget check on health/metrics routes fails
+    this test loudly. Hits line 2876 of ``user_api_key_auth.py``.
+    """
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import (
+        _maybe_enforce_master_key_end_user_model_max_budget,
+    )
+
+    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
+    litellm.enforce_end_user_model_max_budget_on_master_key = True
+
+    try:
+        valid_token = UserAPIKeyAuth(
+            api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+            token=LITELLM_PROXY_MASTER_KEY_ALIAS,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
+            new_callable=AsyncMock,
+        ) as mock_check:
+            await _maybe_enforce_master_key_end_user_model_max_budget(
+                valid_token=valid_token,
+                request_data={"user": "customer-1", "model": MODEL},
+                route=route,
+                request=MagicMock(),
+            )
+            mock_check.assert_not_awaited()
+    finally:
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
