@@ -1003,3 +1003,59 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(mockSetToken).not.toHaveBeenCalled();
   });
 });
+
+describe("MCPServerEdit oauth2_flow preservation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function saveAndGetPayload(server: Record<string, unknown>) {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it("never writes oauth2_flow for a legacy null-flow server with a token_url", async () => {
+    const payload = await saveAndGetPayload({
+      token_url: "https://idp.example.com/oauth/token",
+      oauth2_flow: null,
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
+  });
+
+  it("never writes oauth2_flow over an explicit client_credentials row", async () => {
+    const payload = await saveAndGetPayload({
+      oauth2_flow: "client_credentials",
+      token_url: "https://idp.example.com/oauth/token",
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
+  });
+
+  it("never writes oauth2_flow over the DCR authorization_code stamp", async () => {
+    const payload = await saveAndGetPayload({
+      oauth2_flow: "authorization_code",
+      token_url: "https://idp.example.com/oauth/token",
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
+  });
+});

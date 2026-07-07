@@ -85,6 +85,22 @@ def build_code_interpreter_log_outputs(
     return [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
 
 
+class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
+    """A custom/freeform tool call output item (e.g. apply_patch).
+
+    Mirrors the ``custom_tool_call`` variant of OpenAI's Responses API output.
+    Unlike ``OutputFunctionToolCall`` which uses ``arguments`` (JSON string),
+    this uses ``input`` (raw string) for the tool payload.
+    """
+
+    type: Literal["custom_tool_call"]
+    call_id: str
+    id: Optional[str] = None
+    name: str
+    input: str
+    status: Optional[Literal["in_progress", "completed", "incomplete"]] = None
+
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item

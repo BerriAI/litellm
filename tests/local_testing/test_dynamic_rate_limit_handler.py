@@ -7,7 +7,7 @@ import sys
 import time
 import traceback
 from litellm._uuid import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from dotenv import load_dotenv
@@ -38,7 +38,8 @@ Basic test cases:
 @pytest.fixture
 def dynamic_rate_limit_handler() -> DynamicRateLimitHandler:
     internal_cache = DualCache()
-    return DynamicRateLimitHandler(internal_usage_cache=internal_cache)
+    frozen_now = datetime(2024, 1, 1, 10, 30, 0, tzinfo=timezone.utc)
+    return DynamicRateLimitHandler(internal_usage_cache=internal_cache, time_fn=lambda: frozen_now)
 
 
 @pytest.fixture
