@@ -34,7 +34,7 @@ async def calculate_batch_cost_and_usage(
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
     )
-    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name, custom_llm_provider)
 
     return batch_cost, batch_usage, batch_models
 
@@ -70,7 +70,7 @@ async def _handle_completed_batch(
         model_name=model_name,
     )
 
-    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name, custom_llm_provider)
 
     return batch_cost, batch_usage, batch_models
 
@@ -78,6 +78,7 @@ async def _handle_completed_batch(
 def _get_batch_models_from_file_content(
     file_content_dictionary: List[dict],
     model_name: Optional[str] = None,
+    custom_llm_provider: str = "openai",
 ) -> List[str]:
     """
     Get the models from the file content
@@ -86,8 +87,8 @@ def _get_batch_models_from_file_content(
         return [model_name]
     batch_models = []
     for _item in file_content_dictionary:
-        if _batch_response_was_successful(_item):
-            _response_body = _get_response_from_batch_job_output_file(_item)
+        if _batch_response_was_successful(_item, custom_llm_provider):
+            _response_body = _get_response_from_batch_job_output_file(_item, custom_llm_provider)
             _model = _response_body.get("model")
             if _model:
                 batch_models.append(_model)
@@ -373,10 +374,10 @@ def _get_batch_job_cost_from_file_content(
         # parse the file content as json
         verbose_logger.debug("file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4))
         for _item in file_content_dictionary:
-            if _batch_response_was_successful(_item):
-                _response_body = _get_response_from_batch_job_output_file(_item)
-                if model_info is not None:
-                    usage = _get_batch_job_usage_from_response_body(_response_body)
+            if _batch_response_was_successful(_item, custom_llm_provider):
+                _response_body = _get_response_from_batch_job_output_file(_item, custom_llm_provider)
+                if model_info is not None or custom_llm_provider == "anthropic":
+                    usage = _get_batch_job_usage_from_response_body(_response_body, custom_llm_provider)
                     model = _response_body.get("model", "")
                     prompt_cost, completion_cost = batch_cost_calculator(
                         usage=usage,
@@ -419,9 +420,9 @@ def _get_batch_job_total_usage_from_file_content(
     prompt_tokens: int = 0
     completion_tokens: int = 0
     for _item in file_content_dictionary:
-        if _batch_response_was_successful(_item):
-            _response_body = _get_response_from_batch_job_output_file(_item)
-            usage: Usage = _get_batch_job_usage_from_response_body(_response_body)
+        if _batch_response_was_successful(_item, custom_llm_provider):
+            _response_body = _get_response_from_batch_job_output_file(_item, custom_llm_provider)
+            usage: Usage = _get_batch_job_usage_from_response_body(_response_body, custom_llm_provider)
             total_tokens += usage.total_tokens
             prompt_tokens += usage.prompt_tokens
             completion_tokens += usage.completion_tokens
@@ -465,27 +466,51 @@ def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
     return 0
 
 
-def _get_batch_job_usage_from_response_body(response_body: dict) -> Usage:
+def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_provider: str = "openai") -> Usage:
     """
     Get the tokens of a batch job from the response body
     """
+    if custom_llm_provider == "anthropic":
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        return AnthropicConfig().calculate_usage(
+            usage_object=response_body.get("usage", None) or {},
+            reasoning_content=None,
+        )
     _usage_dict = response_body.get("usage", None) or {}
     usage: Usage = Usage(**_usage_dict)
     return usage
 
 
-def _get_response_from_batch_job_output_file(batch_job_output_file: dict) -> Any:
+def _get_anthropic_result_from_batch_results_line(batch_results_line: dict) -> dict:
+    """
+    Get the ``result`` object from a line of an Anthropic message batch results JSONL file.
+
+    Anthropic batch results lines look like:
+    ``{"custom_id": ..., "result": {"type": "succeeded", "message": {..., "usage": {...}}}}``
+    """
+    return batch_results_line.get("result", None) or {}
+
+
+def _get_response_from_batch_job_output_file(batch_job_output_file: dict, custom_llm_provider: str = "openai") -> Any:
     """
     Get the response from the batch job output file
     """
+    if custom_llm_provider == "anthropic":
+        return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
     _response: dict = batch_job_output_file.get("response", None) or {}
     _response_body = _response.get("body", None) or {}
     return _response_body
 
 
-def _batch_response_was_successful(batch_job_output_file: dict) -> bool:
+def _batch_response_was_successful(batch_job_output_file: dict, custom_llm_provider: str = "openai") -> bool:
     """
-    Check if the batch job response status == 200
+    Check if the batch job response was successful
+
+    OpenAI-shaped output rows report ``response.status_code == 200``; Anthropic
+    message batch results lines report ``result.type == "succeeded"``.
     """
+    if custom_llm_provider == "anthropic":
+        return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
     _response: dict = batch_job_output_file.get("response", None) or {}
     return _response.get("status_code", None) == 200

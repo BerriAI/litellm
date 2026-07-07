@@ -4735,6 +4735,13 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
         return provider_config.transform_file_content_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -4790,6 +4797,13 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
 
         return provider_config.transform_file_content_response(
             raw_response=response,
