@@ -212,7 +212,14 @@ async def test_async_iterator_error_after_first_chunk_carries_generated_content(
 
     with pytest.raises(MidStreamFallbackError) as exc_info:
         await _drain()
-    assert len(chunks) == 2
+    assert [chunk.type for chunk in chunks] == [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+    ]
     assert exc_info.value.status_code == 500
     assert exc_info.value.is_pre_first_chunk is False
     assert exc_info.value.generated_content == "hello world"
