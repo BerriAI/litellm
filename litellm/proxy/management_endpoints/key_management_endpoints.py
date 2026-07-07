@@ -178,7 +178,13 @@ async def _enforce_email_prefix_on_key_alias(
     if key_alias is None:
         return None
     ui_settings = await get_ui_settings_cached()
-    if ui_settings.get("enforce_email_prefix_on_key_alias") is not True:
+    if "enforce_email_prefix_on_key_alias" in ui_settings:
+        is_enabled = ui_settings["enforce_email_prefix_on_key_alias"] is True
+    else:
+        from litellm.proxy.proxy_server import general_settings
+
+        is_enabled = general_settings.get("enforce_email_prefix_on_key_alias") is True
+    if not is_enabled:
         return key_alias
     resolved_email = next(
         (email.strip() for email in (owner_email, fallback_email) if email is not None and email.strip()),
@@ -1072,6 +1078,8 @@ async def _common_key_generation_helper(
         owner_email=data_json.get("user_email") or owner_email,
         fallback_email=user_api_key_dict.user_email,
     )
+
+    verbose_proxy_logger.warning(f'data_json["key_alias"]: {data_json["key_alias"]}')
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
@@ -2034,11 +2042,14 @@ async def prepare_key_update_data(
             owner_email=(
                 await _get_user_email_by_id(
                     prisma_client=prisma_client,
-                    user_id=cast(Optional[str], non_default_values.get("user_id", existing_key_row.user_id)),
+                    user_id=cast(
+                        Optional[str],
+                        non_default_values.get("user_id", existing_key_row.user_id),
+                    ),
                 )
             )
             or getattr(existing_key_row, "user_email", None),
-            fallback_email=user_api_key_dict.user_email if user_api_key_dict is not None else None,
+            fallback_email=(user_api_key_dict.user_email if user_api_key_dict is not None else None),
         )
 
     return non_default_values
