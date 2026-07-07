@@ -119,6 +119,7 @@ from litellm.proxy.management_endpoints.types import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
+    get_cookie_path_from_server_root_path,
     get_custom_url,
     get_server_root_path,
 )
@@ -2796,6 +2797,7 @@ def set_session_token_cookie(response: Response, request: Request, jwt_token: st
     response.set_cookie(
         key="token",
         value=jwt_token,
+        path=get_cookie_path_from_server_root_path(),
         secure=IPAddressUtils.is_request_https(request),
         httponly=False,
         samesite="lax",

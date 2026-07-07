@@ -645,6 +645,7 @@ from litellm.proxy.utils import (
     _is_valid_team_configs,
     evict_config_param,
     get_config_param,
+    get_cookie_path_from_server_root_path,
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
