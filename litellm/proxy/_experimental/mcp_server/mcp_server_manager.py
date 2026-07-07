@@ -582,6 +582,21 @@ class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
     @staticmethod
+    def _explicit_oauth2_flow(
+        oauth2_flow: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """DB rows persist their flow (write-time stamps plus the startup backfill) and
+        config servers must declare it (validated at load), so both builds read the
+        value verbatim: unknown or null resolves to None, which
+        ``needs_user_oauth_token`` already treats as interactive. Field-shape inference
+        survives only in the request-time security helpers (``effective_oauth2_flow`` /
+        ``resolve_oauth2_flow_for_request``).
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
+        return None
+
+    @staticmethod
     def _resolve_oauth2_flow(
         *,
         auth_type: Optional[MCPAuthType],
@@ -591,11 +606,15 @@ class MCPServerManager:
         client_id: Optional[str],
         client_secret: Optional[str],
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
-        """Infer oauth2_flow for legacy records that omit the field.
+        """Infer oauth2_flow from field shape when the value is omitted.
 
-        DB rows created before oauth2_flow support may have OAuth2 client
-        credentials + token_url but a null oauth2_flow. Treat these as M2M,
-        unless authorization_url is present (interactive OAuth).
+        Not called directly by security sites; they go through ``effective_oauth2_flow``
+        (boolean/enum decisions) or ``resolve_oauth2_flow_for_request`` (the egress object
+        backstop), which are the single choke points for request-time resolution. DB rows
+        are stamped at write time and by the startup backfill, config servers must declare
+        oauth2_flow (validated at load), and both builds read the value verbatim via
+        ``_explicit_oauth2_flow``. Delete this whole request-time layer once the backstop
+        warning stays silent in production.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
             return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
@@ -609,6 +628,51 @@ class MCPServerManager:
         if token_url and client_id and client_secret:
             return "client_credentials"
         return None
+
+    @staticmethod
+    def effective_oauth2_flow(server: "MCPServer") -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """The oauth2_flow a security decision must use for ``server`` this request.
+
+        Column-first, shape-fallback: a stamped row returns its explicit value; an
+        unstamped (null) row whose fields carry the M2M shape resolves to
+        ``client_credentials`` so it is treated as M2M and fails closed. Every
+        security-sensitive reader (anonymous-delegate allowlist and gate, egress flow
+        resolution) goes through this one helper rather than reading the bare
+        ``has_client_credentials`` column, which is unreliable for null rows.
+        """
+        return MCPServerManager._resolve_oauth2_flow(
+            auth_type=server.auth_type,
+            oauth2_flow=server.oauth2_flow,
+            token_url=server.token_url,
+            authorization_url=server.authorization_url,
+            client_id=server.client_id,
+            client_secret=server.client_secret,
+        )
+
+    @staticmethod
+    def resolve_oauth2_flow_for_request(server: "MCPServer") -> "MCPServer":
+        """Return ``server`` with its effective oauth2_flow applied, for egress paths.
+
+        A stamped row is returned unchanged (its effective flow equals the stored value).
+        An unstamped M2M-shape row is returned as a per-request copy carrying
+        ``oauth2_flow=client_credentials`` so downstream ``has_client_credentials`` /
+        ``needs_user_oauth_token`` compute correctly and the stored client credentials are
+        used instead of forwarding the caller's Authorization. Use this at every point that
+        resolves an allowed server id into an ``MCPServer`` for a tool call or listing.
+        """
+        effective = MCPServerManager.effective_oauth2_flow(server)
+        if effective is None or effective == server.oauth2_flow:
+            return server
+        verbose_logger.warning(
+            "MCP server %s has no persisted oauth2_flow but matches the %s shape; using the "
+            "inferred flow for this request. The startup backfill leaves this ambiguous M2M "
+            "shape unstamped on purpose, so it will NOT self-heal: set oauth2_flow explicitly "
+            "in the dashboard or via PUT /v1/mcp/server (client_credentials for M2M, or "
+            "authorization_code after an interactive sign-in).",
+            server.server_id,
+            effective,
+        )
+        return server.model_copy(update={"oauth2_flow": effective})
 
     @staticmethod
     def _obo_needs_endpoint_discovery(
@@ -842,6 +906,20 @@ class MCPServerManager:
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )
 
+            config_oauth2_flow = server_config.get("oauth2_flow", None)
+            if auth_type == MCPAuth.oauth2 and config_oauth2_flow not in (
+                "client_credentials",
+                "authorization_code",
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': auth_type oauth2 "
+                    f"requires an explicit oauth2_flow (got {config_oauth2_flow!r}). Set "
+                    "oauth2_flow: client_credentials for machine-to-machine servers (the proxy mints "
+                    "a shared token at token_url using client_id/client_secret, no user interaction) "
+                    "or oauth2_flow: authorization_code for interactive servers (per-user tokens via "
+                    "browser sign-in, including delegate_auth_to_upstream)."
+                )
+
             new_server = MCPServer(
                 server_id=server_id,
                 name=name_for_prefix,
@@ -855,14 +933,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=self._resolve_oauth2_flow(
-                    auth_type=auth_type,
-                    oauth2_flow=server_config.get("oauth2_flow", None),
-                    token_url=resolved_token_url,
-                    authorization_url=resolved_authorization_url,
-                    client_id=server_config.get("client_id", None),
-                    client_secret=server_config.get("client_secret", None),
-                ),
+                oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -1240,15 +1311,7 @@ class MCPServerManager:
             env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=self._resolve_oauth2_flow(
-                auth_type=auth_type,
-                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
-                token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
-                authorization_url=mcp_server.authorization_url
-                or getattr(mcp_oauth_metadata, "authorization_url", None),
-                client_id=client_id_value or getattr(mcp_server, "client_id", None),
-                client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            ),
+            oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
             token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
@@ -1556,8 +1619,11 @@ class MCPServerManager:
                     and getattr(server, "delegate_auth_to_upstream", False) is True
                     # M2M servers must not be exposed anonymously: an
                     # unauthenticated caller would get LiteLLM to proxy tool
-                    # calls using its stored client_credentials.
-                    and not server.has_client_credentials
+                    # calls using its stored client_credentials. Resolve the flow
+                    # rather than reading has_client_credentials so an unstamped
+                    # M2M-shape row (null column, verbatim-read as non-M2M) still
+                    # fails closed here, matching the anonymous-delegate auth gate.
+                    and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
                 ]
                 combined_servers.update(delegate_server_ids)
 
