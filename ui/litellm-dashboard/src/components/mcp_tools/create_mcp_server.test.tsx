@@ -388,6 +388,48 @@ describe("CreateMCPServer", () => {
       expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
     });
 
+    it("sends max_concurrent_requests in the create payload when set", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "Limited_Server");
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "None");
+
+      const limitInput = screen.getByPlaceholderText("e.g. 10");
+      await user.type(limitInput, "5");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Limited_Server",
+        alias: "Limited_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.max_concurrent_requests).toBe(5);
+    });
+
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
       await selectHttpTransport();
 

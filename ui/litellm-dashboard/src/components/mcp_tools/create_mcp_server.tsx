@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input, InputNumber, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
@@ -922,6 +922,26 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </Form.Item>
               </>
             )}
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Max Concurrent Requests
+                  <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="max_concurrent_requests"
+            >
+              <InputNumber
+                min={1}
+                precision={0}
+                placeholder="e.g. 10"
+                style={{ width: "100%" }}
+                className="rounded-lg"
+              />
+            </Form.Item>
 
             {/* Authentication - show for HTTP, SSE, and OpenAPI */}
             {transportType !== "stdio" && transportType !== "" && (
