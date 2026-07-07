@@ -6185,3 +6185,15 @@ class TestDbBuildReadsOauth2FlowColumnVerbatim:
         assert built.oauth2_flow == "client_credentials"
         assert built.has_client_credentials is True
         assert built.needs_user_oauth_token is False
+
+    @pytest.mark.asyncio
+    async def test_authorization_code_flow_column_is_read_verbatim(self):
+        manager = MCPServerManager()
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(
+                self._row("authorization_code"), credentials_are_encrypted=False
+            )
+
+        assert built.oauth2_flow == "authorization_code"
+        assert built.has_client_credentials is False
+        assert built.needs_user_oauth_token is True
