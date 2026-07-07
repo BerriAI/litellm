@@ -129,6 +129,18 @@ class TestOpenRouterImageGenerationTransformation:
 
         assert result == "https://custom.openrouter.ai/api/v1/images"
 
+    def test_get_complete_url_legacy_chat_completions_base(self):
+        """api_base values from the old chat-completions workaround still resolve to /images."""
+        result = self.config.get_complete_url(
+            api_base="https://openrouter.ai/api/v1/chat/completions",
+            api_key="test_key",
+            model=self.model,
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert result == "https://openrouter.ai/api/v1/images"
+
     @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
     def test_validate_environment_with_api_key(self, mock_get_secret):
         result = self.config.validate_environment(

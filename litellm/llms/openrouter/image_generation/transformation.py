@@ -143,6 +143,11 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             base = api_base.rstrip("/")
             if base.endswith("/images"):
                 return base
+            if base.endswith("/chat/completions"):
+                # Backwards compatibility: image generation previously routed
+                # through /chat/completions, so older configs may still point
+                # api_base at that path.
+                base = base[: -len("/chat/completions")]
             return f"{base}/images"
 
         return "https://openrouter.ai/api/v1/images"
