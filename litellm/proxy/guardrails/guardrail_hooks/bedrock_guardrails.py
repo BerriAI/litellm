@@ -1355,7 +1355,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _update_messages_with_updated_bedrock_guardrail_response(
         self,
         messages: List[AllMessageValues],
-        bedrock_guardrail_response: Union[BedrockGuardrailResponse, str],
+        bedrock_guardrail_response: BedrockGuardrailResponse,
     ) -> List[AllMessageValues]:
         """
         Use the output from the bedrock guardrail to mask sensitive content in messages.
@@ -1367,8 +1367,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             List of messages with content masked according to guardrail response
         """
-        if isinstance(bedrock_guardrail_response, str):
-            return messages
         # Get masked texts from guardrail response
         masked_texts = self._extract_masked_texts_from_response(bedrock_guardrail_response)
 
