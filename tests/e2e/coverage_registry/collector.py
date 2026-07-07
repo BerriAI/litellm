@@ -13,13 +13,14 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from .registry import load_registry
-from .schema import MODULE_ORDER, ROLLUP, Cell, Tier
+from .schema import MODULE_ORDER, Cell, Tier, dashboard_module
 
 E2E_DIR = Path(__file__).resolve().parent.parent
 
@@ -46,12 +47,21 @@ class _CoversSink:
             self.collection_errors = (*self.collection_errors, report.nodeid)
 
 
-def collect_covered_ids(e2e_dir: Path = E2E_DIR) -> tuple[frozenset[str], tuple[str, ...]]:
+def collect_covered_ids(
+    e2e_dir: Path = E2E_DIR,
+) -> tuple[frozenset[str], tuple[str, ...]]:
     """Return (covered cell ids, nodeids that failed to import)."""
     sink = _CoversSink()
     with contextlib.redirect_stdout(io.StringIO()):
         pytest.main(
-            ["--collect-only", "-qq", "--continue-on-collection-errors", "-p", "no:cacheprovider", str(e2e_dir)],
+            [
+                "--collect-only",
+                "-qq",
+                "--continue-on-collection-errors",
+                "-p",
+                "no:cacheprovider",
+                str(e2e_dir),
+            ],
             plugins=[sink],
         )
     return sink.covered_ids, sink.collection_errors
@@ -78,8 +88,10 @@ class CoverageReport:
     collection_errors: tuple[str, ...]
 
 
-def _module_coverage(module: str, cells: tuple[Cell, ...], covered: frozenset[str]) -> ModuleCoverage:
-    in_module = tuple(c for c in cells if ROLLUP[c.module] == module)
+def _module_coverage(
+    module: str, cells: tuple[Cell, ...], covered: frozenset[str]
+) -> ModuleCoverage:
+    in_module = tuple(c for c in cells if dashboard_module(c) == module)
     p0 = tuple(c for c in in_module if c.tier is Tier.P0)
     return ModuleCoverage(
         module=module,
@@ -116,7 +128,10 @@ def _row(label: str, covered: int, total: int, p0_covered: int, p0_total: int) -
 
 
 def render(report: CoverageReport) -> str:
-    rows = tuple(_row(m.module, m.covered, m.total, m.p0_covered, m.p0_total) for m in report.modules)
+    rows = tuple(
+        _row(m.module, m.covered, m.total, m.p0_covered, m.p0_total)
+        for m in report.modules
+    )
     pct = (100.0 * report.p0_covered / report.p0_total) if report.p0_total else 0.0
     lines = (
         f"{'MODULE':30}{'COVERED':>12}{'P0 COVERED':>14}",
@@ -129,7 +144,8 @@ def render(report: CoverageReport) -> str:
     orphans = (
         (
             f"\n{len(report.orphan_markers)} marker(s) point at ids not in the registry "
-            f"(reconcile: fix the marker or add the cell):\n  " + "\n  ".join(report.orphan_markers),
+            f"(reconcile: fix the marker or add the cell):\n  "
+            + "\n  ".join(report.orphan_markers),
         )
         if report.orphan_markers
         else ()
@@ -137,7 +153,8 @@ def render(report: CoverageReport) -> str:
     warning = (
         (
             f"\nWARNING: {len(report.collection_errors)} node(s) failed to import during "
-            f"collection, so coverage may undercount:\n  " + "\n  ".join(report.collection_errors),
+            f"collection, so coverage may undercount:\n  "
+            + "\n  ".join(report.collection_errors),
         )
         if report.collection_errors
         else ()
@@ -146,9 +163,26 @@ def render(report: CoverageReport) -> str:
 
 
 def main() -> int:
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero if markers outside the registry are found.",
+    )
+    parser.add_argument(
+        "--fail-on-collection-errors",
+        action="store_true",
+        help="Exit non-zero if pytest collection errors are found.",
+    )
+    args = parser.parse_args()
     cells = load_registry()
     covered, errors = collect_covered_ids()
-    print(render(compute_coverage(cells, covered, errors)))  # noqa: T201  # CLI entrypoint output
+    report = compute_coverage(cells, covered, errors)
+    print(render(report))  # noqa: T201  # CLI entrypoint output
+    if args.strict and report.orphan_markers:
+        return 1
+    if args.fail_on_collection_errors and report.collection_errors:
+        return 1
     return 0
 
 
