@@ -1258,18 +1258,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if message["role"] == "system":
                 system_prompt_indices.append(idx)
                 system_message_block = ChatCompletionSystemMessage(**message)
-                if isinstance(system_message_block["content"], str):
+                system_content = system_message_block["content"]
+                if isinstance(system_content, dict):
+                    # Some clients send a bare content-part object instead of
+                    # wrapping it in a list (e.g. {"content": {"type": "text",
+                    # "text": "..."}}). Treat it as a single-element content
+                    # list instead of silently dropping the system prompt.
+                    system_content = [system_content]
+                if isinstance(system_content, str):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
-                    if not system_message_block["content"]:
+                    if not system_content:
                         continue
                     # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
-                    ):
+                    if system_content.startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
-                        text=system_message_block["content"],
+                        text=system_content,
                     )
                     if "cache_control" in system_message_block:
                         anthropic_system_message_content["cache_control"] = (
@@ -1278,8 +1283,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
-                elif isinstance(message["content"], list):
-                    for _content in message["content"]:
+                elif isinstance(system_content, list):
+                    for _content in system_content:
                         # Skip empty text blocks - Anthropic API raises errors for empty text
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
