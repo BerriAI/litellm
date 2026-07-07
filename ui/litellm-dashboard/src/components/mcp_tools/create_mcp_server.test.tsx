@@ -991,3 +991,99 @@ describe("CreateMCPServer", () => {
     });
   });
 });
+
+describe("CreateMCPServer oauth2_flow persistence", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const createdServer = {
+    server_id: "new-server-oauth",
+    server_name: "OAuth_Server",
+    alias: "OAuth_Server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "oauth2",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+  };
+
+  async function setupHttpServerForm() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+    const nameInput = document.getElementById("server_name") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+    });
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+    });
+  }
+
+  async function submitCreate() {
+    const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+    await waitFor(() => {
+      expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it("persists authorization_code for an interactive OAuth create", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "OAuth");
+    await waitFor(() => {
+      expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+    });
+
+    const payload = await submitCreate();
+    expect(payload.auth_type).toBe("oauth2");
+    expect(payload.oauth2_flow).toBe("authorization_code");
+  });
+
+  it("persists client_credentials for an M2M OAuth create", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, oauth2_flow: "client_credentials" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "OAuth");
+    await waitFor(() => {
+      expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+    });
+    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Enter OAuth client ID")).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), { target: { value: "cid" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), { target: { value: "csecret" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://auth.example.com/oauth/token"), {
+        target: { value: "https://auth.example.com/oauth/token" },
+      });
+    });
+
+    const payload = await submitCreate();
+    expect(payload.oauth2_flow).toBe("client_credentials");
+  });
+
+  it("sends no oauth2_flow for a non-oauth2 create", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "none" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "None");
+
+    const payload = await submitCreate();
+    expect(payload.oauth2_flow).toBeUndefined();
+  });
+});
