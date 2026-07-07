@@ -360,7 +360,11 @@ export function KeyEditView({
                   value={isDisabled ? [] : models}
                   onChange={(value) => setFieldValue("models", value)}
                 >
-                  {keyData.team_id != null && <Select.Option value="all-team-models">All Team Models</Select.Option>}
+                  {keyData.team_id != null ? (
+                    <Select.Option value="all-team-models">All Team Models</Select.Option>
+                  ) : (
+                    <Select.Option value="all-proxy-models">All Proxy Models</Select.Option>
+                  )}
                   {availableModels.map((model) => (
                     <Select.Option key={model} value={model}>
                       {model}

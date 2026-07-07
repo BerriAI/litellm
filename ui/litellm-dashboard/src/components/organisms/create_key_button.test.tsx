@@ -1,4 +1,4 @@
-import { act, fireEvent } from "@testing-library/react";
+import { act, fireEvent, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
@@ -583,18 +583,29 @@ describe("CreateKey", () => {
   });
 
   describe("models dropdown team gating", () => {
-    it("should not offer all-team-models when no team is selected", async () => {
+    const getModelsSelect = async (): Promise<HTMLElement> => {
+      return waitFor(() => {
+        const element = document.querySelector('select[placeholder="Select models"]');
+        expect(element).toBeTruthy();
+        return element as HTMLElement;
+      });
+    };
+
+    it("should offer all-proxy-models but not all-team-models when no team is selected", async () => {
       renderWithProviders(<CreateKey {...defaultProps} />);
 
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
       });
 
+      const modelsSelect = await getModelsSelect();
+
       await waitFor(() => {
-        expect(screen.getByText("gpt-4")).toBeInTheDocument();
+        expect(within(modelsSelect).getByText("gpt-4")).toBeInTheDocument();
       });
 
-      expect(screen.queryByText("All Team Models")).not.toBeInTheDocument();
+      expect(within(modelsSelect).getByText("All Proxy Models")).toBeInTheDocument();
+      expect(within(modelsSelect).queryByText("All Team Models")).not.toBeInTheDocument();
     });
 
     it("should offer all-team-models but hide all-proxy-models when a team is selected", async () => {
@@ -616,12 +627,15 @@ describe("CreateKey", () => {
         fireEvent.change(screen.getByTestId("team-dropdown"), { target: { value: "team-1" } });
       });
 
+      const modelsSelect = await getModelsSelect();
+
       await waitFor(() => {
-        expect(screen.getByText("team-model-1")).toBeInTheDocument();
+        expect(within(modelsSelect).getByText("team-model-1")).toBeInTheDocument();
       });
 
-      expect(screen.getByText("All Team Models")).toBeInTheDocument();
-      expect(screen.queryByText("all-proxy-models")).not.toBeInTheDocument();
+      expect(within(modelsSelect).getByText("All Team Models")).toBeInTheDocument();
+      expect(within(modelsSelect).queryByText("All Proxy Models")).not.toBeInTheDocument();
+      expect(within(modelsSelect).queryByText("all-proxy-models")).not.toBeInTheDocument();
     });
   });
 

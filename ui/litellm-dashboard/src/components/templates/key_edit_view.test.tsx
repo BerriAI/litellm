@@ -904,7 +904,7 @@ describe("KeyEditView", () => {
       fireEvent.mouseDown(selector as Element);
     };
 
-    it("should not offer all-team-models for a teamless key", async () => {
+    it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
       renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
@@ -927,6 +927,7 @@ describe("KeyEditView", () => {
         expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
       });
 
+      expect(screen.getAllByText("All Proxy Models").length).toBeGreaterThan(0);
       expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
     });
 
@@ -958,6 +959,7 @@ describe("KeyEditView", () => {
       });
 
       expect(screen.getAllByText("All Team Models").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
       expect(screen.queryAllByText("all-proxy-models")).toHaveLength(0);
     });
   });

@@ -950,12 +950,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   onChange={(values) => {
                     if (values.includes("all-team-models")) {
                       form.setFieldsValue({ models: ["all-team-models"] });
+                    } else if (values.includes("all-proxy-models")) {
+                      form.setFieldsValue({ models: ["all-proxy-models"] });
                     }
                   }}
                 >
                   {!selectedProjectId && selectedCreateKeyTeam && (
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
+                    </Option>
+                  )}
+                  {!selectedProjectId && !selectedCreateKeyTeam && (
+                    <Option key="all-proxy-models" value="all-proxy-models">
+                      All Proxy Models
                     </Option>
                   )}
                   {modelsToPick.map((model: string) => (
