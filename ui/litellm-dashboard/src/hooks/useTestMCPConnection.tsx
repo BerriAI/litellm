@@ -5,6 +5,7 @@ import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT } from "@/components/mcp_tools/types";
 interface MCPServerConfig {
   server_id?: string;
   server_name?: string;
+  alias?: string;
   url?: string;
   spec_path?: string;
   transport?: string;
@@ -140,6 +141,7 @@ export const useTestMCPConnection = ({
       const mcpServerConfig: MCPServerConfig = {
         server_id: formValues.server_id || "",
         server_name: formValues.server_name || "",
+        alias: formValues.alias,
         url: formValues.url,
         spec_path: formValues.spec_path,
         transport: effectiveTransport,
@@ -214,6 +216,7 @@ export const useTestMCPConnection = ({
     formValues.spec_path,
     formValues.transport,
     formValues.auth_type,
+    formValues.alias,
     accessToken,
     enabled,
     oauthAccessToken,

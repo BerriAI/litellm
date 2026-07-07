@@ -1294,9 +1294,25 @@ if MCP_AVAILABLE:
 
         new_mcp_server_request = _inherit_credentials_from_existing_server(new_mcp_server_request)
 
+        def _preview_warnings(tool_names: List[str]) -> List[str]:
+            # In short-prefix mode the 3-char prefix derives from the server_id
+            # assigned at create time, so without one the final length is
+            # unknowable; skip speculative warnings (runtime exclusion still warns).
+            if is_short_mcp_tool_prefix_enabled() and not new_mcp_server_request.server_id:
+                return []
+            return tool_name_length_warnings(
+                tool_names,
+                get_server_prefix(new_mcp_server_request),
+                MCP_MAX_TOOL_NAME_LENGTH,
+            )
+
         # For OpenAPI spec servers, generate tools from the spec directly
         if new_mcp_server_request.spec_path:
-            return await _preview_openapi_tools(new_mcp_server_request.spec_path)
+            openapi_preview = await _preview_openapi_tools(new_mcp_server_request.spec_path)
+            return {
+                **openapi_preview,
+                "warnings": _preview_warnings([tool["name"] for tool in openapi_preview.get("tools") or []]),
+            }
 
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
@@ -1326,23 +1342,11 @@ if MCP_AVAILABLE:
             list_tools_response = await client.run_with_session(_list_tools_session_operation)
             list_tools_result: List[MCPTool] = list_tools_response.tools
             model_dumped_tools: List[dict] = [tool.model_dump() for tool in list_tools_result]
-            # In short-prefix mode the 3-char prefix derives from the server_id
-            # assigned at create time, so without one the final length is
-            # unknowable; skip speculative warnings (runtime exclusion still warns).
-            warnings = (
-                []
-                if is_short_mcp_tool_prefix_enabled() and not new_mcp_server_request.server_id
-                else tool_name_length_warnings(
-                    [tool.name for tool in list_tools_result],
-                    get_server_prefix(new_mcp_server_request),
-                    MCP_MAX_TOOL_NAME_LENGTH,
-                )
-            )
             return {
                 "tools": model_dumped_tools,
                 "error": None,
                 "message": "Successfully retrieved tools",
-                "warnings": warnings,
+                "warnings": _preview_warnings([tool.name for tool in list_tools_result]),
             }
 
         return await _execute_with_mcp_client(

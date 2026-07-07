@@ -688,6 +688,40 @@ class TestTestToolsList:
 
         assert result["warnings"] == []
 
+    async def test_openapi_preview_flags_tool_names_exceeding_provider_limit(self, monkeypatch):
+        """The OpenAPI spec preview must carry the same length warnings as the MCP
+        preview, since registered OpenAPI tools get the server prefix too."""
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.proxy._types import LitellmUserRoles
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+
+        async def fake_preview(spec_path):
+            return {
+                "tools": [{"name": fitting}, {"name": too_long}],
+                "error": None,
+                "message": "Found 2 tools from OpenAPI spec",
+            }
+
+        monkeypatch.setattr(rest_endpoints, "_preview_openapi_tools", fake_preview, raising=False)
+
+        result = await rest_endpoints.test_tools_list(
+            _build_request(),
+            NewMCPServerRequest(
+                server_name="example",
+                alias=alias,
+                spec_path="/tmp/spec.json",
+                auth_type=MCPAuth.none,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert len(result["tools"]) == 2
+        assert len(result["warnings"]) == 1
+        assert f"{alias}-{too_long}" in result["warnings"][0]
+
 
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
