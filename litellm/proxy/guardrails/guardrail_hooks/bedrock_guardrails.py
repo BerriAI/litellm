@@ -1419,9 +1419,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # violates the guardrail policy.
             ###################################################################
             # A block with disable_exception_on_block=True raises ModifyResponseException
-            # from make_bedrock_api_request; that propagates to the endpoint handler.
-            # Attach the assembled response to original_response so the synthetic
-            # block reply reports the real token usage the upstream call consumed.
+            # from make_bedrock_api_request. Non-streaming paths let it propagate so
+            # the endpoint handler turns it into a 200. Streaming can't do that: the
+            # SSE response headers are already flushed, so a raise would be serialized
+            # as an error frame by async_streaming_data_generator. Instead, replace
+            # the assembled response with the synthetic block content in-place and
+            # yield it as a normal stream, matching the shape a non-streaming block
+            # produces.
             try:
                 output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
@@ -1431,9 +1435,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
             except ModifyResponseException as e:
-                if e.original_response is None:
-                    e.original_response = assembled_model_response
-                raise
+                assembled_model_response = ModelResponse(
+                    choices=[
+                        Choices(
+                            index=0,
+                            message=Message(role="assistant", content=e.message),
+                            finish_reason="content_filter",
+                        )
+                    ],
+                    model=e.model,
+                )
+                output_guardrail_response = None
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########

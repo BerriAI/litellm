@@ -3050,3 +3050,65 @@ async def test_apply_guardrail_propagates_modify_response_on_block():
             )
 
     assert exc_info.value.message == "Sorry, the model cannot answer this question."
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_block_yields_synthetic_stream_not_raise():
+    """LIT-4186 regression: with disable_exception_on_block=True, streaming
+    post_call blocks must be delivered as a synthetic stream (finish_reason=
+    content_filter, block message as content), NOT raised. Pre-fix the local
+    handler already produced this shape; the LIT-4186 refactor briefly turned
+    it into an SSE 500 by letting ModifyResponseException escape the streaming
+    generator. This test locks in the correct streaming contract.
+    """
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    async def _stream():
+        yield ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content="Coffee is a popular"),
+                )
+            ]
+        )
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=" beverage."), finish_reason="stop")]
+        )
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        chunks = [
+            c
+            async for c in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_stream(),
+                request_data={"model": "bedrock-nova-micro"},
+            )
+        ]
+
+    assert chunks, "streaming block should yield synthetic chunks, not error out"
+    assembled_content = "".join(
+        (c.choices[0].delta.content or "")
+        for c in chunks
+        if getattr(c, "choices", None) and getattr(c.choices[0], "delta", None)
+    )
+    assert assembled_content == "Sorry, the model cannot answer this question."
+    assert chunks[-1].choices[0].finish_reason == "content_filter"

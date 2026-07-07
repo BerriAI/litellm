@@ -1514,12 +1514,10 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
             async for chunk in result_generator:
                 pass
 
-    # Test 2: disable_exception_on_block=True raises ModifyResponseException,
-    # which the endpoint handler converts into a 200 with the block message as
-    # content. original_response carries the assembled LLM response so the
-    # synthetic reply reports the real token usage.
-    from litellm.exceptions import ModifyResponseException
-
+    # Test 2: disable_exception_on_block=True. Streaming can't raise up to the
+    # endpoint handler (SSE headers already flushed), so the block is delivered
+    # as a synthetic stream with finish_reason=content_filter and the block
+    # message as content -- same shape a non-streaming block produces.
     guardrail_disabled = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
@@ -1536,12 +1534,15 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
             response=mock_streaming_response(),
             request_data=request_data,
         )
-
-        with pytest.raises(ModifyResponseException) as exc_info:
-            async for _ in result_generator:
-                pass
-        assert exc_info.value.message == "I can't provide that information."
-        assert exc_info.value.original_response is not None
+        chunks = [c async for c in result_generator]
+        assert chunks, "streaming block should yield synthetic chunks, not empty"
+        assembled_content = "".join(
+            (c.choices[0].delta.content or "")
+            for c in chunks
+            if getattr(c, "choices", None) and getattr(c.choices[0], "delta", None)
+        )
+        assert assembled_content == "I can't provide that information."
+        assert chunks[-1].choices[0].finish_reason == "content_filter"
 
 
 @pytest.mark.asyncio
