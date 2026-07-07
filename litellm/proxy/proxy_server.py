@@ -934,7 +934,7 @@ async def proxy_startup_event(app: FastAPI):
                 AuthConfig(),
                 DbResolver(prisma_client, user_api_key_cache),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # auth_v2 wiring is best-effort and must never block proxy startup
             verbose_proxy_logger.warning(f"auth_v2 wiring skipped: {e}")
 
     ## use_redis_transaction_buffer: fall back to a standalone Redis (REDIS_* env)

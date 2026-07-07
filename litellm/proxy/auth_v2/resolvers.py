@@ -122,7 +122,7 @@ class DbResolver(Resolver, ProvisioningStore):
                 user_api_key_cache=self._cache,
                 user_id_upsert=False,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail closed: an unresolvable owning user yields no role
             return None
         return map_role(user.user_role) if user is not None else None
 
@@ -154,39 +154,19 @@ class DbResolver(Resolver, ProvisioningStore):
             credential_ref=credential.credential_ref,
         )
 
-    def _principal_from_key(
-        self, credential: Credential, key: UserAPIKeyAuth, role: Optional[Role]
-    ) -> Principal:
+    def _principal_from_key(self, credential: Credential, key: UserAPIKeyAuth, role: Optional[Role]) -> Principal:
         teams: List[TeamIdentity] = []
         if key.team_id is not None:
-            membership = (
-                team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
-            )
-            teams.append(
-                TeamIdentity(id=key.team_id, name=key.team_alias, role=membership)
-            )
+            membership = team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
+            teams.append(TeamIdentity(id=key.team_id, name=key.team_alias, role=membership))
         organization = (
-            OrganizationIdentity(id=key.org_id, name=key.organization_alias)
-            if key.org_id is not None
-            else None
+            OrganizationIdentity(id=key.org_id, name=key.organization_alias) if key.org_id is not None else None
         )
-        user = (
-            UserIdentity(id=key.user_id, email=key.user_email)
-            if key.user_id is not None
-            else None
-        )
-        project = (
-            ProjectIdentity(id=key.project_id, name=key.project_alias)
-            if key.project_id is not None
-            else None
-        )
-        end_user = (
-            EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
-        )
+        user = UserIdentity(id=key.user_id, email=key.user_email) if key.user_id is not None else None
+        project = ProjectIdentity(id=key.project_id, name=key.project_alias) if key.project_id is not None else None
+        end_user = EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
         return Principal(
-            principal_type=(
-                PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT
-            ),
+            principal_type=(PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT),
             subject=key.user_id or key.key_alias or credential.subject,
             issuer=credential.issuer,
             user=user,
@@ -200,9 +180,7 @@ class DbResolver(Resolver, ProvisioningStore):
             credential_ref=credential.credential_ref,
         )
 
-    async def _principal_from_user(
-        self, credential: Credential, user: "LiteLLM_UserTable"
-    ) -> Principal:
+    async def _principal_from_user(self, credential: Credential, user: "LiteLLM_UserTable") -> Principal:
         teams: List[TeamIdentity] = []
         for team_id in user.teams or []:
             try:
@@ -238,9 +216,7 @@ class DbResolver(Resolver, ProvisioningStore):
             credential_ref=credential.credential_ref,
         )
 
-    async def _organization(
-        self, user: "LiteLLM_UserTable"
-    ) -> Optional[OrganizationIdentity]:
+    async def _organization(self, user: "LiteLLM_UserTable") -> Optional[OrganizationIdentity]:
         if user.organization_id is None:
             return None
         try:
@@ -253,11 +229,7 @@ class DbResolver(Resolver, ProvisioningStore):
     async def upsert_user(self, user: ScimUser) -> ScimUser:
         repo = UserRepository(self._prisma)
         data = scim_user_to_db(user)
-        existing = (
-            await repo.table.find_unique(where={"user_id": user.id})
-            if user.id
-            else None
-        )
+        existing = await repo.table.find_unique(where={"user_id": user.id}) if user.id else None
         if existing is None:
             data["user_id"] = user.id or str(uuid.uuid4())
             stored = await repo.table.create(data=data)
@@ -266,9 +238,7 @@ class DbResolver(Resolver, ProvisioningStore):
         return db_user_to_scim(stored)
 
     async def get_user(self, resource_id: str) -> Optional[ScimUser]:
-        stored = await UserRepository(self._prisma).table.find_unique(
-            where={"user_id": resource_id}
-        )
+        stored = await UserRepository(self._prisma).table.find_unique(where={"user_id": resource_id})
         return db_user_to_scim(stored) if stored is not None else None
 
     async def deactivate_user(self, resource_id: str) -> None:
@@ -278,9 +248,7 @@ class DbResolver(Resolver, ProvisioningStore):
             return
         metadata = dict(getattr(stored, "metadata", None) or {})
         metadata["scim_active"] = False
-        await repo.table.update(
-            where={"user_id": resource_id}, data={"metadata": metadata}
-        )
+        await repo.table.update(where={"user_id": resource_id}, data={"metadata": metadata})
 
     async def list_users(self, filter_expr: Optional[str]) -> List[ScimUser]:
         rows = await UserRepository(self._prisma).table.find_many()
@@ -291,7 +259,8 @@ class DbResolver(Resolver, ProvisioningStore):
 
         repo = TeamRepository(self._prisma)
         data = scim_group_to_db(group)
-        data["members_with_roles"] = Json(cast(list, data["members_with_roles"]))
+        members = cast(list, data["members_with_roles"])  # cast-ok: members_with_roles is JSON-serializable
+        data["members_with_roles"] = Json(members)
         existing = await repo.find_by_id(group.id, "team_id") if group.id else None
         if existing is None:
             data["team_id"] = group.id or str(uuid.uuid4())
