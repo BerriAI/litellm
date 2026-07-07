@@ -1,9 +1,4 @@
 {
-  "src/app/(dashboard)/api-reference/APIReferenceView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/budgets/components/budget_modal.tsx": {
     "no-restricted-imports": {
       "count": 1

@@ -1,38 +1,39 @@
+"use client";
+
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
-  ApiOutlined,
-  ApartmentOutlined,
-  AppstoreOutlined,
-  AuditOutlined,
-  BankOutlined,
-  BarChartOutlined,
-  BgColorsOutlined,
-  BlockOutlined,
-  BookOutlined,
-  CommentOutlined,
-  CreditCardOutlined,
-  DatabaseOutlined,
-  ExperimentOutlined,
-  ExportOutlined,
-  FileTextOutlined,
-  FolderOutlined,
-  KeyOutlined,
-  LineChartOutlined,
-  PlayCircleOutlined,
-  RobotOutlined,
-  SafetyOutlined,
-  SearchOutlined,
-  SettingOutlined,
-  TagsOutlined,
-  TeamOutlined,
-  ToolOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
-import type { MenuProps } from "antd";
-import { ConfigProvider, Layout, Menu } from "antd";
-import { useMemo } from "react";
+  Key,
+  PlayCircle,
+  MessageSquare,
+  Blocks,
+  Bot,
+  GitBranch,
+  BookOpen,
+  Wrench,
+  Search,
+  Database,
+  Shield,
+  ClipboardCheck,
+  Code,
+  BarChart3,
+  LineChart,
+  Users,
+  Folder,
+  User,
+  Building2,
+  CreditCard,
+  LayoutGrid,
+  FlaskConical,
+  FileText,
+  Tags,
+  Settings,
+  Palette,
+  ExternalLink,
+  ChevronRight,
+} from "lucide-react";
+import { useMemo, useState } from "react";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -45,9 +46,11 @@ import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
-const { Sider } = Layout;
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/cva.config";
 
-// Define the props type
 interface SidebarProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
@@ -61,7 +64,6 @@ interface SidebarProps {
   allowVectorStoresForTeamAdmins?: boolean;
 }
 
-// Menu item configuration
 interface MenuItem {
   key: string;
   page: string;
@@ -72,14 +74,12 @@ interface MenuItem {
   external_url?: string;
 }
 
-// Group configuration
 interface MenuGroup {
   groupLabel: string;
   items: MenuItem[];
   roles?: string[];
 }
 
-// Menu groups organized by category - defined outside component for export
 const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
@@ -88,13 +88,13 @@ const menuGroups: MenuGroup[] = [
         key: "api-keys",
         page: "api-keys",
         label: "Virtual Keys",
-        icon: <KeyOutlined />,
+        icon: <Key className="size-4" />,
       },
       {
         key: "llm-playground",
         page: "llm-playground",
         label: "Playground",
-        icon: <PlayCircleOutlined />,
+        icon: <PlayCircle className="size-4" />,
         roles: rolesWithWriteAccess,
       },
       {
@@ -105,43 +105,39 @@ const menuGroups: MenuGroup[] = [
             Chat <NewBadge />
           </span>
         ),
-        icon: <CommentOutlined />,
+        icon: <MessageSquare className="size-4" />,
       },
       {
         key: "models",
         page: "models",
         label: "Models + Endpoints",
-        icon: <BlockOutlined />,
-        // Admin Viewer can view models read-only (write actions are
-        // hidden inside the page); Playground above stays write-only.
+        icon: <Blocks className="size-4" />,
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
         key: "agentic",
         page: "agentic",
         label: "Agentic",
-        icon: <RobotOutlined />,
+        icon: <Bot className="size-4" />,
         children: [
           {
             key: "agents",
             page: "agents",
             label: "Agents",
-            icon: <RobotOutlined />,
-            // Admin Viewer can view agents read-only (write actions are
-            // hidden inside the page); Playground above stays write-only.
+            icon: <Bot className="size-4" />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
           {
             key: "workflows",
             page: "workflows",
             label: "Workflow Runs",
-            icon: <ApartmentOutlined />,
+            icon: <GitBranch className="size-4" />,
           },
           {
             key: "memory",
             page: "memory",
             label: "Memory",
-            icon: <BookOutlined />,
+            icon: <BookOpen className="size-4" />,
           },
         ],
       },
@@ -149,51 +145,51 @@ const menuGroups: MenuGroup[] = [
         key: "mcp-servers",
         page: "mcp-servers",
         label: "MCP Servers",
-        icon: <ToolOutlined />,
+        icon: <Wrench className="size-4" />,
       },
       {
         key: "skills",
         page: "skills",
         label: "Skills",
-        icon: <ApiOutlined />,
+        icon: <Code className="size-4" />,
         roles: all_admin_roles,
       },
       {
         key: "guardrails",
         page: "guardrails",
         label: "Guardrails",
-        icon: <SafetyOutlined />,
+        icon: <Shield className="size-4" />,
       },
       {
         key: "policies",
         page: "policies",
-        label: <span className="flex items-center gap-4">Policies</span>,
-        icon: <AuditOutlined />,
+        label: "Policies",
+        icon: <ClipboardCheck className="size-4" />,
         roles: all_admin_roles,
       },
       {
         key: "tools",
         page: "tools",
         label: "Tools",
-        icon: <ToolOutlined />,
+        icon: <Wrench className="size-4" />,
         children: [
           {
             key: "search-tools",
             page: "search-tools",
             label: "Search Tools",
-            icon: <SearchOutlined />,
+            icon: <Search className="size-4" />,
           },
           {
             key: "vector-stores",
             page: "vector-stores",
             label: "Vector Stores",
-            icon: <DatabaseOutlined />,
+            icon: <Database className="size-4" />,
           },
           {
             key: "tool-policies",
             page: "tool-policies",
             label: "Tool Policies",
-            icon: <SafetyOutlined />,
+            icon: <Shield className="size-4" />,
           },
         ],
       },
@@ -205,7 +201,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "new_usage",
         page: "new_usage",
-        icon: <BarChartOutlined />,
+        icon: <BarChart3 className="size-4" />,
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
       },
@@ -213,13 +209,13 @@ const menuGroups: MenuGroup[] = [
         key: "logs",
         page: "logs",
         label: "Logs",
-        icon: <LineChartOutlined />,
+        icon: <LineChart className="size-4" />,
       },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
         label: "Guardrails Monitor",
-        icon: <SafetyOutlined />,
+        icon: <Shield className="size-4" />,
         roles: [...all_admin_roles, ...internalUserRoles],
       },
     ],
@@ -231,7 +227,7 @@ const menuGroups: MenuGroup[] = [
         key: "teams",
         page: "teams",
         label: "Teams",
-        icon: <TeamOutlined />,
+        icon: <Users className="size-4" />,
       },
       {
         key: "projects",
@@ -241,35 +237,35 @@ const menuGroups: MenuGroup[] = [
             Projects <NewBadge />
           </span>
         ),
-        icon: <FolderOutlined />,
+        icon: <Folder className="size-4" />,
         roles: all_admin_roles,
       },
       {
         key: "users",
         page: "users",
         label: "Internal Users",
-        icon: <UserOutlined />,
+        icon: <User className="size-4" />,
         roles: all_admin_roles,
       },
       {
         key: "organizations",
         page: "organizations",
         label: "Organizations",
-        icon: <BankOutlined />,
+        icon: <Building2 className="size-4" />,
         roles: all_admin_roles,
       },
       {
         key: "access-groups",
         page: "access-groups",
         label: "Access Groups",
-        icon: <BlockOutlined />,
+        icon: <Blocks className="size-4" />,
         roles: all_admin_roles,
       },
       {
         key: "budgets",
         page: "budgets",
         label: "Budgets",
-        icon: <CreditCardOutlined />,
+        icon: <CreditCard className="size-4" />,
         roles: all_admin_roles,
       },
     ],
@@ -281,61 +277,60 @@ const menuGroups: MenuGroup[] = [
         key: "api_ref",
         page: "api_ref",
         label: "API Reference",
-        icon: <ApiOutlined />,
+        icon: <Code className="size-4" />,
       },
       {
         key: "model-hub-table",
         page: "model-hub-table",
         label: "AI Hub",
-        icon: <AppstoreOutlined />,
+        icon: <LayoutGrid className="size-4" />,
       },
-
       {
         key: "learning-resources",
         page: "learning-resources",
         label: "Learning Resources",
-        icon: <BookOutlined />,
+        icon: <BookOpen className="size-4" />,
         external_url: "https://models.litellm.ai/cookbook",
       },
       {
         key: "experimental",
         page: "experimental",
         label: "Experimental",
-        icon: <ExperimentOutlined />,
+        icon: <FlaskConical className="size-4" />,
         children: [
           {
             key: "caching",
             page: "caching",
             label: "Caching",
-            icon: <DatabaseOutlined />,
+            icon: <Database className="size-4" />,
             roles: all_admin_roles,
           },
           {
             key: "prompts",
             page: "prompts",
             label: "Prompts",
-            icon: <FileTextOutlined />,
+            icon: <FileText className="size-4" />,
             roles: all_admin_roles,
           },
           {
             key: "transform-request",
             page: "transform-request",
             label: "API Playground",
-            icon: <ApiOutlined />,
+            icon: <Code className="size-4" />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
           {
             key: "tag-management",
             page: "tag-management",
             label: "Tag Management",
-            icon: <TagsOutlined />,
+            icon: <Tags className="size-4" />,
             roles: all_admin_roles,
           },
           {
             key: "4",
             page: "usage",
             label: "Old Usage",
-            icon: <BarChartOutlined />,
+            icon: <BarChart3 className="size-4" />,
           },
         ],
       },
@@ -353,21 +348,21 @@ const menuGroups: MenuGroup[] = [
             Settings <NewBadge />
           </span>
         ),
-        icon: <SettingOutlined />,
+        icon: <Settings className="size-4" />,
         roles: all_admin_roles,
         children: [
           {
             key: "router-settings",
             page: "router-settings",
             label: "Router Settings",
-            icon: <SettingOutlined />,
+            icon: <Settings className="size-4" />,
             roles: all_admin_roles,
           },
           {
             key: "logging-and-alerts",
             page: "logging-and-alerts",
             label: "Logging & Alerts",
-            icon: <SettingOutlined />,
+            icon: <Settings className="size-4" />,
             roles: all_admin_roles,
           },
           {
@@ -381,21 +376,21 @@ const menuGroups: MenuGroup[] = [
                 </NewBadge>
               </span>
             ),
-            icon: <SettingOutlined />,
+            icon: <Settings className="size-4" />,
             roles: all_admin_roles,
           },
           {
             key: "cost-tracking",
             page: "cost-tracking",
             label: "Cost Tracking",
-            icon: <BarChartOutlined />,
+            icon: <BarChart3 className="size-4" />,
             roles: all_admin_roles,
           },
           {
             key: "ui-theme",
             page: "ui-theme",
             label: "UI Theme",
-            icon: <BgColorsOutlined />,
+            icon: <Palette className="size-4" />,
             roles: all_admin_roles,
           },
         ],
@@ -403,6 +398,132 @@ const menuGroups: MenuGroup[] = [
     ],
   },
 ];
+
+function NavItem({
+  item,
+  isSelected,
+  collapsed,
+  onNavigate,
+}: {
+  item: MenuItem;
+  isSelected: boolean;
+  collapsed: boolean;
+  onNavigate: (page: string) => void;
+}) {
+  const migratedRoute = MIGRATED_PAGES[item.page];
+  const href = item.external_url ?? (migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(item.page));
+  const isExternal = Boolean(item.external_url);
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isExternal) {
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+      return;
+    }
+    e.preventDefault();
+    onNavigate(item.page);
+  };
+
+  const content = (
+    <a
+      href={href}
+      target={isExternal ? "_blank" : undefined}
+      rel={isExternal ? "noopener noreferrer" : undefined}
+      onClick={handleClick}
+      className={cn(
+        "flex items-center gap-2 h-8 py-1.5 px-2 rounded-md text-[13px] transition-colors w-full",
+        "hover:bg-sidebar-accent",
+        isSelected && "bg-sidebar-accent text-sidebar-accent-foreground font-medium",
+        !isSelected && "text-sidebar-foreground/70",
+      )}
+    >
+      <span className="shrink-0">{item.icon}</span>
+      {!collapsed && (
+        <span className="truncate flex items-center gap-1.5">
+          {item.label}
+          {isExternal && <ExternalLink aria-hidden className="size-3 opacity-60" />}
+        </span>
+      )}
+    </a>
+  );
+
+  if (collapsed) {
+    const tooltipLabel = typeof item.label === "string" ? item.label : item.page;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{content}</TooltipTrigger>
+        <TooltipContent side="right">{tooltipLabel}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return content;
+}
+
+function CollapsibleNavItem({
+  item,
+  selectedKey,
+  collapsed,
+  onNavigate,
+}: {
+  item: MenuItem;
+  selectedKey: string;
+  collapsed: boolean;
+  onNavigate: (page: string) => void;
+}) {
+  const hasSelectedChild = item.children?.some((child) => child.key === selectedKey) ?? false;
+  const [open, setOpen] = useState(hasSelectedChild);
+
+  if (collapsed) {
+    const tooltipLabel = typeof item.label === "string" ? item.label : item.page;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="flex items-center justify-center h-8 py-1.5 px-2 rounded-md text-[13px] text-sidebar-foreground/70 hover:bg-sidebar-accent transition-colors w-full"
+          >
+            <span className="shrink-0">{item.icon}</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">{tooltipLabel}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex items-center gap-2 h-8 py-1.5 px-2 rounded-md text-[13px] transition-colors w-full",
+            "hover:bg-sidebar-accent text-sidebar-foreground/70",
+          )}
+        >
+          <span className="shrink-0">{item.icon}</span>
+          <span className="truncate flex-1 text-left">{item.label}</span>
+          <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", open && "rotate-90")} />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="ml-4 border-l border-sidebar-border pl-2 mt-0.5 flex flex-col gap-0.5">
+          {item.children?.map((child) => (
+            <NavItem
+              key={child.key}
+              item={child}
+              isSelected={child.key === selectedKey}
+              collapsed={false}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 const Sidebar: React.FC<SidebarProps> = ({
   setPage,
@@ -420,7 +541,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
 
-  // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
     if (!userId || !organizations) return false;
     return organizations.some((org: Organization) =>
@@ -428,55 +548,38 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }, [userId, organizations]);
 
-  // Check if user is a team admin for any team
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
-  // The parent (legacy root page or dashboard layout) owns navigation for both
-  // migrated and legacy pages; the sidebar only reports the selected page.
   const navigateToPage = (page: string) => setPage(page);
 
-  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
-  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (label: React.ReactNode, page: string, externalUrl?: string): React.ReactNode => {
-    if (externalUrl) {
-      return (
-        <a
-          href={externalUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          style={{ color: "inherit", textDecoration: "none" }}
-        >
-          {label} <ExportOutlined style={{ fontSize: 10, marginLeft: 4 }} />
-        </a>
-      );
-    }
-    const migratedRoute = MIGRATED_PAGES[page];
-    const href = migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(page);
-    return (
-      <a
-        href={href}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
-            e.stopPropagation();
-            return;
-          }
-          e.preventDefault();
-        }}
-        style={{ color: "inherit", textDecoration: "none" }}
-      >
-        {label}
-      </a>
-    );
+  const isFeatureGated = (item: MenuItem): boolean => {
+    if (item.key === "projects" && !enableProjectsUI) return true;
+    if (item.key === "chat" && !enableChatUI) return true;
+    return false;
   };
 
-  // Filter items based on user role and enabled pages for internal users
+  const isDisabledForNonAdmin = (item: MenuItem): boolean => {
+    if (item.key === "agents" && disableAgentsForInternalUsers && !(allowAgentsForTeamAdmins && isTeamAdmin))
+      return true;
+    if (
+      item.key === "vector-stores" &&
+      disableVectorStoresForInternalUsers &&
+      !(allowVectorStoresForTeamAdmins && isTeamAdmin)
+    )
+      return true;
+    return false;
+  };
+
+  const isVisibleForInternalUser = (item: MenuItem, enabledPages: string[]): boolean => {
+    if (item.children && item.children.length > 0) {
+      return item.children.some((child) => enabledPages.includes(child.page));
+    }
+    return enabledPages.includes(item.page);
+  };
+
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     const isAdmin = isAdminRole(userRole);
-
-    // Debug logging
-    if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-    }
+    const hasPageRestrictions = !isAdmin && enabledPagesInternalUsers != null;
 
     return items
       .map((item) => ({
@@ -484,127 +587,21 @@ const Sidebar: React.FC<SidebarProps> = ({
         children: item.children ? filterItemsByRole(item.children) : undefined,
       }))
       .filter((item) => {
-        // Special handling for organizations and users menu items - allow org_admins
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;
-
-          // Check enabled pages for internal users (non-admins)
-          if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-            const isIncluded = enabledPagesInternalUsers.includes(item.page);
-            return isIncluded;
-          }
+          if (hasPageRestrictions) return enabledPagesInternalUsers!.includes(item.page);
           return true;
         }
 
-        // Hide Projects page if enableProjectsUI is not enabled
-        if (item.key === "projects" && !enableProjectsUI) return false;
-
-        // Hide Chat page if enableChatUI is not enabled
-        if (item.key === "chat" && !enableChatUI) return false;
-
-        // Hide agents and vector-stores pages for non-admin users when disabled,
-        // unless allow_*_for_team_admins is on and the user is a team admin.
-        if (
-          !isAdmin &&
-          item.key === "agents" &&
-          disableAgentsForInternalUsers &&
-          !(allowAgentsForTeamAdmins && isTeamAdmin)
-        )
-          return false;
-        if (
-          !isAdmin &&
-          item.key === "vector-stores" &&
-          disableVectorStoresForInternalUsers &&
-          !(allowVectorStoresForTeamAdmins && isTeamAdmin)
-        )
-          return false;
-
-        // Existing role check
+        if (isFeatureGated(item)) return false;
+        if (!isAdmin && isDisabledForNonAdmin(item)) return false;
         if (item.roles && !item.roles.includes(userRole)) return false;
-
-        // Check enabled pages for internal users (non-admins)
-        if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-          // If item has children, check if any children are visible
-          if (item.children && item.children.length > 0) {
-            const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
-            if (hasVisibleChildren) {
-              return true;
-            }
-          }
-
-          const isIncluded = enabledPagesInternalUsers.includes(item.page);
-          return isIncluded;
-        }
-
+        if (hasPageRestrictions) return isVisibleForInternalUser(item, enabledPagesInternalUsers!);
         return true;
       });
   };
 
-  // Build menu items with groups
-  const buildMenuItems = (): MenuProps["items"] => {
-    const items: MenuProps["items"] = [];
-
-    menuGroups.forEach((group) => {
-      // Check if group has role restriction
-      if (group.roles && !group.roles.includes(userRole)) {
-        return;
-      }
-
-      const filteredItems = filterItemsByRole(group.items);
-      if (filteredItems.length === 0) return;
-
-      // Add group with items
-      items.push({
-        type: "group",
-        label: collapsed ? null : (
-          <span
-            style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              color: "#6b7280",
-              letterSpacing: "0.05em",
-              padding: "12px 0 4px 12px",
-              display: "block",
-              marginBottom: "2px",
-            }}
-          >
-            {group.groupLabel}
-          </span>
-        ),
-        children: filteredItems.map((item) => ({
-          key: item.key,
-          icon: item.icon,
-          label: renderNavLink(item.label, item.page, item.external_url),
-          children: item.children?.map((child) => ({
-            key: child.key,
-            icon: child.icon,
-            label: renderNavLink(child.label, child.page, child.external_url),
-            onClick: () => {
-              if (child.external_url) {
-                window.open(child.external_url, "_blank");
-              } else {
-                navigateToPage(child.page);
-              }
-            },
-          })),
-          onClick: !item.children
-            ? () => {
-                if (item.external_url) {
-                  window.open(item.external_url, "_blank");
-                } else {
-                  navigateToPage(item.page);
-                }
-              }
-            : undefined,
-        })),
-      });
-    });
-
-    return items;
-  };
-
-  // Find selected menu key
   const findMenuItemKey = (page: string): string => {
     for (const group of menuGroups) {
       for (const item of group.items) {
@@ -621,58 +618,58 @@ const Sidebar: React.FC<SidebarProps> = ({
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
   return (
-    <Layout>
-      <Sider
-        theme="light"
-        width={220}
-        collapsed={collapsed}
-        collapsedWidth={80}
-        collapsible
-        trigger={null}
-        style={{
-          transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-          position: "relative",
-        }}
+    <TooltipProvider>
+      <aside
+        className={cn(
+          "bg-sidebar border-r border-sidebar-border flex flex-col transition-all duration-300",
+          collapsed ? "w-[52px]" : "w-[220px]",
+        )}
       >
-        <ConfigProvider
-          theme={{
-            components: {
-              Menu: {
-                iconSize: 15,
-                fontSize: 13,
-                itemMarginInline: 4,
-                itemPaddingInline: 8,
-                itemHeight: 30,
-                itemBorderRadius: 6,
-                subMenuItemBorderRadius: 6,
-                groupTitleFontSize: 10,
-                groupTitleLineHeight: 1.5,
-              },
-            },
-          }}
-        >
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={[]}
-            inlineCollapsed={collapsed}
-            className="custom-sidebar-menu"
-            style={{
-              borderRight: 0,
-              backgroundColor: "transparent",
-              fontSize: "13px",
-              paddingTop: "4px",
-            }}
-            items={buildMenuItems()}
-          />
-        </ConfigProvider>
+        <ScrollArea className="flex-1">
+          <nav className="flex flex-col gap-4 py-2 px-2">
+            {menuGroups
+              .filter((group) => !group.roles || group.roles.includes(userRole))
+              .map((group) => {
+                const filteredItems = filterItemsByRole(group.items);
+                if (filteredItems.length === 0) return null;
+
+                return (
+                  <div key={group.groupLabel} className="flex flex-col gap-0.5">
+                    {!collapsed && (
+                      <span className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground px-2 pt-1 pb-0.5">
+                        {group.groupLabel}
+                      </span>
+                    )}
+                    {filteredItems.map((item) =>
+                      item.children && item.children.length > 0 ? (
+                        <CollapsibleNavItem
+                          key={item.key}
+                          item={item}
+                          selectedKey={selectedMenuKey}
+                          collapsed={collapsed}
+                          onNavigate={navigateToPage}
+                        />
+                      ) : (
+                        <NavItem
+                          key={item.key}
+                          item={item}
+                          isSelected={item.key === selectedMenuKey}
+                          collapsed={collapsed}
+                          onNavigate={navigateToPage}
+                        />
+                      ),
+                    )}
+                  </div>
+                );
+              })}
+          </nav>
+        </ScrollArea>
         {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
-      </Sider>
-    </Layout>
+      </aside>
+    </TooltipProvider>
   );
 };
 
 export default Sidebar;
 
-// Also export menuGroups for advanced use cases
 export { menuGroups };
