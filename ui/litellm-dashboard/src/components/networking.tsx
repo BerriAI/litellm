@@ -32,6 +32,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import type { components } from "@/lib/http/schema";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
@@ -1210,6 +1211,22 @@ export const organizationUpdateCall = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const organizationUpdateV2Call = async (
+  accessToken: string,
+  organizationId: string,
+  body: components["schemas"]["OrganizationUpdateRequestV2"],
+): Promise<components["schemas"]["LiteLLM_OrganizationTableWithMembers"]> => {
+  try {
+    return await apiClient.patch<components["schemas"]["LiteLLM_OrganizationTableWithMembers"]>(
+      `/v2/organization/${encodeURIComponent(organizationId)}`,
+      { accessToken, body },
+    );
+  } catch (error) {
+    console.error("Failed to update organization:", error);
     throw error;
   }
 };

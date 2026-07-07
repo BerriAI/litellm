@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { vi, test, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
+import { organizationUpdateV2Call } from "../networking";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 
 // Mock networking calls used by the component's mutation handlers
@@ -13,7 +14,7 @@ vi.mock("../networking", () => {
     organizationMemberAddCall: vi.fn(),
     organizationMemberUpdateCall: vi.fn(),
     organizationMemberDeleteCall: vi.fn(),
-    organizationUpdateCall: vi.fn(),
+    organizationUpdateV2Call: vi.fn(),
   };
 });
 
@@ -38,7 +39,11 @@ vi.mock("../object_permissions_view", () => ({
 }));
 vi.mock("../molecules/notifications_manager", () => ({
   __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
+  default: { success: vi.fn(), fromBackend: vi.fn(), error: vi.fn() },
+}));
+vi.mock("../ModelSelect/ModelSelect", () => ({
+  __esModule: true,
+  ModelSelect: () => null,
 }));
 vi.mock("../team/edit_membership", () => ({
   __esModule: true,
@@ -203,4 +208,33 @@ test("should display team ID as fallback when alias is not found", async () => {
   await waitFor(() => {
     expect(screen.getByText("team_999")).toBeInTheDocument();
   });
+});
+
+test("blocks Save and does not call the update API when metadata JSON is invalid", async () => {
+  vi.mocked(organizationUpdateV2Call).mockClear();
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={true}
+      userModels={[]}
+      editOrg={true}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: /Edit Settings/i }));
+
+  const metadata = await screen.findByLabelText("Metadata");
+  await user.type(metadata, "not valid json");
+  await user.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+  await waitFor(() => {
+    expect(screen.getByText("Metadata must be a valid JSON object")).toBeInTheDocument();
+  });
+  expect(organizationUpdateV2Call).not.toHaveBeenCalled();
 });

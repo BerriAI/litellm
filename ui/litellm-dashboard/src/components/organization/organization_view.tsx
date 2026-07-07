@@ -20,8 +20,16 @@ import {
   organizationMemberAddCall,
   organizationMemberDeleteCall,
   organizationMemberUpdateCall,
-  organizationUpdateCall,
+  organizationUpdateV2Call,
 } from "../networking";
+import {
+  buildOrgSettingsBaseline,
+  buildOrganizationUpdateV2Payload,
+  OrgMetadataParseError,
+  parseMetadata,
+  type OrganizationUpdateV2Body,
+  type OrgSettingsFormValues,
+} from "./organizationUpdatePayload";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import MemberModal from "../team/EditMembership";
@@ -119,28 +127,35 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     }
   };
 
-  const handleOrgUpdate = async (values: any) => {
+  const validateMetadataJson = async (_rule: unknown, value: string | undefined): Promise<void> => {
+    if (!value || value.trim() === "") {
+      return;
+    }
     try {
-      if (!accessToken) return;
+      parseMetadata(value);
+    } catch {
+      throw new Error("Metadata must be a valid JSON object");
+    }
+  };
+
+  const handleOrgUpdate = async (
+    values: OrgSettingsFormValues & {
+      vector_stores?: string[];
+      mcp_servers_and_groups?: { servers?: string[]; accessGroups?: string[] };
+    },
+  ) => {
+    try {
+      if (!accessToken || !orgData) return;
       setIsOrgSaving(true);
 
-      const updateData: any = {
-        organization_id: organizationId,
-        organization_alias: values.organization_alias,
-        models: values.models,
-        litellm_budget_table: {
-          tpm_limit: values.tpm_limit,
-          rpm_limit: values.rpm_limit,
-          max_budget: values.max_budget,
-          budget_duration: values.budget_duration,
-        },
-        metadata: values.metadata ? JSON.parse(values.metadata) : null,
-      };
+      const body: OrganizationUpdateV2Body = buildOrganizationUpdateV2Payload({
+        values,
+        baseline: buildOrgSettingsBaseline(orgData),
+      });
 
-      // Handle object_permission updates
       if (values.vector_stores !== undefined || values.mcp_servers_and_groups !== undefined) {
-        updateData.object_permission = {
-          ...orgData?.object_permission,
+        const objectPermission: NonNullable<OrganizationUpdateV2Body["object_permission"]> = {
+          ...(orgData?.object_permission ?? {}),
           vector_stores: values.vector_stores || [],
         };
 
@@ -150,21 +165,27 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             accessGroups: [],
           };
           if (servers && servers.length > 0) {
-            updateData.object_permission.mcp_servers = servers;
+            objectPermission.mcp_servers = servers;
           }
           if (accessGroups && accessGroups.length > 0) {
-            updateData.object_permission.mcp_access_groups = accessGroups;
+            objectPermission.mcp_access_groups = accessGroups;
           }
         }
+
+        body.object_permission = objectPermission;
       }
 
-      const response = await organizationUpdateCall(accessToken, updateData);
+      await organizationUpdateV2Call(accessToken, organizationId, body);
 
       NotificationsManager.success("Organization settings updated successfully");
       setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization settings");
+      if (error instanceof OrgMetadataParseError) {
+        NotificationsManager.error("Metadata must be a valid JSON object");
+      } else {
+        NotificationsManager.fromBackend("Failed to update organization settings");
+      }
       console.error("Error updating organization:", error);
     } finally {
       setIsOrgSaving(false);
@@ -437,7 +458,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Metadata" name="metadata">
+                    <Form.Item label="Metadata" name="metadata" rules={[{ validator: validateMetadataJson }]}>
                       <Input.TextArea rows={4} />
                     </Form.Item>
 
