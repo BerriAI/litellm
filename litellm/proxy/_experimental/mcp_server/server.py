@@ -5,6 +5,7 @@ LiteLLM MCP Server Routes
 # pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
+import base64
 import contextlib
 import contextvars
 import hashlib
@@ -423,7 +424,7 @@ if MCP_AVAILABLE:
             elif isinstance(content, BlobResourceContents):
                 normalized.append(
                     ReadResourceContents(
-                        content=content.blob,
+                        content=base64.b64decode(content.blob),
                         mime_type=content.mimeType,
                         meta=meta,
                     )
