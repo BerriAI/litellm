@@ -30,7 +30,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       return;
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      console.log("callbacks", data);
       let router_settings = data.router_settings;
       if ("model_group_retry_policy" in router_settings) {
         delete router_settings["model_group_retry_policy"];
@@ -44,7 +43,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       }));
     });
     getRouterSettingsCall(accessToken).then((data) => {
-      console.log("router settings from API", data);
       if (data.fields) {
         // Build metadata map for easy lookup
         const fieldsMap: { [key: string]: any } = {};
@@ -87,7 +85,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     }
 
     const router_settings = formValue.routerSettings;
-    console.log("router_settings", router_settings);
 
     const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
     const jsonKeys = new Set(["model_group_alias"]);
@@ -158,14 +155,12 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
               setRoutingStrategyArgs["ttl"] = Number(ttlElement.value);
             }
 
-            console.log(`setRoutingStrategyArgs: ${setRoutingStrategyArgs}`);
             return ["routing_strategy_args", setRoutingStrategyArgs];
           }
           return null;
         })
         .filter((entry) => entry !== null && entry !== undefined) as Iterable<[string, unknown]>,
     );
-    console.log("updatedVariables", updatedVariables);
 
     const payload = {
       router_settings: updatedVariables,

@@ -1122,7 +1122,7 @@ class TestNativeWebSocketGuardrails:
         client_ws = MagicMock()
         client_ws.send_text = AsyncMock()
         logging_obj = MagicMock()
-        logging_obj.async_success_handler = AsyncMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
 
         delta_event = json.dumps(
             {"type": "response.output_text.delta", "delta": "alice@example.com"}
@@ -1196,7 +1196,7 @@ class TestNativeWebSocketGuardrails:
         client_ws = MagicMock()
         client_ws.send_text = AsyncMock()
         logging_obj = MagicMock()
-        logging_obj.async_success_handler = AsyncMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
 
         done_events = [
             json.dumps(
@@ -1895,7 +1895,7 @@ class TestNativeWebSocketGuardrailMasking:
             ]
         )
         logging_obj = MagicMock()
-        logging_obj.async_success_handler = AsyncMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
 
         handler = _make_streaming(
             websocket=websocket,
@@ -1951,7 +1951,7 @@ class TestNativeWebSocketGuardrailMasking:
             ]
         )
         logging_obj = MagicMock()
-        logging_obj.async_success_handler = AsyncMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
 
         handler = _make_streaming(
             websocket=websocket,
@@ -2014,7 +2014,7 @@ class TestNativeWebSocketGuardrailMasking:
             ]
         )
         logging_obj = MagicMock()
-        logging_obj.async_success_handler = AsyncMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
 
         handler = _make_streaming(
             websocket=websocket,
@@ -2077,7 +2077,7 @@ class TestNativeWebSocketGuardrailMasking:
             ]
         )
         logging_obj = MagicMock()
-        logging_obj.async_success_handler = AsyncMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
 
         handler = _make_streaming(
             websocket=websocket,
