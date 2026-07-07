@@ -7131,3 +7131,54 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
     assert response.status_code == 200
     assert "Default Credentials" not in body
     assert "MASTER_KEY" not in body
+
+
+@pytest.mark.asyncio
+async def test_cli_poll_key_tolerates_missing_user_row():
+    """The CLI poll must still mint the JWT when the user lookup raises,
+    e.g. the user row was created moments ago and a negative-cache window
+    from the pre-creation SSO existence check is still active on this pod."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _hash_cli_sso_secret,
+        cli_poll_key,
+    )
+
+    session_key = "cli-session-missing-user"
+    session_data = {
+        "user_id": "just-created-user",
+        "user_role": "internal_user",
+        "teams": [],
+        "models": ["gpt-4"],
+    }
+
+    mock_cache = MagicMock()
+    mock_cache.get_cache.return_value = {
+        "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+        "sso_complete": True,
+        "user_code_verified": True,
+        "session_data": session_data,
+    }
+
+    mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.missing.user"
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+            return_value=mock_jwt_token,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            new=AsyncMock(side_effect=ValueError("User doesn't exist in db. 'user_id'=just-created-user")),
+        ),
+    ):
+        result = await cli_poll_key(
+            key_id=session_key,
+            team_id=None,
+            x_litellm_cli_poll_secret="poll-secret",
+        )
+
+    assert result["status"] == "ready"
+    assert result["key"] == mock_jwt_token
+    assert result["user_id"] == "just-created-user"
