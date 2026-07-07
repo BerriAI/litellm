@@ -4748,6 +4748,43 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
         self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
 
+    def test_emit_once_keeps_metadata_json_serializable(self):
+        """Regression for the spend-logs crash + memory leak (issue #32250).
+
+        The dedupe markers ``_emit_once`` writes into
+        ``litellm_params["metadata"]["_otel_internal"]`` propagate into the
+        persisted request body, which is serialized with plain ``json.dumps``.
+        A tuple dedupe key makes that dict non-JSON-serializable, so
+        ``json.dumps`` raised ``TypeError: keys must be str, ... not tuple`` on
+        every request, dropping the spend-log write and growing the in-memory
+        transaction queue without bound.
+
+        The key must be a string so ``metadata`` stays JSON-serializable, and
+        the markers must survive serialization so dedup state is not silently
+        dropped."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+
+        otel._emit_once(kwargs, "success")
+        otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+
+        metadata = kwargs["litellm_params"]["metadata"]
+        spans_logged = metadata["_otel_internal"]["spans_logged"]
+        self.assertTrue(
+            all(isinstance(key, str) for key in spans_logged),
+            "Dedupe keys must be strings; a tuple key crashes json.dumps",
+        )
+
+        serialized = json.dumps(metadata)
+
+        self.assertEqual(
+            len(json.loads(serialized)["_otel_internal"]["spans_logged"]),
+            3,
+            "All three dedupe markers must survive JSON serialization; a "
+            "non-string key would be silently dropped, losing dedup state",
+        )
+
     def test_create_guardrail_span_does_not_raise_on_list_mode(self):
         """End-to-end regression for LIT-3428: ``_create_guardrail_span``
         must produce exactly one span (not raise ``TypeError``) when the

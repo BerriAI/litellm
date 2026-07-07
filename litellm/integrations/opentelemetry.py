@@ -1043,10 +1043,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         ``scope`` parts may include unhashable containers (list, dict, set);
         they are normalized into a hashable shape via ``_freeze_for_dedupe``
-        before keying the marker dict. The marker is stored in
+        and the whole key is ``repr``-ed to a string. The string form matters:
+        the marker is stored in
         ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it is
         request-local (kwargs is shared across the sync/async callbacks and
-        lifecycle hooks for one request).
+        lifecycle hooks for one request), and that metadata is serialized to
+        JSON downstream (e.g. spend logs). A tuple key would make ``metadata``
+        non-JSON-serializable and crash ``json.dumps``.
         """
         litellm_params = kwargs.get("litellm_params")
         if not isinstance(litellm_params, dict):
@@ -1068,10 +1071,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (
-            self.__class__.__name__,
-            id(self),
-            *(_freeze_for_dedupe(part) for part in scope),
+        dedupe_key = repr(
+            (
+                self.__class__.__name__,
+                id(self),
+                *(_freeze_for_dedupe(part) for part in scope),
+            )
         )
         if spans_logged.get(dedupe_key) is True:
             return False
