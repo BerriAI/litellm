@@ -583,6 +583,60 @@ def get_bedrock_cross_region_inference_regions() -> List[str]:
     return ["global", "us", "eu", "apac", "jp", "au", "us-gov"]
 
 
+_BEDROCK_ARN_REGION_PATTERN = re.compile(r"\A[a-z0-9-]+\Z")
+
+_BEDROCK_MODEL_ID_ROUTING_PREFIXES = (
+    "bedrock/converse/",
+    "bedrock/",
+    "converse/",
+    "invoke/",
+)
+
+
+def _get_region_from_bedrock_arn(model: str) -> Optional[str]:
+    """Extract AWS region from a Bedrock ARN (standard, GovCloud, or China partitions)."""
+    if not isinstance(model, str) or not model.lower().startswith("arn:"):
+        return None
+    if "bedrock" not in model.lower():
+        return None
+
+    parts = model.split(":")
+    if len(parts) < 4:
+        return None
+
+    region = parts[3]
+    if not region or not _BEDROCK_ARN_REGION_PATTERN.match(region):
+        return None
+
+    return region
+
+
+def extract_bedrock_region_and_model_id(model: str) -> tuple[Optional[str], str]:
+    """
+    Strip LiteLLM routing prefixes, then extract region + cleaned model ID.
+
+    Handles:
+      - bedrock/converse/us-east-1/anthropic.claude-… → ("us-east-1", "anthropic.claude-…")
+      - arn:aws:bedrock:us-east-1:…:application-inference-profile/xyz → ("us-east-1", full ARN)
+    """
+    stripped = model
+    for prefix in _BEDROCK_MODEL_ID_ROUTING_PREFIXES:
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix) :]
+            break
+
+    region = _get_region_from_bedrock_arn(stripped)
+    model_id = stripped
+
+    if region is None:
+        potential_region = stripped.split("/", 1)[0]
+        if potential_region in _get_all_bedrock_regions() and "/" in stripped:
+            region = potential_region
+            model_id = stripped.split("/", 1)[1]
+
+    return region, model_id
+
+
 def extract_model_name_from_bedrock_arn(model: str) -> str:
     """
     Extract the model name from an AWS Bedrock ARN.

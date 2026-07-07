@@ -2556,13 +2556,86 @@ def test_is_already_running_as_role_ssl_verify_passed():
                 )
 
 
-# ---------------------------------------------------------------------------
-# LIT-3274: get_bedrock_model_id must strip "bedrock/" prefix and URL-encode
-# ARNs for the invoke path (invoke-with-response-stream).  Without this fix
-# the Bedrock API receives a malformed URL, returns a JSON error body, and
-# botocore's EventStreamBuffer raises ChecksumMismatch instead of the real
-# error.  0x223a7b22 == ':{\"' — the start of a JSON object.
-# ---------------------------------------------------------------------------
+INFERENCE_PROFILE_ARN = (
+    "arn:aws:bedrock:eu-west-1:6767:inference-profile/eu.amazon.nova-2-lite-v1:0"
+)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        f"bedrock/{INFERENCE_PROFILE_ARN}",
+        f"bedrock/converse/{INFERENCE_PROFILE_ARN}",
+        f"converse/{INFERENCE_PROFILE_ARN}",
+    ],
+)
+def test_converse_handler_strips_bedrock_prefix_for_inference_profile_arn(model):
+    """
+    Inference profile ARNs must reach Bedrock URLs without a leftover bedrock/converse routing prefix.
+    """
+    from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+
+    converse_llm = BedrockConverseLLM()
+
+    def mock_get_credentials(**kwargs):
+        mock_credentials = MagicMock()
+        mock_credentials.access_key = "test-access-key"
+        mock_credentials.secret_key = "test-secret-key"
+        mock_credentials.token = "test-session-token"
+        return mock_credentials
+
+    with patch.object(converse_llm, "get_credentials", side_effect=mock_get_credentials):
+        with patch.object(
+            converse_llm, "_get_aws_region_name", return_value="eu-west-1"
+        ):
+            with patch.object(
+                converse_llm,
+                "get_runtime_endpoint",
+                return_value=("https://test", "https://test"),
+            ):
+                with patch("litellm.AmazonConverseConfig") as mock_config:
+                    mock_config.return_value._transform_request.return_value = {
+                        "test": "data"
+                    }
+                    mock_config.return_value._transform_response.return_value = (
+                        MagicMock()
+                    )
+                    with patch.object(
+                        converse_llm, "get_request_headers"
+                    ) as mock_headers:
+                        mock_headers.return_value = MagicMock()
+                        mock_headers.return_value.headers = {"Authorization": "test"}
+                        with patch(
+                            "litellm.llms.bedrock.chat.converse_handler._get_httpx_client"
+                        ) as mock_client:
+                            mock_http_client = MagicMock()
+                            mock_response = MagicMock()
+                            mock_response.raise_for_status.return_value = None
+                            mock_http_client.post.return_value = mock_response
+                            mock_client.return_value = mock_http_client
+
+                            converse_llm.completion(
+                                model=model,
+                                messages=[{"role": "user", "content": "Hello"}],
+                                api_base=None,
+                                custom_prompt_dict={},
+                                model_response=MagicMock(),
+                                encoding="utf-8",
+                                logging_obj=MagicMock(),
+                                optional_params={},
+                                acompletion=False,
+                                timeout=None,
+                                litellm_params={},
+                            )
+
+                            expected_model_segment = BaseAWSLLM.encode_model_id(
+                                model_id=INFERENCE_PROFILE_ARN
+                            )
+                            posted_url = mock_http_client.post.call_args.kwargs["url"]
+                            assert posted_url == (
+                                f"https://test/model/{expected_model_segment}/converse"
+                            )
+                            assert "bedrock%2F" not in posted_url
 
 
 class TestGetBedrockModelIdArnHandling:
@@ -2590,9 +2663,7 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
-    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(
-        self,
-    ):
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(self):
         """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
 
         The old fix used ``break`` after the first matched prefix, so
@@ -2653,3 +2724,10 @@ class TestGetBedrockModelIdArnHandling:
         """invoke/ prefix stripping still works after the fix."""
         model_id = self._call("invoke/anthropic.claude-3-sonnet-20240229-v1:0")
         assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+    def test_converse_prefixed_arn_is_stripped_and_encoded(self):
+        """converse/ prefix on an ARN must be stripped before encoding."""
+        model_id = self._call(f"converse/{self.ARN}")
+        assert "converse/" not in model_id
+        assert "%3A" in model_id
+

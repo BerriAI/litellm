@@ -8,6 +8,7 @@ import pytest
 
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
+    extract_bedrock_region_and_model_id,
     extract_model_name_from_bedrock_arn,
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
@@ -99,6 +100,29 @@ class TestExtractModelNameFromBedrockArn:
     def test_case_insensitive_arn_detection(self):
         arn = "ARN:aws:bedrock:us-east-1:123456789012:model/my-model"
         assert extract_model_name_from_bedrock_arn(arn) == "my-model"
+
+
+class TestExtractBedrockRegionAndModelId:
+    """Tests for extract_bedrock_region_and_model_id helper."""
+
+    ARN = (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+    )
+
+    @pytest.mark.parametrize(
+        "model,expected_region,expected_model_id",
+        [
+            ("us-east-1/anthropic.claude-3-haiku", "us-east-1", "anthropic.claude-3-haiku"),
+            (ARN, "us-east-1", ARN),
+            (f"bedrock/converse/{ARN}", "us-east-1", ARN),
+            (f"converse/{ARN}", "us-east-1", ARN),
+            ("us.anthropic.claude-haiku-4-5-20251001-v1:0", None, "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ],
+    )
+    def test_region_and_model_id(self, model, expected_region, expected_model_id):
+        region, model_id = extract_bedrock_region_and_model_id(model)
+        assert region == expected_region
+        assert model_id == expected_model_id
 
 
 class TestGetBedrockCrossRegionInferenceRegions:
