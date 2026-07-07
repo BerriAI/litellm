@@ -166,6 +166,10 @@ class MCPCredentials(TypedDict, total=False):
     Token exchange wire dialect: "rfc8693" (default, the standard token-exchange grant) or
     "entra_obo" (Microsoft Entra On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use
     extension). Not a secret; stored unencrypted.
+
+    Legacy input shape: lifted into the dedicated ``token_exchange_profile`` column on
+    write and stripped from the stored blob; the column is authoritative. Prefer the
+    top-level request field.
     """
 
 
