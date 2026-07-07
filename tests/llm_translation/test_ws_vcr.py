@@ -54,7 +54,9 @@ def test_cassette_json_roundtrip_preserves_frames_and_gate():
                     _server('{"type":"session.created"}', 0),
                     _client('{"type":"response.create"}'),
                     _server('{"type":"response.done"}', 1),
-                    WsFrame(direction="server_to_client", opcode="binary", binary_b64="dGVzdA==", client_frames_before=1),
+                    WsFrame(
+                        direction="server_to_client", opcode="binary", binary_b64="dGVzdA==", client_frames_before=1
+                    ),
                 )
             ),
         )
@@ -144,26 +146,20 @@ async def test_replay_timeout_raises_instead_of_hanging():
 
 
 async def test_replay_accepts_client_frame_with_volatile_id_drift():
-    recorded_client = _client(
-        '{"type":"conversation.item.create","item":{"id":"item_ABC12345","role":"user"}}'
-    )
+    recorded_client = _client('{"type":"conversation.item.create","item":{"id":"item_ABC12345","role":"user"}}')
     session = WsSession(frames=(_server("s", 0), recorded_client, _server("done", 1)))
     errors, on_error = _collect_errors()
     conn = ReplayConnection(session, timeout=1.0, on_error=on_error)
 
     await conn.recv(decode=False)
-    await conn.send(
-        '{"type":"conversation.item.create","item":{"role":"user","id":"item_ZZ99887766"}}'
-    )
+    await conn.send('{"type":"conversation.item.create","item":{"role":"user","id":"item_ZZ99887766"}}')
 
     assert errors == []
     assert await conn.recv(decode=False) == b"done"
 
 
 async def test_replay_rejects_structurally_different_client_frame():
-    session = WsSession(
-        frames=(_server("s", 0), _client('{"type":"response.create"}'), _server("done", 1))
-    )
+    session = WsSession(frames=(_server("s", 0), _client('{"type":"response.create"}'), _server("done", 1)))
     errors, on_error = _collect_errors()
     conn = ReplayConnection(session, timeout=1.0, on_error=on_error)
 
@@ -194,9 +190,7 @@ def test_text_frames_match_normalizes_ids_and_timestamps_but_not_structure():
 
 
 def test_scrub_secrets_removes_auth_material():
-    scrubbed = scrub_secrets(
-        'Authorization: Bearer sk-abcdef123456 and key xai-zzz99988877 raw sk-plainkey123'
-    )
+    scrubbed = scrub_secrets("Authorization: Bearer sk-abcdef123456 and key xai-zzz99988877 raw sk-plainkey123")
     assert "sk-abcdef123456" not in scrubbed
     assert "xai-zzz99988877" not in scrubbed
     assert "sk-plainkey123" not in scrubbed
@@ -212,9 +206,7 @@ def test_recorder_scrubs_secrets_in_stored_frames():
 
 
 def _sample_cassette() -> WsCassette:
-    return WsCassette(
-        sessions=(WsSession(frames=(_server('{"type":"session.created"}', 0),)),)
-    )
+    return WsCassette(sessions=(WsSession(frames=(_server('{"type":"session.created"}', 0),)),))
 
 
 def test_save_sets_24h_ttl_and_load_roundtrips():

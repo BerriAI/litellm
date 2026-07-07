@@ -106,15 +106,11 @@ class WsVcrContractDrift(WsVcrReplayError): ...
 class WsVcrReplayTimeout(WsVcrReplayError): ...
 
 
-_UUID_RE = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _OPENAI_ID_RE = re.compile(
     r"\b(?:evt|event|item|msg|resp|response|sess|session|call|fc|rs|conv|ce|audio)_[A-Za-z0-9]{6,}"
 )
-_ISO_TS_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
-)
+_ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
 _EPOCH_RE = re.compile(r"(?<![\d.])1[0-9]{9,12}(?![\d.])")
 
 _VOLATILE_KEYS = frozenset(
@@ -207,9 +203,7 @@ class WsSessionRecorder:
 
     def record_client_frame(self, message: Message) -> None:
         opcode, text, binary_b64 = _frame_payload(message)
-        self._frames.append(
-            WsFrame(direction="client_to_server", opcode=opcode, text=text, binary_b64=binary_b64)
-        )
+        self._frames.append(WsFrame(direction="client_to_server", opcode=opcode, text=text, binary_b64=binary_b64))
         self._client_count += 1
 
     def record_server_frame(self, message: Message) -> None:
