@@ -1,12 +1,15 @@
 """
 Push-based OTLP metering for enterprise litellm deployments.
 
-Owns a dedicated OpenTelemetry meter provider and an OTLP/gRPC exporter
-authenticated to our global collector with mutual TLS. It is intentionally
-isolated from the global meter provider so the customer's own OTEL metrics are
-untouched and ours never leak into their backend.
+Owns a dedicated OpenTelemetry meter provider and an OTLP/HTTP exporter
+authenticated to our global collector with a TLS client certificate. The
+collector front end terminates mutual TLS: the client certificate presented
+here is validated against our CA at the edge, and the verified subject is
+what identifies the deployment. It is intentionally isolated from the global
+meter provider so the customer's own OTEL metrics are untouched and ours
+never leak into their backend.
 
-The deployment's identity rides on the mTLS client certificate, not on the
+The deployment's identity rides on the TLS client certificate, not on the
 payload; the secret license key is never sent as an attribute or header.
 """
 
@@ -14,8 +17,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
-import grpc
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Counter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -33,6 +35,7 @@ CLIENT_KEY_ENV = "LITELLM_BILLING_METRICS_CLIENT_KEY"
 CA_CERT_ENV = "LITELLM_BILLING_METRICS_CA_CERT"
 EXPORT_INTERVAL_ENV = "LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS"
 DEFAULT_EXPORT_INTERVAL_MS = 60_000
+_METRICS_PATH = "/v1/metrics"
 
 METRIC_NAME = "litellm.enterprise.billable_requests"
 METER_NAME = "litellm.enterprise.billing"
@@ -45,24 +48,16 @@ class BillingMetricsConfig:
     endpoint: str
     client_cert_path: str
     client_key_path: str
-    ca_cert_path: str
+    ca_cert_path: Optional[str]
     export_interval_ms: int
     litellm_version: str
     license_id: Optional[str]
 
 
-def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as handle:
-        return handle.read()
-
-
-def _mtls_credentials_args(config: BillingMetricsConfig) -> Dict[str, bytes]:
-    """Map cert files to grpc.ssl_channel_credentials kwargs: CA verifies the server, cert+key authenticate us."""
-    return {
-        "root_certificates": _read_bytes(config.ca_cert_path),
-        "private_key": _read_bytes(config.client_key_path),
-        "certificate_chain": _read_bytes(config.client_cert_path),
-    }
+def _metrics_endpoint(endpoint: str) -> str:
+    """The OTLP/HTTP metric exporter wants the full URL including the signal path."""
+    trimmed = endpoint.rstrip("/")
+    return trimmed if trimmed.endswith(_METRICS_PATH) else f"{trimmed}{_METRICS_PATH}"
 
 
 def _resource_attributes(config: BillingMetricsConfig) -> Dict[str, AttributeValue]:
@@ -87,8 +82,20 @@ def _billable_attributes(
 
 
 def build_mtls_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
-    credentials: grpc.ChannelCredentials = grpc.ssl_channel_credentials(**_mtls_credentials_args(config))
-    exporter = OTLPMetricExporter(endpoint=config.endpoint, credentials=credentials)
+    """OTLP/HTTP exporter presenting a TLS client certificate.
+
+    The collector's load balancer terminates mutual TLS and validates the client
+    certificate against our CA. Server verification uses the system trust store
+    (the collector presents a public web-PKI certificate); ca_cert_path overrides
+    it only for private/test collectors.
+    """
+    exporter = OTLPMetricExporter(
+        endpoint=_metrics_endpoint(config.endpoint),
+        # None -> exporter falls back to the system trust store.
+        certificate_file=config.ca_cert_path,
+        client_certificate_file=config.client_cert_path,
+        client_key_file=config.client_key_path,
+    )
     reader = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
     return MeterProvider(metric_readers=[reader], resource=Resource.create(_resource_attributes(config)))
 
@@ -127,6 +134,8 @@ def load_billing_metrics_config(
     endpoint = os.getenv(ENDPOINT_ENV)
     client_cert = os.getenv(CLIENT_CERT_ENV)
     client_key = os.getenv(CLIENT_KEY_ENV)
+    # Optional: only for private/test collectors whose server cert is not on the
+    # public web PKI. The production collector needs no CA override.
     ca_cert = os.getenv(CA_CERT_ENV)
 
     missing = [
@@ -135,18 +144,18 @@ def load_billing_metrics_config(
             (ENDPOINT_ENV, endpoint),
             (CLIENT_CERT_ENV, client_cert),
             (CLIENT_KEY_ENV, client_key),
-            (CA_CERT_ENV, ca_cert),
         )
         if not value
     ]
-    if endpoint is None or client_cert is None or client_key is None or ca_cert is None:
+    if endpoint is None or client_cert is None or client_key is None:
         verbose_proxy_logger.warning(
             "Enterprise billing metrics disabled: licensed deployment missing config (%s)",
             ", ".join(missing),
         )
         return None
 
-    unreadable = [path for path in (client_cert, client_key, ca_cert) if not os.path.isfile(path)]
+    required_paths = [client_cert, client_key] + ([ca_cert] if ca_cert else [])
+    unreadable = [path for path in required_paths if not os.path.isfile(path)]
     if unreadable:
         verbose_proxy_logger.warning(
             "Enterprise billing metrics disabled: certificate file(s) not found: %s",

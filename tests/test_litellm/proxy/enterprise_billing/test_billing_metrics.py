@@ -2,9 +2,10 @@
 Tests for the enterprise billing-metrics recorder and its factory.
 
 These verify the license gate, the missing-config and missing-cert disable
-paths, the cert-file -> mTLS credential mapping (CA verifies the server,
-cert+key authenticate us), the metric attribute mapping, and that recording
-produces the expected OTLP counter via an in-memory reader.
+paths, the OTLP/HTTP exporter wiring (client cert+key authenticate us to the
+collector's mTLS-terminating front end; CA override optional for private
+collectors), the metric attribute mapping, and that recording produces the
+expected OTLP counter via an in-memory reader.
 """
 
 from pathlib import Path
@@ -113,17 +114,55 @@ def test_export_interval_default_and_override(monkeypatch):
     assert bm._export_interval_ms() == bm.DEFAULT_EXPORT_INTERVAL_MS
 
 
-# ── mTLS credential mapping ───────────────────────────────────────────────────
+# ── OTLP/HTTP exporter wiring ─────────────────────────────────────────────────
 
 
-def test_mtls_credentials_args_map_files_correctly(tmp_path):
-    """CA -> root_certificates (verify server); client cert/key -> certificate_chain/private_key (authenticate us)."""
-    args = bm._mtls_credentials_args(_config(tmp_path))
-    assert args == {
-        "root_certificates": b"ca-bytes",
-        "private_key": b"client-key-bytes",
-        "certificate_chain": b"client-cert-bytes",
-    }
+def test_metrics_endpoint_appends_signal_path():
+    assert bm._metrics_endpoint("https://telemetry.example.com") == "https://telemetry.example.com/v1/metrics"
+    assert bm._metrics_endpoint("https://telemetry.example.com/") == "https://telemetry.example.com/v1/metrics"
+    assert bm._metrics_endpoint("https://telemetry.example.com/v1/metrics") == "https://telemetry.example.com/v1/metrics"
+
+
+def test_meter_provider_wires_client_cert_into_http_exporter(tmp_path, monkeypatch):
+    """Client cert+key authenticate us at the collector's mTLS front end; CA override rides certificate_file."""
+    captured = {}
+
+    class _FakeExporter:
+        # PeriodicExportingMetricReader probes these on the exporter it wraps.
+        _preferred_temporality: dict = {}
+        _preferred_aggregation: dict = {}
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def export(self, *args, **kwargs):
+            return None
+
+        def shutdown(self, *args, **kwargs):
+            return None
+
+        def force_flush(self, *args, **kwargs):
+            return True
+
+    monkeypatch.setattr(bm, "OTLPMetricExporter", _FakeExporter)
+    config = _config(tmp_path)
+    provider = bm.build_mtls_meter_provider(config)
+    provider.shutdown()
+
+    assert captured["endpoint"] == "https://collector.example:4317/v1/metrics"
+    assert captured["client_certificate_file"] == config.client_cert_path
+    assert captured["client_key_file"] == config.client_key_path
+    assert captured["certificate_file"] == config.ca_cert_path
+
+
+def test_load_config_without_ca_is_valid(monkeypatch, tmp_path):
+    """The production collector presents a public web-PKI cert: no CA override required."""
+    paths = _write_certs(tmp_path)
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://telemetry.example.com")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, paths[bm.CLIENT_CERT_ENV])
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, paths[bm.CLIENT_KEY_ENV])
+    config = bm.load_billing_metrics_config(license_data=None, litellm_version="1.0")
+    assert config is not None and config.ca_cert_path is None
 
 
 # ── Resource and metric attributes ────────────────────────────────────────────

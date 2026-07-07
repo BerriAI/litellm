@@ -1813,9 +1813,17 @@ app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     BillableRequestMetricsMiddleware,
-    recorder=build_billing_metrics_recorder(
+    # Factory, not an instance: the recorder is resolved on the first request so
+    # it sees premium_user and the billing env vars AFTER proxy_startup_event has
+    # loaded the YAML config's environment_variables. Building it here at import
+    # time would permanently capture recorder=None for YAML-configured
+    # deployments. The lambda reads the module globals at call time.
+    recorder_factory=lambda: build_billing_metrics_recorder(
         premium=premium_user,
-        license_data=premium_user_data,
+        # Read from the license check, not the premium_user_data module global:
+        # that global is bound once at import and goes stale when the license
+        # arrives via the YAML config's environment_variables.
+        license_data=_license_check.airgapped_license_data,
         litellm_version=version,
     ),
 )
