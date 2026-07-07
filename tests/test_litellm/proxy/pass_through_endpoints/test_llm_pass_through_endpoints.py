@@ -1853,6 +1853,98 @@ class TestForwardHeaders:
     """
 
     @pytest.mark.asyncio
+    async def test_websocket_forward_headers_strips_proxy_credentials(self):
+        from contextlib import asynccontextmanager
+
+        from starlette.websockets import WebSocketState
+
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            websocket_passthrough_request,
+        )
+
+        original_general_settings = proxy_server.general_settings
+        proxy_server.general_settings = {
+            "litellm_key_header_name": "X-My-Tenant-Key",
+        }
+
+        mock_websocket = MagicMock()
+        mock_websocket.headers = {
+            "authorization": "Bearer proxy-token",
+            "x-api-key": "proxy-api-key",
+            "X-My-Tenant-Key": "tenant-proxy-key",
+            "x-goog-user-project": "billing-project",
+        }
+        mock_websocket.accept = AsyncMock()
+        mock_websocket.close = AsyncMock()
+        mock_websocket.receive = AsyncMock(
+            return_value={"type": "websocket.disconnect"}
+        )
+        mock_websocket.send_text = AsyncMock()
+        mock_websocket.client_state = WebSocketState.CONNECTED
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {}
+
+        mock_proxy_logging_obj = MagicMock()
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging_obj.post_call_success_hook = AsyncMock(return_value=None)
+        mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+        mock_upstream_ws = MagicMock()
+        mock_upstream_ws.send = AsyncMock()
+        mock_upstream_ws.recv = AsyncMock(return_value=b"{}")
+        mock_upstream_ws.close = AsyncMock()
+        mock_upstream_ws.__aiter__.return_value = []
+
+        @asynccontextmanager
+        async def mock_connect_context(*args, **kwargs):
+            yield mock_upstream_ws
+
+        try:
+            with (
+                patch(
+                    "litellm.litellm_core_utils.litellm_logging.Logging",
+                    return_value=mock_logging_obj,
+                ),
+                patch(
+                    "litellm.proxy.proxy_server.proxy_logging_obj",
+                    mock_proxy_logging_obj,
+                ),
+                patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                    side_effect=mock_connect_context,
+                ) as mock_connect,
+                patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging."
+                    "pass_through_async_success_handler",
+                    new=Mock(return_value=None),
+                ),
+                patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER."
+                    "ensure_initialized_and_enqueue",
+                ),
+            ):
+                await websocket_passthrough_request(
+                    websocket=mock_websocket,
+                    target="wss://example.com/live",
+                    custom_headers={"Authorization": "Bearer provider-token"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="hashed-proxy-key"),
+                    forward_headers=True,
+                    accept_websocket=False,
+                )
+        finally:
+            proxy_server.general_settings = original_general_settings
+
+        sent_headers = mock_connect.call_args.kwargs["additional_headers"]
+        assert sent_headers["Authorization"] == "Bearer provider-token"
+        assert sent_headers["x-goog-user-project"] == "billing-project"
+        assert "authorization" not in sent_headers
+        assert "x-api-key" not in sent_headers
+        assert "X-My-Tenant-Key" not in sent_headers
+        mock_proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_pass_through_request_with_forward_headers_true(self):
         """
         Test that when forward_headers=True, user headers from the main request

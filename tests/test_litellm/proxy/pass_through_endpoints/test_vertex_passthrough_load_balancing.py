@@ -582,6 +582,33 @@ def test_forward_headers_strips_proxy_credentials_and_uses_x_pass_auth():
     assert result.get("x-api-key") != "proxy-x-api-key"
 
 
+def test_forward_headers_strips_configured_custom_proxy_key_header():
+    """
+    A custom general_settings.litellm_key_header_name is also a proxy credential
+    header and must not be raw-forwarded upstream.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+    from litellm.proxy import proxy_server
+
+    original_general_settings = getattr(proxy_server, "general_settings", None)
+    proxy_server.general_settings = {"litellm_key_header_name": "X-My-Tenant-Key"}
+    try:
+        result = BasePassthroughUtils.forward_headers_from_request(
+            request_headers={
+                "X-My-Tenant-Key": "sk-litellm-custom",
+                "x-custom-header": "custom-value",
+            },
+            headers={},
+            forward_headers=True,
+        )
+    finally:
+        proxy_server.general_settings = original_general_settings
+
+    assert "X-My-Tenant-Key" not in result
+    assert "x-my-tenant-key" not in result
+    assert result["x-custom-header"] == "custom-value"
+
+
 def test_forward_headers_can_forward_raw_authorization_with_explicit_opt_in():
     """
     Operators who intentionally used forward_headers=True to pass caller

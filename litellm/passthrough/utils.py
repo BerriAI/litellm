@@ -7,6 +7,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 
 # Headers that must never be forwarded from the raw client request.
+# A configured general_settings.litellm_key_header_name is added at runtime.
 _RAW_FORWARD_EXCLUDED_HEADERS: frozenset = frozenset(
     {
         "api-key",
@@ -26,6 +27,22 @@ _PASS_THROUGH_BLOCKED_HEADERS: frozenset = frozenset({"host", "content-length"})
 
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
 _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: tuple = ("x-amz-",)
+
+
+def _configured_litellm_key_header_names() -> frozenset[str]:
+    try:
+        from litellm.proxy import proxy_server
+    except ImportError:
+        return frozenset()
+
+    general_settings = getattr(proxy_server, "general_settings", None)
+    if not isinstance(general_settings, dict):
+        return frozenset()
+
+    name = general_settings.get("litellm_key_header_name")
+    if not isinstance(name, str) or not name:
+        return frozenset()
+    return frozenset({name.lower()})
 
 
 class BasePassthroughUtils:
@@ -82,12 +99,13 @@ class BasePassthroughUtils:
                 x_pass_header_names.add(actual_header_name)
 
         if forward_headers is True:
+            raw_forward_excluded_headers = _RAW_FORWARD_EXCLUDED_HEADERS | _configured_litellm_key_header_names()
             forwardable_request_headers = {}
             for header_name, header_value in request_headers.items():
                 normalized_header_name = header_name.lower()
                 if (
                     (
-                        normalized_header_name in _RAW_FORWARD_EXCLUDED_HEADERS
+                        normalized_header_name in raw_forward_excluded_headers
                         and not (normalized_header_name == "authorization" and forward_raw_authorization is True)
                     )
                     or normalized_header_name.startswith(PASS_THROUGH_HEADER_PREFIX)
