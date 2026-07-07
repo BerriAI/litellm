@@ -2588,12 +2588,18 @@ async def test_load_config_user_url_validation_handles_null_and_string_false(tmp
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.example"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["provider.example"])
     null_config_file = tmp_path / "null_config.yaml"
     null_config_file.write_text(
         yaml.dump(
             {
                 "model_list": [],
-                "general_settings": {"user_url_validation": None},
+                "general_settings": {
+                    "user_url_allowed_hosts": None,
+                    "user_url_validation": None,
+                    "provider_url_destination_allowed_hosts": None,
+                },
             }
         )
     )
@@ -2602,6 +2608,8 @@ async def test_load_config_user_url_validation_handles_null_and_string_false(tmp
         router=MagicMock(), config_file_path=str(null_config_file)
     )
     assert litellm.user_url_validation is True
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
 
     false_config_file = tmp_path / "false_config.yaml"
     false_config_file.write_text(
@@ -8954,6 +8962,27 @@ async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
     assert litellm.user_url_validation is False
     assert litellm.user_url_allowed_hosts == ["internal.example"]
     assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
 
 
 @pytest.mark.asyncio

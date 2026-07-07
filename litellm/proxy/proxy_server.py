@@ -3563,17 +3563,17 @@ def _normalize_user_url_validation(value: object) -> Optional[bool]:
 
 
 def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
-    user_url_allowed_hosts = settings.get("user_url_allowed_hosts")
-    if user_url_allowed_hosts is not None:
-        litellm.user_url_allowed_hosts = cast(list[str], user_url_allowed_hosts)
+    if "user_url_allowed_hosts" in settings:
+        litellm.user_url_allowed_hosts = cast(list[str], settings["user_url_allowed_hosts"])
 
     user_url_validation = _normalize_user_url_validation(settings.get("user_url_validation"))
     if user_url_validation is not None:
         litellm.user_url_validation = user_url_validation
 
-    provider_url_destination_allowed_hosts = settings.get("provider_url_destination_allowed_hosts")
-    if provider_url_destination_allowed_hosts is not None:
-        litellm.provider_url_destination_allowed_hosts = cast(list[str], provider_url_destination_allowed_hosts)
+    if "provider_url_destination_allowed_hosts" in settings:
+        litellm.provider_url_destination_allowed_hosts = cast(
+            list[str], settings["provider_url_destination_allowed_hosts"]
+        )
 
 
 class ProxyConfig:
