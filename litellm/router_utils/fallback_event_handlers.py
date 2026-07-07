@@ -19,6 +19,46 @@ else:
     LitellmRouter = Any
 
 
+_GEMINI_ENDPOINT_PROVIDERS = ("vertex_ai", "gemini")
+
+
+def _get_model_group_custom_llm_provider(litellm_router: LitellmRouter, model_group: str) -> Optional[str]:
+    """
+    Best-effort lookup of the custom_llm_provider for a model group's first deployment.
+    """
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    deployments = litellm_router.get_model_list(model_name=model_group)
+    if not deployments:
+        return None
+    litellm_params = deployments[0].get("litellm_params") or {}
+    custom_llm_provider = litellm_params.get("custom_llm_provider")
+    if custom_llm_provider:
+        return custom_llm_provider
+    model = litellm_params.get("model")
+    if not model:
+        return None
+    try:
+        _, inferred_custom_llm_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        return inferred_custom_llm_provider
+    except Exception:  # noqa: BLE001  # best-effort provider lookup; any failure just skips the boundary check
+        return None
+
+
+def _crosses_gemini_endpoint_boundary(original_provider: Optional[str], fallback_provider: Optional[str]) -> bool:
+    """
+    True when a fallback switches between Vertex AI and Google AI Studio for
+    the same Gemini model family. Thought signatures minted by one endpoint
+    are rejected by the other, so they must be stripped from replayed
+    messages before the fallback call is made.
+    """
+    return (
+        original_provider != fallback_provider
+        and original_provider in _GEMINI_ENDPOINT_PROVIDERS
+        and fallback_provider in _GEMINI_ENDPOINT_PROVIDERS
+    )
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
@@ -135,6 +175,20 @@ async def run_async_fallback(
             kwargs.setdefault("metadata", {}).update(
                 {"model_group": kwargs.get("model", None)}
             )  # update model_group used, if fallbacks are done
+            fallback_model_name = kwargs.get("model")
+            messages = kwargs.get("messages")
+            if isinstance(fallback_model_name, str) and isinstance(messages, list):
+                original_provider = _get_model_group_custom_llm_provider(litellm_router, original_model_group)
+                fallback_provider = _get_model_group_custom_llm_provider(litellm_router, fallback_model_name)
+                if _crosses_gemini_endpoint_boundary(original_provider, fallback_provider):
+                    from litellm.litellm_core_utils.prompt_templates.factory import (
+                        THOUGHT_SIGNATURE_SEPARATOR,
+                    )
+                    from litellm.utils import _remove_foreign_thought_signatures_from_messages
+
+                    kwargs["messages"] = _remove_foreign_thought_signatures_from_messages(
+                        messages, THOUGHT_SIGNATURE_SEPARATOR
+                    )
             fallback_depth = fallback_depth + 1
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks

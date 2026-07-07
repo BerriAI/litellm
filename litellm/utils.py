@@ -728,6 +728,69 @@ def _remove_thought_signatures_from_messages(messages: List, thought_signature_s
     return processed_messages
 
 
+def _strip_foreign_thought_signature_from_tool_call(tool_call: dict, thought_signature_separator: str) -> dict:
+    """
+    Remove a Gemini thought signature from a single tool call dict, both from
+    provider_specific_fields and from the tool call ID, so the receiving
+    endpoint treats the signature as missing rather than replaying a foreign one.
+    """
+    tc_dict = tool_call.copy()
+
+    provider_fields = tc_dict.get("provider_specific_fields")
+    if isinstance(provider_fields, dict) and "thought_signature" in provider_fields:
+        tc_dict["provider_specific_fields"] = {k: v for k, v in provider_fields.items() if k != "thought_signature"}
+
+    tool_call_id = tc_dict.get("id")
+    if isinstance(tool_call_id, str):
+        tc_dict["id"] = _remove_thought_signature_from_id(tool_call_id, thought_signature_separator)
+
+    return tc_dict
+
+
+def _remove_foreign_thought_signatures_from_messages(messages: list, thought_signature_separator: str) -> list:
+    """
+    Remove Gemini thought signatures from tool calls in replayed messages.
+
+    Thought signatures are endpoint-bound: a signature minted by Vertex AI is
+    rejected as corrupted by Google AI Studio, and vice versa. When the Router
+    falls back across this boundary, the foreign signature must be stripped so
+    the receiving endpoint treats it as missing and re-fills its own dummy
+    placeholder, instead of replaying an incompatible value.
+
+    See: https://ai.google.dev/gemini-api/docs/thought-signatures
+    """
+    processed_messages = []
+
+    for msg in messages:
+        if hasattr(msg, "model_dump"):
+            msg_dict = msg.model_dump()
+        elif isinstance(msg, dict):
+            msg_dict = msg.copy()
+        else:
+            processed_messages.append(msg)
+            continue
+
+        tool_calls = msg_dict.get("tool_calls")
+        if msg_dict.get("role") == "assistant" and isinstance(tool_calls, list):
+            new_tool_calls = []
+            for tc in tool_calls:
+                if hasattr(tc, "model_dump"):
+                    tc_dict = tc.model_dump()
+                elif isinstance(tc, dict):
+                    tc_dict = tc
+                else:
+                    new_tool_calls.append(tc)
+                    continue
+                new_tool_calls.append(
+                    _strip_foreign_thought_signature_from_tool_call(tc_dict, thought_signature_separator)
+                )
+            msg_dict["tool_calls"] = new_tool_calls
+
+        processed_messages.append(msg_dict)
+
+    return processed_messages
+
+
 def function_setup(
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.

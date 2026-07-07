@@ -24,6 +24,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     _check_provider_match,
     _is_streaming_request,
+    _remove_foreign_thought_signatures_from_messages,
     get_llm_provider,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
@@ -4863,3 +4864,76 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+class TestRemoveForeignThoughtSignaturesFromMessages:
+    """A Gemini thought signature minted by one endpoint (Vertex AI or Google
+    AI Studio) is rejected by the other. These tests cover stripping it from
+    both channels a replayed tool call can carry it in: the provider_specific_fields
+    dict and the tool call ID suffix."""
+
+    def test_strips_signature_from_provider_specific_fields_and_id(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123__thought__VERTEX_SIG",
+                        "type": "function",
+                        "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            }
+        ]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        tool_call = result[0]["tool_calls"][0]
+        assert tool_call["id"] == "call_abc123"
+        assert "thought_signature" not in tool_call["provider_specific_fields"]
+
+    def test_leaves_other_provider_specific_fields_untouched(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123__thought__VERTEX_SIG",
+                        "type": "function",
+                        "provider_specific_fields": {
+                            "thought_signature": "VERTEX_SIG",
+                            "other_field": "keep_me",
+                        },
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            }
+        ]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0]["tool_calls"][0]["provider_specific_fields"] == {"other_field": "keep_me"}
+
+    def test_does_not_mutate_the_caller_supplied_messages(self):
+        original_tool_call = {
+            "id": "call_abc123__thought__VERTEX_SIG",
+            "type": "function",
+            "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+            "function": {"name": "get_weather", "arguments": "{}"},
+        }
+        messages = [{"role": "assistant", "content": None, "tool_calls": [original_tool_call]}]
+
+        _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert original_tool_call["id"] == "call_abc123__thought__VERTEX_SIG"
+        assert original_tool_call["provider_specific_fields"]["thought_signature"] == "VERTEX_SIG"
+
+    def test_ignores_messages_without_tool_calls(self):
+        messages = [{"role": "user", "content": "hello"}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result == messages
