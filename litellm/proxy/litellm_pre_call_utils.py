@@ -182,6 +182,15 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "client_disconnected",
     "error_information",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    # OpenTelemetry's per-request span-dedupe marker (see
+    # OpenTelemetry._emit_once). It is server-only bookkeeping that gets
+    # echoed back to the caller in spend-log/audit request-body snapshots.
+    # A caller who replayed a previously observed marker here could make
+    # _emit_once believe a span (including a guardrail-violation span) was
+    # already emitted for their new request and skip logging it — an
+    # observability/audit-evasion bypass. Must never be seeded from client
+    # input.
+    "_otel_internal",
 )
 
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
