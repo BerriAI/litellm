@@ -36,6 +36,21 @@ def test_cost_per_web_search_request_no_details_is_zero():
     assert cost_per_web_search_request(usage=usage, model_info=model_info) == 0.0
 
 
+def test_get_cost_for_web_search_request_dispatches_for_mistral():
+    """The shared dispatcher must route provider 'mistral' to this cost calculator;
+    without the mistral branch the surcharge silently becomes None."""
+    from litellm.llms import get_cost_for_web_search_request
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2),
+    )
+    model_info = litellm.get_model_info("mistral/mistral-medium-latest")
+    assert get_cost_for_web_search_request("mistral", usage=usage, model_info=model_info) == pytest.approx(0.06)
+
+
 def _conversation_response(connectors: dict = None, execution_names: list = None) -> ModelResponse:
     """Build a transformed ModelResponse from a Conversations payload.
 
