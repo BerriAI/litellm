@@ -207,12 +207,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const row = info.row.original;
       const mcpCount = row.mcp_tool_call_count || 0;
       const mcpSpend = row.mcp_tool_call_spend || 0;
+      const spend = info.getValue();
 
       return (
         <div className="flex flex-col items-end">
-          <Tooltip title={`$${String(info.getValue() || 0)}`}>
+          <Tooltip title={spend ? `$${String(spend)}` : undefined}>
             <span>
-              <MoneyCell value={info.getValue()} decimals={6} />
+              <MoneyCell value={spend} decimals={6} />
             </span>
           </Tooltip>
           {mcpCount > 0 && mcpSpend > 0 && (

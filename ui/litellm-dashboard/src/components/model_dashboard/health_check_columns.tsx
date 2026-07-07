@@ -51,7 +51,6 @@ export const healthCheckColumns = (
   handleModelSelection: (modelId: string, checked: boolean) => void,
   handleSelectAll: (checked: boolean) => void,
   runIndividualHealthCheck: (modelId: string) => void,
-  getStatusBadge: (status: string) => JSX.Element,
   getDisplayModelName: (model: any) => string,
   showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
   showSuccessModal?: (modelName: string, response: any) => void,
