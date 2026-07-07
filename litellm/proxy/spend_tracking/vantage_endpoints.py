@@ -34,9 +34,7 @@ def _get_registered_vantage_logger():
     """Return the VantageLogger already registered in litellm.callbacks, if any."""
     from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-    vantage_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        callback_type=VantageLogger
-    )
+    vantage_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=VantageLogger)
     if vantage_loggers:
         return vantage_loggers[0]
     return None
@@ -98,15 +96,11 @@ async def _get_vantage_settings():
 
     encrypted_api_key = settings.get("api_key")
     if encrypted_api_key:
-        decrypted_api_key = decrypt_value_helper(
-            encrypted_api_key, key="vantage_api_key", exception_type="error"
-        )
+        decrypted_api_key = decrypt_value_helper(encrypted_api_key, key="vantage_api_key", exception_type="error")
         if decrypted_api_key is None:
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Failed to decrypt Vantage API key. Check your salt key configuration."
-                },
+                detail={"error": "Failed to decrypt Vantage API key. Check your salt key configuration."},
             )
         settings["api_key"] = decrypted_api_key
 
@@ -120,9 +114,7 @@ async def _get_vantage_settings():
         if decrypted_integration_token is None:
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Failed to decrypt Vantage integration token. Check your salt key configuration."
-                },
+                detail={"error": "Failed to decrypt Vantage integration token. Check your salt key configuration."},
             )
         settings["integration_token"] = decrypted_integration_token
 
@@ -215,16 +207,10 @@ async def update_vantage_settings(
         if not current_settings:
             raise HTTPException(
                 status_code=404,
-                detail={
-                    "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
-                },
+                detail={"error": "Vantage settings not found. Please initialize settings first using /vantage/init"},
             )
 
-        updated_api_key = (
-            request.api_key
-            if request.api_key is not None
-            else current_settings.get("api_key", "")
-        )
+        updated_api_key = request.api_key if request.api_key is not None else current_settings.get("api_key", "")
         updated_token = (
             request.integration_token
             if request.integration_token is not None
@@ -244,9 +230,7 @@ async def update_vantage_settings(
 
         verbose_proxy_logger.info("Vantage settings updated successfully")
 
-        return VantageInitResponse(
-            message="Vantage settings updated successfully", status="success"
-        )
+        return VantageInitResponse(message="Vantage settings updated successfully", status="success")
 
     except HTTPException:
         raise
@@ -335,9 +319,7 @@ async def init_vantage_settings(
 
         verbose_proxy_logger.info("Vantage settings initialized successfully")
 
-        return VantageInitResponse(
-            message="Vantage settings initialized successfully", status="success"
-        )
+        return VantageInitResponse(message="Vantage settings initialized successfully", status="success")
 
     except HTTPException:
         raise
@@ -393,26 +375,14 @@ async def vantage_dry_run_export(
         def _to_json_safe_dicts(frame: pl.DataFrame) -> list:
             """Cast Decimal columns to Float64 so .to_dicts() produces
             JSON-serializable float values instead of decimal.Decimal."""
-            decimal_cols = [
-                col
-                for col, dtype in zip(frame.columns, frame.dtypes)
-                if isinstance(dtype, pl.Decimal)
-            ]
+            decimal_cols = [col for col, dtype in zip(frame.columns, frame.dtypes) if isinstance(dtype, pl.Decimal)]
             if decimal_cols:
-                frame = frame.with_columns(
-                    [pl.col(c).cast(pl.Float64) for c in decimal_cols]
-                )
+                frame = frame.with_columns([pl.col(c).cast(pl.Float64) for c in decimal_cols])
             return frame.to_dicts()
 
-        usage_sample = (
-            _to_json_safe_dicts(data.head(min(50, len(data))))
-            if not data.is_empty()
-            else []
-        )
+        usage_sample = _to_json_safe_dicts(data.head(min(50, len(data)))) if not data.is_empty() else []
         normalized_sample = (
-            _to_json_safe_dicts(normalized.head(min(50, len(normalized))))
-            if not normalized.is_empty()
-            else []
+            _to_json_safe_dicts(normalized.head(min(50, len(normalized)))) if not normalized.is_empty() else []
         )
 
         # Use the same pre-transform column names as
@@ -564,22 +534,16 @@ async def delete_vantage_settings(
                 detail={"error": "Vantage settings not found"},
             )
 
-        await ConfigRepository(prisma_client).table.delete(
-            where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
-        )
+        await ConfigRepository(prisma_client).table.delete(where={"param_name": VANTAGE_SETTINGS_PARAM_NAME})
 
         # Deregister in-memory VantageLogger so the scheduler stops firing
         from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-        litellm.logging_callback_manager.remove_callbacks_by_type(
-            litellm.callbacks, VantageLogger
-        )
+        litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, VantageLogger)
 
         verbose_proxy_logger.info("Vantage settings deleted successfully")
 
-        return VantageInitResponse(
-            message="Vantage settings deleted successfully", status="success"
-        )
+        return VantageInitResponse(message="Vantage settings deleted successfully", status="success")
 
     except HTTPException:
         raise

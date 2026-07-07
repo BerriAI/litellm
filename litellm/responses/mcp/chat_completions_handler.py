@@ -1,5 +1,6 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import logging
 from typing import (
     Any,
     List,
@@ -77,7 +78,7 @@ def _add_mcp_metadata_to_response(
             setattr(message, "provider_specific_fields", provider_fields)
 
 
-async def acompletion_with_mcp(  # noqa: PLR0915
+async def acompletion_with_mcp(
     model: str,
     messages: List,
     tools: Optional[List] = None,
@@ -114,9 +115,8 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         )
 
     # Extract user_api_key_auth from metadata or kwargs
-    user_api_key_auth = kwargs.get("user_api_key_auth") or (
-        (kwargs.get("metadata", {}) or {}).get("user_api_key_auth")
-    )
+    user_api_key_auth = kwargs.get("user_api_key_auth") or ((kwargs.get("metadata", {}) or {}).get("user_api_key_auth"))
+    request_tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs)
 
     # Extract MCP auth headers before fetching tools (needed for dynamic auth)
     (
@@ -139,6 +139,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
+        request_tags=request_tags,
     )
 
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -220,6 +221,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                request_tags,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -233,6 +235,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
                 self.base_call_args = base_call_args
+                self.request_tags = request_tags
                 self.collected_chunks: List[ModelResponseStream] = []
                 self.tool_calls: Optional[List] = None
                 self.tool_results: Optional[List] = None
@@ -246,9 +249,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             async def __aiter__(self):
                 return self
 
-            def _add_mcp_list_tools_to_chunk(
-                self, chunk: ModelResponseStream
-            ) -> ModelResponseStream:
+            def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
                 from litellm.types.utils import (
                     StreamingChoices,
@@ -260,19 +261,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
                 if hasattr(chunk, "choices") and chunk.choices:
                     for choice in chunk.choices:
-                        if (
-                            isinstance(choice, StreamingChoices)
-                            and hasattr(choice, "delta")
-                            and choice.delta
-                        ):
+                        if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
                             # Get existing provider_specific_fields or create new dict
-                            existing_fields = (
-                                getattr(choice.delta, "provider_specific_fields", None)
-                                or {}
-                            )
-                            provider_fields = dict(
-                                existing_fields
-                            )  # Create a copy to avoid mutating the original
+                            existing_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
+                            provider_fields = dict(existing_fields)  # Create a copy to avoid mutating the original
 
                             # Add only mcp_list_tools to first chunk
                             provider_fields["mcp_list_tools"] = self.openai_tools
@@ -283,9 +275,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
                 return chunk
 
-            def _add_mcp_tool_metadata_to_final_chunk(
-                self, chunk: ModelResponseStream
-            ) -> ModelResponseStream:
+            def _add_mcp_tool_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_tool_calls and mcp_call_results to the final chunk."""
                 from litellm.types.utils import (
                     StreamingChoices,
@@ -294,25 +284,15 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
                 if hasattr(chunk, "choices") and chunk.choices:
                     for choice in chunk.choices:
-                        if (
-                            isinstance(choice, StreamingChoices)
-                            and hasattr(choice, "delta")
-                            and choice.delta
-                        ):
+                        if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
                             # Get existing provider_specific_fields or create new dict
                             # Access the attribute directly to handle Pydantic model attributes correctly
                             existing_fields = {}
                             if hasattr(choice.delta, "provider_specific_fields"):
-                                attr_value = getattr(
-                                    choice.delta, "provider_specific_fields", None
-                                )
+                                attr_value = getattr(choice.delta, "provider_specific_fields", None)
                                 if attr_value is not None:
                                     # Create a copy to avoid mutating the original
-                                    existing_fields = (
-                                        dict(attr_value)
-                                        if isinstance(attr_value, dict)
-                                        else {}
-                                    )
+                                    existing_fields = dict(attr_value) if isinstance(attr_value, dict) else {}
 
                             provider_fields = existing_fields
 
@@ -327,6 +307,17 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                             add_provider_specific_fields(choice.delta, provider_fields)
 
                 return chunk
+
+            async def _drain_inner_stream(self):
+                try:
+                    while True:
+                        await self._stream_iterator.__anext__()
+                except StopAsyncIteration:
+                    pass
+                except Exception:
+                    logging.getLogger("LiteLLM").exception(
+                        "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
+                    )
 
             async def __anext__(self):
                 # Phase 1: Collect and yield initial stream chunks
@@ -357,15 +348,16 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                         )
 
                         if is_final:
-                            # This is the final chunk, mark stream as exhausted
                             self.stream_exhausted = True
-                            # Process tool calls after we've collected all chunks
                             await self._process_tool_calls()
-                            # Apply MCP metadata (tool_calls and tool_results) to final chunk
                             chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                            # If we have tool results, prepare follow-up call immediately
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
+                            # Drain inner stream so CustomStreamWrapper fires its
+                            # end-of-stream handler (dispatch_success_handlers →
+                            # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
+                            # yield one usage chunk before raising StopAsyncIteration.
+                            await self._drain_inner_stream()
 
                         return chunk
                     except StopAsyncIteration:
@@ -375,12 +367,11 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                         # If we have chunks, yield the final one with metadata
                         if self.collected_chunks:
                             final_chunk = self.collected_chunks[-1]
-                            final_chunk = self._add_mcp_tool_metadata_to_final_chunk(
-                                final_chunk
-                            )
+                            final_chunk = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
                             # If we have tool results, prepare follow-up call
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
+                            await self._drain_inner_stream()
                             return final_chunk
 
                 # Phase 2: Yield follow-up stream chunks if available
@@ -414,9 +405,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 ):
                     from litellm._logging import verbose_logger
 
-                    verbose_logger.warning(
-                        "Follow-up stream was not created despite having tool results"
-                    )
+                    verbose_logger.warning("Follow-up stream was not created despite having tool results")
 
                 raise StopAsyncIteration
 
@@ -445,18 +434,17 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
                     if self.tool_calls:
                         # Execute tool calls
-                        self.tool_results = (
-                            await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                                tool_server_map=self.tool_server_map,
-                                tool_calls=self.tool_calls,
-                                user_api_key_auth=self.user_api_key_auth,
-                                mcp_auth_header=self.mcp_auth_header,
-                                mcp_server_auth_headers=self.mcp_server_auth_headers,
-                                oauth2_headers=self.oauth2_headers,
-                                raw_headers=self.raw_headers,
-                                litellm_call_id=self.litellm_call_id,
-                                litellm_trace_id=self.litellm_trace_id,
-                            )
+                        self.tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+                            tool_server_map=self.tool_server_map,
+                            tool_calls=self.tool_calls,
+                            user_api_key_auth=self.user_api_key_auth,
+                            mcp_auth_header=self.mcp_auth_header,
+                            mcp_server_auth_headers=self.mcp_server_auth_headers,
+                            oauth2_headers=self.oauth2_headers,
+                            raw_headers=self.raw_headers,
+                            litellm_call_id=self.litellm_call_id,
+                            litellm_trace_id=self.litellm_trace_id,
+                            request_tags=self.request_tags,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -468,12 +456,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                     return
 
                 # Create follow-up messages with tool results
-                follow_up_messages = (
-                    LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
-                        original_messages=self.messages,
-                        response=self.complete_response,
-                        tool_results=self.tool_results,
-                    )
+                follow_up_messages = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
+                    original_messages=self.messages,
+                    response=self.complete_response,
+                    tool_results=self.tool_results,
                 )
 
                 # Make follow-up call with streaming
@@ -518,6 +504,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            request_tags=request_tags,
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -529,14 +516,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                     completion_stream=None,
                     model=getattr(original_wrapper, "model", "unknown"),
                     logging_obj=getattr(original_wrapper, "logging_obj", None),
-                    custom_llm_provider=getattr(
-                        original_wrapper, "custom_llm_provider", None
-                    ),
+                    custom_llm_provider=getattr(original_wrapper, "custom_llm_provider", None),
                     stream_options=getattr(original_wrapper, "stream_options", None),
                     make_call=getattr(original_wrapper, "make_call", None),
-                    _response_headers=getattr(
-                        original_wrapper, "_response_headers", None
-                    ),
+                    _response_headers=getattr(original_wrapper, "_response_headers", None),
                 )
                 self._original_wrapper = original_wrapper
                 self._custom_iterator = custom_iterator
@@ -560,9 +543,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                     except RuntimeError:
                         self._sync_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(self._sync_loop)
-                    self._sync_iterator = _SyncIteratorWrapper(
-                        self._custom_iterator, self._sync_loop
-                    )
+                    self._sync_iterator = _SyncIteratorWrapper(self._custom_iterator, self._sync_loop)
                 return self._sync_iterator
 
             def __next__(self):
@@ -615,9 +596,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         return initial_response
 
     # Extract tool calls from response
-    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(
-        response=initial_response
-    )
+    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(response=initial_response)
 
     if not tool_calls:
         _add_mcp_metadata_to_response(
@@ -637,6 +616,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        request_tags=request_tags,
     )
 
     if not tool_results:

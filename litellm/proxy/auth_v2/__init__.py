@@ -11,7 +11,7 @@ from litellm.proxy.auth_v2.config import (
 )
 from litellm.proxy.auth_v2.models import Principal
 from litellm.proxy.auth_v2.authorization import Role
-from litellm.proxy.auth_v2.resolvers import IdentityResolver, ProvisioningStore
+from litellm.proxy.auth_v2.resolvers import ProvisioningStore, Resolver
 from litellm.proxy.auth_v2.security import AuthSecurity
 
 __all__ = [
@@ -19,7 +19,7 @@ __all__ = [
     "AuthConfig",
     "Principal",
     "Role",
-    "IdentityResolver",
+    "Resolver",
     "ProvisioningStore",
     "ApiKeySchemeConfig",
     "HttpBasicConfig",

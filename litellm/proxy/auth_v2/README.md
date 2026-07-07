@@ -16,8 +16,9 @@ the scheme, the subject, scopes/claims from the token, and, for exchangeable bea
 tokens, the raw token for downstream RFC 8693 token exchange.
 
 `Principal` is what the route handler receives: a normalized identity with the user,
-organization, teams, roles and scopes filled in. It holds identity only, no budget or
-policy state. Scope checking lives here as `Principal.has_required_scopes`.
+organization, teams, project, end user, roles and scopes filled in. It holds identity
+only, no budget or policy state. Scope checking lives here as
+`Principal.has_required_scopes`.
 
 The split matters: authentication proves the credential, resolution turns the proven
 credential into a known identity, and only then can authorization run.
@@ -45,7 +46,7 @@ always run first.
    `401` with a combined `WWW-Authenticate` challenge built from each scheme.
 
 2. Resolve identity. The verified `Credential` is handed to the configured
-   `IdentityResolver`, which builds the `Principal`. The DB resolver looks the subject up in
+   `Resolver`, which builds the `Principal`. The DB resolver looks the subject up in
    the proxy's Prisma tables (key object, user, teams, org). A blocked key or unknown subject
    raises `401`/`403` here, before any route logic runs.
 
@@ -86,8 +87,8 @@ built once at the composition root.
 dispatch to it by where its credential lives). `build_authenticators` constructs and orders
 them from `AuthConfig`. JWT verification for OIDC/OAuth2 is shared via `JWTVerifier`.
 
-`resolvers.py` holds the `IdentityResolver` / `IdentityStore` protocols and the single
-`DbIdentityStore` implementation against Prisma. The store also handles SCIM user/group
+`resolvers.py` holds the `Resolver` and `ProvisioningStore` protocols and the single
+`DbResolver` implementation against Prisma. The store also handles SCIM user/group
 provisioning so a provisioned user is immediately resolvable. `utils.py` holds the pure
 SCIM/role-mapping helpers the store uses.
 
@@ -107,7 +108,7 @@ the right status and challenge header.
 ## Adding things
 
 A new credential scheme is a new `Authenticator` plus a branch in `build_authenticators`.
-A new identity backend is a new `IdentityStore`. A new authorization method (ReBAC, an
+A new identity backend is a new `Resolver` (also a `ProvisioningStore` if it provisions). A new authorization method (ReBAC, an
 external PDP) is a new `Authorizer` passed as `AuthSecurity(..., authorizer=...)`.
 Dependencies are injected at construction, so each of these is unit-testable with a fake
 in place of the real backend.

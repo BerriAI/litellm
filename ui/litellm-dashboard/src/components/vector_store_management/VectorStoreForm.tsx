@@ -10,7 +10,8 @@ import {
   getProviderSpecificFields,
   VectorStoreFieldConfig,
 } from "../vector_store_providers";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { resolveLogoSrc } from "@/lib/assetPaths";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreFormProps {
@@ -130,7 +131,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                 <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
                   <div className="flex items-center space-x-2">
                     <img
-                      src={vectorStoreProviderLogoMap[providerDisplayName]}
+                      src={resolveLogoSrc(vectorStoreProviderLogoMap[providerDisplayName])}
                       alt={`${providerEnum} logo`}
                       className="w-5 h-5"
                       onError={(e) => {

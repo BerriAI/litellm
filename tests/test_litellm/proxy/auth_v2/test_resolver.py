@@ -17,14 +17,14 @@ from litellm.proxy.auth_v2.models import (
     PrincipalType,
     SecuritySchemeType,
 )
-from litellm.proxy.auth_v2.resolvers import DbIdentityStore
+from litellm.proxy.auth_v2.resolvers import DbResolver
 
 
 class _FakeCache:
     """Stands in for the DualCache that get_key_object / get_user_object read.
 
     Both helpers return a cache hit before touching the DB, so seeding this and
-    injecting it into DbIdentityStore exercises the real resolver mapping without
+    injecting it into DbResolver exercises the real resolver mapping without
     a database. A non-None prisma client is still required (the helpers guard on
     it); it is never reached on a hit.
     """
@@ -42,8 +42,8 @@ class _FakeCache:
 _PRISMA_STUB = object()
 
 
-def _store(entries: Optional[Dict[str, object]] = None) -> DbIdentityStore:
-    return DbIdentityStore(_PRISMA_STUB, _FakeCache(entries))
+def _store(entries: Optional[Dict[str, object]] = None) -> DbResolver:
+    return DbResolver(_PRISMA_STUB, _FakeCache(entries))
 
 
 def _api_key_credential(raw: str) -> Credential:
@@ -119,11 +119,42 @@ async def test_service_account_key_without_user_has_no_role():
     assert principal.roles == []
 
 
+async def test_api_key_principal_carries_project_and_end_user():
+    raw = "sk-live-proj"
+    key = UserAPIKeyAuth(
+        token=hash_token(raw),
+        user_id="u-1",
+        project_id="proj-1",
+        project_alias="Acme Prod",
+        end_user_id="cust-7",
+    )
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.project is not None
+    assert principal.project.id == "proj-1"
+    assert principal.project.name == "Acme Prod"
+    assert principal.end_user is not None
+    assert principal.end_user.id == "cust-7"
+
+
+async def test_api_key_principal_omits_project_and_end_user_when_absent():
+    raw = "sk-live-bare"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1")
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.project is None
+    assert principal.end_user is None
+
+
 async def test_api_key_lookup_is_keyed_on_hashed_token():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1")
     # cache seeded under the RAW key, not its hash -> resolver hashes first -> miss
-    store = DbIdentityStore(None, _FakeCache({raw: key}))
+    store = DbResolver(None, _FakeCache({raw: key}))
     with pytest.raises(AuthError) as exc:
         await store.resolve(_api_key_credential(raw))
     assert exc.value.status_code == 401
@@ -141,7 +172,7 @@ async def test_blocked_key_is_rejected_403():
 
 async def test_unknown_key_is_rejected_401():
     # cache miss + no prisma -> get_key_object raises -> resolver maps to 401
-    store = DbIdentityStore(None, _FakeCache())
+    store = DbResolver(None, _FakeCache())
     with pytest.raises(AuthError) as exc:
         await store.resolve(_api_key_credential("sk-live-unknown"))
     assert exc.value.status_code == 401
@@ -177,7 +208,7 @@ async def test_mtls_credential_resolves_to_service_account():
         client_certificate=ClientCertificate(subject_dn="CN=svc-a,O=Co"),
     )
     # service-account path does no identity lookup, so no cache/prisma needed
-    principal = await DbIdentityStore(None, _FakeCache()).resolve(credential)
+    principal = await DbResolver(None, _FakeCache()).resolve(credential)
 
     assert principal.principal_type == PrincipalType.SERVICE_ACCOUNT
     assert principal.user is None
@@ -225,7 +256,7 @@ class _FakeTeamPrisma:
 
 
 async def test_group_upsert_round_trips_members_through_json():
-    store = DbIdentityStore(_FakeTeamPrisma(), _FakeCache())
+    store = DbResolver(_FakeTeamPrisma(), _FakeCache())
     created = await store.upsert_group(
         ScimGroup(
             display_name="eng",
@@ -243,7 +274,7 @@ async def test_group_upsert_round_trips_members_through_json():
 
 
 async def test_group_list_and_delete():
-    store = DbIdentityStore(_FakeTeamPrisma(), _FakeCache())
+    store = DbResolver(_FakeTeamPrisma(), _FakeCache())
     a = await store.upsert_group(ScimGroup(display_name="a"))
     await store.upsert_group(ScimGroup(display_name="b"))
 

@@ -6,8 +6,10 @@ from pydantic import ValidationError
 from litellm.proxy.auth_v2.models import (
     AuthMethod,
     Credential,
+    EndUserIdentity,
     Principal,
     PrincipalType,
+    ProjectIdentity,
     SecuritySchemeType,
     TeamIdentity,
     TeamRole,
@@ -70,6 +72,8 @@ def test_principal_default_network_and_collections():
     )
     assert principal.teams == []
     assert principal.scopes == []
+    assert principal.project is None
+    assert principal.end_user is None
     assert principal.network.client_ip is None
     assert principal.network.via_trusted_proxy is False
 
@@ -91,3 +95,13 @@ def test_user_identity_optional_fields_default_none():
     user = UserIdentity(id="u1")
     assert user.email is None
     assert user.external_id is None
+
+
+def test_project_identity_name_is_optional():
+    assert ProjectIdentity(id="p1").name is None
+    assert ProjectIdentity(id="p1", name="Acme").name == "Acme"
+
+
+def test_end_user_identity_requires_id():
+    with pytest.raises(ValidationError):
+        EndUserIdentity()

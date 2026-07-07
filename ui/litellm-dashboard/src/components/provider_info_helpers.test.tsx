@@ -62,6 +62,22 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
+      const result = getProviderLogoAndName("bedrock_mantle");
+      expect(result.displayName).toBe(Providers.BedrockMantle);
+      expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
+    it("should resolve the BedrockMantle enum key to the Bedrock Mantle logo", () => {
+      // The Add Model dropdown passes the provider_map key ("BedrockMantle"),
+      // not the slug ("bedrock_mantle"). Unlike "Bedrock", the key does not
+      // lowercase-match its slug, so without the enum-key fallback this would
+      // render a blank fallback logo for a Bedrock variant (LIT-3885).
+      const result = getProviderLogoAndName("BedrockMantle");
+      expect(result.displayName).toBe(Providers.BedrockMantle);
+      expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
@@ -201,12 +217,6 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderModels", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    afterEach(() => {
-      consoleSpy.mockClear();
-    });
-
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
       const result = getProviderModels(undefined as any, modelMap);
@@ -292,18 +302,35 @@ describe("provider_info_helpers", () => {
       expect(result).not.toContain("anthropic-native");
     });
 
-    it("should include bedrock variants (converse, mantle) when called with 'Bedrock' provider key", () => {
+    it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {
       const modelMap = {
         "bedrock-base": { litellm_provider: "bedrock" },
         "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
-        "bedrock-mantle-model": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.4": { litellm_provider: "bedrock_mantle" },
         "openai-model": { litellm_provider: "openai" },
       };
       const result = getProviderModels("Bedrock" as Providers, modelMap);
       expect(result).toContain("bedrock-base");
       expect(result).toContain("bedrock-converse-model");
-      expect(result).toContain("bedrock-mantle-model");
+      expect(result).not.toContain("bedrock_mantle/openai.gpt-5.4");
       expect(result).not.toContain("openai-model");
+    });
+
+    it("should return only bedrock_mantle models when called with 'BedrockMantle' provider key", () => {
+      // Selecting "Amazon Bedrock Mantle" in the dropdown must populate the
+      // model field with the Mantle models and exclude the regular Bedrock
+      // ones, so onboarding a gpt-oss model is a one-click flow (LIT-3885).
+      const modelMap = {
+        "bedrock_mantle/openai.gpt-oss-120b": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.5": { litellm_provider: "bedrock_mantle" },
+        "bedrock-base": { litellm_provider: "bedrock" },
+        "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
+      };
+      const result = getProviderModels("BedrockMantle" as Providers, modelMap);
+      expect(result).toContain("bedrock_mantle/openai.gpt-oss-120b");
+      expect(result).toContain("bedrock_mantle/openai.gpt-5.5");
+      expect(result).not.toContain("bedrock-base");
+      expect(result).not.toContain("bedrock-converse-model");
     });
 
     it("should include fireworks_ai-embedding-models when called with 'FireworksAI' provider key", () => {
@@ -371,13 +398,6 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["valid-model"]);
     });
 
-    it("should log provider key and mapped provider when called", () => {
-      const modelMap = { "gpt-3.5-turbo": { litellm_provider: "openai" } };
-      getProviderModels(Providers.OpenAI, modelMap);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider key: ${Providers.OpenAI}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider mapped to: ${provider_map[Providers.OpenAI]}`);
-    });
-
     it("should return empty array for provider with no matching models", () => {
       const modelMap = {
         "gpt-3.5-turbo": { litellm_provider: "openai" },
@@ -401,5 +421,29 @@ describe("provider_info_helpers", () => {
       expect(anthropicResult).toEqual(["claude-3-opus"]);
       expect(groqResult).toContain("groq-model");
     });
+  });
+});
+
+describe("getProviderLogoAndName under a custom server_root_path", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
+  });
+
+  // Regression: under SERVER_ROOT_PATH=/litellm the logo must be requested at
+  // /litellm/ui/assets/logos/... A bare /ui/... path is served off the root and
+  // 404s behind the reverse proxy.
+  it("prefixes the server root path onto the resolved logo", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/litellm" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/litellm/ui/assets/logos/openai_small.svg");
+  });
+
+  it("leaves the logo at /ui/... when mounted at the root", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/ui/assets/logos/openai_small.svg");
   });
 });

@@ -9,12 +9,54 @@ import { serverRootPath } from "@/components/networking";
  * legacy `?page=` URL; remove it to roll back.
  */
 export const MIGRATED_PAGES: Record<string, string> = {
+  "api-keys": "api-keys",
+  models: "models-and-endpoints",
   api_ref: "api-reference",
   // Legacy alias: older bookmarks used the hyphenated ?page=api-reference form.
   "api-reference": "api-reference",
+  "llm-playground": "playground",
+  projects: "projects",
+  chat: "chat",
+  "access-groups": "access-groups",
+  budgets: "budgets",
+  workflows: "workflows",
+  "guardrails-monitor": "guardrails-monitor",
+  "mcp-servers": "mcp-servers",
+  "search-tools": "search-tools",
+  "tag-management": "tag-management",
+  "vector-stores": "vector-stores",
+  memory: "memory",
+  policies: "policies",
+  guardrails: "guardrails",
+  prompts: "prompts",
+  "tool-policies": "tool-policies",
+  skills: "skills",
+  // Legacy alias: the old switch matched ?page=claude-code-plugins for the same panel.
+  "claude-code-plugins": "skills",
+  caching: "caching",
+  "cost-tracking": "cost-tracking",
+  "transform-request": "transform-request",
+  "ui-theme": "ui-theme",
+  logs: "logs",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  // The modern usage dashboard; the legacy ?page=usage report routes to /old-usage.
+  new_usage: "usage",
+  usage: "old-usage",
+  agents: "agents",
+  "router-settings": "router-settings",
+  users: "users",
+  teams: "teams",
+  organizations: "organizations",
 };
 
 function uiBase(): string {
+  // next dev serves the app at the root; only the proxy mounts the static export under /ui
+  // (and optionally under server_root_path). Inlined at build time, so production is unaffected.
+  if (process.env.NODE_ENV === "development") {
+    return "";
+  }
   const root = serverRootPath && serverRootPath !== "/" ? `/${serverRootPath.replace(/^\/+|\/+$/g, "")}` : "";
   return `${root}/ui`;
 }

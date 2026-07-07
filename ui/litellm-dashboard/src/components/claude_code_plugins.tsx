@@ -82,7 +82,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
             <h1 className="text-2xl font-bold">Skills</h1>
             <p className="text-sm text-gray-600">
               Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via{" "}
-              <code className="bg-gray-100 px-1 rounded">/claude-code/marketplace.json</code>.
+              <code className="bg-gray-100 px-1 rounded-sm">/claude-code/marketplace.json</code>.
             </p>
             <div className="mt-2 flex gap-2">
               <Button onClick={() => setIsAddModalVisible(true)} disabled={!accessToken || !isAdmin}>

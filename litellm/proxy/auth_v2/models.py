@@ -68,6 +68,15 @@ class TeamIdentity(BaseModel):
     role: TeamRole = TeamRole.MEMBER
 
 
+class ProjectIdentity(BaseModel):
+    id: str
+    name: Optional[str] = None
+
+
+class EndUserIdentity(BaseModel):
+    id: str
+
+
 class CredentialRef(BaseModel):
     key_id: Optional[str] = None
     token_id: Optional[str] = None
@@ -118,6 +127,8 @@ class Principal(BaseModel):
     user: Optional[UserIdentity] = None
     organization: Optional[OrganizationIdentity] = None
     teams: List[TeamIdentity] = Field(default_factory=list)
+    project: Optional[ProjectIdentity] = None
+    end_user: Optional[EndUserIdentity] = None
 
     roles: List[Role] = Field(default_factory=list)
     scopes: List[str] = Field(default_factory=list)

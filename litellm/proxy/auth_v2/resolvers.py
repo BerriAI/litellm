@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, List, Optional, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, List, Optional, Protocol, cast
 
 from scim2_models import Group as ScimGroup
 from scim2_models import User as ScimUser
@@ -17,9 +17,11 @@ from litellm.proxy.auth_v2 import errors
 from litellm.proxy.auth_v2.models import (
     AuthMethod,
     Credential,
+    EndUserIdentity,
     OrganizationIdentity,
     Principal,
     PrincipalType,
+    ProjectIdentity,
     TeamIdentity,
     TeamRole,
     UserIdentity,
@@ -44,8 +46,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
-@runtime_checkable
-class IdentityResolver(Protocol):
+class Resolver(Protocol):
     async def resolve(self, credential: Credential) -> Principal:
         """Resolve a verified credential to a Principal.
 
@@ -59,7 +60,6 @@ class IdentityResolver(Protocol):
         ...
 
 
-@runtime_checkable
 class ProvisioningStore(Protocol):
     async def upsert_user(self, user: ScimUser) -> ScimUser: ...
     async def get_user(self, resource_id: str) -> Optional[ScimUser]: ...
@@ -71,31 +71,20 @@ class ProvisioningStore(Protocol):
     async def list_groups(self, filter_expr: Optional[str]) -> List[ScimGroup]: ...
 
 
-@runtime_checkable
-class IdentityStore(IdentityResolver, ProvisioningStore, Protocol):
-    """An identity backend: resolves credentials and provisions SCIM users/groups.
-
-    This is the single interface every implementation satisfies (in-memory,
-    database, ...). Resolution and provisioning live behind one store so a
-    provisioned user is immediately resolvable.
-    """
-
-
-class DbIdentityStore(IdentityStore):
+class DbResolver(Resolver, ProvisioningStore):
     """Resolves credentials against the proxy's Prisma tables and provisions
     SCIM users/groups into ``LiteLLM_UserTable`` / ``LiteLLM_TeamTable``.
 
-    The Prisma client and key cache are injected so this stays a plain object
-    the composition root can build once the proxy DB is connected.
+    Resolution and provisioning share one object so a provisioned user is
+    immediately resolvable. The Prisma client and key cache are injected so this
+    stays a plain object the composition root can build once the proxy DB is
+    connected.
     """
 
     def __init__(self, prisma_client: "PrismaClient", cache: "UserApiKeyCache") -> None:
         self._prisma = prisma_client
         self._cache = cache
 
-    # ------------------------------------------------------------------ #
-    # IdentityResolver
-    # ------------------------------------------------------------------ #
     async def resolve(self, credential: Credential) -> Principal:
         if credential.method == AuthMethod.API_KEY:
             return await self._resolve_api_key(credential)
@@ -186,6 +175,14 @@ class DbIdentityStore(IdentityStore):
             if key.user_id is not None
             else None
         )
+        project = (
+            ProjectIdentity(id=key.project_id, name=key.project_alias)
+            if key.project_id is not None
+            else None
+        )
+        end_user = (
+            EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
+        )
         return Principal(
             principal_type=(
                 PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT
@@ -195,6 +192,8 @@ class DbIdentityStore(IdentityStore):
             user=user,
             organization=organization,
             teams=teams,
+            project=project,
+            end_user=end_user,
             roles=[role] if role else [],
             scopes=list(credential.scopes),
             auth_method=credential.method,
@@ -251,9 +250,6 @@ class DbIdentityStore(IdentityStore):
         name = org.organization_alias if org is not None else None
         return OrganizationIdentity(id=user.organization_id, name=name)
 
-    # ------------------------------------------------------------------ #
-    # ProvisioningStore
-    # ------------------------------------------------------------------ #
     async def upsert_user(self, user: ScimUser) -> ScimUser:
         repo = UserRepository(self._prisma)
         data = scim_user_to_db(user)

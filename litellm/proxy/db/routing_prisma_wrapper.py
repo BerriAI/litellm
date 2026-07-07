@@ -5,7 +5,7 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
 import os
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
@@ -73,6 +73,17 @@ class RoutingPrismaWrapper:
     `connect()` or `recreate_prisma_client()` clears the flag. This keeps the
     proxy serving traffic during transient reader outages instead of failing
     startup or returning errors for read-heavy endpoints.
+
+    Writer degradation: a writer-side `connect()` failure while the reader
+    connects is likewise non-fatal — the wrapper sets
+    `_writer_unavailable=True`, logs a warning, and keeps serving reads from
+    the reader (key lookups, DB-stored model loads) so a proxy that starts
+    during a primary outage still serves inference from the replica. Writes
+    fail at call time until the writer recovers; the PrismaClient DB health
+    watchdog polls `writer_unavailable` and drives the writer reconnect,
+    which clears the flag via `recreate_prisma_client`. Only when BOTH sides
+    fail to connect does `connect()` raise (full DB outage — the existing
+    `allow_requests_on_db_unavailable` startup handling applies).
     """
 
     def __init__(self, writer: PrismaWrapper, reader: PrismaWrapper):
@@ -81,6 +92,7 @@ class RoutingPrismaWrapper:
         # When True, reads fall back to the writer. Flipped on by reader
         # connect/recreate failures and flipped off on the next reader recovery.
         self._reader_unavailable: bool = False
+        self._writer_unavailable: bool = False
 
     @property
     def writer(self) -> PrismaWrapper:
@@ -94,17 +106,46 @@ class RoutingPrismaWrapper:
     def reader_unavailable(self) -> bool:
         return self._reader_unavailable
 
+    @property
+    def writer_unavailable(self) -> bool:
+        return self._writer_unavailable
+
+    def mark_writer_recovered(self) -> None:
+        """Clear the degraded-writer flag after an external health probe proved
+        the writer reachable. Needed when recovery happens without
+        `recreate_prisma_client` (e.g. an IAM token refresh already recreated
+        the writer engine), which is otherwise the only runtime path that
+        clears the flag — without this, the watchdog would keep firing
+        reconnect attempts against an already-healthy writer."""
+        self._writer_unavailable = False
+
     def _should_use_reader(self) -> bool:
         return not self._reader_unavailable
 
-    async def connect(self, *args: Any, **kwargs: Any) -> None:
-        await self._writer.connect(*args, **kwargs)
-        verbose_proxy_logger.info("[writer] DB connected")
+    @staticmethod
+    async def _try_connect(client: PrismaWrapper, *args: Any, **kwargs: Any) -> Exception | None:
+        if client.is_connected() is True:
+            return None
         try:
-            await self._reader.connect(*args, **kwargs)
+            await client.connect(*args, **kwargs)
+            return None
+        except Exception as e:
+            return e
+
+    async def connect(self, *args: Any, **kwargs: Any) -> None:
+        writer_error = await self._try_connect(self._writer, *args, **kwargs)
+        if writer_error is None:
+            self._writer_unavailable = False
+            verbose_proxy_logger.info("[writer] DB connected")
+        reader_error = await self._try_connect(self._reader, *args, **kwargs)
+        if reader_error is None:
             self._reader_unavailable = False
             verbose_proxy_logger.info("[reader] DB connected")
-        except Exception as e:
+        if writer_error is None and reader_error is None:
+            return
+        if writer_error is not None and reader_error is not None:
+            raise writer_error
+        if reader_error is not None:
             # Degrade gracefully: the proxy keeps serving traffic with reads
             # routed to the writer until the reader endpoint is reachable.
             # Aborting startup here would tie proxy availability to an
@@ -113,11 +154,18 @@ class RoutingPrismaWrapper:
             verbose_proxy_logger.warning(
                 "Failed to connect to read replica DB: %s. "
                 "Falling back to the writer for reads until the reader is reachable.",
-                e,
+                reader_error,
             )
+            return
+        self._writer_unavailable = True
+        verbose_proxy_logger.warning(
+            "Failed to connect to primary (writer) DB: %s. "
+            "Serving reads from the read replica; writes will fail until the writer recovers.",
+            writer_error,
+        )
 
     async def disconnect(self, *args: Any, **kwargs: Any) -> None:
-        first_error: Optional[BaseException] = None
+        first_error: BaseException | None = None
         for client in (self._writer, self._reader):
             try:
                 await client.disconnect(*args, **kwargs)
@@ -144,8 +192,12 @@ class RoutingPrismaWrapper:
         await self._reader.stop_token_refresh_task()
 
     async def recreate_prisma_client(
-        self, new_db_url: str, http_client: Optional[Any] = None
-    ) -> None:
+        self,
+        new_db_url: str,
+        http_client: Any | None = None,
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
         """Recreate both writer and reader Prisma clients.
 
         The writer reconnect path in PrismaClient calls
@@ -155,8 +207,20 @@ class RoutingPrismaWrapper:
         the writer first (its URL is the one passed in), then best-effort
         recreate the reader. A reader failure flips `_reader_unavailable=True`
         so reads transparently fall through to the writer.
+
+        `expected_generation` is forwarded to the writer's optimistic-lock
+        guard. If the writer recreate is skipped (another path already replaced
+        the engine — issue #29176), we skip the reader too rather than churning
+        it needlessly, and return ``False``.
         """
-        await self._writer.recreate_prisma_client(new_db_url, http_client=http_client)
+        writer_recreated = await self._writer.recreate_prisma_client(
+            new_db_url,
+            http_client=http_client,
+            expected_generation=expected_generation,
+        )
+        if not writer_recreated:
+            return False
+        self._writer_unavailable = False
         try:
             await self._recreate_reader(http_client=http_client)
             self._reader_unavailable = False
@@ -167,8 +231,9 @@ class RoutingPrismaWrapper:
                 "Reads will fall back to the writer until the reader recovers.",
                 e,
             )
+        return True
 
-    async def _recreate_reader(self, http_client: Optional[Any] = None) -> None:
+    async def _recreate_reader(self, http_client: Any | None = None) -> None:
         """Resolve the reader URL and recreate its Prisma client.
 
         IAM-enabled readers regenerate their token (host/port/user came from
@@ -178,18 +243,12 @@ class RoutingPrismaWrapper:
         if self._reader.iam_token_db_auth:
             new_reader_url = self._reader.get_rds_iam_token()
             if not new_reader_url:
-                raise RuntimeError(
-                    "Failed to generate fresh IAM token for read replica"
-                )
-            await self._reader.recreate_prisma_client(
-                new_reader_url, http_client=http_client
-            )
+                raise RuntimeError("Failed to generate fresh IAM token for read replica")
+            await self._reader.recreate_prisma_client(new_reader_url, http_client=http_client)
             return
         reader_url = os.getenv("DATABASE_URL_READ_REPLICA", "")
         if not reader_url:
-            raise RuntimeError(
-                "DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client"
-            )
+            raise RuntimeError("DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client")
         await self._reader.recreate_prisma_client(reader_url, http_client=http_client)
 
     def __getattr__(self, name: str) -> Any:
@@ -200,11 +259,7 @@ class RoutingPrismaWrapper:
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
         # tx are callables and stay on the writer untouched.
-        if (
-            not callable(writer_attr)
-            and hasattr(writer_attr, "find_many")
-            and hasattr(writer_attr, "create")
-        ):
+        if not callable(writer_attr) and hasattr(writer_attr, "find_many") and hasattr(writer_attr, "create"):
             try:
                 reader_attr = getattr(self._reader, name)
             except AttributeError:
