@@ -15,13 +15,21 @@ Signal order, strongest first:
    endpoint; M2M (RFC 6749 section 4.4) never has one.
 3. ``registration_url`` persisted: dynamic client registration (RFC 7591) exists to mint
    clients for the interactive flow; M2M servers are configured with static credentials.
-4. ``token_url`` plus decryptable ``client_id`` and ``client_secret``: the M2M credential
-   shape, mirroring the legacy inference in ``MCPServerManager._resolve_oauth2_flow``.
+4. ``token_url`` plus decryptable ``client_id`` and ``client_secret``: ambiguous, left
+   unstamped. The shape is shared by M2M servers and DCR-registered interactive servers
+   whose authorization endpoint lives only in discovery (registered but never signed
+   in), so stamping client_credentials here could permanently route per-user traffic
+   through the proxy's stored client credential. The row keeps working through the
+   request-time backstop and a warning names it with the one-line fix (set oauth2_flow
+   via the dashboard or ``PUT /v1/mcp/server``); a completed interactive sign-in also
+   heals it via rule 1 at the next boot.
 5. Anything else is interactive: matching how ``needs_user_oauth_token`` treats a null
    flow, so the stamp never changes runtime routing for rows no rule recognizes.
 
-Runs before the first registry load on every boot and is idempotent: a healed fleet has
-no null rows and the backfill exits after one query.
+The backfill never stamps client_credentials: M2M is asserted by a human (config
+requires it, the API accepts it, the dashboard sets it), mirroring the config-level
+validation error. Runs before the first registry load on every boot and is idempotent:
+a healed fleet has no null rows and the backfill exits after one query.
 """
 
 import json
@@ -38,7 +46,7 @@ BackfillRule = Literal[
     "per_user_tokens",
     "authorization_url",
     "registration_url",
-    "m2m_credential_shape",
+    "ambiguous_m2m_shape",
     "interactive_default",
 ]
 
@@ -67,7 +75,7 @@ def classify_null_flow_row(
     registration_url: Optional[str],
     token_url: Optional[str],
     credentials: Optional[MCPCredentials],
-) -> tuple[OAuth2Flow, BackfillRule]:
+) -> tuple[Optional[OAuth2Flow], BackfillRule]:
     if has_per_user_tokens:
         return "authorization_code", "per_user_tokens"
     if authorization_url:
@@ -75,7 +83,7 @@ def classify_null_flow_row(
     if registration_url:
         return "authorization_code", "registration_url"
     if token_url and credentials and credentials.get("client_id") and credentials.get("client_secret"):
-        return "client_credentials", "m2m_credential_shape"
+        return None, "ambiguous_m2m_shape"
     return "authorization_code", "interactive_default"
 
 
@@ -108,6 +116,16 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
     )
 
     for row, (flow, rule) in classified:
+        if flow is None:
+            verbose_proxy_logger.warning(
+                "oauth2_flow backfill: server_id=%s is ambiguous (client credentials + token_url, "
+                "no interactive signal); left unstamped. Set oauth2_flow explicitly via the "
+                "dashboard or PUT /v1/mcp/server: client_credentials if this server is M2M, or "
+                "complete an interactive sign-in and it will be stamped authorization_code at the "
+                "next boot.",
+                row.server_id,
+            )
+            continue
         await prisma_client.db.litellm_mcpservertable.update(
             where={"server_id": row.server_id},
             data={"oauth2_flow": flow, "updated_by": _BACKFILL_AUDIT_ACTOR},
@@ -121,7 +139,7 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
 
     counts: dict[BackfillRule, int] = dict(Counter(rule for _, (_, rule) in classified))
     verbose_proxy_logger.info(
-        "oauth2_flow backfill: stamped %d oauth2 server row(s): %s",
+        "oauth2_flow backfill: processed %d oauth2 server row(s): %s",
         len(null_rows),
         counts,
     )

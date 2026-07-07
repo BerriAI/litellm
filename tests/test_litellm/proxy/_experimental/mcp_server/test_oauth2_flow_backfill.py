@@ -4,8 +4,10 @@ Tests for the startup oauth2_flow backfill.
 Legacy oauth2 rows with a null oauth2_flow are classified once, at rest, using
 signals read-time inference never had (per-user token rows first), and the
 result is persisted so the read path never infers again. The signal order is
-the spec: a wrong order re-introduces the DCR trap where an interactive server
-with client creds + token_url and no persisted authorization_url is stamped M2M.
+the spec, and so is the refusal to stamp client_credentials: the M2M credential
+shape is shared by DCR-registered interactive servers whose authorization
+endpoint lives only in discovery, so ambiguous rows are left unstamped for a
+human to assert rather than being permanently mislabeled M2M.
 """
 
 from types import SimpleNamespace
@@ -59,7 +61,11 @@ def test_classify_registration_url_beats_m2m_shape():
     assert rule == "registration_url"
 
 
-def test_classify_m2m_credential_shape():
+def test_classify_m2m_shape_is_ambiguous_and_unstamped():
+    """The M2M shape alone must never stamp client_credentials: a DCR-registered
+    interactive server that nobody signed into yet has the identical shape, and a
+    wrong M2M stamp would permanently route its per-user traffic through the
+    proxy's stored client credential."""
     flow, rule = classify_null_flow_row(
         has_per_user_tokens=False,
         authorization_url=None,
@@ -67,8 +73,8 @@ def test_classify_m2m_credential_shape():
         token_url="https://idp.example.com/token",
         credentials={"client_id": "cid", "client_secret": "csecret"},
     )
-    assert flow == "client_credentials"
-    assert rule == "m2m_credential_shape"
+    assert flow is None
+    assert rule == "ambiguous_m2m_shape"
 
 
 def test_classify_partial_credentials_default_interactive():
@@ -150,20 +156,23 @@ async def test_backfill_stamps_rows_and_reports_rule_counts():
 
     counts = await backfill_null_oauth2_flows(mock_prisma)
 
-    assert counts == {"per_user_tokens": 1, "m2m_credential_shape": 1, "authorization_url": 1}
+    assert counts == {"per_user_tokens": 1, "ambiguous_m2m_shape": 1, "authorization_url": 1}
 
     stamped = {
         call.kwargs["where"]["server_id"]: call.kwargs["data"]
         for call in mock_prisma.db.litellm_mcpservertable.update.await_args_list
     }
     assert stamped["signed_in_dcr"]["oauth2_flow"] == "authorization_code"
-    assert stamped["legacy_m2m"]["oauth2_flow"] == "client_credentials"
     assert stamped["legacy_interactive"]["oauth2_flow"] == "authorization_code"
+    assert "legacy_m2m" not in stamped
+    assert mock_prisma.db.litellm_mcpservertable.update.await_count == 2
     assert all(data["updated_by"] == "oauth2_flow_backfill" for data in stamped.values())
 
 
 @pytest.mark.asyncio
 async def test_backfill_handles_json_string_credentials():
+    """JSON-string credential blobs must decode: the M2M shape is recognized (and
+    therefore deliberately left unstamped) rather than misread as credential-less."""
     m2m_row = _row(
         "json_creds_m2m",
         token_url="https://idp.example.com/token",
@@ -173,7 +182,8 @@ async def test_backfill_handles_json_string_credentials():
 
     counts = await backfill_null_oauth2_flows(mock_prisma)
 
-    assert counts == {"m2m_credential_shape": 1}
+    assert counts == {"ambiguous_m2m_shape": 1}
+    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
