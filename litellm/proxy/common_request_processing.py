@@ -1214,7 +1214,7 @@ class ProxyBaseLLMRequestProcessing:
         model: Optional[str],
         route_type: str,
         llm_router: Optional[Router],
-    ) -> Tuple[dict, LiteLLMLoggingObj]:
+    ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         try:
