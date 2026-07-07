@@ -7,7 +7,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -18,6 +18,7 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -94,6 +95,11 @@ export function KeyEditView({
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
+  // Per-model budgets are proxy-admin / team-admin only, mirroring the backend
+  // gate in _caller_can_set_key_model_max_budget. Everyone else can't see or edit.
+  const canManageKeyModelBudget =
+    isProxyAdminRole(userRole ?? "") ||
+    (userID != null && isUserTeamAdminForSingleTeam(team?.members_with_roles ?? null, userID));
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
     Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
@@ -304,6 +310,15 @@ export function KeyEditView({
         values.budget_limits = [];
       }
 
+      // Only admins can set per-model budgets; the backend 403s if a non-admin
+      // sends the field at all, so strip it for them. For admins, coerce an empty
+      // editor to {} so clearing all overrides actually removes them on the key.
+      if (canManageKeyModelBudget) {
+        values.model_max_budget = values.model_max_budget ?? {};
+      } else {
+        delete values.model_max_budget;
+      }
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -471,6 +486,22 @@ export function KeyEditView({
       >
         <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
       </Form.Item>
+
+      {canManageKeyModelBudget && (
+        <Form.Item
+          label={
+            <span>
+              Per-Model Budgets{" "}
+              <Tooltip title="Admin-only. Set a spend cap per model for this key. A key-level override takes precedence over the team and team-member budgets for that model, and switches the key to its own isolated counter. Models left unset fall back to the team/member budget.">
+                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+              </Tooltip>
+            </span>
+          }
+          name="model_max_budget"
+        >
+          <ModelMaxBudgetEditor modelOptions={availableModels} />
+        </Form.Item>
+      )}
 
       <Form.Item label="TPM Limit" name="tpm_limit">
         <NumericalInput min={0} />
