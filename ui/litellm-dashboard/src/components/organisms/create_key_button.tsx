@@ -28,6 +28,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
+import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { TagRateLimitEditor, TagRateLimitEntry, tagRowsToLimits } from "../key_team_helpers/TagRateLimitEditor";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -90,8 +91,6 @@ interface UserOption {
 const getPredefinedTags = (data: any[] | null) => {
   let allTags = [];
 
-  console.log("data:", JSON.stringify(data));
-
   if (data) {
     for (let key of data) {
       if (key["metadata"] && key["metadata"]["tags"]) {
@@ -106,7 +105,6 @@ const getPredefinedTags = (data: any[] | null) => {
     label: tag,
   }));
 
-  console.log("uniqueTags:", uniqueTags);
   return uniqueTags;
 };
 
@@ -124,7 +122,6 @@ export const fetchTeamModels = async (
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole, true, teamID, true);
       let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-      console.log("available_model_names:", available_model_names);
       return available_model_names;
     }
     return [];
@@ -148,7 +145,6 @@ export const fetchUserModels = async (
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole);
       let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-      console.log("available_model_names:", available_model_names);
       setUserModels(available_model_names);
     }
   } catch (error) {
@@ -204,6 +200,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
+  const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
+  const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -223,6 +221,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedProjectId(null);
     setBudgetLimits([]);
     setTagRateLimits([]);
+    setBudgetFallbacks({});
+    setBudgetFallbacksKey((k) => k + 1);
   };
 
   const handleCancel = () => {
@@ -243,6 +243,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedProjectId(null);
     setBudgetLimits([]);
     setTagRateLimits([]);
+    setBudgetFallbacks({});
+    setBudgetFallbacksKey((k) => k + 1);
   };
 
   useEffect(() => {
@@ -546,14 +548,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         formValues.tag_rpm_limit = tag_rpm_limit;
       }
 
+      if (Object.keys(budgetFallbacks).length > 0) {
+        formValues.budget_fallbacks = budgetFallbacks;
+      }
+
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
       } else {
         response = await keyCreateCall(accessToken, userID, formValues);
       }
-
-      console.log("key create Response:", response);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
@@ -569,9 +573,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       form.resetFields();
       setBudgetLimits([]);
       setTagRateLimits([]);
+      setBudgetFallbacks({});
+      setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.log("error in create key:", error);
       const simplifiedError = simplifyKeyGenerateError(error);
       NotificationsManager.fromBackend(simplifiedError);
     }
@@ -1086,6 +1091,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   >
                     <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Budget Fallbacks{" "}
+                        <Tooltip title="When a model exceeds its per-model budget (model_max_budget), requests automatically reroute to fallback models instead of failing. Configure per-model budgets in Advanced Settings.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <BudgetFallbacksEditor
+                      key={budgetFallbacksKey}
+                      value={budgetFallbacks}
+                      onChange={setBudgetFallbacks}
+                      availableModels={modelsToPick}
+                    />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"

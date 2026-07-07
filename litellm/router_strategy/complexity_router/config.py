@@ -237,6 +237,15 @@ class ComplexityRouterConfig(BaseModel):
         default=None,
         description="Keywords indicating technical content",
     )
+    custom_technical_keywords: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Domain-specific technical keywords appended to the effective base list "
+            "(technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). "
+            "Order is preserved; duplicates are removed case-insensitively against "
+            "the base list and within this list."
+        ),
+    )
     simple_keywords: Optional[List[str]] = Field(
         default=None,
         description="Keywords indicating simple/basic queries",

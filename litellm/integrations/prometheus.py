@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import sys
 from datetime import datetime, timedelta
@@ -64,6 +65,26 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
+
+_DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+
+def _get_budget_metrics_per_request_timeout() -> float:
+    raw = os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT")
+    if raw is None:
+        return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+    try:
+        parsed = float(raw)
+    except ValueError:
+        parsed = None
+    if parsed is None or not math.isfinite(parsed) or parsed <= 0:
+        verbose_logger.debug(
+            "[Non-Blocking] Prometheus: invalid PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT=%r; using default %ss.",
+            raw,
+            _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT,
+        )
+        return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+    return parsed
 
 
 class PrometheusLogger(CustomLogger):
@@ -591,6 +612,21 @@ class PrometheusLogger(CustomLogger):
                 "litellm_check_batch_cost_last_run_timestamp",
                 "Unix timestamp of the last CheckBatchCost job run",
                 labelnames=[],
+            )
+
+            ########################################
+            # MCP Tool Call Metrics
+            ########################################
+            self.litellm_mcp_tool_calls_total = self._counter_factory(
+                name="litellm_mcp_tool_calls_total",
+                documentation="Total MCP tool calls, segmented by tool and server name",
+                labelnames=self.get_labels_for_metric("litellm_mcp_tool_calls_total"),
+            )
+
+            self.litellm_mcp_tool_call_spend_metric = self._counter_factory(
+                name="litellm_mcp_tool_call_spend_metric",
+                documentation="Total spend on MCP tool calls, segmented by tool and server name",
+                labelnames=self.get_labels_for_metric("litellm_mcp_tool_call_spend_metric"),
             )
 
         except Exception as e:
@@ -1300,6 +1336,13 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        # MCP tool call metrics
+        self._increment_mcp_tool_call_metrics(
+            standard_logging_payload=standard_logging_payload,
+            enum_values=enum_values,
+            response_cost=response_cost,
+        )
+
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
@@ -1521,6 +1564,49 @@ class PrometheusLogger(CustomLogger):
                     amount=float(provider_cache_creation_tokens),
                 )
 
+    def _increment_mcp_tool_call_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        response_cost: float,
+    ) -> None:
+        metadata = standard_logging_payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        mcp_meta = metadata.get("mcp_tool_call_metadata")
+        if not isinstance(mcp_meta, dict):
+            return
+
+        mcp_enum_values = UserAPIKeyLabelValues(
+            mcp_tool_name=mcp_meta.get("name"),
+            mcp_server_name=mcp_meta.get("mcp_server_name"),
+            hashed_api_key=enum_values.hashed_api_key,
+            api_key_alias=enum_values.api_key_alias,
+            team=enum_values.team,
+            team_alias=enum_values.team_alias,
+            user=enum_values.user,
+            end_user=enum_values.end_user,
+        )
+        mcp_label_context = PrometheusLabelFactoryContext(mcp_enum_values)
+
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_mcp_tool_calls_total,
+            "litellm_mcp_tool_calls_total",
+            mcp_enum_values,
+            label_context=mcp_label_context,
+        )
+
+        if response_cost > 0:
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_mcp_tool_call_spend_metric,
+                "litellm_mcp_tool_call_spend_metric",
+                mcp_enum_values,
+                label_context=mcp_label_context,
+                amount=response_cost,
+            )
+
     async def _increment_remaining_budget_metrics(
         self,
         user_api_team: Optional[str],
@@ -1542,7 +1628,15 @@ class PrometheusLogger(CustomLogger):
         _user_spend = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
-        results = await asyncio.gather(
+        # Bound the per-request budget-metric emission so that slow Redis/DB
+        # lookups under load cannot consume the whole LoggingWorker watchdog
+        # (LOGGING_WORKER_MAX_TIME_PER_COROUTINE, default 20s) and get the entire
+        # success-logging event cancelled. Budget gauges are also refreshed by the
+        # periodic cron every PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+        # so dropping one slow per-request emission only loses sub-cron real-time
+        # detail, not correctness.
+        budget_metrics_timeout = _get_budget_metrics_per_request_timeout()
+        gather_coro = asyncio.gather(
             self._set_api_key_budget_metrics_after_api_request(
                 user_api_key=user_api_key,
                 user_api_key_alias=user_api_key_alias,
@@ -1569,6 +1663,16 @@ class PrometheusLogger(CustomLogger):
             ),
             return_exceptions=True,
         )
+        try:
+            results = await asyncio.wait_for(gather_coro, timeout=budget_metrics_timeout)
+        except asyncio.TimeoutError:
+            verbose_logger.debug(
+                "[Non-Blocking] Prometheus: per-request budget metric emission "
+                "exceeded %ss under load; skipping (values are refreshed by the "
+                "periodic budget-metrics cron job).",
+                budget_metrics_timeout,
+            )
+            return
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 verbose_logger.debug(
@@ -1939,6 +2043,43 @@ class PrometheusLogger(CustomLogger):
 
         return False
 
+    @staticmethod
+    def _extract_api_provider_from_request_data(request_data: dict) -> Optional[str]:
+        """
+        Best-effort provider for the client-side failure path.
+
+        A request can fail before a deployment is resolved, so the provider is
+        not always known. Prefer the resolved ``custom_llm_provider`` on
+        ``litellm_params``, then any provider recovered onto a partial
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
+        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
+        ``openai``) since the proxy's failure ``request_data`` usually carries
+        only the client-supplied model. Return ``None`` when it cannot be
+        determined so the label emits empty rather than a guess.
+        """
+        litellm_params = request_data.get("litellm_params") or {}
+        provider = litellm_params.get("custom_llm_provider")
+        if provider:
+            return provider
+        standard_logging_object = request_data.get("standard_logging_object") or {}
+        provider = standard_logging_object.get("custom_llm_provider")
+        if provider:
+            return provider
+        model = litellm_params.get("model") or request_data.get("model")
+        if not model:
+            return None
+        try:
+            return litellm.get_llm_provider(model=model)[1] or None
+        except litellm.exceptions.BadRequestError:
+            return None
+        except Exception as e:  # noqa: BLE001 - metrics labeling must never break request/failure handling
+            verbose_logger.debug(
+                "prometheus: unexpected error inferring api_provider from model=%s: %s",
+                model,
+                e,
+            )
+            return None
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -1974,6 +2115,7 @@ class PrometheusLogger(CustomLogger):
             _metadata = request_data.get("metadata", {}) or {}
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
+            api_provider = self._extract_api_provider_from_request_data(request_data)
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -1995,6 +2137,7 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
             )
             _label_ctx = PrometheusLabelFactoryContext(enum_values)

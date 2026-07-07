@@ -57,8 +57,6 @@ source ~/.nvm/nvm.sh
 nvm install v18.17.0
 nvm use v18.17.0
 
-# copy _enterprise.json from this directory to /ui/litellm-dashboard, and rename it to ui_colors.json
-cp enterprise/enterprise_ui/enterprise_colors.json ui/litellm-dashboard/ui_colors.json
 
 # cd in to /ui/litellm-dashboard
 cd ui/litellm-dashboard

@@ -748,12 +748,27 @@ export default function KeyInfoView({
                     </Text>
                   </div>
 
+                  {currentKeyData.budget_fallbacks && Object.keys(currentKeyData.budget_fallbacks).length > 0 && (
+                    <div>
+                      <Text className="font-medium">Budget Fallbacks</Text>
+                      <div className="mt-1 space-y-1">
+                        {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
+                          <div key={model} className="text-xs text-gray-600">
+                            <span className="font-medium">{model}</span>
+                            <span className="mx-1 text-gray-400">-&gt;</span>
+                            {fallbacks.join(", ")}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <Text className="font-medium">Tags</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
                               {tag}
                             </span>
                           ))
@@ -766,7 +781,7 @@ export default function KeyInfoView({
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
                               {prompt}
                             </span>
                           ))
@@ -779,7 +794,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
                         currentKeyData.allowed_routes.map((route, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
                             {route}
                           </span>
                         ))
@@ -795,7 +810,7 @@ export default function KeyInfoView({
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
                       currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
                               {route}
                             </span>
                           ))
@@ -819,7 +834,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
                             {model}
                           </span>
                         ))
@@ -862,7 +877,7 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Metadata</Text>
-                    <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                       {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>

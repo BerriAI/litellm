@@ -960,7 +960,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         for _idx, (keys, args, meta) in enumerate(descriptor_groups):
             try:
-                raw = await self.check_and_increment_by_n_script(
+                raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
                     keys=keys,
                     args=args,
                 )

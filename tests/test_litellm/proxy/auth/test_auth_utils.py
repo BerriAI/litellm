@@ -2105,6 +2105,21 @@ class TestObservabilityCallbackBans:
             )
         assert field in str(exc.value)
 
+    def test_observability_field_in_litellm_params_metadata_is_rejected(self):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "litellm_params": {
+                        "metadata": {"turn_off_message_logging": False}
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert "turn_off_message_logging" in str(exc.value)
+
     @pytest.mark.parametrize(
         "metadata_key",
         ["metadata", "litellm_metadata"],
