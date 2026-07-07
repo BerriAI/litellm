@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
+    dumps_anthropic_messages_request_body,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -1837,3 +1838,185 @@ async def test_alist_input_items_surfaces_upstream_error_status():
         )
 
     assert excinfo.value.status_code == 404
+
+
+class _SentrySpanStub:
+    """Stand-in for sentry_sdk's Transaction/Span, which is not JSON serializable."""
+
+    def __repr__(self) -> str:
+        return "<Transaction stub>"
+
+
+@pytest.mark.asyncio
+async def test_async_post_anthropic_messages_strips_non_serializable_metadata():
+    """Regression for #30662: a callback injects a non-serializable value into
+    metadata after validation; the body builder must drop it rather than crash
+    the outbound serialization, and must not ship it to Anthropic."""
+    handler = BaseLLMHTTPHandler()
+
+    captured = {}
+
+    async def fake_post(*args, **kwargs):
+        captured["data"] = kwargs.get("data")
+        response = Mock()
+        response.status_code = 200
+        response.headers = {}
+        response.raise_for_status = Mock()
+        return response
+
+    mock_client = Mock()
+    mock_client.post = AsyncMock(side_effect=fake_post)
+
+    provider_config = Mock()
+    provider_config.max_retry_on_anthropic_messages_http_error = 1
+
+    request_body = {
+        "model": "claude-3-5-sonnet-latest",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "metadata": {"user_id": "my-org", "_sentry_span": _SentrySpanStub()},
+    }
+
+    await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=mock_client,
+        request_url="https://api.anthropic.com/v1/messages",
+        headers={},
+        signed_json_body=None,  # native anthropic path -> body is json.dumps'd here
+        request_body=request_body,
+        stream=False,
+        logging_obj=Mock(),
+        provider_config=provider_config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key="sk-ant-test",
+        model="claude-3-5-sonnet-latest",
+    )
+
+    sent = json.loads(captured["data"])
+    assert sent["metadata"] == {"user_id": "my-org"}
+    assert sent["messages"] == [{"role": "user", "content": "hi"}]
+    assert sent["max_tokens"] == 16
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_strips_non_serializable_metadata_on_wire():
+    """The success-path serialization in async_anthropic_messages_handler (the
+    second #30662 call site, run on every request) also drops callback-injected
+    non-serializable metadata rather than crashing."""
+    handler = BaseLLMHTTPHandler()
+
+    provider_config = Mock()
+    provider_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
+    )
+    provider_config.transform_anthropic_messages_request = Mock(
+        return_value={
+            "model": "claude-3-5-sonnet-latest",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            "metadata": {"user_id": "my-org", "_sentry_span": _SentrySpanStub()},
+        }
+    )
+    provider_config.get_complete_url = Mock(
+        return_value="https://api.anthropic.com/v1/messages"
+    )
+    # Unsigned (native anthropic): the success path serializes via the helper.
+    provider_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
+    provider_config.max_retry_on_anthropic_messages_http_error = 1
+    provider_config.transform_anthropic_messages_response = Mock(
+        return_value={"id": "m"}
+    )
+
+    captured = {}
+
+    async def fake_post(*args, **kwargs):
+        captured["data"] = kwargs.get("data")
+        response = Mock()
+        response.status_code = 200
+        response.headers = {}
+        response.raise_for_status = Mock()
+        return response
+
+    client = AsyncHTTPHandler()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    with (
+        patch.object(client, "post", side_effect=fake_post),
+        patch(
+            "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers",
+            return_value=None,
+        ),
+    ):
+        try:
+            await handler.async_anthropic_messages_handler(
+                model="claude-3-5-sonnet-latest",
+                messages=[{"role": "user", "content": "hi"}],
+                anthropic_messages_provider_config=provider_config,
+                anthropic_messages_optional_request_params={},
+                custom_llm_provider="anthropic",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=logging_obj,
+                client=client,
+                stream=False,
+            )
+        except Exception:
+            # Response transform / hooks run after the body is on the wire;
+            # the assertion target is the captured outbound body.
+            pass
+
+    assert "data" in captured  # serialization reached the wire, did not crash
+    sent = json.loads(captured["data"])
+    assert sent["metadata"] == {"user_id": "my-org"}
+    assert "_sentry_span" not in sent["metadata"]
+
+
+def test_dumps_anthropic_messages_request_body_drops_non_serializable_metadata():
+    """The dropped value must not reach the wire, the validated metadata must
+    survive, and the caller's request_body must not be mutated."""
+    request_body = {
+        "model": "claude-3-5-sonnet-latest",
+        "max_tokens": 16,
+        "metadata": {"user_id": "my-org", "_sentry_span": _SentrySpanStub()},
+    }
+
+    sent = json.loads(dumps_anthropic_messages_request_body(request_body))
+
+    assert sent["metadata"] == {"user_id": "my-org"}
+    assert sent["max_tokens"] == 16
+    assert "_sentry_span" in request_body["metadata"]  # original untouched
+
+
+def test_dumps_anthropic_messages_request_body_passthrough_when_serializable():
+    """A fully serializable body round-trips unchanged, metadata intact."""
+    request_body = {
+        "model": "claude-3-5-sonnet-latest",
+        "max_tokens": 16,
+        "metadata": {"user_id": "my-org"},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    assert (
+        json.loads(dumps_anthropic_messages_request_body(request_body)) == request_body
+    )
+
+
+def test_dumps_anthropic_messages_request_body_reraises_non_metadata():
+    """A non-serializable value outside metadata is a real bug, not callback
+    noise; surface it instead of silently dropping request content. Covers both
+    a missing metadata key (re-raise guard) and a present, already-clean
+    metadata dict (the stripped body still fails to serialize)."""
+    no_metadata = {
+        "model": "claude-3-5-sonnet-latest",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": _SentrySpanStub()}],
+    }
+    clean_metadata = {
+        "model": "claude-3-5-sonnet-latest",
+        "max_tokens": 16,
+        "metadata": {"user_id": "my-org"},
+        "messages": [{"role": "user", "content": _SentrySpanStub()}],
+    }
+
+    for body in (no_metadata, clean_metadata):
+        with pytest.raises(TypeError):
+            dumps_anthropic_messages_request_body(body)
