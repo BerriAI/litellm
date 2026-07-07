@@ -2,24 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildOrganizationUpdateV2Payload,
-  buildOrgSettingsBaseline,
   OrgMetadataParseError,
   parseMetadata,
   toNumberOrNull,
-  type OrgSettingsBaseline,
+  type OrgSettingsFormValues,
 } from "./organizationUpdatePayload";
 
-const baseline = (overrides: Partial<OrgSettingsBaseline> = {}): OrgSettingsBaseline => ({
-  organization_alias: "acme",
-  models: ["gpt-4"],
-  tpm_limit: 100,
-  rpm_limit: 50,
-  max_budget: 10,
-  budget_duration: "30d",
-  metadata: { team: "core" },
-  object_permission: { vector_stores: [], mcp_servers: [], mcp_access_groups: [] },
-  ...overrides,
-});
+const touched =
+  (...names: string[]) =>
+  (name: string): boolean =>
+    names.includes(name);
 
 describe("toNumberOrNull", () => {
   it("maps empty-ish and non-numeric inputs to null", () => {
@@ -59,86 +51,8 @@ describe("parseMetadata", () => {
 });
 
 describe("buildOrganizationUpdateV2Payload", () => {
-  it("sends a changed limit", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { tpm_limit: 500 }, baseline: baseline() })).toEqual({
-      tpm_limit: 500,
-    });
-  });
-
-  it("sends null for a cleared limit", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { tpm_limit: null }, baseline: baseline() })).toEqual({
-      tpm_limit: null,
-    });
-  });
-
-  it("coerces an emptied numeric input to null, never an empty string", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { tpm_limit: "" }, baseline: baseline() })).toEqual({
-      tpm_limit: null,
-    });
-  });
-
-  it("omits a limit whose value is unchanged", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { tpm_limit: 100 }, baseline: baseline() })).toEqual({});
-  });
-
-  it("omits an absent (untouched) limit", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: {}, baseline: baseline() })).toEqual({});
-  });
-
-  it("sets metadata", () => {
-    expect(
-      buildOrganizationUpdateV2Payload({ values: { metadata: '{"a":1}' }, baseline: baseline({ metadata: null }) }),
-    ).toEqual({ metadata: { a: 1 } });
-  });
-
-  it("edits a metadata value", () => {
-    expect(
-      buildOrganizationUpdateV2Payload({ values: { metadata: '{"a":2}' }, baseline: baseline({ metadata: { a: 1 } }) }),
-    ).toEqual({ metadata: { a: 2 } });
-  });
-
-  it("clears metadata to null when the box is emptied", () => {
-    expect(
-      buildOrganizationUpdateV2Payload({ values: { metadata: "" }, baseline: baseline({ metadata: { a: 1 } }) }),
-    ).toEqual({ metadata: null });
-  });
-
-  it("omits metadata that is deep-equal to the baseline", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { metadata: '{"team":"core"}' }, baseline: baseline() })).toEqual(
-      {},
-    );
-  });
-
-  it("throws on invalid metadata JSON so Save can be blocked", () => {
-    expect(() => buildOrganizationUpdateV2Payload({ values: { metadata: "{oops" }, baseline: baseline() })).toThrow(
-      OrgMetadataParseError,
-    );
-  });
-
-  it("sends changed and cleared models", () => {
-    expect(
-      buildOrganizationUpdateV2Payload({ values: { models: ["a", "b"] }, baseline: baseline({ models: ["a"] }) }),
-    ).toEqual({ models: ["a", "b"] });
-    expect(buildOrganizationUpdateV2Payload({ values: { models: [] }, baseline: baseline({ models: ["a"] }) })).toEqual(
-      { models: [] },
-    );
-  });
-
-  it("omits models that are unchanged", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { models: ["gpt-4"] }, baseline: baseline() })).toEqual({});
-  });
-
-  it("sends a changed alias and budget_duration", () => {
-    expect(
-      buildOrganizationUpdateV2Payload({ values: { organization_alias: "new-name" }, baseline: baseline() }),
-    ).toEqual({ organization_alias: "new-name" });
-    expect(buildOrganizationUpdateV2Payload({ values: { budget_duration: "7d" }, baseline: baseline() })).toEqual({
-      budget_duration: "7d",
-    });
-  });
-
-  it("returns an empty body when a full form submit changed nothing", () => {
-    const values = {
+  it("sends nothing when no field is touched", () => {
+    const values: OrgSettingsFormValues = {
       organization_alias: "acme",
       models: ["gpt-4"],
       tpm_limit: 100,
@@ -146,73 +60,111 @@ describe("buildOrganizationUpdateV2Payload", () => {
       max_budget: 10,
       budget_duration: "30d",
       metadata: '{"team":"core"}',
+      vector_stores: ["vs-1"],
+      mcp_servers_and_groups: { servers: ["srv-1"], accessGroups: ["grp-1"] },
     };
-    expect(buildOrganizationUpdateV2Payload({ values, baseline: baseline() })).toEqual({});
+    expect(buildOrganizationUpdateV2Payload(values, touched())).toEqual({});
   });
 
-  it("bundles multiple sets and clears into one payload", () => {
-    const payload = buildOrganizationUpdateV2Payload({
-      values: { tpm_limit: null, rpm_limit: 25, metadata: "" },
-      baseline: baseline(),
+  it("omits a field that has a value but was not touched", () => {
+    expect(buildOrganizationUpdateV2Payload({ tpm_limit: 500 }, touched())).toEqual({});
+  });
+
+  it("sends a touched alias", () => {
+    expect(buildOrganizationUpdateV2Payload({ organization_alias: "new-name" }, touched("organization_alias"))).toEqual(
+      {
+        organization_alias: "new-name",
+      },
+    );
+  });
+
+  it("sends a touched budget_duration and clears it to null when emptied", () => {
+    expect(buildOrganizationUpdateV2Payload({ budget_duration: "7d" }, touched("budget_duration"))).toEqual({
+      budget_duration: "7d",
     });
-    expect(payload).toEqual({ tpm_limit: null, rpm_limit: 25, metadata: null });
+    expect(buildOrganizationUpdateV2Payload({ budget_duration: "" }, touched("budget_duration"))).toEqual({
+      budget_duration: null,
+    });
   });
 
-  it("sends object_permission when vector stores change", () => {
-    expect(buildOrganizationUpdateV2Payload({ values: { vector_stores: ["vs-1"] }, baseline: baseline() })).toEqual({
+  it("sends touched models, including an empty array to clear", () => {
+    expect(buildOrganizationUpdateV2Payload({ models: ["a", "b"] }, touched("models"))).toEqual({
+      models: ["a", "b"],
+    });
+    expect(buildOrganizationUpdateV2Payload({ models: [] }, touched("models"))).toEqual({ models: [] });
+    expect(buildOrganizationUpdateV2Payload({ models: undefined }, touched("models"))).toEqual({ models: [] });
+  });
+
+  it("sends a touched numeric value, including 0", () => {
+    expect(buildOrganizationUpdateV2Payload({ tpm_limit: 500 }, touched("tpm_limit"))).toEqual({ tpm_limit: 500 });
+    expect(buildOrganizationUpdateV2Payload({ max_budget: 0 }, touched("max_budget"))).toEqual({ max_budget: 0 });
+  });
+
+  it("coerces a touched but emptied numeric input to null", () => {
+    expect(buildOrganizationUpdateV2Payload({ tpm_limit: "" }, touched("tpm_limit"))).toEqual({ tpm_limit: null });
+    expect(buildOrganizationUpdateV2Payload({ rpm_limit: null }, touched("rpm_limit"))).toEqual({ rpm_limit: null });
+  });
+
+  it("sends touched metadata as a parsed object", () => {
+    expect(buildOrganizationUpdateV2Payload({ metadata: '{"a":1}' }, touched("metadata"))).toEqual({
+      metadata: { a: 1 },
+    });
+  });
+
+  it("clears touched metadata to null when the box is emptied", () => {
+    expect(buildOrganizationUpdateV2Payload({ metadata: "" }, touched("metadata"))).toEqual({ metadata: null });
+  });
+
+  it("throws on invalid metadata JSON so Save can be blocked", () => {
+    expect(() => buildOrganizationUpdateV2Payload({ metadata: "{oops" }, touched("metadata"))).toThrow(
+      OrgMetadataParseError,
+    );
+  });
+
+  it("does not parse untouched metadata, so invalid JSON left untouched never throws", () => {
+    expect(buildOrganizationUpdateV2Payload({ metadata: "{oops" }, touched())).toEqual({});
+  });
+
+  it("sends object_permission when vector_stores is touched", () => {
+    expect(buildOrganizationUpdateV2Payload({ vector_stores: ["vs-1"] }, touched("vector_stores"))).toEqual({
       object_permission: { vector_stores: ["vs-1"], mcp_servers: [], mcp_access_groups: [] },
     });
   });
 
-  it("clears mcp servers with [] while preserving unchanged vector stores", () => {
+  it("sends object_permission when mcp_servers_and_groups is touched", () => {
     expect(
-      buildOrganizationUpdateV2Payload({
-        values: { vector_stores: ["vs-1"], mcp_servers_and_groups: { servers: [], accessGroups: [] } },
-        baseline: baseline({
-          object_permission: { vector_stores: ["vs-1"], mcp_servers: ["srv-1"], mcp_access_groups: [] },
-        }),
-      }),
-    ).toEqual({ object_permission: { vector_stores: ["vs-1"], mcp_servers: [], mcp_access_groups: [] } });
-  });
-
-  it("omits object_permission when nothing in it changed", () => {
-    expect(
-      buildOrganizationUpdateV2Payload({
-        values: { vector_stores: [], mcp_servers_and_groups: { servers: [], accessGroups: [] } },
-        baseline: baseline(),
-      }),
-    ).toEqual({});
-  });
-});
-
-describe("buildOrgSettingsBaseline", () => {
-  it("extracts a baseline from an org row", () => {
-    expect(
-      buildOrgSettingsBaseline({
-        organization_alias: "acme",
-        models: ["gpt-4"],
-        metadata: { team: "core" },
-        litellm_budget_table: { tpm_limit: 100, rpm_limit: 50, max_budget: 10, budget_duration: "30d" },
-        object_permission: { vector_stores: ["vs-1"], mcp_servers: ["srv-1"], mcp_access_groups: ["grp-1"] },
-      }),
+      buildOrganizationUpdateV2Payload(
+        { mcp_servers_and_groups: { servers: ["srv-1"], accessGroups: ["grp-1"] } },
+        touched("mcp_servers_and_groups"),
+      ),
     ).toEqual({
-      organization_alias: "acme",
-      models: ["gpt-4"],
-      tpm_limit: 100,
-      rpm_limit: 50,
-      max_budget: 10,
-      budget_duration: "30d",
-      metadata: { team: "core" },
-      object_permission: { vector_stores: ["vs-1"], mcp_servers: ["srv-1"], mcp_access_groups: ["grp-1"] },
+      object_permission: { vector_stores: [], mcp_servers: ["srv-1"], mcp_access_groups: ["grp-1"] },
     });
   });
 
-  it("defaults a missing budget table, metadata, and object_permission", () => {
-    const result = buildOrgSettingsBaseline({});
-    expect(result.tpm_limit).toBeNull();
-    expect(result.budget_duration).toBeNull();
-    expect(result.metadata).toBeNull();
-    expect(result.models).toBeNull();
-    expect(result.object_permission).toEqual({ vector_stores: [], mcp_servers: [], mcp_access_groups: [] });
+  it("sends the full object_permission with [] clears when either half is touched", () => {
+    expect(
+      buildOrganizationUpdateV2Payload(
+        { vector_stores: ["vs-1"], mcp_servers_and_groups: { servers: [], accessGroups: [] } },
+        touched("vector_stores"),
+      ),
+    ).toEqual({ object_permission: { vector_stores: ["vs-1"], mcp_servers: [], mcp_access_groups: [] } });
+  });
+
+  it("omits object_permission when neither vector_stores nor mcp_servers_and_groups is touched", () => {
+    expect(
+      buildOrganizationUpdateV2Payload(
+        { vector_stores: ["vs-1"], mcp_servers_and_groups: { servers: ["srv-1"], accessGroups: [] } },
+        touched("organization_alias"),
+      ),
+    ).toEqual({});
+  });
+
+  it("bundles multiple touched sets and clears into one payload", () => {
+    const payload = buildOrganizationUpdateV2Payload(
+      { tpm_limit: null, rpm_limit: 25, metadata: "" },
+      touched("tpm_limit", "rpm_limit", "metadata"),
+    );
+    expect(payload).toEqual({ tpm_limit: null, rpm_limit: 25, metadata: null });
   });
 });

@@ -23,11 +23,9 @@ import {
   organizationUpdateV2Call,
 } from "../networking";
 import {
-  buildOrgSettingsBaseline,
   buildOrganizationUpdateV2Payload,
   OrgMetadataParseError,
   parseMetadata,
-  type OrgSettingsBaseline,
   type OrgSettingsFormValues,
 } from "./organizationUpdatePayload";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -63,7 +61,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isOrgSaving, setIsOrgSaving] = useState(false);
-  const [editBaseline, setEditBaseline] = useState<OrgSettingsBaseline | null>(null);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
 
@@ -139,21 +136,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     }
   };
 
-  const enterEditMode = () => {
-    if (!orgData) return;
-    setEditBaseline(buildOrgSettingsBaseline(orgData));
-    setIsEditing(true);
-  };
-
   const handleOrgUpdate = async (values: OrgSettingsFormValues) => {
     try {
       if (!accessToken || !orgData) return;
       setIsOrgSaving(true);
 
-      const body = buildOrganizationUpdateV2Payload({
-        values,
-        baseline: editBaseline ?? buildOrgSettingsBaseline(orgData),
-      });
+      const body = buildOrganizationUpdateV2Payload(values, (name) => form.isFieldTouched(name));
 
       await organizationUpdateV2Call(accessToken, organizationId, body);
 
@@ -350,7 +338,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               <Card className="overflow-y-auto max-h-[65vh]">
                 <div className="flex justify-between items-center mb-4">
                   <Title>Organization Settings</Title>
-                  {canEditOrg && !isEditing && <TremorButton onClick={enterEditMode}>Edit Settings</TremorButton>}
+                  {canEditOrg && !isEditing && (
+                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                  )}
                 </div>
 
                 {isEditing ? (
@@ -388,8 +378,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
                     <Form.Item label="Models" name="models">
                       <ModelSelect
-                        value={form.getFieldValue("models")}
-                        onChange={(values) => form.setFieldValue("models", values)}
+                        onChange={() => {}}
                         context="organization"
                         options={{
                           includeSpecialOptions: true,
@@ -420,8 +409,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
                     <Form.Item label="Vector Stores" name="vector_stores">
                       <VectorStoreSelector
-                        onChange={(values) => form.setFieldValue("vector_stores", values)}
-                        value={form.getFieldValue("vector_stores")}
+                        onChange={() => {}}
                         accessToken={accessToken || ""}
                         placeholder="Select vector stores"
                       />
@@ -429,8 +417,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
                     <Form.Item label="MCP Servers & Access Groups" name="mcp_servers_and_groups">
                       <MCPServerSelector
-                        onChange={(values) => form.setFieldValue("mcp_servers_and_groups", values)}
-                        value={form.getFieldValue("mcp_servers_and_groups")}
+                        onChange={() => {}}
                         accessToken={accessToken || ""}
                         placeholder="Select MCP servers and access groups"
                       />
