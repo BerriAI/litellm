@@ -421,6 +421,7 @@ serviceMonitor:
     enabled: true
     name: ""
     key: ""
+    useMasterKey: false
   relabelings: []
   # - targetLabel: __meta_kubernetes_pod_node_name
   #   replacement: $1
