@@ -542,6 +542,29 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools",
         }
 
+    def _as_query_str(value: Any) -> Optional[str]:
+        """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
+        return value if isinstance(value, str) else None
+
+    async def _resolve_toolset_scope(
+        toolset_name: Optional[str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> UserAPIKeyAuth:
+        """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
+        if not toolset_name:
+            return user_api_key_dict
+
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw("Database not available. Connect a database to your proxy")
+        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name)
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Toolset '{toolset_name}' not found",
+            )
+        return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
+
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
         request: Request,
@@ -587,10 +610,8 @@ if MCP_AVAILABLE:
         )
 
         try:
-            if not isinstance(mcp_server_name, str):
-                mcp_server_name = None
-            if not isinstance(toolset_name, str):
-                toolset_name = None
+            mcp_server_name = _as_query_str(mcp_server_name)
+            toolset_name = _as_query_str(toolset_name)
 
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
@@ -598,17 +619,7 @@ if MCP_AVAILABLE:
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
 
-            if toolset_name:
-                from litellm.proxy.utils import get_prisma_client_or_throw
-
-                prisma_client = get_prisma_client_or_throw("Database not available. Connect a database to your proxy")
-                toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name)
-                if toolset is None:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Toolset '{toolset_name}' not found",
-                    )
-                user_api_key_dict = await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
+            user_api_key_dict = await _resolve_toolset_scope(toolset_name, user_api_key_dict)
 
             if server_id is None:
                 server_id = mcp_server_name
