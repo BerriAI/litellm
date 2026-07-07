@@ -103,6 +103,18 @@ describe("MCPSemanticFilterTestPanel", () => {
     expect(screen.getByText("wiki-fetch")).toBeInTheDocument();
     expect(screen.getByText("github-search")).toBeInTheDocument();
     expect(screen.getByText("slack-post")).toBeInTheDocument();
+    expect(screen.queryByText(/more selected tools not shown/i)).not.toBeInTheDocument();
+  });
+
+  it("should note how many selected tools are missing when the header list is incomplete", () => {
+    const testResult: TestResult = {
+      totalTools: 40,
+      selectedTools: 8,
+      tools: ["metrics_mcp-node_query_by_id", "metrics_mcp-latency_query_api", "inventory_mcp-site_lookup"],
+    };
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
+
+    expect(screen.getByText("+5 more selected tools not shown")).toBeInTheDocument();
   });
 
   it("should not render the results section when testResult is null", () => {

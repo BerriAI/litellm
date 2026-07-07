@@ -347,6 +347,30 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_vertex_chirp_3_transcription_cost_from_duration():
+    """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
+    and cost_per_second prefers output_cost_per_second whenever it is not None, so
+    every transcription priced to $0.00 instead of using input_cost_per_second."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 18.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/chirp_3",
+        custom_llm_provider="vertex_ai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 18.0 * 0.00026667
+    assert cost > 0
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
@@ -421,6 +445,64 @@ def test_handle_realtime_stream_cost_calculation():
         litellm_model_name="gpt-3.5-turbo",
     )
     assert cost == 0.0  # No usage, no cost
+
+
+def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
+    """Regression: realtime cost must populate logging_obj.cost_breakdown so the
+    spend logs / UI show input vs output cost (issue: cost_breakdown was None for
+    /v1/realtime even though a total spend was computed)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    logging_obj = Logging(
+        model="gpt-4o-realtime-preview",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-cost-breakdown-test",
+        function_id="realtime-cost-breakdown-test",
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-4o-realtime-preview",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert total_cost > 0
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] > 0
+    assert logging_obj.cost_breakdown["output_cost"] > 0
+    assert (
+        abs(
+            logging_obj.cost_breakdown["input_cost"]
+            + logging_obj.cost_breakdown["output_cost"]
+            - total_cost
+        )
+        < 1e-9
+    )
+    assert abs(logging_obj.cost_breakdown["total_cost"] - total_cost) < 1e-9
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -505,12 +587,84 @@ def test_realtime_logging_object_allows_null_transcript_in_conversation_item_add
     assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
 
 
+def test_realtime_logging_object_does_not_validate_unknown_event_types():
+    """
+    A realtime session emits events outside the OpenAIRealtimeEvents union (e.g.
+    rate_limits.updated, response.function_call_arguments.delta). Building the
+    logging object must not revalidate every event against the union; doing so
+    produces thousands of Pydantic ValidationErrors per session, blocks the event
+    loop, and the raised error discards the session's usage. The events must
+    survive verbatim, the combined usage must be preserved, and serialization
+    must stay clean.
+    """
+    import warnings
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "event_id": "ev0", "session": {"id": "s"}},
+    ]
+    for i in range(50):
+        results += [
+            {
+                "type": "rate_limits.updated",
+                "event_id": f"rl{i}",
+                "rate_limits": [{"name": "requests", "limit": 1000, "remaining": 900}],
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "event_id": f"fc{i}",
+                "delta": "{}",
+            },
+            {
+                "type": "response.done",
+                "event_id": f"rd{i}",
+                "response": {
+                    "usage": {
+                        "input_tokens": 4,
+                        "output_tokens": 6,
+                        "total_tokens": 10,
+                    }
+                },
+            },
+        ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    # On unfixed code this raises pydantic ValidationError instead of returning.
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+
+    assert logging_result.usage.total_tokens == 500
+    assert len(logging_result.results) == len(results)
+    unknown_types = {
+        r["type"]
+        for r in logging_result.results
+        if r["type"]
+        in ("rate_limits.updated", "response.function_call_arguments.delta")
+    }
+    assert unknown_types == {
+        "rate_limits.updated",
+        "response.function_call_arguments.delta",
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        dumped = logging_result.model_dump()
+    assert len(dumped["results"]) == len(results)
+
+
 def test_realtime_transcription_duration_cost(monkeypatch):
     """
     gpt-realtime-whisper transcription sessions are billed by input audio duration
     ($0.017/min). The .completed events carry usage {type: duration, seconds: N};
     cost must equal total_seconds * input_cost_per_second.
     """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -541,17 +695,41 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
         results=results
     )
+    logging_obj = Logging(
+        model="gpt-realtime-whisper",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-transcription-cost-breakdown-test",
+        function_id="realtime-transcription-cost-breakdown-test",
+    )
     cost = handle_realtime_stream_cost_calculation(
         results=results,
         combined_usage_object=combined,
         custom_llm_provider="openai",
         litellm_model_name="gpt-realtime-whisper",
+        litellm_logging_obj=logging_obj,
     )
 
     # 90 seconds at $0.017/minute.
     expected = 90.0 * (0.017 / 60)
     assert abs(cost - expected) < 1e-9
     assert cost > 0  # guards against the duration branch being dropped
+    assert logging_obj.cost_breakdown is not None
+    assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
+
+    # The transcription cost must be attributed in the breakdown, not just folded
+    # into total_cost, or input_cost + output_cost + additional_costs won't sum to total_cost.
+    additional_costs = logging_obj.cost_breakdown.get("additional_costs")
+    assert additional_costs is not None
+    assert abs(additional_costs["transcription_cost"] - expected) < 1e-9
+    attributed_total = (
+        logging_obj.cost_breakdown["input_cost"]
+        + logging_obj.cost_breakdown["output_cost"]
+        + additional_costs["transcription_cost"]
+    )
+    assert abs(attributed_total - logging_obj.cost_breakdown["total_cost"]) < 1e-9
 
 
 def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
@@ -3047,3 +3225,153 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["cache_read_input_token_cost"] == 2.5e-08
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_completion_cost_logs_reasoning_and_cache_breakdown():
+    """
+    completion_cost must surface explicit reasoning and cache-read costs into the
+    cost_breakdown stored on the logging object, so they end up in the spend logs
+    rather than being silently folded into the output/input totals.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    logging_obj = Logging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cache-breakdown",
+        function_id="f",
+    )
+
+    response = ModelResponse(
+        id="x",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="hi"),
+                finish_reason="length",
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=209,
+            completion_tokens=3996,
+            total_tokens=4205,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=3114, text_tokens=882
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=100, text_tokens=109
+            ),
+        ),
+    )
+
+    litellm.completion_cost(
+        completion_response=response,
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_cost_per_token_per_second_pricing(monkeypatch):
+    """
+    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "together_ai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(0.02 * 1.5)
+    assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def _batch_cache_usage() -> Usage:
+    return Usage(
+        prompt_tokens=11000,
+        completion_tokens=200,
+        total_tokens=11200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=8000,
+            cache_creation_tokens=2000,
+            text_tokens=1000,
+        ),
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+
+def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
+    """
+    LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
+    Cache creation tokens must be priced at cache_creation_input_token_cost / 2,
+    not folded into the base input rate, and must not also be billed as base
+    input tokens.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "cache_creation_input_token_cost": 3.75e-6,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
+def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)

@@ -284,8 +284,11 @@ def test_prepare_mcp_server_headers_oauth2_m2m_omits_litellm_caller_authorizatio
     assert extra_headers is None
 
 
-def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
-    """Interactive OAuth still forwards the user's OAuth token in extra_headers."""
+def test_prepare_mcp_server_headers_oauth2_interactive_drops_caller_authorization():
+    """A v2-migrated interactive OAuth (authorization_code) server must NOT forward the
+    caller's Authorization: the resolver injects the stored per-user token, so a
+    caller-supplied bearer must not override another user's stored credential. Non-auth
+    headers are still carried; only the credential is dropped."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,
@@ -293,7 +296,7 @@ def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    user_oauth = {"Authorization": "Bearer upstream-user-token"}
+    caller_oauth = {"Authorization": "Bearer caller-supplied-token"}
 
     server = MCPServer(
         server_id="3lo-server",
@@ -307,12 +310,13 @@ def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
         server=server,
         mcp_server_auth_headers=None,
         mcp_auth_header=None,
-        oauth2_headers=user_oauth,
+        oauth2_headers=caller_oauth,
         raw_headers=None,
     )
 
     assert server_auth_header is None
-    assert extra_headers == user_oauth
+    # Caller's Authorization is dropped (only key present) -> extra_headers is None.
+    assert extra_headers is None
 
 
 def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_headers():
@@ -2813,8 +2817,10 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
 
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
-async def test_oauth2_headers_passed_to_mcp_client():
-    """Test that OAuth2 headers are properly passed through to the MCP client for OAuth2 servers like github_mcp"""
+async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
+    """A v2-migrated authorization_code server (like github_mcp) must NOT forward the
+    caller's oauth2 Authorization to the MCP client — the resolver injects the stored
+    per-user token, so a caller-supplied bearer cannot override another user's credential."""
     try:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -2928,20 +2934,13 @@ async def test_oauth2_headers_passed_to_mcp_client():
     assert captured_client_args["server"].server_id == oauth2_server.server_id
     assert captured_client_args["server"].auth_type == MCPAuth.oauth2
 
-    # Most importantly: verify that OAuth2 headers were passed as extra_headers
-    assert (
-        captured_client_args["extra_headers"] is not None
-    ), "Expected extra_headers to be passed for OAuth2 server"
-    assert (
-        captured_client_args["extra_headers"] == oauth2_headers
-    ), f"Expected OAuth2 headers to be passed as extra_headers, got {captured_client_args['extra_headers']}"
-
-    # Verify the Authorization header specifically
-    assert "Authorization" in captured_client_args["extra_headers"]
-    assert (
-        captured_client_args["extra_headers"]["Authorization"]
-        == "Bearer github_oauth_token_12345"
-    )
+    # Security: a v2-migrated authorization_code server must NOT forward the caller's
+    # oauth2 Authorization upstream. The v2 resolver injects the stored per-user token,
+    # so a caller-supplied bearer cannot override another user's stored credential.
+    extra_headers = captured_client_args["extra_headers"]
+    assert extra_headers is None or "Authorization" not in {
+        k.lower() for k in extra_headers
+    }, f"Caller Authorization must not be forwarded, got {extra_headers}"
 
 
 @pytest.mark.asyncio
@@ -3313,6 +3312,7 @@ async def test_list_tools_filters_by_key_team_permissions():
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
+    server.short_prefix = None
     server.allowed_tools = None
     server.disallowed_tools = None
     server.server_name = "server1"
@@ -3423,6 +3423,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
+    server.short_prefix = None
     server.allowed_tools = None
     server.disallowed_tools = None
     server.server_name = "server1"
@@ -3519,6 +3520,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
+    server.short_prefix = None
     server.allowed_tools = None
     server.disallowed_tools = None
     server.server_name = "server1"
@@ -3620,7 +3622,9 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     server = MagicMock()
     server.server_id = "gitmcp_server"
     server.name = "GITMCP"
-    server.alias = "gitmcp"
+    server.alias = "GITMCP"
+    server.short_prefix = None
+    server.server_name = "GITMCP"
     server.allowed_tools = None
     server.disallowed_tools = None
 
@@ -4160,6 +4164,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             _get_tools_from_mcp_servers,
         )
         from litellm.proxy._types import UserAPIKeyAuth
+        from mcp.types import Tool as MCPTool
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -4173,12 +4178,20 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     server_a.auth_type = None
     server_a.extra_headers = None
 
-    tool_1 = MagicMock()
-    tool_1.name = "server_a-tool_1"
+    tool_1 = MCPTool(
+        name="server_a-tool_1",
+        description="test tool",
+        inputSchema={"type": "object"},
+    )
 
     dummy_logging_obj = MagicMock()
     dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
     dummy_logging_obj.async_success_handler = AsyncMock()
+    function_setup_kwargs = {}
+
+    def _capture_function_setup(*_args, **kwargs):
+        function_setup_kwargs.update(kwargs)
+        return dummy_logging_obj, None
 
     with (
         patch(
@@ -4202,7 +4215,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.function_setup",
-            return_value=(dummy_logging_obj, None),
+            side_effect=_capture_function_setup,
         ),
     ):
         mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
@@ -4214,13 +4227,15 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             mcp_server_auth_headers=None,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="mcp_protocol",
+            request_tags=["team-a"],
         )
 
     assert tools == [tool_1]
     dummy_logging_obj.async_success_handler.assert_awaited_once()
     assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [
-        tool_1
+        tool_1.model_dump(mode="json")
     ]
+    assert function_setup_kwargs["metadata"]["tags"] == ["team-a"]
 
     spend_meta = dummy_logging_obj.model_call_details["metadata"]["spend_logs_metadata"]
     assert spend_meta["tool_count_total"] == 1
@@ -6293,3 +6308,287 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_empty_list_fails_cl
     )
 
     assert result == []
+
+
+class TestProxyExceptionToHttpException:
+    """Auth failures reach the MCP ASGI handlers as ProxyException, not
+    HTTPException. The handlers must map them back to their real status and
+    headers; otherwise they fall through to the generic 500 handler, dropping
+    the 401 + WWW-Authenticate challenge an OAuth client needs to re-authenticate
+    and surfacing the tool call as a cancelled/terminated session.
+    """
+
+    def test_preserves_401_status_and_www_authenticate_header(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _proxy_exception_to_http_exception,
+        )
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="Authentication Error, invalid token",
+            type="auth_error",
+            param="key",
+            code=401,
+            headers={"WWW-Authenticate": 'Bearer resource_metadata="/x"'},
+        )
+
+        http_exc = _proxy_exception_to_http_exception(exc)
+
+        assert http_exc.status_code == 401
+        assert http_exc.detail == "Authentication Error, invalid token"
+        assert http_exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/x"'
+
+    def test_preserves_403_status(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _proxy_exception_to_http_exception,
+        )
+        from litellm.proxy._types import ProxyException
+
+        http_exc = _proxy_exception_to_http_exception(
+            ProxyException(
+                message="Forbidden", type="auth_error", param="key", code=403
+            )
+        )
+
+        assert http_exc.status_code == 403
+
+    def test_non_numeric_code_falls_back_to_500(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _proxy_exception_to_http_exception,
+        )
+        from litellm.proxy._types import ProxyException
+
+        # ProxyException normalises code to the string "None" when unset.
+        http_exc = _proxy_exception_to_http_exception(
+            ProxyException(message="boom", type="server_error", param=None, code=None)
+        )
+
+        assert http_exc.status_code == 500
+
+
+class TestStreamableHttpAuthErrorMapping:
+    """End-to-end guard for the handler wiring: a ProxyException from auth must
+    propagate as the real HTTPException (401 + WWW-Authenticate), not be
+    flattened to a generic 500 by the catch-all handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_propagates_proxy_exception_as_401(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/some_server",
+            "headers": [(b"x-litellm-api-key", b"sk-bad")],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        auth_failure = ProxyException(
+            message="Authentication Error, invalid token",
+            type="auth_error",
+            param="key",
+            code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+        with patch.object(
+            mcp_module,
+            "extract_mcp_auth_context",
+            new=AsyncMock(side_effect=auth_failure),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["WWW-Authenticate"] == "Bearer"
+        # Must not have emitted a 500 body via the generic catch-all.
+        assert not any(
+            m.get("type") == "http.response.start" and m.get("status") == 500
+            for m in sent
+        )
+
+    @pytest.mark.asyncio
+    async def test_sse_propagates_proxy_exception_as_401(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/mcp/some_server",
+            "headers": [(b"x-litellm-api-key", b"sk-bad")],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        auth_failure = ProxyException(
+            message="Authentication Error, invalid token",
+            type="auth_error",
+            param="key",
+            code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+        with patch.object(
+            mcp_module,
+            "extract_mcp_auth_context",
+            new=AsyncMock(side_effect=auth_failure),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_module.handle_sse_mcp(scope, receive, send)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["WWW-Authenticate"] == "Bearer"
+        assert not any(
+            m.get("type") == "http.response.start" and m.get("status") == 500
+            for m in sent
+        )
+
+
+class TestMCPMetaTraceCarrier:
+    """`_mcp_meta_trace_carrier` extracts the W3C trace context the MCP client
+    propagated in the request's params._meta (SEP-414) so the otel_v2 MCP span can
+    parent to the client's span. Exercises the real MCP SDK `RequestParams.Meta`
+    shape (extra='allow' preserves the unprefixed keys), not just an injected
+    carrier."""
+
+    def test_extracts_trace_context_and_excludes_baggage_and_other_meta(self):
+        """Only traceparent/tracestate are carried. The client's W3C ``baggage`` is
+        deliberately dropped even though it rides in params._meta: it is
+        caller-controlled, and the otel baggage processor stamps allowlisted baggage
+        keys onto the span, so honoring it would let a client spoof a span's identity
+        (e.g. ``litellm.team.id``). Dropping it at the source is the regression guard."""
+        from types import SimpleNamespace
+
+        from mcp.types import RequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_meta_trace_carrier,
+        )
+
+        meta = RequestParams.Meta.model_validate(
+            {
+                "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+                "tracestate": "rojo=1",
+                "baggage": "litellm.team.id=spoofed-team,litellm.metadata.user_api_key_user_id=attacker",
+                "progressToken": "p1",
+            }
+        )
+        carrier = _mcp_meta_trace_carrier(SimpleNamespace(meta=meta))
+        assert carrier == {
+            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+            "tracestate": "rojo=1",
+        }
+        assert "baggage" not in carrier
+
+    def test_none_when_no_trace_context(self):
+        from types import SimpleNamespace
+
+        from mcp.types import RequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_meta_trace_carrier,
+        )
+
+        assert _mcp_meta_trace_carrier(None) is None
+        assert _mcp_meta_trace_carrier(SimpleNamespace(meta=None)) is None
+        only_progress = RequestParams.Meta.model_validate({"progressToken": "p1"})
+        assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_includes_active_servers_submitted_by_user():
+    """BYOM submitters can see approved servers they submitted without allow_all_keys."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    submitted_server = _make_mcp_server_for_scope_filter("submitted-1", "user_mcp")
+    submitter = UserAPIKeyAuth(
+        user_id="submitter-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-submitter",
+    )
+    other_user = UserAPIKeyAuth(
+        user_id="other-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-other",
+    )
+
+    async def _submitted_ids(prisma_client, user_id):
+        return ["submitted-1"] if user_id == "submitter-user" else []
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_registry",
+            return_value={"submitted-1": submitted_server},
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_active_submitted_mcp_server_ids_for_user",
+            side_effect=_submitted_ids,
+        ),
+    ):
+        submitter_allowed = await global_mcp_server_manager.get_allowed_mcp_servers(submitter)
+        other_allowed = await global_mcp_server_manager.get_allowed_mcp_servers(other_user)
+
+    assert "submitted-1" in submitter_allowed
+    assert "submitted-1" not in other_allowed
+
+
+@pytest.mark.asyncio
+async def test_get_active_submitted_mcp_server_ids_for_user_queries_active_rows():
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_active_submitted_mcp_server_ids_for_user,
+    )
+    from litellm.proxy._types import MCPApprovalStatus
+
+    row = MagicMock()
+    row.server_id = "submitted-1"
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+
+    result = await get_active_submitted_mcp_server_ids_for_user(prisma_client, "submitter-user")
+
+    assert result == ["submitted-1"]
+    prisma_client.db.litellm_mcpservertable.find_many.assert_awaited_once_with(
+        where={
+            "submitted_by": "submitter-user",
+            "approval_status": MCPApprovalStatus.active,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_db():
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_active_submitted_mcp_server_ids_for_user,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock()
+
+    assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
+    prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()

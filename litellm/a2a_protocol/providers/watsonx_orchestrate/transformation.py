@@ -19,9 +19,7 @@ class WatsonxOrchestrateTransformation:
     Handles request/response transformation between A2A and the WXO REST API.
     """
 
-    TERMINAL_STATES = frozenset(
-        {"completed", "succeeded", "failed", "error", "cancelled"}
-    )
+    TERMINAL_STATES = frozenset({"completed", "succeeded", "failed", "error", "cancelled"})
     SUCCESS_STATES = frozenset({"completed", "succeeded"})
 
     @staticmethod
@@ -114,11 +112,7 @@ class WatsonxOrchestrateTransformation:
             verbose_logger.warning("WXO: A2A result has no parts list")
             return ""
         for part in parts:
-            if (
-                isinstance(part, dict)
-                and part.get("kind") == "text"
-                and part.get("text")
-            ):
+            if isinstance(part, dict) and part.get("kind") == "text" and part.get("text"):
                 return str(part["text"])
         verbose_logger.warning("WXO: A2A result parts contained no text")
         return ""
@@ -219,6 +213,4 @@ class WatsonxOrchestrateTransformation:
             },
         }
 
-        verbose_logger.debug(
-            f"WXO: Fake streaming completed for request_id={request_id}"
-        )
+        verbose_logger.debug(f"WXO: Fake streaming completed for request_id={request_id}")

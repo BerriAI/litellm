@@ -51,7 +51,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import SearchToolSelector from "./SearchTools/SearchToolSelector";
+import SearchToolSelector from "./search_tools/SearchToolSelector";
 
 interface TeamProps {
   accessToken: string | null;
@@ -94,7 +94,6 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
 
   if (organization) {
     if (organization.models.length > 0) {
-      console.log(`organization.models: ${organization.models}`);
       tempModelsToPick = organization.models;
     } else {
       // show all available models if the team has no models set
@@ -251,9 +250,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
-    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
     const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
-    console.log(`models: ${models}`);
     setModelsToPick(models);
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
@@ -262,14 +259,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   useEffect(() => {
     if (isTeamModalVisible) {
       const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
+      const isOrgAdmin = userRole !== "Admin";
 
-      // If there's exactly one organization the user is admin for, preselect it
-      if (adminOrgs.length === 1) {
+      // Org admins must scope a team to an org, so with exactly one we preselect it.
+      // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
+      if (isOrgAdmin && adminOrgs.length === 1) {
         const org = adminOrgs[0];
         form.setFieldValue("organization_id", org.organization_id);
         setCurrentOrgForCreateTeam(org);
       } else {
-        // Reset the organization selection for multiple orgs
         form.setFieldValue("organization_id", currentOrg?.organization_id || null);
         setCurrentOrgForCreateTeam(currentOrg);
       }
@@ -430,7 +428,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
@@ -1132,7 +1129,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           : []
                       }
                       help={
-                        isSingleOrg
+                        isOrgAdmin && isSingleOrg
                           ? "You can only create teams within this organization"
                           : isOrgAdmin
                             ? "required"
@@ -1142,7 +1139,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       <Select
                         showSearch
                         allowClear={!isOrgAdmin}
-                        disabled={isSingleOrg}
+                        disabled={isOrgAdmin && isSingleOrg}
                         placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
                         onChange={(value) => {
                           form.setFieldValue("organization_id", value);
@@ -1478,6 +1475,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                       accessToken={accessToken || ""}
                       placeholder="Select MCP servers or access groups (optional)"
+                      allowAllProxyMcpServers={isProxyAdminRole(userRole || "")}
                     />
                   </Form.Item>
 

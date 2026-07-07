@@ -16,6 +16,7 @@ from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
+    SANDBOX_MAX_OUTPUT_BYTES,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -29,7 +30,7 @@ E2B_DEFAULT_TEMPLATE = "code-interpreter-v1"
 E2B_DEFAULT_DOMAIN = "e2b.app"
 JUPYTER_PORT = 49999
 DEFAULT_SANDBOX_TIMEOUT = 300
-MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+MAX_OUTPUT_BYTES = SANDBOX_MAX_OUTPUT_BYTES
 
 
 class E2BSandboxConfig(BaseSandboxConfig):
@@ -49,7 +50,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         *,
         template: str | None = None,
         timeout: int | None = None,
-        allow_internet_access: bool = True,
+        allow_internet_access: bool | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         metadata: dict | None = None,
@@ -62,7 +63,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             "templateID": template or E2B_DEFAULT_TEMPLATE,
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
             "secure": True,
-            "allow_internet_access": allow_internet_access,
+            "allow_internet_access": (True if allow_internet_access is None else allow_internet_access),
         }
         if metadata:
             body["metadata"] = metadata
@@ -138,11 +139,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         **kwargs,
     ) -> bool:
         handle = self._as_handle(container)
-        key = (
-            api_key
-            or handle._hidden_params.get("api_key")
-            or self.validate_environment()
-        )
+        key = api_key or handle._hidden_params.get("api_key") or self.validate_environment()
         base = api_base or handle._hidden_params.get("api_base") or E2B_API_BASE
         try:
             response = cast(
@@ -162,25 +159,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
     def _as_handle(container: Union[ContainerHandle, str]) -> ContainerHandle:
         if isinstance(container, ContainerHandle):
             return container
-        handle = ContainerHandle(
-            id=str(container), provider="e2b", domain=E2B_DEFAULT_DOMAIN
-        )
+        handle = ContainerHandle(id=str(container), provider="e2b", domain=E2B_DEFAULT_DOMAIN)
         handle._hidden_params = {}
         return handle
-
-    @staticmethod
-    async def _read_capped_lines(response: httpx.Response) -> list[str]:
-        lines: list[str] = []
-        total = 0
-        async for line in response.aiter_lines():
-            total += len(line.encode("utf-8"))
-            if total > MAX_OUTPUT_BYTES:
-                raise ValueError(
-                    f"Sandbox output exceeded {MAX_OUTPUT_BYTES} bytes; aborting to "
-                    "avoid unbounded memory use."
-                )
-            lines.append(line)
-        return lines
 
     @staticmethod
     def _parse_lines(lines: list[str]) -> CodeExecutionResult:
@@ -191,21 +172,14 @@ class E2BSandboxConfig(BaseSandboxConfig):
                 return None
 
         messages = tuple(
-            parsed
-            for stripped in (line.strip() for line in lines)
-            if stripped
-            for parsed in (_try_parse(stripped),)
-            if parsed is not None
+            parsed for line in lines if (stripped := line.strip()) if (parsed := _try_parse(stripped)) is not None
         )
 
         def of_type(message_type: str):
             return (m for m in messages if m.get("type") == message_type)
 
         error = next(
-            (
-                {key: m.get(key) for key in ("name", "value", "traceback")}
-                for m in of_type("error")
-            ),
+            ({key: m.get(key) for key in ("name", "value", "traceback")} for m in of_type("error")),
             None,
         )
         execution_count = next(
@@ -216,9 +190,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         return CodeExecutionResult(
             stdout="".join(m.get("text", "") for m in of_type("stdout")),
             stderr="".join(m.get("text", "") for m in of_type("stderr")),
-            results=[
-                {k: v for k, v in m.items() if k != "type"} for m in of_type("result")
-            ],
+            results=[{k: v for k, v in m.items() if k != "type"} for m in of_type("result")],
             error=error,
             execution_count=execution_count,
         )

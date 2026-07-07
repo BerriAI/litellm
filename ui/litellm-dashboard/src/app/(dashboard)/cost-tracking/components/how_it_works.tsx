@@ -31,7 +31,7 @@ const HowItWorks: React.FC = () => {
         <Text className="font-medium text-gray-900 text-sm mb-1">Cost Calculation</Text>
         <Text className="text-xs text-gray-600">
           Discounts are applied to provider costs:{" "}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">
+          <code className="bg-gray-100 px-1.5 py-0.5 rounded-sm text-xs">
             final_cost = base_cost × (1 - discount%/100)
           </code>
         </Text>
@@ -65,19 +65,19 @@ const HowItWorks: React.FC = () => {
         <Text className="text-xs text-gray-600 mt-3 mb-2">Look for these headers in the response:</Text>
         <div className="space-y-1.5">
           <div className="flex items-start gap-3">
-            <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono text-gray-800 whitespace-nowrap">
+            <code className="bg-gray-100 px-2 py-1 rounded-sm text-xs font-mono text-gray-800 whitespace-nowrap">
               x-litellm-response-cost
             </code>
             <Text className="text-xs text-gray-600">Final cost after discount</Text>
           </div>
           <div className="flex items-start gap-3">
-            <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono text-gray-800 whitespace-nowrap">
+            <code className="bg-gray-100 px-2 py-1 rounded-sm text-xs font-mono text-gray-800 whitespace-nowrap">
               x-litellm-response-cost-original
             </code>
             <Text className="text-xs text-gray-600">Original cost before discount</Text>
           </div>
           <div className="flex items-start gap-3">
-            <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono text-gray-800 whitespace-nowrap">
+            <code className="bg-gray-100 px-2 py-1 rounded-sm text-xs font-mono text-gray-800 whitespace-nowrap">
               x-litellm-response-cost-discount-amount
             </code>
             <Text className="text-xs text-gray-600">Amount discounted</Text>

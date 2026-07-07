@@ -29,6 +29,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
+    _hash_api_key_for_spend_log,
     _is_master_key,
     _redact_prompt_leaks_in_error_string,
     _sanitize_error_information_for_spend_logs,
@@ -2120,3 +2121,195 @@ def test_get_logging_payload_failure_without_recovered_usage_is_zero():
     )
 
     assert payload["total_tokens"] == 0
+
+
+def test_get_logging_payload_sets_litellm_call_id_for_correlation():
+    """LIT-3868: a successful spend log must carry the x-litellm-call-id (the
+    trace id) in its metadata, distinct from request_id, which stays the
+    provider response id. Without this there is no way to correlate a DB row
+    with its trace for a successful call.
+    """
+    provider_response_id = "chatcmpl-e6e6f3e9-c392-404e-9a71-5361c79d8470"
+    trace_call_id = "c6a77556-19ce-4406-b287-53f5fb4b2b55"
+
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": provider_response_id,
+        "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+    metadata = json.loads(payload["metadata"])
+
+    assert payload["request_id"] == provider_response_id
+    assert metadata["litellm_call_id"] == trace_call_id
+    assert metadata["litellm_call_id"] != payload["request_id"]
+
+
+def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
+    """litellm_call_id may only be present in litellm_params; it must still land
+    in the spend log metadata so correlation works on that path too.
+    """
+    trace_call_id = "fallback-7a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "litellm_call_id": trace_call_id,
+            "metadata": {"user_api_key": "sk-test"},
+        },
+    }
+    response_obj = {
+        "id": "chatcmpl-abc123",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+
+
+def test_get_logging_payload_litellm_call_id_when_response_has_no_id():
+    """When the provider returns no id, request_id falls back to the call id, so
+    request_id and the metadata call id hold the same value and correlation
+    still resolves.
+    """
+    trace_call_id = "noid-5b2e-4c7a-9d10-3f8a1c2b4e6d"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+    assert payload["request_id"] == trace_call_id
+
+
+def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
+    """On a cache hit request_id is suffixed to stay unique, but the metadata
+    litellm_call_id stays the raw trace id so the row still points at its trace.
+    """
+    trace_call_id = "cache-9a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "cache_hit": True,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": "chatcmpl-cache-src",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+    assert "_cache_hit" in payload["request_id"]
+    assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
+
+
+class TestHashApiKeyForSpendLog:
+    """Regression: plaintext API keys with Bearer prefix were stored in
+    SpendLogs for failed requests (LIT-4121)"""
+
+    def test_bearer_prefixed_sk_key_is_hashed(self):
+        raw = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("Bearer")
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_bare_sk_key_is_hashed(self):
+        raw = "sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_bearer_lowercase_is_handled(self):
+        raw = "bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("bearer")
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_already_hashed_key_unchanged(self):
+        hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
+        assert _hash_api_key_for_spend_log(hashed) == hashed
+
+    def test_bearer_prefixed_non_sk_key_strips_prefix(self):
+        raw = "Bearer some-other-token-format"
+        result = _hash_api_key_for_spend_log(raw)
+        assert result == "some-other-token-format"
+        assert not result.startswith("Bearer")
+
+    def test_bearer_and_bare_produce_same_hash(self):
+        bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
+        bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        assert _hash_api_key_for_spend_log(bare) == _hash_api_key_for_spend_log(bearer)
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_hashes_bearer_prefixed_api_key():
+    """Regression for LIT-4121: failed-request spend logs stored plaintext
+    'Bearer sk-...' in both the api_key column and metadata.user_api_key"""
+    raw_key = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": raw_key,
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+                "status": "failure",
+            }
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("model error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert not payload["api_key"].startswith("Bearer"), (
+        f"api_key column contains plaintext Bearer key: {payload['api_key']}"
+    )
+    assert not payload["api_key"].startswith("sk-"), (
+        f"api_key column contains unhashed key: {payload['api_key']}"
+    )
+
+    metadata_dict = json.loads(payload["metadata"])
+    assert not metadata_dict["user_api_key"].startswith("Bearer"), (
+        f"metadata user_api_key contains plaintext Bearer key: {metadata_dict['user_api_key']}"
+    )
+    assert not metadata_dict["user_api_key"].startswith("sk-"), (
+        f"metadata user_api_key contains unhashed key: {metadata_dict['user_api_key']}"
+    )
