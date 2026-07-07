@@ -176,6 +176,11 @@ def _mcp_session_id_from_headers(
     return None
 
 
+def _format_progress_token_for_log(progress_token: object) -> str:
+    """Short, log-safe form of an MCP progressToken (str or int per spec)."""
+    return f"{str(progress_token)[:8]}..."
+
+
 def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     """Whether a (possibly truncated) JSON-RPC envelope has a ``method`` key at
     the root object's top level.
@@ -732,7 +737,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 verbose_logger.error(f"Failed to forward progress to Host: {e}")
 
-        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        verbose_logger.debug(f"Host progressToken captured: {_format_progress_token_for_log(host_token)}")
         return forward_progress
 
     async def _build_virtual_call_logging_obj(

@@ -6592,3 +6592,16 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
     assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
     prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "token, expected",
+    [(123456789, "12345678..."), ("abcdefghij", "abcdefgh...")],
+)
+def test_format_progress_token_for_log_handles_int_and_str(token, expected):
+    # Regression for #32181: an integer progressToken crashed host_token[:8].
+    from litellm.proxy._experimental.mcp_server.server import (
+        _format_progress_token_for_log,
+    )
+
+    assert _format_progress_token_for_log(token) == expected
