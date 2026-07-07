@@ -3931,6 +3931,15 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
+        # Resolved before any hook runs so a missing BYOK credential (401) never
+        # leaves during-hook side effects (audit logging, rate-limit bookkeeping)
+        # recorded against a call that ultimately fails.
+        mcp_auth_header = await _resolve_byok_mcp_auth_header(
+            mcp_server,
+            user_api_key_auth,
+            mcp_auth_header,
+        )
+
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
@@ -3962,12 +3971,6 @@ class MCPServerManager:
                 start_time=start_time,
             )
             tasks.append(during_hook_task)
-
-        mcp_auth_header = await _resolve_byok_mcp_auth_header(
-            mcp_server,
-            user_api_key_auth,
-            mcp_auth_header,
-        )
 
         oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
 
