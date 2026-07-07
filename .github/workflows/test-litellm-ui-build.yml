@@ -9,6 +9,7 @@ on:
       - litellm_internal_staging
       - litellm_oss_branch
       - "litellm_**"
+      - "release/v*.do.*"
 
 jobs:
   build-ui:
