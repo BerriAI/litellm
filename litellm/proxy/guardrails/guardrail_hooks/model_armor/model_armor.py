@@ -39,6 +39,7 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    CallTypes,
     CallTypesLiteral,
     Choices,
     GuardrailStatus,
@@ -477,6 +478,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
         event_type = GuardrailEventHooks.pre_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
@@ -574,6 +577,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
         event_type = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 

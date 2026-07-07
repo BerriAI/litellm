@@ -2367,3 +2367,29 @@ def test_update_ui_settings_writes_audit_log(monkeypatch):
         assert after["disable_custom_api_keys"] is True
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
+    """Non-admin callers must not mutate global MCP semantic filter settings."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+    async def _internal_user_auth():
+        return UserAPIKeyAuth(
+            user_id="internal-user-1",
+            api_key="hashed-internal-key",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _internal_user_auth
+    try:
+        resp = client.patch(
+            "/update/mcp_semantic_filter_settings",
+            json={"enabled": True, "top_k": 99, "similarity_threshold": 0.01},
+        )
+        assert resp.status_code == 403
+        assert "proxy admin" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)

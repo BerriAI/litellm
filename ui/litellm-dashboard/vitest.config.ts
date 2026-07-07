@@ -8,6 +8,8 @@ export default defineConfig({
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks
     testTimeout: 30000,
+    silent: process.env.CI ? "passed-only" : false,
+    teardownTimeout: 60000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
