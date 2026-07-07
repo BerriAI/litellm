@@ -25,7 +25,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars, TOOL_DISPLAY_NAME_PATTERN } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -326,6 +326,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   }, [isModalVisible, prefillData, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
+    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
+      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+    );
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
+      );
+      return;
+    }
     setIsLoading(true);
     try {
       const {

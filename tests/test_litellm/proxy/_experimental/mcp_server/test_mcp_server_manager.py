@@ -4074,6 +4074,24 @@ class TestMCPServerTimestamps:
         assert table.created_at is None
         assert table.updated_at is None
 
+    def test_build_mcp_server_table_preserves_tool_overrides(self):
+        """Tool display/description overrides must survive registry -> API table conversion."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="override-server",
+            name="deepwiki",
+            server_name="deepwiki_mcp",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            tool_name_to_display_name={"read_wiki_structure": "browse_docs"},
+            tool_name_to_description={"read_wiki_structure": "Browse repository documentation"},
+        )
+
+        table = manager._build_mcp_server_table(server)
+
+        assert table.tool_name_to_display_name == {"read_wiki_structure": "browse_docs"}
+        assert table.tool_name_to_description == {"read_wiki_structure": "Browse repository documentation"}
+
     @pytest.mark.asyncio
     async def test_round_trip_timestamps_preserved(self):
         """Timestamps survive the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
