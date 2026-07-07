@@ -4735,3 +4735,139 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 )
 
         assert processor.data["model"] == primary_model
+
+    @pytest.mark.asyncio
+    async def test_real_parallel_request_limiter_model_tpm_limit_triggers_fallback(self):
+        """
+        Customer-reported scenario from LIT-3890 / GH #8822.
+
+        The prior tests in this class hand-build a ``ProxyRateLimitError``. The
+        customer's production setup is different: they set a *per-key per-model*
+        TPM cap on the key itself::
+
+            Model TPM Limits: {"gpt-4.1-20250414-test": 100}
+
+        and configure a proxy-side fallback (gpt-4.1-...-test -> gpt-4.1-...).
+        When the per-model TPM cap trips, the real
+        ``parallel_request_limiter`` raises ``ProxyRateLimitError`` from inside
+        ``proxy_logging_obj.pre_call_hook`` — the seam ``_pre_call_with_fallbacks``
+        wraps. This test drives that *real* limiter (not a mock error) end-to-end
+        to prove the customer's exact knob triggers the gateway fallback instead
+        of returning a 429 to the client.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            ProxyRateLimitError,
+        )
+        from litellm.proxy.hooks.parallel_request_limiter import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
+        from litellm.proxy.utils import InternalUsageCache
+
+        primary_model = "gpt-4"
+        fallback_model = "gpt-3.5-turbo"
+
+        # Freeze the limiter's clock so the per-minute counter key is stable and
+        # the pre-seeded counter is guaranteed to be the one it reads.
+        class _FrozenClock(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 1, 1, 12, 30, 0)
+
+        precise_minute = "2026-01-01-12-30"
+
+        # Real per-key per-model TPM limiter + a key carrying the customer's
+        # `model_tpm_limit` metadata (only the primary is capped).
+        limiter = _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache())
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-lit3890",
+            metadata={"model_tpm_limit": {primary_model: 100}},
+        )
+
+        # Pre-seed the primary's per-model token counter at the cap so the very
+        # next request trips it. The counter key uses the *hashed* api_key.
+        counter_key = (
+            f"{user_api_key_dict.api_key}::{primary_model}"
+            f"::{precise_minute}::request_count"
+        )
+        await limiter.internal_usage_cache.async_set_cache(
+            key=counter_key,
+            value={"current_requests": 0, "current_tpm": 100, "current_rpm": 0},
+            litellm_parent_otel_span=None,
+            local_only=True,
+        )
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        # Stand in for common_processing_pre_call_logic's pre_call_hook step by
+        # invoking the real limiter for whatever model is currently selected.
+        limiter_calls = []
+
+        async def real_limiter_pre_call(**kwargs):
+            current_model = processor.data["model"]
+            limiter_calls.append(current_model)
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={
+                    "model": current_model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                call_type="acompletion",
+            )
+            return processor.data, MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{primary_model: [fallback_model]}]
+
+        with patch(
+            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
+        ):
+            with patch.object(
+                processor,
+                "common_processing_pre_call_logic",
+                side_effect=real_limiter_pre_call,
+            ):
+                data, logging_obj = await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=user_api_key_dict,
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model=primary_model,
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        # The capped primary tripped the real limiter, and the fallback (which
+        # has no per-model cap) served the request — no 429 to the client.
+        assert processor.data["model"] == fallback_model
+        assert limiter_calls == [primary_model, fallback_model]
+
+        # Sanity-check the premise: the limiter genuinely raises a
+        # ProxyRateLimitError for the capped primary under the frozen clock.
+        with patch(
+            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await limiter.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=DualCache(),
+                    data={
+                        "model": primary_model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                    call_type="acompletion",
+                )
