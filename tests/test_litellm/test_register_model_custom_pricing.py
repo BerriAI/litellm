@@ -9,8 +9,11 @@ mode, and supports_prompt_caching were dropped, causing incorrect cost
 calculations for DB-sourced models with prompt caching pricing.
 """
 
+import copy
 import os
 import sys
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -18,6 +21,20 @@ sys.path.insert(
 
 import litellm
 from litellm.main import _build_custom_pricing_entry
+from litellm.utils import _invalidate_model_cost_lowercase_map
+
+
+def _snapshot_model_cost_entries(keys):
+    return {key: copy.deepcopy(litellm.model_cost.get(key)) for key in keys}
+
+
+def _restore_model_cost_entries(original_entries):
+    for key, value in original_entries.items():
+        if value is None:
+            litellm.model_cost.pop(key, None)
+        else:
+            litellm.model_cost[key] = value
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_build_custom_pricing_entry_includes_all_kwargs_fields():
@@ -471,3 +488,166 @@ def test_register_model_router_add_deployment_custom_pricing_applies():
         litellm.model_cost.pop(model_key, None)
         litellm.model_cost.pop(deployment_model, None)
         del router
+
+
+def test_embedding_router_zero_pricing_does_not_clobber_builtin_pricing():
+    """LIT-3991: a router-originated embedding request that carries explicit
+    zero custom pricing (e.g. resolved through an ``openai/*`` wildcard
+    deployment with ``input_cost_per_token: 0``) must not overwrite the shared
+    ``openai/text-embedding-3-small`` entry in ``litellm.model_cost``. Before
+    the fix, one call through the wildcard poisoned the shared key and every
+    sibling deployment relying on built-in pricing logged $0 until restart.
+    """
+    shared_key = "openai/text-embedding-3-small"
+    deployment_id = "lit3991-wildcard-embed-zero"
+    snapshot = _snapshot_model_cost_entries(
+        [shared_key, "text-embedding-3-small", deployment_id]
+    )
+    builtin_input_cost = litellm.get_model_info(model=shared_key)[
+        "input_cost_per_token"
+    ]
+    assert builtin_input_cost > 0
+
+    try:
+        litellm.embedding(
+            model=shared_key,
+            input=["hello"],
+            api_key="fake-key",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            model_info={"id": deployment_id},
+            metadata={"model_info": {"id": deployment_id}},
+            mock_response=[0.1, 0.2],
+        )
+
+        assert (
+            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
+            == builtin_input_cost
+        ), "wildcard deployment's zero pricing leaked into the shared model_cost key"
+        assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.0
+        assert litellm.model_cost[deployment_id]["output_cost_per_token"] == 0.0
+
+        sibling_response = litellm.embedding(
+            model=shared_key,
+            input=["hello"],
+            api_key="fake-key",
+            mock_response=[0.1, 0.2],
+        )
+        sibling_cost = litellm.completion_cost(
+            completion_response=sibling_response, call_type="embedding"
+        )
+        assert sibling_cost == pytest.approx(10 * builtin_input_cost)
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
+    """The request that carries custom pricing must still be costed with that
+    pricing (via its deployment id entry), while the shared backend key keeps
+    the built-in rate for siblings.
+    """
+    shared_key = "openai/text-embedding-3-small"
+    deployment_id = "lit3991-wildcard-embed-custom"
+    override_input_cost = 5e-05
+    snapshot = _snapshot_model_cost_entries(
+        [shared_key, "text-embedding-3-small", deployment_id]
+    )
+    builtin_input_cost = litellm.get_model_info(model=shared_key)[
+        "input_cost_per_token"
+    ]
+    assert builtin_input_cost != override_input_cost
+
+    try:
+        response = litellm.embedding(
+            model=shared_key,
+            input=["hello"],
+            api_key="fake-key",
+            input_cost_per_token=override_input_cost,
+            output_cost_per_token=override_input_cost * 2,
+            model_info={"id": deployment_id},
+            metadata={"model_info": {"id": deployment_id}},
+            mock_response=[0.1, 0.2],
+        )
+
+        request_cost = litellm.completion_cost(
+            completion_response=response,
+            model=shared_key,
+            custom_llm_provider="openai",
+            call_type="embedding",
+            custom_pricing=True,
+            router_model_id=deployment_id,
+        )
+        assert request_cost == pytest.approx(10 * override_input_cost)
+        assert (
+            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
+            == builtin_input_cost
+        )
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_completion_router_zero_pricing_does_not_clobber_builtin_pricing():
+    """Same isolation as the embedding path, exercised through completion()."""
+    shared_key = "openai/gpt-4o-mini"
+    deployment_id = "lit3991-wildcard-chat-zero"
+    snapshot = _snapshot_model_cost_entries(
+        [shared_key, "gpt-4o-mini", deployment_id]
+    )
+    builtin_input_cost = litellm.get_model_info(model=shared_key)[
+        "input_cost_per_token"
+    ]
+    assert builtin_input_cost > 0
+
+    try:
+        litellm.completion(
+            model=shared_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            model_info={"id": deployment_id},
+            metadata={"model_info": {"id": deployment_id}},
+            mock_response="hello back",
+        )
+
+        assert (
+            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
+            == builtin_input_cost
+        ), "wildcard deployment's zero pricing leaked into the shared model_cost key"
+        assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.0
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
+    """Direct SDK calls (no router deployment id in metadata) keep the legacy
+    behavior: custom pricing is registered under ``{provider}/{model}`` and the
+    request is costed with it.
+    """
+    model_key = "openai/lit3991-direct-sdk-embed-model"
+    override_input_cost = 3e-05
+    try:
+        response = litellm.embedding(
+            model=model_key,
+            input=["hello"],
+            api_key="fake-key",
+            input_cost_per_token=override_input_cost,
+            output_cost_per_token=override_input_cost * 2,
+            mock_response=[0.1, 0.2],
+        )
+
+        assert (
+            litellm.model_cost[model_key]["input_cost_per_token"]
+            == override_input_cost
+        )
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=model_key,
+            custom_llm_provider="openai",
+            call_type="embedding",
+            custom_pricing=True,
+        )
+        assert cost == pytest.approx(10 * override_input_cost)
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
