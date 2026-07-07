@@ -2584,6 +2584,50 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_load_config_user_url_validation_handles_null_and_string_false(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.example"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["provider.example"])
+    null_config_file = tmp_path / "null_config.yaml"
+    null_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "user_url_allowed_hosts": None,
+                    "user_url_validation": None,
+                    "provider_url_destination_allowed_hosts": None,
+                },
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(null_config_file)
+    )
+    assert litellm.user_url_validation is True
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
+
+    false_config_file = tmp_path / "false_config.yaml"
+    false_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {"user_url_validation": "false"},
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(false_config_file)
+    )
+    assert litellm.user_url_validation is False
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
@@ -8869,6 +8913,76 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     assert "sk-stored-secret" not in written["before_value"]
     assert "sk-stored-secret" not in written["updated_values"]
     assert before["some_api_key"] != "sk-stored-secret"
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_validation",
+            field_value="false",
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=["internal.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=["provider.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_validation is False
+    assert litellm.user_url_allowed_hosts == ["internal.example"]
+    assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
 
 
 @pytest.mark.asyncio

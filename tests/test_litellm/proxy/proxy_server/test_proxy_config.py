@@ -721,6 +721,37 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp_path, monkeypatch):
+    """Regression for #26599: SSRF settings in general_settings must reach litellm globals."""
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  user_url_validation: false\n"
+        "  user_url_allowed_hosts:\n"
+        "    - internal.corp\n"
+        "  provider_url_destination_allowed_hosts:\n"
+        "    - api.example.com\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    original_validation = litellm.user_url_validation
+    original_hosts = list(litellm.user_url_allowed_hosts)
+    original_provider_hosts = list(litellm.provider_url_destination_allowed_hosts)
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        assert litellm.user_url_validation is False
+        assert litellm.user_url_allowed_hosts == ["internal.corp"]
+        assert litellm.provider_url_destination_allowed_hosts == ["api.example.com"]
+    finally:
+        litellm.user_url_validation = original_validation
+        litellm.user_url_allowed_hosts = original_hosts
+        litellm.provider_url_destination_allowed_hosts = original_provider_hosts
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
