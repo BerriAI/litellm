@@ -61,7 +61,6 @@ async def test_vertex_passthrough_load_balancing():
             new_callable=AsyncMock,
         ) as mock_auth,
     ):
-
         # Setup additional mocks to avoid side effects
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
         mock_prep_headers.return_value = (
@@ -86,9 +85,7 @@ async def test_vertex_passthrough_load_balancing():
 
         # Verify
         # 1. Check that get_available_deployment_for_pass_through was called with the correct model ID
-        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(
-            model="gemini-pro"
-        )
+        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(model="gemini-pro")
 
         # 2. Check that get_model_list was NOT called (this ensures we aren't doing the old logic)
         mock_router.get_model_list.assert_not_called()
@@ -210,9 +207,7 @@ def test_get_available_deployment_for_pass_through_load_balancing():
     # Call multiple times and track selected deployments
     selections = {"project-1": 0, "project-2": 0}
     for _ in range(100):
-        deployment = router.get_available_deployment_for_pass_through(
-            model="gemini-pro"
-        )
+        deployment = router.get_available_deployment_for_pass_through(model="gemini-pro")
         project = deployment["litellm_params"]["vertex_project"]
         selections[project] += 1
 
@@ -241,9 +236,7 @@ async def test_async_get_available_deployment_for_pass_through():
 
     router = Router(model_list=model_list, routing_strategy="simple-shuffle")
 
-    deployment = await router.async_get_available_deployment_for_pass_through(
-        model="gemini-pro", request_kwargs={}
-    )
+    deployment = await router.async_get_available_deployment_for_pass_through(model="gemini-pro", request_kwargs={})
 
     assert deployment is not None
     assert deployment["litellm_params"]["use_in_pass_through"] is True
@@ -307,7 +300,6 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
             return_value=("new-access-token", None),
         ) as mock_get_token,
     ):
-
         # Call the function
         (
             headers,
@@ -402,7 +394,6 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
             return_value=("vertex-access-token", None),
         ),
     ):
-
         (
             headers,
             _base_target_url,
@@ -621,7 +612,6 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
             new_callable=AsyncMock,
         ) as mock_auth,
     ):
-
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
         mock_prep_headers.return_value = (
             {},
@@ -634,9 +624,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         mock_create_route.return_value = mock_endpoint_func
         mock_auth.return_value = {}
 
-        mock_handler.get_default_base_target_url.return_value = (
-            "https://global-aiplatform.googleapis.com"
-        )
+        mock_handler.get_default_base_target_url.return_value = "https://global-aiplatform.googleapis.com"
 
         await _base_vertex_proxy_route(
             endpoint=test_endpoint,
@@ -646,17 +634,78 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         )
 
         # Verify the router was called with the custom model name (extracted from URL)
-        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(
-            model="gcp/google/gemini-3-pro"
-        )
+        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(model="gcp/google/gemini-3-pro")
 
         # Verify the target URL passed to create_pass_through_route contains
         # the REAL Vertex AI model name, not the custom one
         create_route_call = mock_create_route.call_args
         target_url = create_route_call.kwargs.get("target", "")
-        assert (
-            "gcp/google/gemini-3-pro" not in target_url
-        ), f"Custom model name should have been replaced in target URL. Got: {target_url}"
-        assert (
-            "gemini-3-pro" in target_url
-        ), f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
+        assert "gcp/google/gemini-3-pro" not in target_url, (
+            f"Custom model name should have been replaced in target URL. Got: {target_url}"
+        )
+        assert "gemini-3-pro" in target_url, f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
+
+
+def test_forward_headers_strips_proxy_auth_when_forwarding():
+    """
+    Regression test for #32202: when forward_headers=True and custom headers
+    do NOT include an Authorization key, the proxy's own auth header must
+    still be stripped so it is never forwarded to the upstream provider.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "authorization": "Bearer sk-litellm-master",
+        "api-key": "sk-litellm-azure",
+        "x-api-key": "sk-litellm-anthropic",
+        "x-goog-api-key": "sk-litellm-google",
+        "content-type": "application/json",
+        "x-request-id": "req-456",
+    }
+    custom_headers = {
+        "x-custom": "custom-value",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers.copy(),
+        headers=custom_headers.copy(),
+        forward_headers=True,
+    )
+
+    assert "authorization" not in result
+    assert "api-key" not in result
+    assert "x-api-key" not in result
+    assert "x-goog-api-key" not in result
+    assert result["x-custom"] == "custom-value"
+    assert result["content-type"] == "application/json"
+    assert result["x-request-id"] == "req-456"
+
+
+def test_forward_headers_no_raw_x_pass_prefix_in_output():
+    """
+    Regression test for #32202: when forward_headers=True, x-pass- prefixed
+    headers must not appear verbatim in the forwarded set. Only the
+    prefix-stripped version should be present.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "authorization": "Bearer sk-litellm-key",
+        "x-pass-anthropic-beta": "prompt-caching-2025-04",
+        "x-pass-custom-header": "custom-value",
+        "content-type": "application/json",
+    }
+    custom_headers = {"x-api-key": "sk-real-provider-key"}
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers.copy(),
+        headers=custom_headers.copy(),
+        forward_headers=True,
+    )
+
+    assert "x-pass-anthropic-beta" not in result
+    assert "x-pass-custom-header" not in result
+    assert result["anthropic-beta"] == "prompt-caching-2025-04"
+    assert result["custom-header"] == "custom-value"
+    assert "authorization" not in result
+    assert result["x-api-key"] == "sk-real-provider-key"
