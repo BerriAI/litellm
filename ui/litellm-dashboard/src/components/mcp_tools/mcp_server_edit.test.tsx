@@ -1039,7 +1039,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
   });
 });
 
-describe("MCPServerEdit oauth2_flow preservation", () => {
+describe("MCPServerEdit oauth2_flow selector", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -1078,19 +1078,83 @@ describe("MCPServerEdit oauth2_flow preservation", () => {
     expect(payload).not.toHaveProperty("oauth2_flow");
   });
 
-  it("never writes oauth2_flow over an explicit client_credentials row", async () => {
+  it("re-writes an explicit client_credentials row with its own prefilled value", async () => {
     const payload = await saveAndGetPayload({
       oauth2_flow: "client_credentials",
       token_url: "https://idp.example.com/oauth/token",
     });
-    expect(payload).not.toHaveProperty("oauth2_flow");
+    expect(payload.oauth2_flow).toBe("client_credentials");
   });
 
-  it("never writes oauth2_flow over the DCR authorization_code stamp", async () => {
+  it("re-writes the DCR authorization_code stamp with its own prefilled value", async () => {
     const payload = await saveAndGetPayload({
       oauth2_flow: "authorization_code",
       token_url: "https://idp.example.com/oauth/token",
     });
-    expect(payload).not.toHaveProperty("oauth2_flow");
+    expect(payload.oauth2_flow).toBe("authorization_code");
+  });
+
+  it("persists client_credentials when the admin selects M2M on a legacy null-flow row", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://idp.example.com/oauth/token",
+          oauth2_flow: null,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.oauth2_flow).toBe("client_credentials");
+  });
+
+  it("persists authorization_code when the admin selects Interactive on a legacy null-flow row", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://idp.example.com/oauth/token",
+          oauth2_flow: null,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("OAuth Flow Type", "Interactive (PKCE)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.oauth2_flow).toBe("authorization_code");
   });
 });

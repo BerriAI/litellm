@@ -6,6 +6,7 @@ import {
   AUTH_TYPE,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
+  MCP_OAUTH2_FLOW_INTERACTIVE,
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
@@ -225,7 +226,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       static_headers: initialStaticHeaders,
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
-      oauth_flow_type: mcpServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+      oauth_flow_type:
+        mcpServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M
+          ? OAUTH_FLOW.M2M
+          : mcpServer.oauth2_flow
+            ? OAUTH_FLOW.INTERACTIVE
+            : undefined,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -681,6 +687,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
             : false;
         })(),
+        ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && restValues.oauth_flow_type
+          ? {
+              oauth2_flow:
+                restValues.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
+            }
+          : {}),
         // Include token_validation when it is set (non-null) or when clearing an existing value
         ...(tokenValidation !== null || mcpServer.token_validation ? { token_validation: tokenValidation } : {}),
       };
@@ -929,6 +941,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {!isStdioTransport && isOAuthAuthType && (
               <>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      OAuth Flow Type
+                      <Tooltip title="Machine-to-Machine (M2M) authenticates with client credentials and no user interaction. Interactive (PKCE) authorizes each user in the browser and stores per-user tokens. Servers created before this field existed have no stored value; choose one to persist it.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="oauth_flow_type"
+                >
+                  <Select placeholder="Select OAuth flow">
+                    <Select.Option value={OAUTH_FLOW.M2M}>Machine-to-Machine (M2M)</Select.Option>
+                    <Select.Option value={OAUTH_FLOW.INTERACTIVE}>Interactive (PKCE)</Select.Option>
+                  </Select>
+                </Form.Item>
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
