@@ -191,6 +191,8 @@ class ZscalerAIGuard(CustomGuardrail):
                 blocking_info = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
                 error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
                 raise HTTPException(status_code=400, detail={"error": error_message})
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.error("ZscalerAIGuard: Failed to apply guardrail: %s", str(e))
             raise e

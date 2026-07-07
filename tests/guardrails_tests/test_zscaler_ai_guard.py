@@ -364,3 +364,35 @@ async def test_apply_guardrail_block_raises_400(mock_api_call):
 
     assert exc_info.value.status_code == 400
     assert "blocked" in exc_info.value.detail["error"].lower()
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_apply_guardrail_block_does_not_log_error(mock_api_call):
+    """
+    Regression: a BLOCK is intentional guardrail behavior, not a failure.
+    apply_guardrail must NOT call verbose_proxy_logger.error when content is blocked.
+    """
+    mock_api_call.return_value = {
+        "action": "BLOCK",
+        "zscaler_ai_guard_response": {
+            "transactionId": "tx-456",
+            "detectorResponses": {"detector1": {"action": "BLOCK"}},
+        },
+    }
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1)
+    inputs = {"texts": ["blocked content"]}
+    request_data = {}
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.zscaler_ai_guard.verbose_proxy_logger"
+    ) as mock_logger:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(inputs, request_data, "request")
+
+        mock_logger.error.assert_not_called()
+
+    assert exc_info.value.status_code == 400
