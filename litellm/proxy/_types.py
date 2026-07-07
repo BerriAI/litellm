@@ -1255,7 +1255,10 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
-    # Token Exchange (OBO) fields — RFC 8693
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: Optional[str] = None
@@ -1345,7 +1348,10 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
-    # Token Exchange (OBO) fields — RFC 8693
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: Optional[str] = None
