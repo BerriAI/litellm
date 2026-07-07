@@ -7,13 +7,16 @@ metadata:
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
   annotations:
+    {{- with .Values.migrationJob.jobAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
-    argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/hook: {{ .Values.migrationJob.hooks.argocd.hook | default "PreSync" | quote }}
+    argocd.argoproj.io/hook-delete-policy: {{ .Values.migrationJob.hooks.argocd.hookDeletePolicy | default "BeforeHookCreation" | quote }}
     {{- end }}
     {{- if .Values.migrationJob.hooks.helm.enabled }}
-    helm.sh/hook: "pre-install,pre-upgrade"
-    helm.sh/hook-delete-policy: "before-hook-creation"
+    helm.sh/hook: {{ .Values.migrationJob.hooks.helm.hook | default "pre-install,pre-upgrade" | quote }}
+    helm.sh/hook-delete-policy: {{ .Values.migrationJob.hooks.helm.hookDeletePolicy | default "before-hook-creation" | quote }}
     helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "1" | quote }}
     {{- end }}
     checksum/config: {{ toYaml .Values | sha256sum }}

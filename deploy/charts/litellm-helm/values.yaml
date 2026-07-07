@@ -348,6 +348,9 @@ migrationJob:
   # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.
   # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".
   serviceAccountName: ""
+  # extra annotations for the Job
+  jobAnnotations: {}
+  # extra annotations for pods created from the Job
   annotations: {}
   ttlSecondsAfterFinished: 120
   resources: {}
@@ -361,8 +364,14 @@ migrationJob:
   hooks:
     argocd:
       enabled: true
+      # Optional hook controls (defaults shown)
+      # hook: PreSync
+      # hookDeletePolicy: BeforeHookCreation
     helm:
       enabled: false
+      # Optional hook controls (defaults shown)
+      # hook: pre-install,pre-upgrade
+      # hookDeletePolicy: before-hook-creation
 
 # Log level for the litellm proxy (sets LITELLM_LOG in the deployment env).
 # Rendered as a direct `env:` entry, which in Kubernetes takes precedence over
