@@ -79,3 +79,14 @@ class TestMistralModelInfo:
             "mistral/mistral-medium-latest",
             "mistral/mistral-large-latest",
         ]
+
+    def test_get_models_raises_without_api_key(self, monkeypatch):
+        monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="MISTRAL_API_BASE or MISTRAL_API_KEY"):
+            MistralModelInfo().get_models()
+
+    def test_get_models_raises_on_http_error(self, respx_mock):
+        litellm.disable_aiohttp_transport = True
+        respx_mock.get("https://api.mistral.ai/v1/models").respond(status_code=500, text="boom")
+        with pytest.raises(Exception, match="Status code: 500"):
+            MistralModelInfo().get_models()
