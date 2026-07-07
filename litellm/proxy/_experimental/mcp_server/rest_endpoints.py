@@ -601,9 +601,7 @@ if MCP_AVAILABLE:
             if toolset_name:
                 from litellm.proxy.utils import get_prisma_client_or_throw
 
-                prisma_client = get_prisma_client_or_throw(
-                    "Database not available. Connect a database to your proxy"
-                )
+                prisma_client = get_prisma_client_or_throw("Database not available. Connect a database to your proxy")
                 toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name)
                 if toolset is None:
                     raise HTTPException(
