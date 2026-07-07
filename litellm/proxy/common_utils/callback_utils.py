@@ -1,4 +1,6 @@
 import copy
+import json
+from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
 
 import litellm
@@ -34,6 +36,7 @@ TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY = "_pillar_response_headers_trusted
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.proxy.utils import PrismaClient
 
 
 def initialize_callbacks_on_proxy(
@@ -579,13 +582,17 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
 
 
-def encrypt_callback_vars(metadata: Any) -> Any:
+def encrypt_callback_vars(metadata: Any, new_encryption_key: Optional[str] = None) -> Any:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so
     round-trips through edit forms don't double-encrypt.
+
+    ``new_encryption_key`` overrides the signing key used for encryption. Master
+    key rotation decrypts with the current key and re-encrypts under the new key
+    by passing it here, mirroring the model / credential / MCP rotation paths.
     """
-    return _transform_callback_vars(metadata, _encrypt_if_plaintext)
+    return _transform_callback_vars(metadata, partial(_encrypt_if_plaintext, new_encryption_key=new_encryption_key))
 
 
 def decrypt_callback_vars(metadata: Any) -> Any:
@@ -626,7 +633,7 @@ def is_sensitive_callback_key(
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
 
-def _encrypt_if_plaintext(key: str, value: Any) -> Any:
+def _encrypt_if_plaintext(key: str, value: Any, new_encryption_key: Optional[str] = None) -> Any:
     if not isinstance(value, str) or not value:
         return value
     if not is_sensitive_callback_key(key):
@@ -639,7 +646,7 @@ def _encrypt_if_plaintext(key: str, value: Any) -> Any:
         # plaintext under K2 and wrap them a second time.
         return value
     try:
-        return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value)
+        return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
     except Exception:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
@@ -656,3 +663,65 @@ def _decrypt_or_passthrough(key: str, value: Any) -> Any:
     inner = value[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
     decrypted = decrypt_value_helper(value=inner, key=key, exception_type="debug", return_original_value=False)
     return decrypted if decrypted is not None else value
+
+
+def _iter_callback_var_dicts(metadata: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    for entry in metadata.get("logging", []) or []:
+        if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
+            yield entry["callback_vars"]
+    callback_settings = metadata.get("callback_settings")
+    if isinstance(callback_settings, dict) and isinstance(callback_settings.get("callback_vars"), dict):
+        yield callback_settings["callback_vars"]
+
+
+def _has_encrypted_callback_vars(metadata: Any) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    return any(
+        isinstance(v, str) and v.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX)
+        for callback_vars in _iter_callback_var_dicts(metadata)
+        for v in callback_vars.values()
+    )
+
+
+async def rotate_callback_vars_master_key(prisma_client: "PrismaClient", new_master_key: str) -> None:
+    """Re-encrypt team and verification-token ``callback_vars`` under ``new_master_key``.
+
+    Key-level (``LiteLLM_VerificationToken.metadata``) and team-level
+    (``LiteLLM_TeamTable.metadata``) logging callback credentials (e.g. Langfuse /
+    Langsmith secrets) are encrypted at rest but were not covered by master key
+    rotation, so after a rotation they stayed encrypted under the old key and
+    produced recurring decryption errors. This walks both tables and, for every
+    row that holds encrypted callback vars, decrypts with the current key and
+    re-encrypts under the new key via the proven ``decrypt_callback_vars`` /
+    ``encrypt_callback_vars`` transforms.
+    """
+    for table_name in ("team", "verification_token"):
+        await _rotate_callback_vars_table(prisma_client, table_name, new_master_key)
+
+
+async def _rotate_callback_vars_table(
+    prisma_client: "PrismaClient",
+    table_name: Literal["team", "verification_token"],
+    new_master_key: str,
+) -> None:
+    if table_name == "team":
+        table = prisma_client.db.litellm_teamtable
+        pk = "team_id"
+    else:
+        table = prisma_client.db.litellm_verificationtoken
+        pk = "token"
+
+    rows = await table.find_many()
+    rotated = 0
+    for row in rows or []:
+        metadata = getattr(row, "metadata", None)
+        if not _has_encrypted_callback_vars(metadata):
+            continue
+        re_encrypted = encrypt_callback_vars(decrypt_callback_vars(metadata), new_encryption_key=new_master_key)
+        await table.update(
+            where={pk: getattr(row, pk)},
+            data={"metadata": json.dumps(re_encrypted)},
+        )
+        rotated += 1
+    verbose_proxy_logger.info("rotate_callback_vars_master_key: rotated %d %s row(s)", rotated, table_name)
