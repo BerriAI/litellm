@@ -2,6 +2,15 @@
 
 Thank you for your interest in contributing to LiteLLM! We welcome contributions of all kinds - from bug fixes and documentation improvements to new features and integrations.
 
+## OSS vs Enterprise
+
+Most contributions belong in the **MIT-licensed OSS** tree (`litellm/`, `ui/`, `cookbook/`, `tests/`, etc.). The `enterprise/` folder is commercially licensed and typically requires a separate agreement to modify.
+
+- **OSS PRs**: Open to all contributors after signing the CLA. This includes the proxy server, MCP gateway, SDK, and dashboard.
+- **Enterprise PRs**: Coordinate with the BerriAI team if you need changes under `enterprise/`.
+
+See [enterprise/README.md](./enterprise/README.md) for the license boundary.
+
 ## **Checklist before submitting a PR**
 
 Here are the core requirements for any PR submitted to LiteLLM:
