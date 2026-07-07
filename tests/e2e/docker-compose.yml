@@ -48,7 +48,7 @@ configs:
 
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ${LITELLM_E2E_IMAGE:-ghcr.io/berriai/litellm:main-latest}
     depends_on:
       db:
         condition: service_healthy
@@ -58,6 +58,8 @@ services:
     environment:
       LITELLM_MASTER_KEY: sk-1234
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      UI_USERNAME: admin
+      UI_PASSWORD: sk-1234
     ports:
       - "4000:4000"
     configs:

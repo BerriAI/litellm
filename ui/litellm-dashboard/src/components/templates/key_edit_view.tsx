@@ -18,6 +18,7 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { excludeProxyWideSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
@@ -136,7 +137,7 @@ export function KeyEditView({
         } else if (team?.team_id) {
           // Fetch team models if team exists
           const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
-          setAvailableModels(Array.from(new Set([...team.models, ...models])));
+          setAvailableModels(excludeProxyWideSentinel(Array.from(new Set([...team.models, ...models]))));
         }
       } catch (error) {
         console.error("Error fetching models:", error);
@@ -359,8 +360,7 @@ export function KeyEditView({
                   value={isDisabled ? [] : models}
                   onChange={(value) => setFieldValue("models", value)}
                 >
-                  {/* Only show All Team Models if team has models */}
-                  {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
+                  {keyData.team_id != null && <Select.Option value="all-team-models">All Team Models</Select.Option>}
                   {availableModels.map((model) => (
                     <Select.Option key={model} value={model}>
                       {model}

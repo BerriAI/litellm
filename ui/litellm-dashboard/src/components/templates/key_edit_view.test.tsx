@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -893,6 +893,72 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(screen.getByText("Engineering")).toBeInTheDocument();
       });
+    });
+  });
+
+  describe("models dropdown team gating", () => {
+    const openModelsDropdown = () => {
+      const modelsFormItem = screen.getByText("Models", { selector: "label" }).closest(".ant-form-item");
+      const selector = modelsFormItem?.querySelector(".ant-select-selector");
+      expect(selector).toBeTruthy();
+      fireEvent.mouseDown(selector as Element);
+    };
+
+    it("should not offer all-team-models for a teamless key", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
+    });
+
+    it("should offer all-team-models but hide all-proxy-models for a team key", async () => {
+      const teamKeyData = { ...MOCK_KEY_DATA, team_id: "team-1" };
+      const teams = [{ team_id: "team-1", models: ["all-proxy-models", "team-model-1"] }];
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={teamKeyData}
+          teams={teams}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      await waitFor(() => {
+        expect(screen.getAllByText("team-model-1").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.getAllByText("All Team Models").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("all-proxy-models")).toHaveLength(0);
     });
   });
 });

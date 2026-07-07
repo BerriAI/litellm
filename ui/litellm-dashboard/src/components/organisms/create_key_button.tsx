@@ -30,7 +30,7 @@ import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { excludeProxyWideSentinel, getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
@@ -589,7 +589,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
     if (userID && userRole && accessToken) {
       fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
-        let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
+        const allModels = excludeProxyWideSentinel(
+          Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models])),
+        );
         setModelsToPick(allModels);
       });
     }
@@ -951,7 +953,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   }}
                 >
-                  {!selectedProjectId && (
+                  {!selectedProjectId && selectedCreateKeyTeam && (
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
                     </Option>
