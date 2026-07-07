@@ -71,6 +71,16 @@ export function getMcpOAuthMode(s: {
   return s.delegate_auth_to_upstream ? "passthrough" : "obo";
 }
 
+// Map a server's stored `oauth2_flow` (the API value: client_credentials /
+// authorization_code / null) to the edit form's OAuth Flow Type select value.
+// A null/unset flow returns undefined so the select shows its placeholder rather
+// than a guessed default — an unstamped legacy row must be assigned explicitly.
+export function oauth2FlowToFormValue(oauth2Flow?: string | null): string | undefined {
+  if (oauth2Flow === MCP_OAUTH2_FLOW_M2M) return OAUTH_FLOW.M2M;
+  if (oauth2Flow) return OAUTH_FLOW.INTERACTIVE;
+  return undefined;
+}
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",

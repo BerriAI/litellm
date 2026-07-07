@@ -11,6 +11,7 @@ import {
   MCPServerCostInfo,
   TRANSPORT,
   getMcpOAuthMode,
+  oauth2FlowToFormValue,
 } from "./types";
 import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential } from "../networking";
 import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
@@ -226,12 +227,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       static_headers: initialStaticHeaders,
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
-      oauth_flow_type:
-        mcpServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M
-          ? OAUTH_FLOW.M2M
-          : mcpServer.oauth2_flow
-            ? OAUTH_FLOW.INTERACTIVE
-            : undefined,
+      oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -1290,8 +1286,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
                   oauth_flow_type:
-                    oauthFlowTypeValue ??
-                    (mcpServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE),
+                    oauthFlowTypeValue ?? oauth2FlowToFormValue(mcpServer.oauth2_flow) ?? OAUTH_FLOW.INTERACTIVE,
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
