@@ -34,13 +34,12 @@ from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import assert_never
 
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
-
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
     Result,
 )
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
 
 
 class AuthSpecKind(str, Enum):
