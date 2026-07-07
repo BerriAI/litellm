@@ -1087,17 +1087,24 @@ def responses_api_bridge_check(
         custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
     if (
-        custom_llm_provider in ("openai", "azure")
+        custom_llm_provider in ("openai", "azure", "github_copilot")
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
         and (
-            (reasoning_effort is not None and reasoning_summary is not None)
+            (
+                reasoning_effort is not None
+                and reasoning_summary is not None
+                and custom_llm_provider in ("openai", "azure")
+            )
             or (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
                 and has_function_tool
                 and reasoning_active
-                and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
+                and (
+                    reasoning_effort is not None
+                    or (custom_llm_provider in ("openai", "azure") and on_constraint_enforcing_endpoint)
+                )
             )
         )
     ):
