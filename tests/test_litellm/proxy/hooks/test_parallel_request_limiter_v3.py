@@ -48,6 +48,42 @@ def time_controller(monkeypatch):
     return controller
 
 
+@pytest.mark.parametrize(
+    "throttle_pct, expected_rpm, expected_tpm",
+    [
+        (None, 100, 1000),  # no throttle -> configured limits
+        (0.1, 10, 100),  # 10% of configured
+        (0.5, 50, 500),
+    ],
+)
+def test_api_key_descriptor_applies_budget_throttle(
+    throttle_pct, expected_rpm, expected_tpm
+):
+    """The api_key rate-limit descriptor scales the key's configured TPM/RPM by
+    the request-scoped budget_throttle_pct, leaving the configured limits intact."""
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-throttle"),
+        rpm_limit=100,
+        tpm_limit=1000,
+        budget_throttle_pct=throttle_pct,
+    )
+
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=user_api_key_dict,
+        data={},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+
+    api_key_descriptor = next(d for d in descriptors if d["key"] == "api_key")
+    assert api_key_descriptor["rate_limit"]["requests_per_unit"] == expected_rpm
+    assert api_key_descriptor["rate_limit"]["tokens_per_unit"] == expected_tpm
+
+
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):

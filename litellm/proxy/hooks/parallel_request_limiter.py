@@ -17,6 +17,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
+from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
@@ -248,10 +249,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if data is None:
             data = {}
         global_max_parallel_requests = data.get("metadata", {}).get("global_max_parallel_requests", None)
-        tpm_limit = getattr(user_api_key_dict, "tpm_limit", sys.maxsize)
+        throttle_pct = getattr(user_api_key_dict, "budget_throttle_pct", None)
+        tpm_limit = throttled_limit(getattr(user_api_key_dict, "tpm_limit", sys.maxsize), throttle_pct)
         if tpm_limit is None:
             tpm_limit = sys.maxsize
-        rpm_limit = getattr(user_api_key_dict, "rpm_limit", sys.maxsize)
+        rpm_limit = throttled_limit(getattr(user_api_key_dict, "rpm_limit", sys.maxsize), throttle_pct)
         if rpm_limit is None:
             rpm_limit = sys.maxsize
 

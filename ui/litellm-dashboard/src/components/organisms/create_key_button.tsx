@@ -1164,6 +1164,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     showDetailedDescriptions={true}
                   />
                   <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Throttle on budget exceeded{" "}
+                        <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="throttle_on_budget_exceeded"
+                    valuePropName="checked"
+                  >
+                    <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+                  <Form.Item
                     label={
                       <span>
                         Guardrails{" "}
