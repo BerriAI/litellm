@@ -163,7 +163,7 @@ class TestTinyfishSearch:
 
     @pytest.mark.asyncio
     async def test_fetch_param_round_trip(self):
-        # End-to-end check: caller passes `fetch=...` (JSON-encoded tf-fetch
+        # End-to-end check: caller passes `fetch=...` (JSON-encoded fetch
         # config); param reaches TinyFish on the request side and the nested
         # `fetch` object on each result surfaces back to the SearchResult on the
         # response side. No LiteLLM-side support code is required.
