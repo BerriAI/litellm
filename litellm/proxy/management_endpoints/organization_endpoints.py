@@ -13,10 +13,12 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -52,7 +54,6 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.utils import _update_dictionary
 
 router = APIRouter()
 
@@ -101,28 +102,121 @@ async def _verify_org_access(
     )
 
 
+_STR_OBJECT_DICT_ADAPTER = TypeAdapter(Dict[str, object])
+_NUMERIC_BUDGET_FIELDS = frozenset({"soft_budget", "max_budget", "max_parallel_requests", "tpm_limit", "rpm_limit"})
+_BUDGET_SETTABLE_FIELDS = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
+_METADATA_MANAGEMENT_FIELDS = frozenset(LiteLLM_ManagementEndpoint_MetadataFields)
+_ORG_COLUMN_EXCLUDED_FIELDS = (
+    frozenset(LiteLLM_BudgetTable.model_fields.keys())
+    | _METADATA_MANAGEMENT_FIELDS
+    | frozenset({"object_permission", "metadata", "organization_id", "updated_by"})
+)
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationUpdatePlan:
+    """Which org columns and budget fields a validated /organization/update request should write."""
+
+    org_column_updates: Mapping[str, object]
+    budget_updates: Mapping[str, object]
+
+
 def handle_nested_budget_structure_in_organization_update_request(
-    raw_data: dict,
-) -> dict:
+    raw_data: Mapping[str, object],
+) -> dict[str, object]:
     """
-    Transform organization update request to handle UI payload format.
+    Flatten the UI's nested ``litellm_budget_table`` into top-level budget fields.
 
-    The UI sends nested budget data in 'litellm_budget_table', but our
-    model expects flat budget fields at the top level.
+    Explicit ``null`` values are preserved (a cleared limit), and an empty-string
+    numeric input is coerced to ``None`` so a cleared limit clears instead of 422-ing.
     """
-    transformed_data = raw_data.copy()
+    nested_budget = raw_data.get("litellm_budget_table")
+    if not isinstance(nested_budget, dict):
+        return dict(raw_data)
 
-    # Handle nested budget structure from UI
-    if "litellm_budget_table" in transformed_data:
-        budget_data = transformed_data.pop("litellm_budget_table", {})
-        if budget_data:
-            # Extract valid budget fields and merge into top level
-            budget_fields = LiteLLM_BudgetTable.model_fields.keys()
-            for key, value in budget_data.items():
-                if key in budget_fields and value is not None:
-                    transformed_data[key] = value
+    nested_budget_items = _STR_OBJECT_DICT_ADAPTER.validate_python(nested_budget)
+    budget_field_names = frozenset(LiteLLM_BudgetTable.model_fields.keys())
+    flattened_budget = {
+        key: (None if key in _NUMERIC_BUDGET_FIELDS and value == "" else value)
+        for key, value in nested_budget_items.items()
+        if key in budget_field_names
+    }
+    return {
+        **{key: value for key, value in raw_data.items() if key != "litellm_budget_table"},
+        **flattened_budget,
+    }
 
-    return transformed_data
+
+def build_organization_update_plan(
+    raw_request: Mapping[str, object],
+    validated_data: LiteLLM_OrganizationTableUpdate,
+) -> OrganizationUpdatePlan:
+    """
+    Decide which columns to write from a validated update, using ONLY the raw request
+    keys for presence detection.
+
+    A field's key present in the raw body (including inside ``litellm_budget_table``) means
+    write it (a ``null``/``[]``/``{}`` value clears); an absent key leaves the field untouched.
+    Metadata is replace-when-sent: present iff the raw body carries ``metadata`` or any special
+    management field that the model validator folds into metadata. A cleared metadata is written
+    as ``{}`` because the org ``metadata`` Json column is non-nullable (prisma-client-py has no
+    NULL sentinel for it, see RobertCraigie/prisma-client-py#714).
+    """
+    nested_budget = raw_request.get("litellm_budget_table")
+    budget_keys = (
+        frozenset(_STR_OBJECT_DICT_ADAPTER.validate_python(nested_budget).keys())
+        if isinstance(nested_budget, dict)
+        else frozenset()
+    )
+    present_keys = frozenset(raw_request.keys()) | budget_keys
+
+    field_values = _STR_OBJECT_DICT_ADAPTER.validate_python(validated_data.model_dump())
+    budget_updates = {field: field_values[field] for field in _BUDGET_SETTABLE_FIELDS if field in present_keys}
+    org_column_updates = {
+        field: field_values[field]
+        for field in LiteLLM_OrganizationTableUpdate.model_fields
+        if field in present_keys and field not in _ORG_COLUMN_EXCLUDED_FIELDS
+    }
+    metadata_present = "metadata" in raw_request or any(field in raw_request for field in _METADATA_MANAGEMENT_FIELDS)
+    metadata_update: Mapping[str, object] = {"metadata": validated_data.metadata or {}} if metadata_present else {}
+
+    return OrganizationUpdatePlan(
+        org_column_updates={**org_column_updates, **metadata_update},
+        budget_updates=budget_updates,
+    )
+
+
+async def _apply_organization_budget_updates(
+    existing_budget_id: Optional[str],
+    budget_updates: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[str]:
+    """
+    Apply budget writes for an org update and return a NEW budget_id to link on the org row.
+
+    Returns None when nothing was created (either nothing to write, or an existing budget row was
+    updated in place). Passing a field explicitly as ``None`` clears it, since ``update_budget``
+    persists every field it receives via ``model_dump(exclude_unset=True)``.
+    """
+    if not budget_updates:
+        return None
+
+    if existing_budget_id is not None:
+        await update_budget(
+            budget_obj=BudgetNewRequest.model_validate({"budget_id": existing_budget_id, **budget_updates}),
+            user_api_key_dict=user_api_key_dict,
+        )
+        return None
+
+    if not any(value is not None for value in budget_updates.values()):
+        return None
+
+    new_budget_id = str(uuid.uuid4())
+    await new_budget(
+        budget_obj=BudgetNewRequest.model_validate({"budget_id": new_budget_id, **budget_updates}),
+        user_api_key_dict=user_api_key_dict,
+    )
+    return new_budget_id
 
 
 @router.post(
@@ -447,11 +541,11 @@ async def update_organization(
         )
 
     # Transform UI payload to expected format
-    raw_data = await request.json()
+    raw_data: dict[str, object] = await request.json()
     raw_data_with_flat_budget_fields = handle_nested_budget_structure_in_organization_update_request(raw_data)
 
     # Create validated data model
-    data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
+    data = LiteLLM_OrganizationTableUpdate.model_validate(raw_data_with_flat_budget_fields)
 
     # Validate budget values are not negative
     if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
@@ -490,39 +584,39 @@ async def update_organization(
     if existing_organization_row is None:
         raise ValueError(f"Organization not found for organization_id={data.organization_id}")
 
-    updated_organization_row_json = data.model_dump(exclude_none=True)
-    # Merge metadata from existing organization with updated metadata
-    if updated_organization_row_json.get("metadata") is not None:
-        existing_metadata = existing_organization_row.metadata or {}
-        updated_metadata = updated_organization_row_json.get("metadata", {})
-        merged_metadata = _update_dictionary(existing_dict=existing_metadata.copy(), new_dict=updated_metadata)
-        updated_organization_row_json["metadata"] = merged_metadata
+    plan = build_organization_update_plan(raw_request=raw_data, validated_data=data)
 
-    updated_organization_row = prisma_client.jsonify_object(updated_organization_row_json)
+    new_budget_id = await _apply_organization_budget_updates(
+        existing_budget_id=existing_organization_row.budget_id,
+        budget_updates=plan.budget_updates,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    linked_budget_write: Mapping[str, object] = {"budget_id": new_budget_id} if new_budget_id is not None else {}
+    object_permission_write: Mapping[str, object] = (
+        {"object_permission": data.object_permission.model_dump(exclude_none=True)}
+        if data.object_permission is not None
+        else {}
+    )
+
+    organization_write_data = prisma_client.jsonify_object(
+        {
+            **plan.org_column_updates,
+            **linked_budget_write,
+            **object_permission_write,
+            "updated_by": data.updated_by,
+        }
+    )
+
     if data.object_permission is not None:
-        updated_organization_row = await handle_update_object_permission(
-            data_json=updated_organization_row,
+        organization_write_data = await handle_update_object_permission(
+            data_json=organization_write_data,
             existing_organization_row=existing_organization_row,
         )
 
-    # Handle budget updates if budget fields are provided
-    budget_fields = {
-        k: v for k, v in data.model_dump().items() if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None
-    }
-
-    if budget_fields and existing_organization_row.budget_id:
-        await update_budget(
-            budget_obj=BudgetNewRequest(budget_id=existing_organization_row.budget_id, **budget_fields),
-            user_api_key_dict=user_api_key_dict,
-        )
-
-    # Remove budget fields from organization update data
-    for field in LiteLLM_BudgetTable.model_fields.keys():
-        updated_organization_row.pop(field, None)
-
     response = await OrganizationRepository(prisma_client).table.update(
         where={"organization_id": data.organization_id},
-        data=updated_organization_row,
+        data=organization_write_data,
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
 

@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from litellm._uuid import uuid
-from typing import Optional, cast
+from typing import Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,6 +13,320 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
+
+
+def _flatten(raw_body: Mapping[str, object]) -> dict[str, object]:
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        handle_nested_budget_structure_in_organization_update_request,
+    )
+
+    return handle_nested_budget_structure_in_organization_update_request(raw_body)
+
+
+def _build_plan(raw_body: Mapping[str, object]):
+    """Flatten -> validate -> plan, exactly as the /organization/update endpoint does."""
+    from litellm.proxy._types import LiteLLM_OrganizationTableUpdate
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        build_organization_update_plan,
+    )
+
+    validated = LiteLLM_OrganizationTableUpdate.model_validate(_flatten(raw_body))
+    return build_organization_update_plan(raw_request=raw_body, validated_data=validated)
+
+
+def test_org_update_plan_change_limit():
+    plan = _build_plan({"organization_id": "o", "litellm_budget_table": {"tpm_limit": 500}})
+    assert plan.budget_updates == {"tpm_limit": 500}
+    assert "tpm_limit" not in plan.org_column_updates
+
+
+def test_org_update_plan_clear_limit_is_present_not_dropped():
+    plan = _build_plan({"organization_id": "o", "litellm_budget_table": {"tpm_limit": None}})
+    assert "tpm_limit" in plan.budget_updates
+    assert plan.budget_updates["tpm_limit"] is None
+
+
+def test_org_update_plan_empty_string_numeric_coerced_and_does_not_422():
+    raw = {"organization_id": "o", "litellm_budget_table": {"tpm_limit": ""}}
+    assert _flatten(raw)["tpm_limit"] is None
+    plan = _build_plan(raw)
+    assert plan.budget_updates == {"tpm_limit": None}
+
+
+def test_org_update_plan_all_numeric_limits_clear_via_empty_string():
+    raw = {
+        "organization_id": "o",
+        "litellm_budget_table": {
+            "tpm_limit": "",
+            "rpm_limit": "",
+            "max_budget": "",
+            "soft_budget": "",
+            "max_parallel_requests": "",
+        },
+    }
+    plan = _build_plan(raw)
+    assert plan.budget_updates == {
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "max_budget": None,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+    }
+
+
+def test_org_update_plan_numeric_string_still_validates_to_number():
+    plan = _build_plan({"organization_id": "o", "litellm_budget_table": {"tpm_limit": "500"}})
+    assert plan.budget_updates == {"tpm_limit": 500}
+
+
+def test_org_update_plan_untouched_budget_fields_never_cleared():
+    plan = _build_plan({"organization_id": "o", "litellm_budget_table": {"tpm_limit": 5}})
+    for untouched in ("soft_budget", "max_parallel_requests", "model_max_budget", "rpm_limit", "max_budget"):
+        assert untouched not in plan.budget_updates
+
+
+def test_org_update_plan_set_metadata():
+    plan = _build_plan({"organization_id": "o", "metadata": {"a": 1}})
+    assert plan.org_column_updates["metadata"] == {"a": 1}
+
+
+def test_org_update_plan_edit_metadata_value():
+    plan = _build_plan({"organization_id": "o", "metadata": {"a": 2}})
+    assert plan.org_column_updates["metadata"] == {"a": 2}
+
+
+def test_org_update_plan_remove_metadata_key_is_replace_not_merge():
+    plan = _build_plan({"organization_id": "o", "metadata": {"a": 1}})
+    assert plan.org_column_updates["metadata"] == {"a": 1}
+
+
+def test_org_update_plan_clear_metadata_present_as_empty_dict():
+    plan = _build_plan({"organization_id": "o", "metadata": None})
+    assert "metadata" in plan.org_column_updates
+    assert plan.org_column_updates["metadata"] == {}
+
+
+def test_org_update_plan_metadata_absent_is_untouched():
+    plan = _build_plan({"organization_id": "o", "organization_alias": "x"})
+    assert "metadata" not in plan.org_column_updates
+
+
+def test_org_update_plan_change_and_clear_models():
+    set_plan = _build_plan({"organization_id": "o", "models": ["m1", "m2"]})
+    assert set_plan.org_column_updates["models"] == ["m1", "m2"]
+
+    clear_plan = _build_plan({"organization_id": "o", "models": []})
+    assert "models" in clear_plan.org_column_updates
+    assert clear_plan.org_column_updates["models"] == []
+
+
+def test_org_update_plan_untouched_alias_absent():
+    plan = _build_plan({"organization_id": "o", "metadata": {"a": 1}})
+    assert "organization_alias" not in plan.org_column_updates
+
+
+def test_org_update_plan_touch_nothing():
+    plan = _build_plan({"organization_id": "o"})
+    assert plan.budget_updates == {}
+    assert dict(plan.org_column_updates) == {}
+
+
+def test_org_update_plan_budget_fields_never_land_in_org_columns():
+    from litellm.proxy._types import LiteLLM_BudgetTable
+
+    plan = _build_plan(
+        {
+            "organization_id": "o",
+            "litellm_budget_table": {"tpm_limit": 5, "rpm_limit": 9, "max_budget": 10},
+            "metadata": {"a": 1},
+            "models": ["m"],
+        }
+    )
+    assert not (set(LiteLLM_BudgetTable.model_fields) & set(plan.org_column_updates))
+    assert "budget_id" not in plan.org_column_updates
+
+
+def test_org_update_plan_special_mgmt_fields_go_to_metadata_not_org_columns():
+    plan = _build_plan({"organization_id": "o", "model_tpm_limit": {"gpt-4": 5}, "model_rpm_limit": {"gpt-4": 2}})
+    assert "model_tpm_limit" not in plan.org_column_updates
+    assert "model_rpm_limit" not in plan.org_column_updates
+    assert plan.org_column_updates["metadata"] == {
+        "model_tpm_limit": {"gpt-4": 5},
+        "model_rpm_limit": {"gpt-4": 2},
+    }
+
+
+def test_org_update_flatten_drops_nothing_and_preserves_untouched_top_level_keys():
+    flat = _flatten(
+        {
+            "organization_id": "o",
+            "organization_alias": "keep",
+            "litellm_budget_table": {"tpm_limit": None, "rpm_limit": 3},
+        }
+    )
+    assert flat["organization_id"] == "o"
+    assert flat["organization_alias"] == "keep"
+    assert flat["tpm_limit"] is None
+    assert flat["rpm_limit"] == 3
+    assert "litellm_budget_table" not in flat
+
+
+async def _run_update_organization(
+    monkeypatch,
+    *,
+    body: Mapping[str, object],
+    existing_budget_id: Optional[str],
+    existing_metadata: Mapping[str, object],
+    update_budget_mock: AsyncMock,
+    new_budget_mock: AsyncMock,
+):
+    """Drive /organization/update end-to-end against a mocked prisma + budget layer.
+
+    Returns the mock prisma client so callers can read the org-write payload from
+    ``.db.litellm_organizationtable.update.await_args``.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        update_organization,
+    )
+    from litellm.proxy.utils import jsonify_object
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = jsonify_object
+
+    existing_org = MagicMock()
+    existing_org.budget_id = existing_budget_id
+    existing_org.object_permission_id = None
+    existing_org.metadata = existing_metadata
+
+    mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=existing_org)
+    mock_prisma_client.db.litellm_organizationtable.update = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(organization_endpoints, "update_budget", update_budget_mock)
+    monkeypatch.setattr(organization_endpoints, "new_budget", new_budget_mock)
+
+    request = MagicMock()
+    request.json = AsyncMock(return_value=body)
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+
+    await update_organization(request=request, user_api_key_dict=auth)
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_update_organization_clears_tpm_limit_and_metadata(monkeypatch):
+    """
+    End-to-end regression for LIT-3664: a cleared tpm_limit (null) must reach
+    update_budget as None, and a cleared metadata (null) must reach the org
+    write as an empty object. Before the fix, exclude_none / "if v is not None"
+    filters dropped both, so the clear silently reverted.
+    """
+    update_budget_mock = AsyncMock()
+    new_budget_mock = AsyncMock()
+
+    mock_prisma_client = await _run_update_organization(
+        monkeypatch,
+        body={
+            "organization_id": "org-1",
+            "litellm_budget_table": {"tpm_limit": None},
+            "metadata": None,
+        },
+        existing_budget_id="budget-1",
+        existing_metadata={"stale": "value"},
+        update_budget_mock=update_budget_mock,
+        new_budget_mock=new_budget_mock,
+    )
+
+    update_budget_mock.assert_awaited_once()
+    budget_obj = update_budget_mock.await_args.kwargs["budget_obj"]
+    assert budget_obj.budget_id == "budget-1"
+    assert budget_obj.tpm_limit is None
+    assert "tpm_limit" in budget_obj.model_fields_set
+    assert "soft_budget" not in budget_obj.model_fields_set
+    new_budget_mock.assert_not_awaited()
+
+    mock_prisma_client.db.litellm_organizationtable.update.assert_awaited_once()
+    write_data = mock_prisma_client.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert "metadata" in write_data
+    assert json.loads(write_data["metadata"]) == {}
+    assert "budget_id" not in write_data
+
+
+@pytest.mark.asyncio
+async def test_update_organization_metadata_replaces_not_merges(monkeypatch):
+    """
+    LIT-3664 flagship: metadata is REPLACE-WHEN-SENT. Sending a new blob must overwrite the
+    stored metadata wholesale, so a key that used to be present (and is now absent from the
+    sent blob) does not survive via an additive merge with the existing row.
+    """
+    update_budget_mock = AsyncMock()
+    new_budget_mock = AsyncMock()
+
+    mock_prisma_client = await _run_update_organization(
+        monkeypatch,
+        body={"organization_id": "org-1", "metadata": {"a": 1}},
+        existing_budget_id="budget-1",
+        existing_metadata={"stale": "value"},
+        update_budget_mock=update_budget_mock,
+        new_budget_mock=new_budget_mock,
+    )
+
+    write_data = mock_prisma_client.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert json.loads(write_data["metadata"]) == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_update_organization_creates_budget_when_org_has_none(monkeypatch):
+    """
+    LIT-3664 upsert path: an org with no budget_id that receives a limit must get a NEW
+    LiteLLM_BudgetTable row created via new_budget, and that new budget_id linked onto the
+    org write so the created budget is actually attached to the org.
+    """
+    update_budget_mock = AsyncMock()
+    new_budget_mock = AsyncMock()
+
+    mock_prisma_client = await _run_update_organization(
+        monkeypatch,
+        body={"organization_id": "org-1", "litellm_budget_table": {"tpm_limit": 5}},
+        existing_budget_id=None,
+        existing_metadata={},
+        update_budget_mock=update_budget_mock,
+        new_budget_mock=new_budget_mock,
+    )
+
+    new_budget_mock.assert_awaited_once()
+    created_budget_obj = new_budget_mock.await_args.kwargs["budget_obj"]
+    assert created_budget_obj.tpm_limit == 5
+    assert created_budget_obj.budget_id is not None
+    update_budget_mock.assert_not_awaited()
+
+    write_data = mock_prisma_client.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert write_data["budget_id"] == created_budget_obj.budget_id
+
+
+@pytest.mark.asyncio
+async def test_update_organization_all_null_budget_creates_nothing(monkeypatch):
+    """
+    LIT-3664 upsert guard: clearing limits (all null) on an org that has no budget row must
+    NOT create an all-null LiteLLM_BudgetTable row, and must not link a budget_id onto the org.
+    """
+    update_budget_mock = AsyncMock()
+    new_budget_mock = AsyncMock()
+
+    mock_prisma_client = await _run_update_organization(
+        monkeypatch,
+        body={"organization_id": "org-1", "litellm_budget_table": {"tpm_limit": None}},
+        existing_budget_id=None,
+        existing_metadata={},
+        update_budget_mock=update_budget_mock,
+        new_budget_mock=new_budget_mock,
+    )
+
+    new_budget_mock.assert_not_awaited()
+    update_budget_mock.assert_not_awaited()
+    write_data = mock_prisma_client.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert "budget_id" not in write_data
 
 
 @pytest.mark.asyncio
