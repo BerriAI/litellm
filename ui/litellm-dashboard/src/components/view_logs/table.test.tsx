@@ -2,7 +2,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { DataTable } from "./table";
+import { DataTable, SKELETON_ROW_COUNT } from "./table";
 
 type Row = { request_id: string; a: string; b: string };
 
@@ -61,10 +61,11 @@ describe("DataTable column sizing", () => {
 });
 
 describe("DataTable states", () => {
-  it("shows the loading message instead of rows while loading", () => {
-    render(<DataTable data={data} columns={unsizedColumns} isLoading loadingMessage="Fetching things" />);
+  it("renders skeleton rows mirroring the column layout while loading", () => {
+    const { container } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
 
-    expect(screen.getByText("Fetching things")).toBeInTheDocument();
+    const skeletons = container.querySelectorAll('[data-slot="skeleton"]');
+    expect(skeletons).toHaveLength(SKELETON_ROW_COUNT * unsizedColumns.length);
     expect(screen.queryByText("alpha")).not.toBeInTheDocument();
   });
 
@@ -74,18 +75,15 @@ describe("DataTable states", () => {
     expect(screen.getByText("Nothing here")).toBeInTheDocument();
   });
 
-  it("falls back to generic loading and empty defaults", () => {
-    const { rerender } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
-
-    rerender(<DataTable data={[]} columns={unsizedColumns} />);
+  it("falls back to the generic empty default", () => {
+    render(<DataTable data={[]} columns={unsizedColumns} />);
     expect(screen.getByText("No results")).toBeInTheDocument();
   });
 
   it("suppresses the primitive's row hover on loading, empty, and expansion placeholder rows", async () => {
     const user = userEvent.setup();
-    const { rerender } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
-    expect(screen.getByText("Loading...").closest("tr")).toHaveClass("hover:bg-transparent");
+    const { rerender, container } = render(<DataTable data={data} columns={unsizedColumns} isLoading />);
+    expect(container.querySelector('[data-slot="skeleton"]')?.closest("tr")).toHaveClass("hover:bg-transparent");
 
     rerender(<DataTable data={[]} columns={unsizedColumns} />);
     expect(screen.getByText("No results").closest("tr")).toHaveClass("hover:bg-transparent");
@@ -112,6 +110,22 @@ describe("DataTable states", () => {
 
     expect(screen.getByText("alpha")).toBeInTheDocument();
     expect(screen.getByText("custom:beta")).toBeInTheDocument();
+  });
+
+  it("right-aligns headers and cells with tabular figures for numeric meta columns", () => {
+    const columns: ColumnDef<Row>[] = [
+      { header: "A", accessorKey: "a" },
+      { header: "B", accessorKey: "b", meta: { numeric: true } },
+    ];
+    render(<DataTable data={data} columns={columns} />);
+
+    const headers = screen.getAllByRole("columnheader");
+    expect(headers[1].querySelector("div")).toHaveClass("justify-end");
+    expect(headers[0].querySelector("div")).not.toHaveClass("justify-end");
+
+    const cells = screen.getAllByRole("cell");
+    expect(cells[1]).toHaveClass("text-right", "tabular-nums");
+    expect(cells[0]).not.toHaveClass("text-right");
   });
 });
 

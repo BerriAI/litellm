@@ -30,6 +30,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
     {
       header: "Spend (USD)",
       accessorKey: "spend",
+      meta: { numeric: true },
       cell: (info: any) => {
         const value = info.getValue();
         return `$${formatNumberWithCommas(value, 2)}`;
@@ -38,16 +39,19 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
     {
       header: "Successful",
       accessorKey: "successful_requests",
+      meta: { numeric: true },
       cell: (info: any) => <span className="text-green-600">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
       header: "Failed",
       accessorKey: "failed_requests",
+      meta: { numeric: true },
       cell: (info: any) => <span className="text-red-600">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
       header: "Tokens",
       accessorKey: "tokens",
+      meta: { numeric: true },
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];

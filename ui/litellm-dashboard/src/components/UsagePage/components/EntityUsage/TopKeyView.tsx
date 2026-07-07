@@ -164,6 +164,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const spendColumn = {
     header: "Spend (USD)",
     accessorKey: "spend",
+    meta: { numeric: true },
     cell: (info: any) => {
       const value = info.getValue();
       return value > 0 && value < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(value, 2)}`;
