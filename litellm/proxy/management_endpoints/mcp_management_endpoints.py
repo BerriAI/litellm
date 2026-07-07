@@ -1874,6 +1874,11 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
         # milliseconds or if the storage logic ever adds a grace period).
@@ -1914,6 +1919,11 @@ if MCP_AVAILABLE:
                 await delete_user_credential(prisma_client, user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=False,

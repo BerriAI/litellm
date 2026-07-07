@@ -3743,6 +3743,104 @@ async def test_delete_mcp_oauth_user_credential_only_deletes_oauth():
 
 
 @pytest.mark.asyncio
+async def test_store_mcp_oauth_user_credential_invalidates_cached_token():
+    """Re-authorizing via the Tools-tab persist drops the v2 per-user token cache entry, so
+    egress stops serving the replaced token immediately instead of until its TTL."""
+    from litellm.proxy._types import MCPOAuthUserCredentialRequest
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        store_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-inv-1"
+    user_id = "user-inv-1"
+    invalidate_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new=AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id=server_id)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value={"type": "oauth2", "access_token": "new-tok"}),
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        await store_mcp_oauth_user_credential(
+            server_id=server_id,
+            payload=MCPOAuthUserCredentialRequest(access_token="new-tok", expires_in=3600),
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    invalidate_mock.assert_awaited_once_with(user_id, server_id)
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
+    """Revoking a stored OAuth credential drops the v2 per-user token cache entry, so the
+    revoked token stops flowing upstream immediately instead of until its TTL."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-inv-2"
+    user_id = "user-inv-2"
+    invalidate_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        result = await delete_mcp_oauth_user_credential(
+            server_id=server_id,
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    invalidate_mock.assert_awaited_once_with(user_id, server_id)
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
 async def test_list_mcp_user_credentials_batch_server_fetch():
     """list_mcp_user_credentials uses a single batch DB call, not N+1 queries."""
     from litellm.proxy._types import MCPUserCredentialListItem

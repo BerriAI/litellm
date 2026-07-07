@@ -69,6 +69,17 @@ class OAuthTokenStore(Protocol):
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None: ...
 
 
+class InvalidatableOAuthTokenStore(OAuthTokenStore, Protocol):
+    """An ``OAuthTokenStore`` whose cached entry for a ``(user, server)`` pair can be dropped.
+
+    The write side calls ``invalidate`` after a (re)authorization or revocation changes the
+    credential row, so reads stop serving the replaced token immediately instead of until its
+    cache TTL. ``CachedOAuthTokenStore`` (the top of the per-user chain) satisfies this.
+    """
+
+    async def invalidate(self, user_id: str, server_id: str) -> None: ...
+
+
 class TokenRefresher(Protocol):
     """Mints a fresh token from an expired one and persists it, returning the new token.
 
