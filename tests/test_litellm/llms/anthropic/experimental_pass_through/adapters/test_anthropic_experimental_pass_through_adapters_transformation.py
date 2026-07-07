@@ -3111,3 +3111,73 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+# ============================================================================
+# thinking_disabled gating tests
+# ============================================================================
+
+
+def test_streaming_reasoning_content_suppressed_when_thinking_disabled():
+    """A streaming chunk with reasoning_content must NOT open/emit a thinking
+    block when thinking_disabled=True — the client didn't ask for thinking."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    choice = StreamingChoices(
+        index=0,
+        delta=Delta(content=None, role="assistant", reasoning_content="internal reasoning"),
+        finish_reason=None,
+    )
+    block_type, _ = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=[choice], thinking_disabled=True
+    )
+    assert block_type == "text", f"expected 'text' when thinking_disabled=True, got {block_type!r}"
+
+
+def test_streaming_reasoning_content_preserved_by_default():
+    """Default behavior (thinking_disabled omitted) is unchanged: reasoning_content
+    still opens a thinking block."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    choice = StreamingChoices(
+        index=0,
+        delta=Delta(content=None, role="assistant", reasoning_content="internal reasoning"),
+        finish_reason=None,
+    )
+    block_type, _ = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(choices=[choice])
+    assert block_type == "thinking", f"expected 'thinking' by default, got {block_type!r}"
+
+
+def test_streaming_emitter_reasoning_content_suppressed_when_thinking_disabled():
+    """The delta emitter must not accumulate reasoning_content into a
+    thinking_delta when thinking_disabled=True."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    choice = StreamingChoices(
+        index=0,
+        delta=Delta(content=None, role="assistant", reasoning_content="internal reasoning"),
+        finish_reason=None,
+    )
+    delta_type, _ = adapter._translate_streaming_openai_chunk_to_anthropic(choices=[choice], thinking_disabled=True)
+    assert delta_type == "text_delta", f"expected 'text_delta' when thinking_disabled=True, got {delta_type!r}"
+
+
+def test_non_streaming_reasoning_content_suppressed_when_thinking_disabled():
+    """A non-streaming completion with reasoning_content must not produce a
+    thinking content block when thinking_disabled=True."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message = Message(role="assistant", content=None, reasoning_content="internal reasoning")
+    choice = Choices(index=0, message=message, finish_reason="stop")
+    content = adapter._translate_openai_content_to_anthropic(choices=[choice], thinking_disabled=True)
+    assert not any(block.get("type") == "thinking" for block in content), (
+        f"expected no thinking block when thinking_disabled=True, got {content!r}"
+    )
+
+
+def test_non_streaming_reasoning_content_preserved_by_default():
+    """Default behavior (thinking_disabled omitted) is unchanged for the
+    non-streaming path: reasoning_content still becomes a thinking block."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message = Message(role="assistant", content=None, reasoning_content="internal reasoning")
+    choice = Choices(index=0, message=message, finish_reason="stop")
+    content = adapter._translate_openai_content_to_anthropic(choices=[choice])
+    assert any(block.get("type") == "thinking" for block in content), (
+        f"expected a thinking block by default, got {content!r}"
+    )
