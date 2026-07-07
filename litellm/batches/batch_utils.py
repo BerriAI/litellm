@@ -3,6 +3,7 @@ from typing import Any, Iterator, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.utils import _parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import token_counter
@@ -419,6 +420,8 @@ def _get_batch_job_total_usage_from_file_content(
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     for _item in file_content_dictionary:
         if _batch_response_was_successful(_item, custom_llm_provider):
             _response_body = _get_response_from_batch_job_output_file(_item, custom_llm_provider)
@@ -426,10 +429,22 @@ def _get_batch_job_total_usage_from_file_content(
             total_tokens += usage.total_tokens
             prompt_tokens += usage.prompt_tokens
             completion_tokens += usage.completion_tokens
+            prompt_details = _parse_prompt_tokens_details(usage)
+            cache_read_tokens += prompt_details["cache_hit_tokens"]
+            cache_creation_tokens += prompt_details["cache_creation_tokens"]
+    cache_token_params = {
+        key: tokens
+        for key, tokens in (
+            ("cache_read_input_tokens", cache_read_tokens),
+            ("cache_creation_input_tokens", cache_creation_tokens),
+        )
+        if tokens > 0
+    }
     return Usage(
         total_tokens=total_tokens,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        **cache_token_params,
     )
 
 

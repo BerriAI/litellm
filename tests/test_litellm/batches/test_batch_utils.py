@@ -828,6 +828,31 @@ def test_anthropic_total_usage_sums_succeeded_only():
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (130, 15, 145)
 
 
+def test_anthropic_total_usage_aggregates_cache_token_details():
+    rows = [
+        _anthropic_succeeded_row(usage=_anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)),
+        _anthropic_errored_row(),
+        _anthropic_succeeded_row(usage=_anthropic_usage(50, 20, cache_creation=300, cache_read=700)),
+    ]
+    usage = bu._get_batch_job_total_usage_from_file_content(rows, custom_llm_provider="anthropic")
+    assert usage.prompt_tokens_details.cached_tokens == 8700
+    assert usage.prompt_tokens_details.cache_creation_tokens == 2300
+    assert usage.cache_read_input_tokens == 8700
+    assert usage.cache_creation_input_tokens == 2300
+
+
+def test_total_usage_without_cache_tokens_has_no_prompt_details():
+    rows = [
+        {
+            "custom_id": "req-1",
+            "response": {"status_code": 200, "body": {"model": "gpt-5.2", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}},
+        }
+    ]
+    usage = bu._get_batch_job_total_usage_from_file_content(rows, custom_llm_provider="openai")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
+    assert usage.prompt_tokens_details is None
+
+
 def test_anthropic_cost_applies_batch_discount_and_cache_pricing():
     """Anthropic batches bill at 50% of the regular rate for base input,
     cache reads, cache writes, and output tokens alike."""
