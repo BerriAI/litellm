@@ -27,6 +27,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 # module while common_utils may pull proxy_server during init, which can leave
 # those names undefined. Import the helpers locally where they are used.
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    get_spend_by_team,
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
@@ -43,6 +44,8 @@ else:
     PrismaClient = Any
 
 router = APIRouter()
+
+SPEND_LOGS_PAGINATION_COUNT_CAP = 10000
 
 
 @router.get(
@@ -1131,68 +1134,7 @@ async def get_global_spend_report(
                 start_date_obj, end_date_obj, team_id, customer_id, prisma_client
             )
         if group_by == "team":
-            # first get data from spend logs -> SpendByModelApiKey
-            # then read data from "SpendByModelApiKey" to format the response obj
-            sql_query = """
-
-            WITH SpendByModelApiKey AS (
-                SELECT
-                    date_trunc('day', sl."startTime") AS group_by_day,
-                    COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
-                    sl.model,
-                    sl.api_key,
-                    SUM(sl.spend) AS model_api_spend,
-                    SUM(sl.total_tokens) AS model_api_tokens
-                FROM 
-                    "LiteLLM_SpendLogs" sl
-                LEFT JOIN 
-                    "LiteLLM_TeamTable" tt 
-                ON 
-                    sl.team_id = tt.team_id
-                WHERE
-                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-                GROUP BY
-                    date_trunc('day', sl."startTime"),
-                    tt.team_alias,
-                    sl.model,
-                    sl.api_key
-            )
-                SELECT
-                    group_by_day,
-                    jsonb_agg(jsonb_build_object(
-                        'team_name', team_name,
-                        'total_spend', total_spend,
-                        'metadata', metadata
-                    )) AS teams
-                FROM (
-                    SELECT
-                        group_by_day,
-                        team_name,
-                        SUM(model_api_spend) AS total_spend,
-                        jsonb_agg(jsonb_build_object(
-                            'model', model,
-                            'api_key', api_key,
-                            'spend', model_api_spend,
-                            'total_tokens', model_api_tokens
-                        )) AS metadata
-                    FROM 
-                        SpendByModelApiKey
-                    GROUP BY
-                        group_by_day,
-                        team_name
-                ) AS aggregated
-                GROUP BY
-                    group_by_day
-                ORDER BY
-                    group_by_day;
-                """
-
-            db_response = await prisma_client.db.query_raw(sql_query, start_date_obj, end_date_obj)
-            if db_response is None:
-                return []
-
-            return db_response
+            return await get_spend_by_team(start_date_obj, end_date_obj, team_id, prisma_client)
 
         elif group_by == "customer":
             sql_query = """
@@ -2018,6 +1960,20 @@ async def ui_view_spend_logs(
         else:
             _order_expr = order_column
 
+        count_query = f"""
+            SELECT COUNT(*) AS total_count
+            FROM (
+                SELECT 1
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                LIMIT ${p}
+            ) AS bounded_matches
+        """
+        count_rows = await prisma_client.db.query_raw(count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1)
+        raw_total = int(count_rows[0]["total_count"]) if count_rows else 0
+        total_is_capped = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
+        total_records = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
+
         sql_query = f"""
             SELECT
                 request_id, call_type, api_key, spend, total_tokens,
@@ -2027,8 +1983,7 @@ async def ui_view_spend_logs(
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms,
-                COUNT(*) OVER () AS total_count
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
             ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
@@ -2038,34 +1993,13 @@ async def ui_view_spend_logs(
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
-        # `COUNT(*) OVER ()` folds the total-match count into the same scan as the
-        # page data; a standalone `COUNT(*)` is a distributed RPC on sharded
-        # engines like YugabyteDB that contacts every tablet and times out
-        # regardless of row count (LIT-4027). The hot path (page 1 and in-range
-        # pages) always carries the count on its rows, so the count round trip is
-        # gone there. Only an out-of-range page overshoots the last row and comes
-        # back empty; fall back to a direct count there so total/total_pages stay
-        # accurate rather than collapsing to zero.
-        if data:
-            total_records = int(data[0]["total_count"])
-        elif page > 1:
-            total_records = int(
-                await SpendLogsRepository(prisma_client).table.count(
-                    where=where_conditions,
-                )
-            )
-        else:
-            total_records = 0
-
         # query_raw returns the JSONB `metadata` column as a string (the Prisma
         # serialiser bypasses the model-layer JSON hydration we get on the ORM
         # path). The UI reads `metadata.status` / `metadata.error_information`
         # as object fields, so failure rows looked like successes (#29674).
-        # Re-hydrate to dict here. Also drop the window-function `total_count`
-        # helper column so it does not leak into the serialised rows.
+        # Re-hydrate to dict here.
         for row in data:
             if isinstance(row, dict):
-                row.pop("total_count", None)
                 md = row.get("metadata")
                 if isinstance(md, str):
                     try:
@@ -2086,6 +2020,7 @@ async def ui_view_spend_logs(
             page_size,
             total_pages,
             enrich_session_counts=not is_v2,
+            total_is_capped=total_is_capped,
         )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
@@ -3394,6 +3329,7 @@ async def _build_ui_spend_logs_response(
     page_size: int,
     total_pages: int,
     enrich_session_counts: bool = True,
+    total_is_capped: bool = False,
 ) -> dict:
     """
     Build the paginated response for the UI spend-logs endpoint.
@@ -3418,10 +3354,12 @@ async def _build_ui_spend_logs_response(
         total_pages: Total number of pages.
         enrich_session_counts: Whether to add ``session_total_count`` to each
             row.  Defaults to ``True``.
+        total_is_capped: Whether ``total_records`` was clamped to the
+            pagination count cap (there are more matching rows than the cap).
 
     Returns:
         A dict with ``data`` (enriched rows), ``total``, ``page``,
-        ``page_size``, and ``total_pages``.
+        ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
     count_map: dict[str, int] = {}
     if enrich_session_counts:
@@ -3511,6 +3449,7 @@ async def _build_ui_spend_logs_response(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+        "total_is_capped": total_is_capped,
     }
 
 

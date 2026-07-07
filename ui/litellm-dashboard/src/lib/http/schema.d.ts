@@ -6538,8 +6538,10 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -6746,6 +6748,7 @@ export interface paths {
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
          *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
          *         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -6821,6 +6824,7 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -6919,6 +6923,7 @@ export interface paths {
          *     - spend: Optional[float] - Amount spent by key
          *     - max_budget: Optional[float] - Max budget for key
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
          *     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -6937,6 +6942,7 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -7000,6 +7006,7 @@ export interface paths {
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
          *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
          *         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -14649,6 +14656,7 @@ export interface paths {
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
          *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+         *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
          *     - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -14729,6 +14737,7 @@ export interface paths {
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
          *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+         *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *         - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
          *         - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -22538,6 +22547,11 @@ export interface components {
              */
             plugins?: components["schemas"]["PluginConfig"][] | null;
             /**
+             * Provider Url Destination Allowed Hosts
+             * @description Allowlist of hosts a request may redirect a provider call's destination URL to.
+             */
+            provider_url_destination_allowed_hosts?: string[] | null;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -22595,6 +22609,16 @@ export interface components {
              * @description Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.
              */
             user_mcp_management_mode?: ("restricted" | "view_all") | null;
+            /**
+             * User Url Allowed Hosts
+             * @description SSRF allowlist for user-supplied URLs. Entries are `hostname` or `hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted hosts skip the blocked-network check in validate_url() but still resolve DNS. Use this to permit legitimate internal targets, e.g. an internal OpenAPI/MCP server.
+             */
+            user_url_allowed_hosts?: string[] | null;
+            /**
+             * User Url Validation
+             * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
+             */
+            user_url_validation?: boolean | null;
         };
         /** ConfigList */
         ConfigList: {
@@ -23615,6 +23639,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -23717,6 +23745,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -23755,6 +23785,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -23853,6 +23887,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Token */
             token?: string | null;
             /** Token Id */
@@ -24738,6 +24774,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -25444,6 +25487,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Itpm */
+            itpm?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -25479,6 +25524,8 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -26123,6 +26170,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -27268,6 +27322,8 @@ export interface components {
              * @default false
              */
             is_public_model_group: boolean;
+            /** Itpm */
+            itpm?: number | null;
             /** Max Input Tokens */
             max_input_tokens?: number | null;
             /** Max Output Tokens */
@@ -27279,6 +27335,8 @@ export interface components {
             mode: string | ("chat" | "embedding" | "completion" | "image_generation" | "audio_transcription" | "rerank" | "moderations") | null;
             /** Model Group */
             model_group: string;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Providers */
@@ -27931,6 +27989,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -28065,6 +28127,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -28162,6 +28228,8 @@ export interface components {
             team_id?: string | null;
             /** Teams */
             teams?: unknown[] | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Token */
             token?: string | null;
             /** Token Id */
@@ -29683,6 +29751,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -29785,6 +29857,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -31642,6 +31716,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -31728,6 +31806,8 @@ export interface components {
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
             temp_budget_increase?: number | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -32105,6 +32185,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -32203,6 +32287,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -32430,6 +32518,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -33192,6 +33287,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Itpm */
+            itpm?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -33227,6 +33324,8 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
+            /** Otpm */
+            otpm?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */

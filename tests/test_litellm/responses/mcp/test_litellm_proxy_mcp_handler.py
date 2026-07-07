@@ -1,4 +1,6 @@
+import subprocess
 import sys
+import textwrap
 import types
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,6 +30,7 @@ def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         call_tool=AsyncMock(return_value=_DummyMCPResult()),
         # Newer logging path calls this to enrich spend logs metadata
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -280,6 +283,87 @@ async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_name(
+    monkeypatch,
+):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    fake_server = types.SimpleNamespace(
+        alias="my_deepwiki",
+        server_name="deepwiki_test",
+        server_id="test-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name=None,
+    )
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+
+    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(
+        return_value=fake_server
+    )
+
+    tool_name = "my_deepwiki-read_wiki_structure"
+    tool_calls = [
+        {
+            "id": "call-4",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki_test"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    colliding_server = types.SimpleNamespace(
+        alias=None,
+        server_name="other_mcp",
+        server_id="other-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name={"search": "search_docs"},
+    )
+    fake_server = types.SimpleNamespace(
+        alias=None,
+        server_name="deepwiki_mcp",
+        server_id="test-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
+    )
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+
+    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(return_value=colliding_server)
+    _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=fake_server)
+
+    tool_name = "browse_repo_docs"
+    tool_calls = [
+        {
+            "id": "call-5",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki_mcp"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkeypatch):
     """
     Regression test for ae4d92ad...:
@@ -475,3 +559,49 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     )
 
     assert captured["metadata"]["tags"] == ["team-a", "prod"]
+
+
+def test_completion_with_function_tools_works_without_fastapi_installed():
+    script = textwrap.dedent(
+        """
+        import sys
+
+        class _FastapiBlocker:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "fastapi" or fullname.startswith("fastapi."):
+                    raise ModuleNotFoundError("No module named 'fastapi'")
+                return None
+
+        sys.meta_path.insert(0, _FastapiBlocker())
+
+        import litellm
+
+        response = litellm.completion(
+            model="openai/gpt-5.5",
+            messages=[{"role": "user", "content": "What is the weather in SF?"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            mock_response="sunny",
+        )
+        assert response.choices[0].message.content == "sunny"
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr

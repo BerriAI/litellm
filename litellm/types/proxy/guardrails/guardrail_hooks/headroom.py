@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,14 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     model: Optional[str] = Field(
         default=None,
         description="Model name forwarded to the headroom /v1/compress endpoint.",
+    )
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when the headroom compression service is unreachable or errors. "
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and "
+            "forwards the request uncompressed instead of blocking it."
+        ),
     )
 
     @staticmethod

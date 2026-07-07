@@ -124,6 +124,11 @@ gateway:
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps
   envSecrets: [] # Add extra environment variables to the gateway from secrets
+  # Additional volumes on the gateway Deployment (e.g. a ConfigMap holding
+  # custom callback / SSO handler code, mounted next to the proxy config).
+  volumes: []
+  # Additional volumeMounts on the gateway container.
+  volumeMounts: []
   config:
     create: true
     proxy_config: {}
@@ -167,6 +172,10 @@ backend:
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
+  # Additional volumes on the backend Deployment.
+  volumes: []
+  # Additional volumeMounts on the backend container.
+  volumeMounts: []
   image:
     repository: ghcr.io/berriai/litellm-backend
     tag: ""
@@ -206,6 +215,10 @@ ui:
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
+  # Additional volumes on the ui Deployment.
+  volumes: []
+  # Additional volumeMounts on the ui container.
+  volumeMounts: []
   image:
     repository: ghcr.io/berriai/litellm-ui
     tag: ""

@@ -335,6 +335,36 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should initialize and submit throttle_on_budget_exceeded from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithThrottle = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, throttle_on_budget_exceeded: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithThrottle}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Throttle on budget exceeded")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+    });
+  });
+
   it("should disable models field when management routes are selected", async () => {
     const keyDataWithManagementRoutes = {
       ...MOCK_KEY_DATA,

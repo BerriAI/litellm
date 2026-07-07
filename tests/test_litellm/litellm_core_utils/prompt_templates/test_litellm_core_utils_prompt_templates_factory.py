@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2744,102 +2745,132 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
     TTL ordering constraint (tools -> system -> messages).
 
     Ref: https://github.com/BerriAI/litellm/issues/XXXXX
+
+    Forces the bundled local cost map so ttl eligibility (driven by
+    `cache_creation_input_token_cost_above_1hr` in litellm.model_cost) reads
+    this branch's pricing data rather than the network-fetched `main` copy,
+    which lacks the fix until merge.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import (
         add_cache_point_tool_block,
     )
 
-    tool_with_1h = {
-        "type": "function",
-        "function": {"name": "get_weather", "parameters": {"type": "object"}},
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-    }
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        tool_with_1h = {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object"}},
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
 
-    # Claude 4.5 model: ttl should be preserved
-    result = add_cache_point_tool_block(
-        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    assert result is not None
-    assert result["cachePoint"]["type"] == "default"
-    assert result["cachePoint"]["ttl"] == "1h"
+        # Claude 4.5 model: ttl should be preserved
+        result = add_cache_point_tool_block(
+            tool_with_1h, model="jp.anthropic.claude-opus-4-7"
+        )
+        assert result is not None
+        assert result["cachePoint"]["type"] == "default"
+        assert result["cachePoint"]["ttl"] == "1h"
 
-    # Claude 4.5 model with 5m ttl: also preserved
-    tool_with_5m = {
-        "cache_control": {"type": "ephemeral", "ttl": "5m"},
-    }
-    result_5m = add_cache_point_tool_block(
-        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    assert result_5m is not None
-    assert result_5m["cachePoint"]["ttl"] == "5m"
+        # Claude 4.5 model with 5m ttl: also preserved
+        tool_with_5m = {
+            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+        }
+        result_5m = add_cache_point_tool_block(
+            tool_with_5m, model="jp.anthropic.claude-opus-4-7"
+        )
+        assert result_5m is not None
+        assert result_5m["cachePoint"]["ttl"] == "5m"
 
-    # Older model: ttl should be stripped
-    result_old = add_cache_point_tool_block(
-        tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
-    assert result_old is not None
-    assert result_old["cachePoint"]["type"] == "default"
-    assert "ttl" not in result_old["cachePoint"]
+        # Older model: ttl should be stripped
+        result_old = add_cache_point_tool_block(
+            tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        assert result_old is not None
+        assert result_old["cachePoint"]["type"] == "default"
+        assert "ttl" not in result_old["cachePoint"]
 
-    # No model provided: ttl should be stripped (safe default)
-    result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
-    assert result_no_model is not None
-    assert "ttl" not in result_no_model["cachePoint"]
+        # No model provided: ttl should be stripped (safe default)
+        result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
+        assert result_no_model is not None
+        assert "ttl" not in result_no_model["cachePoint"]
 
-    # No cache_control: returns None (unchanged behavior)
-    tool_no_cache = {
-        "type": "function",
-        "function": {"name": "get_weather", "parameters": {"type": "object"}},
-    }
-    assert add_cache_point_tool_block(tool_no_cache) is None
+        # No cache_control: returns None (unchanged behavior)
+        tool_no_cache = {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        }
+        assert add_cache_point_tool_block(tool_no_cache) is None
 
-    # cache_control without ttl: returns default cachePoint (unchanged behavior)
-    tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
-    result_no_ttl = add_cache_point_tool_block(
-        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    assert result_no_ttl is not None
-    assert result_no_ttl["cachePoint"]["type"] == "default"
-    assert "ttl" not in result_no_ttl["cachePoint"]
+        # cache_control without ttl: returns default cachePoint (unchanged behavior)
+        tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
+        result_no_ttl = add_cache_point_tool_block(
+            tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+        assert result_no_ttl is not None
+        assert result_no_ttl["cachePoint"]["type"] == "default"
+        assert "ttl" not in result_no_ttl["cachePoint"]
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
     for Claude 4.5+ models when tools have cache_control with ttl.
+
+    Forces the bundled local cost map so ttl eligibility (driven by
+    `cache_creation_input_token_cost_above_1hr` in litellm.model_cost) reads
+    this branch's pricing data rather than the network-fetched `main` copy,
+    which lacks the fix until merge.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
                 },
-            },
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        }
-    ]
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ]
 
-    # Claude 4.5: cachePoint should have ttl
-    result = _bedrock_tools_pt(
-        tools, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-    )
-    cache_blocks = [b for b in result if "cachePoint" in b]
-    assert len(cache_blocks) == 1
-    assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
+        # Claude 4.5: cachePoint should have ttl
+        result = _bedrock_tools_pt(tools, model="jp.anthropic.claude-opus-4-7")
+        cache_blocks = [b for b in result if "cachePoint" in b]
+        assert len(cache_blocks) == 1
+        assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
 
-    # Older model: cachePoint should not have ttl
-    result_old = _bedrock_tools_pt(
-        tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
-    cache_blocks_old = [b for b in result_old if "cachePoint" in b]
-    assert len(cache_blocks_old) == 1
-    assert "ttl" not in cache_blocks_old[0]["cachePoint"]
+        # Older model: cachePoint should not have ttl
+        result_old = _bedrock_tools_pt(
+            tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        cache_blocks_old = [b for b in result_old if "cachePoint" in b]
+        assert len(cache_blocks_old) == 1
+        assert "ttl" not in cache_blocks_old[0]["cachePoint"]
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():

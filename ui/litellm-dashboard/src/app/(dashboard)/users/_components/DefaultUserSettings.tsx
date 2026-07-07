@@ -375,7 +375,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
       return (
         <div className="flex flex-wrap gap-2 mt-1">
           {value.map((model, index) => (
-            <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+            <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
               {getModelDisplayName(model)}
             </span>
           ))}
@@ -390,7 +390,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
         return (
           <div className="flex flex-wrap gap-2 mt-1">
             {value.map((item, index) => (
-              <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+              <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
                 {typeof item === "object" ? JSON.stringify(item) : String(item)}
               </span>
             ))}
@@ -398,7 +398,9 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
         );
       }
 
-      return <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">{JSON.stringify(value, null, 2)}</pre>;
+      return (
+        <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">{JSON.stringify(value, null, 2)}</pre>
+      );
     }
 
     return <span>{String(value)}</span>;
@@ -442,7 +444,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           {isEditing ? (
             <div className="mt-2">{renderEditableField(key, property, value)}</div>
           ) : (
-            <div className="mt-1 p-2 bg-gray-50 rounded">{renderValue(key, value)}</div>
+            <div className="mt-1 p-2 bg-gray-50 rounded-sm">{renderValue(key, value)}</div>
           )}
         </div>
       );

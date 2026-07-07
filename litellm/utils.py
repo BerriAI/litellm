@@ -4204,6 +4204,13 @@ def get_optional_params(
             model=model,
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
+    elif custom_llm_provider == "tencent":
+        optional_params = litellm.TencentChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+        )
     elif custom_llm_provider == "openrouter":
         optional_params = litellm.OpenrouterConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -6017,6 +6024,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("DEEPSEEK_API_KEY")
+        elif custom_llm_provider == "tencent":
+            if "TENCENT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("TENCENT_API_KEY")
         elif custom_llm_provider == "mistral":
             if "MISTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7558,6 +7570,7 @@ class ProviderConfigManager:
             ),
             # Simple provider mappings (no model parameter needed)
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
+            LlmProviders.TENCENT: (lambda: litellm.TencentChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
             LlmProviders.BEDROCK_MANTLE: (
                 lambda: litellm.BedrockMantleChatConfig(),
@@ -7996,6 +8009,12 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.TENCENT == provider:
+            from litellm.llms.tencent.messages.transformation import (
+                TencentAnthropicMessagesConfig,
+            )
+
+            return TencentAnthropicMessagesConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             if "claude" in model_lower:
                 from litellm.llms.github_copilot.messages.transformation import (
@@ -8078,6 +8097,12 @@ class ProviderConfigManager:
             )
 
             return SonioxAudioTranscriptionConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.audio_transcription.transformation import (
+                VertexAIAudioTranscriptionConfig,
+            )
+
+            return VertexAIAudioTranscriptionConfig()
         return None
 
     @staticmethod

@@ -38,7 +38,6 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
     try {
       const values = await form.validateFields();
 
-      console.log("values: ", values);
       if (!accessToken) {
         NotificationsManager.fromBackend("Access token is required");
         return;
@@ -59,7 +58,6 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
 
         try {
           const conversionResult = await convertPromptFileToJson(accessToken, file);
-          console.log("Conversion result:", conversionResult);
 
           // Prepare prompt data for creation
           promptData = {

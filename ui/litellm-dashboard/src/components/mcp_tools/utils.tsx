@@ -54,6 +54,14 @@ export const validateMCPServerName = (value: string) => {
     : Promise.resolve();
 };
 
+export const TOOL_DISPLAY_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export const validateToolDisplayName = (value: string) => {
+  return value && !TOOL_DISPLAY_NAME_PATTERN.test(value)
+    ? Promise.reject("Only letters, digits, underscores, and hyphens are allowed (no spaces).")
+    : Promise.resolve();
+};
+
 // Normalize the env_vars form list into the payload shape the backend expects.
 // Drops empty rows, invalid identifiers, and duplicate names; user-scoped entries never carry a value.
 export const normalizeEnvVars = (list: unknown): MCPEnvVar[] => {
@@ -76,4 +84,23 @@ export const normalizeEnvVars = (list: unknown): MCPEnvVar[] => {
     seen.add(name);
   }
   return out;
+};
+
+/** Normalize tool override maps from API/DB (dict or JSON string) for form state. */
+export const normalizeToolOverrideMap = (
+  value: Record<string, string> | string | null | undefined,
+): Record<string, string> => {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, string>;
+      }
+    } catch {
+      return {};
+    }
+    return {};
+  }
+  return value;
 };

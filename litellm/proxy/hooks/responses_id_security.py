@@ -44,6 +44,7 @@ class ResponsesIDSecurity(CustomLogger):
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "alist_input_items",
         }
         if call_type not in responses_api_call_types:
             return None
@@ -54,7 +55,7 @@ class ResponsesIDSecurity(CustomLogger):
                 original_response_id, user_id, team_id = self._decrypt_response_id(previous_response_id)
                 self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
                 data["previous_response_id"] = original_response_id
-        elif call_type in {"aget_responses", "adelete_responses", "acancel_responses"}:
+        elif call_type in {"aget_responses", "adelete_responses", "acancel_responses", "alist_input_items"}:
             response_id = data.get("response_id")
 
             if response_id and self._is_encrypted_response_id(response_id):

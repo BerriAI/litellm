@@ -172,11 +172,11 @@ export function LogViewer({
                 onClick={() => handleLogClick(log)}
                 className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
               >
-                <ActionIcon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`} />
+                <ActionIcon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border ${config.bg} ${config.color} ${config.border}`}
+                      className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-sm border ${config.bg} ${config.color} ${config.border}`}
                     >
                       {config.label}
                     </span>
@@ -186,7 +186,7 @@ export function LogViewer({
                   </div>
                   <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? log.input ?? "—"}</p>
                 </div>
-                <DownOutlined className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
+                <DownOutlined className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
               </button>
             );
           })}

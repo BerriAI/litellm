@@ -7,13 +7,14 @@ The bedrock-mantle endpoint uses the Anthropic Messages API format but is served
 at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -91,10 +92,14 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        # The parent strips "model" from the body (Invoke API puts it in URL).
-        # The mantle endpoint (Messages API) requires "model" in the body.
-        request["model"] = model_id
-        return request
+        # The parent strips "model" and "stream" from the body (Invoke API puts
+        # the model in the URL and streams via a dedicated endpoint). The mantle
+        # endpoint (Messages API) requires both in the body.
+        return self._restore_mantle_body_fields(
+            request=request,
+            model_id=model_id,
+            optional_params=optional_params,
+        )
 
     async def async_transform_request(
         self,
@@ -114,5 +119,31 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             headers=headers,
         )
         await self._async_convert_document_url_sources_to_base64(request)
-        request["model"] = model_id
-        return request
+        return self._restore_mantle_body_fields(
+            request=request,
+            model_id=model_id,
+            optional_params=optional_params,
+        )
+
+    @staticmethod
+    def _restore_mantle_body_fields(request: dict, model_id: str, optional_params: dict) -> dict:
+        stream_fields: dict = {"stream": True} if optional_params.get("stream") is True else {}
+        return {**request, "model": model_id, **stream_fields}
+
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return False
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+        return ModelResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )

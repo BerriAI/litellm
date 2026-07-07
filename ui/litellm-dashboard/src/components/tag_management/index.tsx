@@ -39,7 +39,6 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     if (!accessToken) return;
     try {
       const response = await tagListCall(accessToken);
-      console.log("List tags response:", response);
       setTags(Object.values(response));
     } catch (error) {
       console.error("Error fetching tags:", error);

@@ -161,6 +161,14 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               checked={value.field_value === true || value.field_value === "true"}
                               onChange={(checked) => handleInputChange(value.field_name, checked)}
                             />
+                          ) : value.field_type == "Float" ? (
+                            <InputNumber
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={value.field_value}
+                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
+                            />
                           ) : null}
                         </TableCell>
                         <TableCell>
@@ -169,9 +177,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               In DB
                             </Badge>
                           ) : value.stored_in_db == false ? (
-                            <Badge className="text-gray bg-white outline">In Config</Badge>
+                            <Badge className="text-gray bg-white outline-solid">In Config</Badge>
                           ) : (
-                            <Badge className="text-gray bg-white outline">Not Set</Badge>
+                            <Badge className="text-gray bg-white outline-solid">Not Set</Badge>
                           )}
                         </TableCell>
                         <TableCell>

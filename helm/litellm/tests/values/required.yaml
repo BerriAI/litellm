@@ -1,0 +1,4 @@
+database:
+  writer:
+    host: postgres.example.com
+    dbname: litellm

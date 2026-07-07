@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
@@ -956,7 +957,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         for _idx, (keys, args, meta) in enumerate(descriptor_groups):
             try:
-                raw = await self.check_and_increment_by_n_script(
+                raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
                     keys=keys,
                     args=args,
                 )
@@ -1549,18 +1550,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             or user_api_key_dict.tpm_limit is not None
             or user_api_key_dict.max_parallel_requests is not None
         ):
+            throttle_pct = user_api_key_dict.budget_throttle_pct
             descriptors.append(
                 RateLimitDescriptor(
                     key="api_key",
                     value=user_api_key_dict.api_key,
                     rate_limit={
                         "requests_per_unit": self._get_enforced_limit(
-                            limit_value=user_api_key_dict.rpm_limit,
+                            limit_value=throttled_limit(user_api_key_dict.rpm_limit, throttle_pct),
                             limit_type=rpm_limit_type,
                             model_has_failures=model_has_failures,
                         ),
                         "tokens_per_unit": self._get_enforced_limit(
-                            limit_value=user_api_key_dict.tpm_limit,
+                            limit_value=throttled_limit(user_api_key_dict.tpm_limit, throttle_pct),
                             limit_type=tpm_limit_type,
                             model_has_failures=model_has_failures,
                         ),

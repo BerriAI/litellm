@@ -7,6 +7,7 @@ import {
   handleTransport,
   handleAuth,
   getMcpOAuthMode,
+  oauth2FlowToFormValue,
 } from "./types";
 
 describe("handleTransport", () => {
@@ -124,5 +125,20 @@ describe("getMcpOAuthMode", () => {
     expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: null, delegate_auth_to_upstream: false })).toBe(
       "obo",
     );
+  });
+});
+
+describe("oauth2FlowToFormValue", () => {
+  it("maps client_credentials to the M2M select value", () => {
+    expect(oauth2FlowToFormValue(MCP_OAUTH2_FLOW_M2M)).toBe(OAUTH_FLOW.M2M);
+  });
+
+  it("maps authorization_code to the Interactive select value", () => {
+    expect(oauth2FlowToFormValue("authorization_code")).toBe(OAUTH_FLOW.INTERACTIVE);
+  });
+
+  it("returns undefined for a null/unset flow so the select shows its placeholder", () => {
+    expect(oauth2FlowToFormValue(null)).toBeUndefined();
+    expect(oauth2FlowToFormValue(undefined)).toBeUndefined();
   });
 });

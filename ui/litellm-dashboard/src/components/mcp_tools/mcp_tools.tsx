@@ -238,9 +238,14 @@ const MCPToolsViewer = ({
 
   const toolsData = mcpToolsResponse?.tools || [];
 
+  const oboToolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
+  const oboTokenRejected = isObo && (oboToolsError?.status ?? oboToolsError?.response?.status) === 401;
+
   // An auth gate replaces the tool list when the user must authenticate first:
-  // passthrough needs a browser token, OBO needs a stored DB credential.
-  const authGateActive = (isPassthrough && !oauthToken) || oboNeedsAuth;
+  // passthrough needs a browser token; OBO needs a stored DB credential or a
+  // still-valid one — a 401 from the list call means the backend has none even
+  // after attempting a refresh, so re-authorization is required.
+  const authGateActive = (isPassthrough && !oauthToken) || oboNeedsAuth || oboTokenRejected;
   // Treat OBO credential-status loading as "tools loading" so the empty state
   // doesn't flash before we know whether the user needs to authorize.
   const toolsAreaLoading = isLoadingTools || oboStatusLoading;
@@ -304,7 +309,7 @@ const MCPToolsViewer = ({
                               });
                             }}
                             prefix={<KeyOutlined className="text-gray-400" />}
-                            className="rounded"
+                            className="rounded-sm"
                           />
                         </div>
                       ))}
@@ -364,10 +369,12 @@ const MCPToolsViewer = ({
                   </div>
                 )}
 
-                {/* OBO auth gate — only when no credential row exists for this user.
-                    An existing-but-expired token is refreshed server-side on the
-                    list call, so the gate never appears for a stored credential. */}
-                {oboNeedsAuth && (
+                {/* OBO auth gate — shown when there is no credential row for this
+                    user, or when the list call returns 401 (no valid token and the
+                    server-side refresh could not mint one, e.g. an expired token
+                    with no usable refresh token). A refreshable token is refreshed
+                    on the list call and never trips this gate. */}
+                {(oboNeedsAuth || oboTokenRejected) && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
                     <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
@@ -471,7 +478,7 @@ const MCPToolsViewer = ({
                             {filteredTools.map((tool: MCPTool) => (
                               <div
                                 key={tool.name}
-                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
+                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-xs ${
                                   selectedTool?.name === tool.name
                                     ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                                     : "border-gray-200 bg-white hover:border-gray-300"
@@ -487,7 +494,7 @@ const MCPToolsViewer = ({
                                     <img
                                       src={resolveLogoSrc(tool.mcp_info.logo_url)}
                                       alt={`${tool.mcp_info.server_name} logo`}
-                                      className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
+                                      className="w-4 h-4 object-contain shrink-0 mt-0.5"
                                     />
                                   )}
                                   <div className="flex-1 min-w-0">

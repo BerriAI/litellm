@@ -9495,3 +9495,43 @@ class TestEmitTeamMembersMetric:
         # A metric failure must be swallowed, not propagated to the handler.
         _emit_team_members_metric(self._team(1))
         fake_logger.set_team_members_metric.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_new_team_rejects_reserved_ui_session_team_id():
+    """
+    /team/new must reject team_id "litellm-dashboard" (UI_TEAM_ID): it is the
+    virtual team stamped on every UI dashboard session token, so a real DB row
+    with that id would bind its budget and permissions to every UI session.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UI_TEAM_ID, NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    team_request = NewTeamRequest(
+        team_alias="dashboard-clone",
+        team_id=UI_TEAM_ID,
+    )
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server._license_check") as mock_license,
+    ):
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert exc_info.value.code == "400"
+        assert "reserved" in str(exc_info.value.message)
+        mock_prisma.get_data.assert_not_called()

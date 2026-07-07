@@ -16,7 +16,6 @@ export async function makeOpenAIImageGenerationRequest(
   if (isLocal !== true) {
     console.log = function () {};
   }
-  console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const client = new openai.OpenAI({
     apiKey: accessToken,
@@ -33,8 +32,6 @@ export async function makeOpenAIImageGenerationRequest(
       },
       { signal },
     );
-
-    console.log(response.data);
 
     if (response.data && response.data[0]) {
       // Handle either URL or base64 data from response
@@ -53,7 +50,6 @@ export async function makeOpenAIImageGenerationRequest(
     }
   } catch (error) {
     if (signal?.aborted) {
-      console.log("Image generation request was cancelled");
     } else {
       NotificationManager.fromBackend(`Error occurred while generating image. Please try again. Error: ${error}`);
     }

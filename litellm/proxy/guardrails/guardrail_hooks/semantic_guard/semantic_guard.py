@@ -225,7 +225,7 @@ def _handle_match(
             detection_info=detection_info,
         )
     else:
-        raise HTTPException(  # type: ignore[reportOptionalCall]
+        raise HTTPException(  # pyright: ignore[reportOptionalCall]  # fastapi is installed wherever this proxy hook runs
             status_code=400,
             detail={
                 "error": violation_msg,

@@ -57,7 +57,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsLoading(true);
     try {
       const response: GuardrailsResponse = await getGuardrailsList(accessToken);
-      console.log(`guardrails: ${JSON.stringify(response)}`);
       setGuardrailsList(response.guardrails);
     } catch (error) {
       console.error("Error fetching guardrails:", error);

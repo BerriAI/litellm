@@ -354,14 +354,14 @@ class DataDogLogger(
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
+        if not self.log_queue:
+            verbose_logger.exception("Datadog: log_queue does not exist")
+            return
+
+        batch_to_send = self.log_queue[:]
+        self.log_queue = []
+
         try:
-            if not self.log_queue:
-                verbose_logger.exception("Datadog: log_queue does not exist")
-                return
-
-            batch_to_send = self.log_queue[:]
-            self.log_queue = []
-
             verbose_logger.debug(
                 "Datadog - about to flush %s events on %s",
                 len(batch_to_send),

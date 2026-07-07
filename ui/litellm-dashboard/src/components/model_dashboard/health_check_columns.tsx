@@ -180,7 +180,7 @@ export const healthCheckColumns = (
             <Tooltip title="View response details" placement="top">
               <button
                 onClick={() => showSuccessModal(displayName, modelHealthStatuses[modelId]?.successResponse)}
-                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded cursor-pointer transition-colors"
+                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded-sm cursor-pointer transition-colors"
               >
                 <InformationCircleIcon className="h-4 w-4" />
               </button>
@@ -218,7 +218,7 @@ export const healthCheckColumns = (
             <Tooltip title="View full error details" placement="top">
               <button
                 onClick={() => showErrorModal(displayName, cleanedError, fullError)}
-                className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded cursor-pointer transition-colors"
+                className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-sm cursor-pointer transition-colors"
               >
                 <InformationCircleIcon className="h-4 w-4" />
               </button>

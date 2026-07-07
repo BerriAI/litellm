@@ -69,7 +69,6 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   );
 
   const handleSubmit = async (formValues: any) => {
-    console.log("formValues", formValues);
     if (!accessToken) {
       NotificationsManager.fromBackend("Access token not found");
       return;
@@ -149,8 +148,6 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
               teamBudget || undefined,
               updateAllUsers,
             );
-
-            console.log("result", result);
 
             teamResults.push({
               teamId,
