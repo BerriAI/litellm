@@ -181,7 +181,6 @@ resource "litellm_vector_store" "pgvector_store" {
   
   litellm_params = {
     api_base = "https://your-pgvector-host.com"
-    api_key  = var.pgvector_api_key
   }
 }
 ```
@@ -195,7 +194,7 @@ The following arguments are supported:
 * `vector_store_description` - (Optional) Description of the vector store.
 * `vector_store_metadata` - (Optional) Map of metadata associated with the vector store.
 * `litellm_credential_name` - (Optional) Name of the LiteLLM credential to use for authentication.
-* `litellm_params` - (Optional) Map of additional parameters specific to the vector store provider.
+* `litellm_params` - (Optional) Map of additional parameters specific to the vector store provider. Do not put API keys or other secrets here; this map is shown in plans and stored unencrypted in state. Store secrets in a `litellm_credential` and reference it via `litellm_credential_name`.
 
 ## Attributes Reference
 
@@ -254,7 +253,6 @@ litellm_params = {
 ```terraform
 litellm_params = {
   api_base = "https://your-pgvector-host.com"
-  api_key  = var.pgvector_api_key
 }
 ```
 

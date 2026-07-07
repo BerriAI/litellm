@@ -5,13 +5,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 type Client struct {
@@ -34,59 +32,7 @@ func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
 	}
 }
 
-// validateUUID checks if the provided string is a valid UUID format
-func (c *Client) validateUUID(id string) error {
-	if err := uuid.Validate(id); err != nil {
-		return fmt.Errorf("invalid UUID format: %v", err)
-	}
-	return nil
-}
-
-// Team-related methods
-func (c *Client) CreateTeam(team map[string]interface{}) (map[string]interface{}, error) {
-	return c.sendRequest("POST", "/team/new", team)
-}
-
-func (c *Client) GetTeam(teamID string) (map[string]interface{}, error) {
-	if err := c.validateUUID(teamID); err != nil {
-		return nil, err
-	}
-	return c.sendRequest("GET", fmt.Sprintf("/team/info?team_id=%s", teamID), nil)
-}
-
-func (c *Client) UpdateTeam(team map[string]interface{}) (map[string]interface{}, error) {
-	return c.sendRequest("POST", "/team/update", team)
-}
-
-func (c *Client) DeleteTeam(teamID string) error {
-	payload := map[string]interface{}{
-		"team_ids": []string{teamID},
-	}
-	_, err := c.sendRequest("POST", "/team/delete", payload)
-	return err
-}
-
-// Organization-related methods
-func (c *Client) CreateOrganization(org map[string]interface{}) (map[string]interface{}, error) {
-	return c.sendRequest("POST", "/organization/new", org)
-}
-
-func (c *Client) GetOrganization(orgID string) (map[string]interface{}, error) {
-	return c.sendRequest("GET", fmt.Sprintf("/organization/info?organization_id=%s", orgID), nil)
-}
-
-func (c *Client) UpdateOrganization(org map[string]interface{}) (map[string]interface{}, error) {
-	return c.sendRequest("PATCH", "/organization/update", org)
-}
-
-func (c *Client) DeleteOrganization(orgID string) error {
-	payload := map[string]interface{}{
-		"organization_ids": []string{orgID},
-	}
-	_, err := c.sendRequest("DELETE", "/organization/delete", payload)
-	return err
-}
-
+// Organization member methods
 func (c *Client) AddOrganizationMember(data map[string]interface{}) (map[string]interface{}, error) {
 	return c.sendRequest("POST", "/organization/member_add", data)
 }
@@ -343,7 +289,7 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading response body: %v", err)
 	}
@@ -367,32 +313,74 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	return result, nil
 }
 
-// redactSensitiveData masks sensitive information in logs
-func (c *Client) redactSensitiveData(data string) string {
-	// List of sensitive field patterns to redact
-	sensitivePatterns := []string{
-		`"(api_key|key|token|password|secret|credential|auth)":\s*"[^"]*"`,
-		`"(model_api_key|aws_access_key_id|aws_secret_access_key|vertex_credentials)":\s*"[^"]*"`,
-		`"(x-api-key)":\s*"[^"]*"`,
-		`"(credential_values)":\s*\{[^}]*\}`,
-	}
+var sensitiveLogFields = map[string]bool{
+	"api_key":               true,
+	"key":                   true,
+	"token":                 true,
+	"password":              true,
+	"secret":                true,
+	"credential":            true,
+	"auth":                  true,
+	"model_api_key":         true,
+	"aws_access_key_id":     true,
+	"aws_secret_access_key": true,
+	"vertex_credentials":    true,
+	"x-api-key":             true,
+	"credential_values":     true,
+}
 
+func redactJSONValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		redacted := make(map[string]interface{}, len(typed))
+		for k, v := range typed {
+			if sensitiveLogFields[k] {
+				redacted[k] = "[REDACTED]"
+			} else {
+				redacted[k] = redactJSONValue(v)
+			}
+		}
+		return redacted
+	case []interface{}:
+		redacted := make([]interface{}, len(typed))
+		for i, v := range typed {
+			redacted[i] = redactJSONValue(v)
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
+var sensitiveLogPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`"(api_key|key|token|password|secret|credential|auth)":\s*"[^"]*"`),
+	regexp.MustCompile(`"(model_api_key|aws_access_key_id|aws_secret_access_key|vertex_credentials)":\s*"[^"]*"`),
+	regexp.MustCompile(`"(x-api-key)":\s*"[^"]*"`),
+}
+
+func redactWithPatterns(data string) string {
 	result := data
-	for _, pattern := range sensitivePatterns {
-		re := regexp.MustCompile(pattern)
+	for _, re := range sensitiveLogPatterns {
 		result = re.ReplaceAllStringFunc(result, func(match string) string {
-			// Extract the field name and replace the value with [REDACTED]
 			parts := strings.SplitN(match, ":", 2)
 			if len(parts) == 2 {
-				fieldPart := parts[0]
-				if strings.Contains(parts[1], "{") {
-					return fieldPart + `: {"[REDACTED]"}`
-				}
-				return fieldPart + `: "[REDACTED]"`
+				return parts[0] + `: "[REDACTED]"`
 			}
 			return "[REDACTED]"
 		})
 	}
-
 	return result
+}
+
+// redactSensitiveData masks sensitive information in logs
+func (c *Client) redactSensitiveData(data string) string {
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+		return redactWithPatterns(data)
+	}
+	redactedBytes, err := json.Marshal(redactJSONValue(parsed))
+	if err != nil {
+		return redactWithPatterns(data)
+	}
+	return string(redactedBytes)
 }

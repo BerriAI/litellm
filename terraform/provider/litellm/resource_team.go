@@ -3,7 +3,7 @@ package litellm
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 
@@ -251,7 +251,7 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 
 func handleResponse(resp *http.Response, action string) error {
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("error %s: %s - %s", action, resp.Status, string(body))
 	}
 	return nil
@@ -275,7 +275,7 @@ func getTeamPermissions(client *Client, teamID string) (*TeamPermissionsResponse
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("error getting team permissions: %s - %s", resp.Status, string(body))
 	}
 

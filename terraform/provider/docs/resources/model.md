@@ -110,7 +110,7 @@ The following arguments are supported:
 
 * `custom_llm_provider` - (Required) string. The LLM provider for this model (e.g., "openai", "anthropic", "azure", "bedrock").
 
-* `model_api_key` - (Optional) string (Sensitive). The API key for the underlying model provider.
+* `model_api_key` - (Optional) string (Sensitive). The API key for the underlying model provider. Sensitive attributes are hidden from Terraform output but still stored in plaintext in the state file; prefer storing provider secrets in a `litellm_credential` and referencing it via `litellm_credential_name`, and secure your state backend.
 
 * `model_api_base` - (Optional) string. The base URL for the model provider's API.
 
@@ -209,7 +209,7 @@ The following arguments are supported:
 
 * `aws_access_key_id` - (Optional) string (Sensitive). AWS access key ID for AWS-based models.
 
-* `aws_secret_access_key` - (Optional) string (Sensitive). AWS secret access key for AWS-based models.
+* `aws_secret_access_key` - (Optional) string (Sensitive). AWS secret access key for AWS-based models. As with `model_api_key`, the value is stored in plaintext in the state file; prefer a `litellm_credential` referenced via `litellm_credential_name` and secure your state backend.
 
 * `aws_region_name` - (Optional) string. AWS region name for AWS-based models.
 

@@ -149,4 +149,4 @@ terraform import litellm_credential.example "credential-name"
 
 * The `credential_values` field is marked as sensitive and will not be displayed in Terraform output or logs.
 * Credential values are not read back from the API for security reasons, so they are preserved in the Terraform state.
-* Ensure your Terraform state is properly secured when using this resource.
+* Like every Terraform attribute marked `Sensitive`, `credential_values` is still written in plaintext to the state file. Anyone with read access to the state (or state artifacts such as plan files) can recover the configured secrets. Use an encrypted remote backend with tight access controls, and prefer feeding secrets in via variables sourced from a secret manager rather than hardcoding them in configuration.
