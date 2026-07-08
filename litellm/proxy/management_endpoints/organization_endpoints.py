@@ -633,9 +633,10 @@ async def update_organization_v2(
     A field present in the request body is written and an omitted field is left untouched; presence
     is read from ``model_fields_set``, so clearing a limit or the metadata now persists instead of
     being dropped as though it were never sent. Clear tokens are per field: budget limits and
-    ``metadata`` clear with ``null``, ``models`` clears with ``[]``, and ``organization_alias``
-    cannot be cleared (it is required). Validation failures return 422, and the budget-row and
-    org-row writes are applied atomically in a single transaction.
+    ``metadata`` clear with ``null``, ``models`` clears with ``[]``, ``object_permission`` clears
+    with ``null`` (it merges when sent, so an empty ``{}`` is rejected rather than silently no-op'd),
+    and ``organization_alias`` cannot be cleared (it is required). Validation failures return 422,
+    and the budget-row and org-row writes are applied atomically in a single transaction.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -682,6 +683,13 @@ async def update_organization_v2(
         raise HTTPException(
             status_code=422,
             detail={"error": "models cannot be set to null; send [] to clear it"},
+        )
+    if data.object_permission is not None and not data.object_permission.model_dump(exclude_none=True):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "object_permission cannot be an empty object; send null to clear it, or a non-empty object to set grants"
+            },
         )
 
     await _verify_org_access(

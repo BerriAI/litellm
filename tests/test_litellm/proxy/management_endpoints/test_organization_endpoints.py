@@ -934,6 +934,29 @@ async def test_v2_clears_object_permission_when_sent_null(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v2_rejects_empty_object_permission(monkeypatch):
+    """object_permission: {} merges nothing, so it is rejected (send null to clear) rather than silently leaving grants."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(organization_endpoints, "_verify_org_access", AsyncMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    with pytest.raises(HTTPException) as exc:
+        await update_organization_v2(
+            organization_id="org-1",
+            data=OrganizationUpdateRequestV2.model_validate({"object_permission": {}}),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 422
+    assert "object_permission" in str(exc.value.detail)
+    mock_prisma_client.db.litellm_organizationtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_v2_writes_budget_and_org_in_one_transaction(monkeypatch):
     """A change touching both the budget row and the org row runs both writes inside one prisma transaction."""
     prisma = await _run_update_organization_v2(

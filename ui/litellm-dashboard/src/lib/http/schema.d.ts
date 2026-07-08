@@ -18806,9 +18806,10 @@ export interface paths {
          *     A field present in the request body is written and an omitted field is left untouched; presence
          *     is read from ``model_fields_set``, so clearing a limit or the metadata now persists instead of
          *     being dropped as though it were never sent. Clear tokens are per field: budget limits and
-         *     ``metadata`` clear with ``null``, ``models`` clears with ``[]``, and ``organization_alias``
-         *     cannot be cleared (it is required). Validation failures return 422, and the budget-row and
-         *     org-row writes are applied atomically in a single transaction.
+         *     ``metadata`` clear with ``null``, ``models`` clears with ``[]``, ``object_permission`` clears
+         *     with ``null`` (it merges when sent, so an empty ``{}`` is rejected rather than silently no-op'd),
+         *     and ``organization_alias`` cannot be cleared (it is required). Validation failures return 422,
+         *     and the budget-row and org-row writes are applied atomically in a single transaction.
          */
         patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
         trace?: never;
