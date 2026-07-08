@@ -218,3 +218,31 @@ async def test_lazy_store_invalidate_reaches_the_store_fetch_reads() -> None:
     assert build_calls == 1
     assert local_store.calls == [("u", "s")]
     assert local_store.invalidations == [("u", "s")]
+
+
+@pytest.mark.asyncio
+async def test_lazy_store_invalidate_works_after_redis_chain_is_built() -> None:
+    redis_store = _RecordingStore("redis")
+    redis_available = _RedisAvailability()
+    redis_available.available = True
+    build_calls = 0
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[InvalidatableOAuthTokenStore, bool]:
+        nonlocal build_calls
+        build_calls += 1
+        return redis_store, True
+
+    def server_lookup(_server_id: str) -> None:
+        return None
+
+    store = LazyPerUserOAuthTokenStore(
+        server_lookup,
+        store_builder=build_store,
+        redis_available=redis_available,
+    )
+
+    await store.fetch("u", "s")
+    await store.invalidate("u", "s")
+
+    assert build_calls == 1
+    assert redis_store.invalidations == [("u", "s")]
