@@ -4379,7 +4379,7 @@ class Router:
         for deployment in deployments:
             try:
                 model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
-            except Exception:
+            except ValueError:
                 continue
             if isinstance(model_info, dict) and model_info.get("max_input_tokens") is not None:
                 return True

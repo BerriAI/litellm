@@ -1,5 +1,5 @@
 from typing import Any, Optional
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -123,6 +123,34 @@ class TestResponsesAPIPreCallCheckIntegration:
             assert result == expected_response
             mock_converter.assert_called_once()
             mock_aresponses.assert_called_once()
+
+    def test_sync_responses_call_type_marks_pre_call_check(self):
+        """
+        router.responses() (the sync entrypoint, factory_function's
+        sync_wrapper) must also set _responses_api_pre_call_check, mirroring
+        the aresponses async path - otherwise the sync Responses API call
+        would silently skip context-window checks entirely.
+        """
+        with (
+            patch("litellm.responses", new=MagicMock(__name__="responses")) as mock_responses,
+            patch("litellm.token_counter", return_value=101),
+            patch(
+                "litellm.router.LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages",
+                wraps=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages,
+            ) as mock_converter,
+        ):
+            router = _router_with_optional_max_input_tokens(max_input_tokens=100)
+
+            with pytest.raises(Exception) as exc_info:
+                router.responses(
+                    model="test-model",
+                    input="large input",
+                    instructions="You are a helpful assistant.",
+                )
+
+            assert "Context Window" in str(exc_info.value) or "context window" in str(exc_info.value).lower()
+            mock_converter.assert_called_once()
+            mock_responses.assert_not_called()
 
 
 if __name__ == "__main__":
