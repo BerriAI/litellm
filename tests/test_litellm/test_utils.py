@@ -3080,9 +3080,9 @@ def test_model_info_for_openai_kimi_and_glm_aliases(local_model_cost_map):
     )
     assert kimi_highspeed is not None
     assert kimi_highspeed["litellm_provider"] == "openai"
-    assert kimi_highspeed["input_cost_per_token"] == 9.5e-07
-    assert kimi_highspeed["output_cost_per_token"] == 4e-06
-    assert kimi_highspeed["cache_read_input_token_cost"] == 1.9e-07
+    assert kimi_highspeed["input_cost_per_token"] == 1.9e-06
+    assert kimi_highspeed["output_cost_per_token"] == 8e-06
+    assert kimi_highspeed["cache_read_input_token_cost"] == 3.8e-07
     assert kimi_highspeed["max_input_tokens"] == 262144
 
     glm = litellm.get_model_info(model="openai/glm-5.2", custom_llm_provider="openai")
