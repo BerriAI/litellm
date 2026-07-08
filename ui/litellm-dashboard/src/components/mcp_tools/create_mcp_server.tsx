@@ -184,7 +184,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         description: values.description,
         url,
         transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
-        auth_type: AUTH_TYPE.OAUTH2,
+        auth_type:
+          values.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH || values.auth_type === AUTH_TYPE.OAUTH_DELEGATE
+            ? values.auth_type
+            : AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
