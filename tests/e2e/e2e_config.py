@@ -21,7 +21,6 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
     "LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL
 ).rstrip("/")
 
-UI_BASE_URL = os.environ.get("E2E_UI_URL", f"{PROXY_BASE_URL}/ui").rstrip("/")
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
 
