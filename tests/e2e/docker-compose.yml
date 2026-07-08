@@ -11,6 +11,7 @@ configs:
         drop_params: true
         num_retries: 3
         request_timeout: 600
+        callbacks: ["prometheus", "datadog"]
         cache: true
         cache_params:
           type: redis

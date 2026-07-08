@@ -1,37 +1,39 @@
-"""Fixtures for the Datadog logging suite.
+"""Fixtures for the logging e2e suite.
 
-These tests drive the Datadog batch-send path (#25663) directly against the real
-Datadog logs intake with synthetic events - no LLM calls, no proxy, no log
-read-back - so they need only the shipping credentials DD_API_KEY + DD_SITE
-(DD_SERVICE is an optional tag). No Datadog Application key is required, and they
-skip when the shipping credentials are absent from the environment.
+The Datadog tests exercise the real delivery path: the proxy ships each request's
+StandardLoggingPayload to Datadog on its ``datadog`` callback, and the tests read
+those events back out of the Datadog Logs Search API to prove they landed. That
+read-back needs all three credentials - ``DD_API_KEY`` and ``DD_SITE`` (which the
+proxy also ships with) plus ``DD_APP_KEY`` (the Logs Search API rejects reads that
+carry only an API key) - so the suite skips when any is absent.
+
+The shared ``resources`` / ``scoped_key`` fixtures come from the root e2e conftest
+via the GatewayProvider protocol (LoggingClient exposes ``.gateway``).
 """
-
-import os
 
 import pytest
 
-from logging_client import LoggingClient, build_logging_client
+from logging_client import DatadogClient, LoggingClient, build_logging_client
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "covers: registry cell a test covers, e.g. logging.datadog.success.writes_object",
+        "covers: registry cell a test covers, e.g. logging.datadog.success.exports_metric",
     )
 
 
 @pytest.fixture(scope="session")
 def client() -> LoggingClient:
-    """The logging suite's client: holds the shared Gateway so `resources` /
-    `scoped_key` clean up keys, and adds `/metrics` scraping."""
+    """The logging suite's client: holds the shared Gateway (so `resources` /
+    `scoped_key` clean up keys), the Datadog read-back client, and `/metrics`
+    scraping."""
     return build_logging_client()
 
 
-@pytest.fixture
-def datadog_creds() -> None:
-    """Gate the suite on the Datadog shipping credentials. The DataDogLogger is built
-    inside each async test, not here, because its __init__ schedules a periodic-flush
-    task via asyncio.create_task and so needs a running event loop."""
-    if not (os.getenv("DD_API_KEY") and os.getenv("DD_SITE")):
-        pytest.skip("set DD_API_KEY and DD_SITE to run the Datadog logging suite")
+@pytest.fixture(scope="session")
+def datadog(client: LoggingClient) -> DatadogClient:
+    """The Datadog read-back client, or skip when the credentials are absent."""
+    if client.datadog is None:
+        pytest.skip("set DD_API_KEY, DD_SITE and DD_APP_KEY to run the Datadog logging suite")
+    return client.datadog
