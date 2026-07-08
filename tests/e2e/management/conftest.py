@@ -45,11 +45,13 @@ def browser() -> "Iterator[Browser]":
 @pytest.fixture
 def ui_page(browser: "Browser") -> "Iterator[Page]":
     context = browser.new_context()
-    page = context.new_page()
-    page.goto(f"{UI_BASE_URL}/")
-    page.fill("#username", UI_USERNAME)
-    page.fill("#password", UI_PASSWORD)
-    page.click('input[type="submit"]')
-    page.wait_for_url("**/ui/**")
-    yield page
-    context.close()
+    try:
+        page = context.new_page()
+        page.goto(f"{UI_BASE_URL}/")
+        page.fill("#username", UI_USERNAME)
+        page.fill("#password", UI_PASSWORD)
+        page.click('input[type="submit"]')
+        page.wait_for_url("**/ui/**")
+        yield page
+    finally:
+        context.close()

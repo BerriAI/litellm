@@ -21,7 +21,7 @@ from models import KeyGenerateBody, TeamNewBody
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 
-from playwright.sync_api import Locator, Page, expect  # noqa: E402
+from playwright.sync_api import Locator, Page, expect  # noqa: E402  # import must follow the importorskip guard above
 
 
 def _form_item(page: Page, label: str) -> Locator:
