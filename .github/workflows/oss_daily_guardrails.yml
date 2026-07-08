@@ -1,0 +1,109 @@
+name: OSS Daily Guardrails
+
+on:
+  push:
+    branches:
+      - "litellm_oss_daily_20*"
+  pull_request:
+    branches:
+      - "litellm_oss_daily_20*"
+      - litellm_internal_staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sensitive-file-guard:
+    name: Block sensitive OSS daily changes
+    if: startsWith(github.ref_name, 'litellm_oss_daily_20') || startsWith(github.head_ref, 'litellm_oss_daily_20') || startsWith(github.base_ref, 'litellm_oss_daily_20')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check for sensitive file changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF_NAME: ${{ github.base_ref }}
+          HEAD_REF_NAME: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          if [ "${EVENT_NAME}" = "pull_request" ] && echo "${HEAD_REF_NAME}" | grep -Eq '^litellm_oss_daily_20[0-9]{2}_[0-9]{2}_[0-9]{2}$'; then
+            # Final daily OSS branch PR into staging: review only the OSS delta
+            # accumulated on top of main, not unrelated main/staging drift.
+            BASE_REF="origin/main"
+            git fetch origin main
+          elif [ "${EVENT_NAME}" = "pull_request" ]; then
+            # PR targeting the daily OSS branch: review the incoming PR delta.
+            BASE_REF="origin/${BASE_REF_NAME}"
+            git fetch origin "${BASE_REF_NAME}"
+          else
+            # Push to the daily OSS branch: review the accumulated OSS delta.
+            BASE_REF="origin/main"
+            git fetch origin main
+          fi
+
+          CHANGED_FILES="$(git diff --name-only "${BASE_REF}...HEAD")"
+
+          if [ -z "${CHANGED_FILES}" ]; then
+            echo "No changed files detected."
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "${CHANGED_FILES}"
+
+          BLOCKED_FILES="$(
+            echo "${CHANGED_FILES}" | grep -E '(^\.github/workflows/|^\.github/actions/|^\.circleci/|^\.cursor/|^Dockerfile$|(^|/)Dockerfile$|^Makefile$|(^|/)Makefile$|(^|/)pyproject\.toml$|(^|/)uv\.lock$|(^|/)poetry\.lock$|(^|/)requirements[^/]*\.txt$|(^|/)package\.json$|(^|/)package-lock\.json$|(^|/)pnpm-lock\.yaml$|(^|/)yarn\.lock$|(^|/)tsconfig[^/]*\.json$|(^|/)(ruff|mypy|pytest|eslint|prettier|vitest|next|vite|jest)\.config\.)' || true
+          )"
+
+          if [ -n "${BLOCKED_FILES}" ]; then
+            echo "::error::OSS daily branch contains sensitive workflow, config, dependency, or lockfile changes. Split these into a separate internal/security-reviewed PR."
+            echo "${BLOCKED_FILES}"
+            exit 1
+          fi
+
+          echo "No sensitive OSS daily file changes detected."
+
+  oss-safe-checks:
+    name: Run OSS daily safe checks
+    if: startsWith(github.ref_name, 'litellm_oss_daily_20') || startsWith(github.head_ref, 'litellm_oss_daily_20') || startsWith(github.base_ref, 'litellm_oss_daily_20')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+
+      - name: Run secret scan test
+        run: |
+          uv run --frozen --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
+
+      - name: Run Ruff
+        run: |
+          uv sync --frozen
+          cd litellm
+          uv run --no-sync ruff check .
