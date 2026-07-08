@@ -75,7 +75,7 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
             elif "content" in item:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
             elif item.get("type") == "function_call_output" and "output" in item:
-                messages.append({"role": "tool", "content": item["output"]})
+                messages.append({"role": "user", "content": item["output"]})
     return messages
 
 

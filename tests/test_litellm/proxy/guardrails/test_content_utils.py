@@ -392,11 +392,12 @@ def test_build_inspection_messages_responses_api_tool_call_taxonomy():
     ]
 
 
-def test_build_inspection_messages_coerces_non_standard_role_to_user():
-    """LIT-4294: the OpenAI chat schema requires ``tool_call_id`` on a
-    ``tool`` message; AIM validates the posted payload and rejects tool
-    messages missing that field. The inspection payload only carries text,
-    so any role outside {system, user, assistant} collapses to ``user``."""
+def test_build_inspection_messages_function_call_output_becomes_user():
+    """LIT-4294: tool-result items must surface to inspection APIs, but the
+    OpenAI chat schema requires ``tool_call_id`` on any ``tool`` message.
+    AIM's ``/fw/v1/analyze`` validates the posted payload and rejects a bare
+    tool message. ``function_call_output`` maps straight to ``user`` so a
+    schema-invalid shape is never materialised, even in isolation."""
     data = {
         "input": [
             {
@@ -406,8 +407,24 @@ def test_build_inspection_messages_coerces_non_standard_role_to_user():
             },
         ]
     }
-    result = build_inspection_messages(data)
-    assert result == [{"role": "user", "content": "tool text"}]
+    assert build_inspection_messages(data) == [{"role": "user", "content": "tool text"}]
+
+
+def test_build_inspection_messages_coerces_non_standard_caller_role_to_user():
+    """LIT-4294: a caller-supplied role outside {system, user, assistant}
+    (e.g. ``developer``, ``function``) is coerced to ``user`` before the
+    payload is posted to a third-party guardrail; downstream validators
+    reject unknown roles the same way they reject bare ``tool``."""
+    data = {
+        "messages": [
+            {"role": "developer", "content": "system-ish instruction"},
+            {"role": "user", "content": "normal user text"},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "user", "content": "system-ish instruction"},
+        {"role": "user", "content": "normal user text"},
+    ]
 
 
 def test_build_inspection_messages_empty_data():
