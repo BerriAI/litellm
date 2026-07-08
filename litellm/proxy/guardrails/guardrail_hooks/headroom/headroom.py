@@ -294,21 +294,33 @@ class HeadroomGuardrail(CustomGuardrail):
                 headers=self._request_headers(),
             )
         except httpx.HTTPStatusError as e:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned an error",
-                {"status_code": e.response.status_code, "body": e.response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned an error",
+                    {"status_code": e.response.status_code, "body": e.response.text},
+                ),
+                False,
+                {},
+            )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service unreachable",
-                {"detail": str(e)},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service unreachable",
+                    {"detail": str(e)},
+                ),
+                False,
+                {},
+            )
         if raw_response is None:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned no response",
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned no response",
+                    {},
+                ),
+                False,
                 {},
             )
         response: HttpxResponse = raw_response
@@ -327,11 +339,15 @@ class HeadroomGuardrail(CustomGuardrail):
         try:
             body: object = response.json()
         except ValueError:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned non-JSON response",
-                {"body": response.text[:500]},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned non-JSON response",
+                    {"body": response.text[:500]},
+                ),
+                False,
+                {},
+            )
         if not _is_str_object_dict(body):
             return (
                 self._handle_compress_failure(
@@ -458,6 +474,16 @@ class HeadroomGuardrail(CustomGuardrail):
 
         if not compression_succeeded:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=stats,
+            request_data=request_data,
+            guardrail_status="success",
+            guardrail_provider="headroom",
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
 
         hashes = extract_hashes_from_messages(compressed)
         if not hashes:
