@@ -84,6 +84,9 @@ export const useMcpOAuthPkceFlow = ({
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
 
+  // Latest-ref pattern: reassigned every render so the memoized callbacks below
+  // read the current buildReturnUrl/persistToken/onSuccess at call time without
+  // listing them as deps (which would re-subscribe the on-mount resume effect).
   const callbacksRef = useRef({ buildReturnUrl, persistToken, onSuccess });
   callbacksRef.current = { buildReturnUrl, persistToken, onSuccess };
 
