@@ -2789,7 +2789,7 @@ def test_get_deployment_model_info_base_model_flow():
     ):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
             # Configure mock returns
-            mock_get_model_info.side_effect = lambda model: {
+            mock_get_model_info.side_effect = lambda model, custom_llm_provider=None: {
                 "gpt-3.5-turbo": mock_base_model_info,
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
@@ -2803,7 +2803,13 @@ def test_get_deployment_model_info_base_model_flow():
             mock_get_model_info.assert_any_call(
                 model="gpt-3.5-turbo"
             )  # base model call
-            mock_get_model_info.assert_any_call(model="test-model")  # model name call
+            mock_get_model_info.assert_any_call(
+                model="test-model", custom_llm_provider=None
+            )  # model name call — custom_llm_provider forwarded to disambiguate
+            # bare model names that collide across providers in the bundled cost map
+            # (e.g. "deepseek-v4-pro" matching DeepSeek's own direct-API entry
+            # instead of azure_ai's); None here since "test-custom-model" isn't a
+            # deployment id registered on this router.
 
             # Verify the result contains merged information
             assert result is not None
@@ -2847,7 +2853,7 @@ def test_get_deployment_model_info_base_model_flow():
         {"test-custom-model-no-base": mock_custom_model_info_no_base},
     ):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
-            mock_get_model_info.side_effect = lambda model: {
+            mock_get_model_info.side_effect = lambda model, custom_llm_provider=None: {
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
 
@@ -2857,7 +2863,9 @@ def test_get_deployment_model_info_base_model_flow():
 
             # Should only call get_model_info once for model name (no base model)
             assert mock_get_model_info.call_count == 1
-            mock_get_model_info.assert_called_with(model="test-model")
+            mock_get_model_info.assert_called_with(
+                model="test-model", custom_llm_provider=None
+            )
 
             # Verify the result contains merged information
             assert result is not None
@@ -2869,7 +2877,7 @@ def test_get_deployment_model_info_base_model_flow():
     # Test Case 3: No custom model info, only litellm model name info
     with patch.object(litellm, "model_cost", {}):  # Empty model cost
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
-            mock_get_model_info.side_effect = lambda model: {
+            mock_get_model_info.side_effect = lambda model, custom_llm_provider=None: {
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
 
@@ -2879,7 +2887,9 @@ def test_get_deployment_model_info_base_model_flow():
 
             # Should only call get_model_info once for model name
             assert mock_get_model_info.call_count == 1
-            mock_get_model_info.assert_called_with(model="test-model")
+            mock_get_model_info.assert_called_with(
+                model="test-model", custom_llm_provider=None
+            )
 
             # Result should be just the litellm model name info
             assert result is not None
@@ -2899,7 +2909,7 @@ def test_get_deployment_model_info_base_model_flow():
     ):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
             # Mock get_model_info to raise exception for invalid base model
-            def mock_get_model_info_side_effect(model):
+            def mock_get_model_info_side_effect(model, custom_llm_provider=None):
                 if model == "invalid-base-model":
                     raise Exception("Model not found")
                 elif model == "test-model":
@@ -2978,7 +2988,7 @@ def test_get_deployment_model_info_base_model_flow():
     ):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
 
-            def get_info_side_effect(model):
+            def get_info_side_effect(model, custom_llm_provider=None):
                 if model == "some-base-model":
                     return mock_base_info
                 raise Exception("Model not in cost map")
@@ -3044,7 +3054,7 @@ def test_get_deployment_model_info_base_model_merge_priority():
         litellm, "model_cost", {"custom-model-id": mock_custom_model_info}
     ):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
-            mock_get_model_info.side_effect = lambda model: {
+            mock_get_model_info.side_effect = lambda model, custom_llm_provider=None: {
                 "gpt-4": mock_base_model_info,
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
@@ -3093,6 +3103,73 @@ def test_get_deployment_model_info_base_model_merge_priority():
             assert result["key"] == "gpt-4"
 
     print("✓ Base model merge priority test passed!")
+
+
+def test_get_deployment_model_info_forwards_custom_llm_provider_to_avoid_collision():
+    """
+    Regression test: a bare model name (no provider prefix) can exist under
+    multiple providers in litellm.model_cost — e.g. "deepseek-v4-pro" is both
+    DeepSeek's own direct-API model AND an Azure AI Foundry (azure_ai) model,
+    each with different pricing/context windows. get_deployment_model_info()
+    must forward the deployment's own custom_llm_provider to get_model_info()
+    so it resolves to the correct entry instead of silently matching whichever
+    provider's bare-name entry litellm.get_model_info() finds first.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "deepseek-v4-pro",
+                "litellm_params": {
+                    "model": "deepseek-v4-pro",
+                    "custom_llm_provider": "azure_ai",
+                    "api_base": "https://example.services.ai.azure.com/models",
+                },
+                "model_info": {"id": "foundry-east-deepseek-v4-pro"},
+            }
+        ],
+    )
+
+    azure_ai_entry = {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "input_cost_per_token": 1.74e-06,
+        "output_cost_per_token": 3.48e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+    }
+    deepseek_direct_entry = {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 4.35e-07,
+        "output_cost_per_token": 8.7e-07,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+    }
+
+    def get_model_info_side_effect(model, custom_llm_provider=None):
+        if model == "deepseek-v4-pro" and custom_llm_provider == "azure_ai":
+            return azure_ai_entry
+        if model == "deepseek-v4-pro" and custom_llm_provider is None:
+            # unqualified lookup — mirrors the pre-fix bug, matching the wrong
+            # (non-azure_ai) provider's bare-name entry
+            return deepseek_direct_entry
+        raise Exception("Model not found")
+
+    with patch.object(litellm, "model_cost", {}):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            mock_get_model_info.side_effect = get_model_info_side_effect
+
+            result = router.get_deployment_model_info(
+                model_id="foundry-east-deepseek-v4-pro", model_name="deepseek-v4-pro"
+            )
+
+            mock_get_model_info.assert_called_once_with(
+                model="deepseek-v4-pro", custom_llm_provider="azure_ai"
+            )
+            assert result is not None
+            assert result["max_output_tokens"] == 384000
+            assert result["input_cost_per_token"] == 1.74e-06
+            assert result["output_cost_per_token"] == 3.48e-06
 
 
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():

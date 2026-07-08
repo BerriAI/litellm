@@ -8582,8 +8582,21 @@ class Router:
         except Exception:
             pass
 
+        # Look up this deployment's own custom_llm_provider (if the router has it
+        # registered under model_id) so a bare model_name that collides with an
+        # unrelated provider's entry in the bundled cost map (e.g. "deepseek-v4-pro"
+        # matching DeepSeek's own direct-API pricing instead of azure_ai's) resolves
+        # to the right one. Without this hint, get_model_info() silently returns
+        # whichever entry it finds first for the bare name.
+        deployment = self.get_deployment(model_id=model_id) if model_id else None
+        custom_llm_provider = (
+            deployment.litellm_params.custom_llm_provider if deployment is not None else None
+        )
+
         try:
-            litellm_model_name_model_info = litellm.get_model_info(model=model_name)
+            litellm_model_name_model_info = litellm.get_model_info(
+                model=model_name, custom_llm_provider=custom_llm_provider
+            )
         except Exception:
             pass
 
