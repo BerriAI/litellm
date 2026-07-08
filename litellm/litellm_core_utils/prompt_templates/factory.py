@@ -1494,9 +1494,17 @@ def convert_to_gemini_tool_call_result(
     if last_message_with_tool_calls:
         tools = last_message_with_tool_calls.get("tool_calls", [])
         msg_tool_call_id = message.get("tool_call_id", None)
+        stripped_msg_id = (
+            msg_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if isinstance(msg_tool_call_id, str) else None
+        )
         for tool in tools:
             prev_tool_call_id = tool.get("id", None)
-            if msg_tool_call_id and prev_tool_call_id and msg_tool_call_id == prev_tool_call_id:
+            stripped_prev_id = (
+                prev_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+                if isinstance(prev_tool_call_id, str)
+                else None
+            )
+            if stripped_msg_id and stripped_prev_id and stripped_msg_id == stripped_prev_id:
                 name = tool.get("function", {}).get("name", "")
 
     # Echo the OpenAI tool_call_id on functionResponse (strip thought-signature suffix).

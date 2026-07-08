@@ -669,6 +669,72 @@ def test_convert_gemini_messages():
     )
 
 
+def test_convert_gemini_tool_call_result_strips_thought_signature_suffix():
+    """
+    Codex-style clients echo the Gemini thought-signature suffix
+    ("<id>__thought__<base64>") on the function_call_output tool_call_id while the
+    assistant tool_call keeps the clean id. The name-recovery match must strip the
+    suffix from both ids before comparing, otherwise convert raises "Missing
+    corresponding tool call for tool response message".
+    Regression for: https://github.com/BerriAI/litellm/issues/29854
+    """
+    clean_id = "call_abc123"
+    suffix = "__thought__EiYKB3RleHRfMTIzEgVzb21ldGhpbmc="
+
+    def _assistant_turn(tool_call_id):
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "index": 0,
+                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                }
+            ],
+        }
+
+    # (a) suffixed response id vs clean assistant id -> matches and echoes the clean id
+    result = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool", tool_call_id=clean_id + suffix, content="{}"
+        ),
+        last_message_with_tool_calls=_assistant_turn(clean_id),
+        model="gemini-3-pro-preview",
+        custom_llm_provider="gemini",
+    )
+    assert result["function_response"]["name"] == "get_current_weather"
+    assert result["function_response"]["id"] == clean_id
+
+    # suffix on the assistant tool_call instead -> also matches (either side may carry it)
+    result_reverse = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool", tool_call_id=clean_id, content="{}"
+        ),
+        last_message_with_tool_calls=_assistant_turn(clean_id + suffix),
+    )
+    assert result_reverse["function_response"]["name"] == "get_current_weather"
+
+    # (b) clean vs clean -> unchanged behavior, still matches
+    result_clean = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool", tool_call_id=clean_id, content="{}"
+        ),
+        last_message_with_tool_calls=_assistant_turn(clean_id),
+    )
+    assert result_clean["function_response"]["name"] == "get_current_weather"
+
+    # (c) genuinely different ids -> still raises, suffix stripping must not match unrelated ids
+    with pytest.raises(Exception, match="Missing corresponding tool call"):
+        convert_to_gemini_tool_call_result(
+            message=ChatCompletionToolMessage(
+                role="tool", tool_call_id="call_zzz" + suffix, content="{}"
+            ),
+            last_message_with_tool_calls=_assistant_turn(clean_id),
+        )
+
+
 def test_convert_gemini_tool_call_result_with_image_url():
     """
     Test that image_url content type in tool results is handled correctly for Gemini.
