@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 from contextlib import ExitStack
@@ -1337,7 +1338,8 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                 upstream_response.raise_for_status = MagicMock()
 
                 async_client = MagicMock()
-                async_client.request = AsyncMock(return_value=upstream_response)
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
                 mock_get_client.return_value = MagicMock(client=async_client)
 
                 async def _empty_chunks(*args, **kwargs):
@@ -1361,7 +1363,7 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                     stream=False,
                 )
 
-                async_client.request.assert_awaited_once()
+                async_client.send.assert_awaited_once()
 
                 mock_chunk_processor.assert_called_once()
                 logging_obj = mock_chunk_processor.call_args.kwargs[
@@ -3046,7 +3048,8 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
     )
 
     mock_async_client = AsyncMock()
-    mock_async_client.request = AsyncMock(return_value=upstream)
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=upstream)
     mock_client_obj = MagicMock()
     mock_client_obj.client = mock_async_client
 
@@ -3082,10 +3085,12 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
             stream=False,
         )
 
-    mock_async_client.request.assert_called_once()
-    req_kw = mock_async_client.request.call_args[1]
-    assert req_kw.get("content") == raw_signed
-    assert "json" not in req_kw
+    mock_async_client.build_request.assert_called_once()
+    build_kw = mock_async_client.build_request.call_args[1]
+    assert build_kw.get("content") == raw_signed
+    assert "json" not in build_kw
+    mock_async_client.send.assert_awaited_once()
+    assert mock_async_client.send.call_args.kwargs.get("stream") is True
 
 
 @pytest.mark.asyncio
@@ -3826,7 +3831,8 @@ async def test_pass_through_request_non_streaming_upstream_error_returned_unchan
                     mock_success_handler.return_value = None
 
                     async_client = MagicMock()
-                    async_client.request = AsyncMock(return_value=upstream_response)
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
                     mock_get_client.return_value = MagicMock(client=async_client)
 
                     mock_request = MagicMock(spec=Request)
@@ -3913,7 +3919,8 @@ async def test_pass_through_request_upstream_error_failure_hook_exception_is_swa
                     mock_success_handler.return_value = None
 
                     async_client = MagicMock()
-                    async_client.request = AsyncMock(return_value=upstream_response)
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
                     mock_get_client.return_value = MagicMock(client=async_client)
 
                     mock_request = MagicMock(spec=Request)
@@ -4043,7 +4050,8 @@ async def test_pass_through_request_non_streaming_success_unchanged():
                     mock_success_handler.return_value = None
 
                     async_client = MagicMock()
-                    async_client.request = AsyncMock(return_value=upstream_response)
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
                     mock_get_client.return_value = MagicMock(client=async_client)
 
                     mock_request = MagicMock(spec=Request)
@@ -4103,3 +4111,393 @@ async def test_pass_through_request_internal_failure_still_raises_proxy_exceptio
 
     assert int(exc_info.value.code) == 500
     assert "auth backend unavailable" in exc_info.value.message
+
+
+class _RecordingUpstreamByteStream(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.chunks_served = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self.chunks_served += 1
+            yield chunk
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _FakeUpstreamTransport(httpx.AsyncBaseTransport):
+    def __init__(self, status_code, headers, stream):
+        self._status_code = status_code
+        self._headers = headers
+        self._stream = stream
+
+    async def handle_async_request(self, request):
+        return httpx.Response(
+            status_code=self._status_code,
+            headers=self._headers,
+            stream=self._stream,
+            request=request,
+        )
+
+
+def _inject_fake_passthrough_client(transport, timeout):
+    """Dependency-inject a fake upstream via the client cache that
+    get_async_httpx_client resolves passthrough clients from (no monkeypatching
+    of the HTTP layer). The cache entry is located by calling the production
+    get_async_httpx_client and identity-scanning the cache for the handler it
+    returned, so the internal cache-key format is never duplicated here. Must
+    run inside the test's event loop because cache keys are loop-scoped.
+    Returns (client, cleanup)."""
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    real_handler = get_async_httpx_client(
+        httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(timeout)},
+    )
+    cache = litellm.in_memory_llm_clients_cache
+    cache_key = next(
+        (key for key, cached in cache.cache_dict.items() if cached is real_handler),
+        None,
+    )
+    assert cache_key is not None, (
+        "PassThroughEndpoint client not found in in_memory_llm_clients_cache; "
+        "get_async_httpx_client may not be caching this provider."
+    )
+    fake_client = httpx.AsyncClient(transport=transport)
+    cache.cache_dict[cache_key] = SimpleNamespace(client=fake_client)
+
+    def _cleanup():
+        cache.cache_dict.pop(cache_key, None)
+
+    return fake_client, _cleanup
+
+
+def _enter_relay_logging_mocks(stack, parsed_body):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    mock_proxy_logging = stack.enter_context(
+        patch("litellm.proxy.proxy_server.proxy_logging_obj")
+    )
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value=parsed_body)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+    mock_success_handler = stack.enter_context(
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+        )
+    )
+    mock_success_handler.return_value = None
+    stack.enter_context(
+        patch.object(
+            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", new=MagicMock()
+        )
+    )
+    return mock_proxy_logging, mock_success_handler
+
+
+def _relay_client_request(method="GET"):
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = method
+    mock_request.url = "http://localhost:4000/passthrough-relay/results"
+    mock_request.body = AsyncMock(return_value=b"")
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+    return mock_request
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_relays_non_json_body_without_buffering():
+    """
+    Regression (LIT-4009): non-SSE passthrough responses used to be fully
+    buffered in proxy memory (content = await response.aread()) before a single
+    byte reached the client, ballooning proxy RSS to a multiple of the body size
+    for large non-JSON downloads (e.g. Anthropic batch results .jsonl files) and
+    producing near-total TTFB dead air that let intermediaries kill the silent
+    connection mid-download.
+
+    A non-JSON 2xx body must be relayed as a StreamingResponse whose chunks are
+    pulled from the upstream one at a time, with zero chunks consumed before the
+    handler returns, upstream status/headers plus x-litellm-* headers preserved,
+    and the success-handler logging fired with response_body=None once the
+    stream completes. Pre-fix, the handler returned a plain Response after
+    reading the entire body, so these assertions fail on the old code.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_chunks = (
+        b'{"custom_id": "a", "result": {}}\n',
+        b'{"custom_id": "b", "result": {}}\n',
+        b'{"custom_id": "c", "result": {}}\n',
+    )
+    upstream_stream = _RecordingUpstreamByteStream(upstream_chunks)
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={
+                "content-type": "application/x-jsonl",
+                "x-upstream-marker": "batch-results",
+                "content-length": str(sum(len(c) for c in upstream_chunks)),
+            },
+            stream=upstream_stream,
+        ),
+        timeout=311.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+
+            response = await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/messages/batches/b1/results",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=311.0,
+            )
+
+            assert isinstance(response, StreamingResponse)
+            assert upstream_stream.chunks_served == 0
+            mock_success_handler.assert_not_called()
+
+            iterator = response.body_iterator
+            first_chunk = await iterator.__anext__()
+            assert first_chunk == upstream_chunks[0]
+            assert upstream_stream.chunks_served == 1
+
+            remaining = [chunk async for chunk in iterator]
+            assert b"".join([first_chunk, *remaining]) == b"".join(upstream_chunks)
+            assert upstream_stream.closed is True
+
+            assert response.status_code == 200
+            assert response.headers["x-upstream-marker"] == "batch-results"
+            assert "x-litellm-call-id" in response.headers
+            assert "content-length" not in response.headers
+
+            mock_success_handler.assert_called_once()
+            success_kwargs = mock_success_handler.call_args.kwargs
+            assert success_kwargs["response_body"] is None
+            assert (
+                success_kwargs["url_route"]
+                == "http://upstream.test/v1/messages/batches/b1/results"
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_json_response_stays_buffered_for_logging():
+    """
+    JSON responses (content-type application/json) must keep the buffered
+    behavior: spend logging and guardrails inspect the parsed body, so the
+    handler reads the full upstream body and passes the parsed dict to the
+    success handler.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_chunks = (b'{"id": "file-123"', b', "status": "processed"}')
+    upstream_stream = _RecordingUpstreamByteStream(upstream_chunks)
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            stream=upstream_stream,
+        ),
+        timeout=312.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+
+            response = await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/files/file-123",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=312.0,
+            )
+
+            assert not isinstance(response, StreamingResponse)
+            assert response.status_code == 200
+            assert response.body == b"".join(upstream_chunks)
+            assert upstream_stream.chunks_served == len(upstream_chunks)
+
+            mock_success_handler.assert_called_once()
+            success_kwargs = mock_success_handler.call_args.kwargs
+            assert success_kwargs["response_body"] == {
+                "id": "file-123",
+                "status": "processed",
+            }
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_upstream_error_body_stays_buffered():
+    """
+    Upstream errors are never relayed as a stream, whatever their content-type:
+    the body must stay available for the failure hook and reach the client
+    buffered with the upstream status code, exactly as before the fix.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_stream = _RecordingUpstreamByteStream((b"upstream ", b"exploded"))
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=502,
+            headers={"content-type": "application/x-jsonl"},
+            stream=upstream_stream,
+        ),
+        timeout=313.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(
+                stack, {}
+            )
+
+            response = await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/messages/batches/b1/results",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=313.0,
+            )
+
+            assert not isinstance(response, StreamingResponse)
+            assert response.status_code == 502
+            assert response.body == b"upstream exploded"
+            mock_proxy_logging.post_call_failure_hook.assert_called_once()
+            mock_success_handler.assert_not_called()
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+_PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_relay_client_disconnect_logs_partial_relay_warning(caplog):
+    """
+    Regression: when the client disconnects mid-relay (GeneratorExit), the
+    proxy log must record that the upstream body was only partially delivered,
+    including the route and the byte count that reached the client, while the
+    success handler still fires so the partial delivery produces a spend-log
+    row. Pre-fix, the finally block fired the success handler silently and a
+    partial delivery was indistinguishable from a complete one.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_chunks = (b'{"custom_id": "a"}\n', b'{"custom_id": "b"}\n')
+    upstream_stream = _RecordingUpstreamByteStream(upstream_chunks)
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/x-jsonl"},
+            stream=upstream_stream,
+        ),
+        timeout=314.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+
+            response = await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/messages/batches/b1/results",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=314.0,
+            )
+
+            assert isinstance(response, StreamingResponse)
+            iterator = response.body_iterator
+            first_chunk = await iterator.__anext__()
+            assert first_chunk == upstream_chunks[0]
+
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                await iterator.aclose()
+
+            partial_relay_warnings = [
+                record.getMessage()
+                for record in caplog.records
+                if record.levelno == logging.WARNING
+                and _PARTIAL_RELAY_WARNING_MARKER in record.getMessage()
+            ]
+            assert len(partial_relay_warnings) == 1
+            assert (
+                "http://upstream.test/v1/messages/batches/b1/results"
+                in partial_relay_warnings[0]
+            )
+            assert (
+                f"{len(first_chunk)} bytes were sent to the client"
+                in partial_relay_warnings[0]
+            )
+
+            assert upstream_stream.closed is True
+            mock_success_handler.assert_called_once()
+            assert mock_success_handler.call_args.kwargs["response_body"] is None
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_relay_full_consumption_logs_no_partial_relay_warning(caplog):
+    """
+    A fully consumed relay must not be reported as a partial delivery: the
+    success handler fires and no partial-relay warning is logged.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_chunks = (b'{"custom_id": "a"}\n', b'{"custom_id": "b"}\n')
+    upstream_stream = _RecordingUpstreamByteStream(upstream_chunks)
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/x-jsonl"},
+            stream=upstream_stream,
+        ),
+        timeout=315.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+
+            response = await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/messages/batches/b1/results",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=315.0,
+            )
+
+            assert isinstance(response, StreamingResponse)
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                relayed = [chunk async for chunk in response.body_iterator]
+
+            assert b"".join(relayed) == b"".join(upstream_chunks)
+            assert not any(
+                _PARTIAL_RELAY_WARNING_MARKER in record.getMessage()
+                for record in caplog.records
+            )
+            mock_success_handler.assert_called_once()
+    finally:
+        cleanup()
+        await fake_client.aclose()

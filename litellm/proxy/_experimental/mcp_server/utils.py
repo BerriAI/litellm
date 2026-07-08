@@ -415,6 +415,25 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             raise Exception(error_message)
 
 
+def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
+    """The first text content of an ``isError=True`` tool result, or ``None``
+    when the result is not an error.
+
+    Accepts both ``mcp.types.CallToolResult`` objects and their dict
+    equivalents, duck-typed so the ``mcp`` package is not required.
+    """
+    is_error: object = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    if is_error is not True:
+        return None
+    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    if isinstance(content, (list, tuple)):
+        for item in content:
+            text: object = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
+            if isinstance(text, str) and text:
+                return text
+    return "MCP tool call returned isError=true"
+
+
 TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 

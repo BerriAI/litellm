@@ -20,6 +20,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Mapping,
     Optional,
     Set,
     Tuple,
@@ -47,7 +48,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPToolResultError,
+    MCPUpstreamAuthError,
+)
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -60,6 +64,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
 )
@@ -716,7 +721,7 @@ if MCP_AVAILABLE:
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
         host_token = getattr(host_ctx.meta, "progressToken", None)
-        if not (host_token and hasattr(host_ctx, "session") and host_ctx.session):
+        if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session = host_ctx.session
 
@@ -732,7 +737,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 verbose_logger.error(f"Failed to forward progress to Host: {e}")
 
-        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        verbose_logger.debug(f"Host progressToken captured: {str(host_token)[:8]}...")
         return forward_progress
 
     async def _build_virtual_call_logging_obj(
@@ -2743,12 +2748,40 @@ if MCP_AVAILABLE:
 
         return response
 
-    async def _fire_mcp_success_logging(
+    _MCP_CREDENTIAL_REQUEST_FIELDS = frozenset(
+        {
+            "raw_headers",
+            "mcp_auth_header",
+            "mcp_server_auth_headers",
+            "oauth2_headers",
+            "user_api_key_auth",
+        }
+    )
+
+    async def _fire_mcp_tool_call_logging(
         logging_obj: LiteLLMLoggingObj,
         result: Any,
         start_time: datetime,
         end_time: datetime,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        request_data: Optional[Mapping[str, object]] = None,
     ) -> None:
+        """Fire post-call logging for an executed MCP tool call.
+
+        A result with ``isError=True`` is logged as a failure (``status="failure"``
+        payload, so OTel marks the span ERROR) while the HTTP wire behavior stays
+        200 + ``isError: true`` per the MCP spec. The error check runs after
+        ``async_post_mcp_tool_call_hook`` because guardrails may flip the result
+        to ``isError=True`` in that hook. Raised exceptions never reach here (the
+        ``@client`` wrapper and ``call_mcp_tool``'s except path log those), so
+        this cannot double-log a failure.
+
+        ``request_data`` may carry credential-bearing fields (the REST path puts
+        ``raw_headers``, ``mcp_auth_header``, ``mcp_server_auth_headers``, and
+        ``oauth2_headers`` at the top level of its data dict), so those are
+        stripped before the dict is handed to ``post_call_failure_hook``
+        callbacks.
+        """
         logging_obj.post_call(original_response=result)
         await logging_obj.async_post_mcp_tool_call_hook(
             kwargs=logging_obj.model_call_details,
@@ -2757,7 +2790,31 @@ if MCP_AVAILABLE:
             end_time=end_time,
         )
         logging_obj.call_type = CallTypes.call_mcp_tool.value
-        await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
+        error_message = extract_mcp_tool_result_error_message(result)
+        if error_message is None:
+            await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
+            return
+
+        logging_obj.has_run_logging(event_type="sync_success")
+        logging_obj.has_run_logging(event_type="async_success")
+        tool_error = MCPToolResultError(error_message)
+        logging_obj.failure_handler(tool_error, "", start_time, end_time)
+        await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)
+
+        if user_api_key_auth is None:
+            return
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        if proxy_logging_obj:
+            sanitized_request_data = {
+                key: value for key, value in (request_data or {}).items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
+            }
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=sanitized_request_data,
+                original_exception=tool_error,
+                user_api_key_dict=user_api_key_auth,
+                route="/mcp/call_tool",
+            )
 
     @client
     async def call_mcp_tool(
@@ -2833,7 +2890,14 @@ if MCP_AVAILABLE:
             raise
 
         if litellm_logging_obj:
-            await _fire_mcp_success_logging(litellm_logging_obj, response, start_time, datetime.now())
+            await _fire_mcp_tool_call_logging(
+                logging_obj=litellm_logging_obj,
+                result=response,
+                start_time=start_time,
+                end_time=datetime.now(),
+                user_api_key_auth=user_api_key_auth,
+                request_data=kwargs,
+            )
         return response
 
     async def mcp_get_prompt(
