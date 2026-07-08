@@ -3,8 +3,7 @@
 This directory is the **denominator** for e2e test coverage: the set of behaviors we
 want covered, one row per behavior, checked into the repo so coverage is a number we
 can track instead of a guess. It implements the plan in the "E2E Coverage Tracking"
-note; the naming grammar lives in `tests/e2e/CLAUDE.md`. The Grafana dashboard contract
-lives in `GRAFANA_DASHBOARD.md`.
+note; the naming grammar lives in `tests/e2e/CLAUDE.md`.
 
 ## The model
 
