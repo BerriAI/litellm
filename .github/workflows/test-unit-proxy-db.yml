@@ -5,6 +5,11 @@ on:
     branches:
       - main
       - litellm_internal_staging
+    paths-ignore:
+      - "ui/**"
+      - "docs/**"
+      - "**.md"
+      - "**.mdx"
 
 permissions:
   contents: read
