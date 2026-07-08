@@ -104,12 +104,13 @@ class ResponsesIDSecurity(CustomLogger):
         return True
 
     def _is_encrypted_response_id(self, response_id: str) -> bool:
-        split_result = response_id.split("resp_")
-        if len(split_result) < 2:
+        if not response_id.startswith("resp_"):
             return False
 
-        remaining_string = split_result[1]
-        decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
+        remaining_string = response_id.split("resp_", 1)[1]
+        decrypted_value = decrypt_value_helper(
+            value=remaining_string, key="response_id", return_original_value=True
+        )
 
         if decrypted_value is None:
             return False
@@ -125,37 +126,39 @@ class ResponsesIDSecurity(CustomLogger):
          - user_id: the user id
          - team_id: the team id
         """
-        split_result = response_id.split("resp_")
-        if len(split_result) < 2:
+        if not response_id.startswith("resp_"):
             return response_id, None, None
 
-        remaining_string = split_result[1]
-        decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
+        remaining_string = response_id.split("resp_", 1)[1]
+        decrypted_value = decrypt_value_helper(
+            value=remaining_string, key="response_id", return_original_value=True
+        )
 
         if decrypted_value is None:
             return response_id, None, None
 
         if decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            # Expected format: "litellm_proxy:responses_api:response_id:{response_id};user_id:{user_id}"
-            parts = decrypted_value.split(";")
-
-            if len(parts) >= 2:
-                # Extract response_id from "litellm_proxy:responses_api:response_id:{response_id}"
-                response_id_part = parts[0]
-                original_response_id = response_id_part.split("response_id:")[-1]
-
-                # Extract user_id from "user_id:{user_id}"
-                user_id_part = parts[1]
-                user_id = user_id_part.split("user_id:")[-1]
-
-                # Extract team_id from "team_id:{team_id}"
-                team_id_part = parts[2]
-                team_id = team_id_part.split("team_id:")[-1]
-
-                return original_response_id, user_id, team_id
-            else:
-                # Fallback if format is unexpected
+            # Expected format:
+            # "litellm_proxy:responses_api:response_id:{response_id};user_id:{user_id};team_id:{team_id}"
+            # Older encrypted ids may not include the team_id segment.
+            response_id_part, *metadata_parts = decrypted_value.split(";")
+            if "response_id:" not in response_id_part:
                 return response_id, None, None
+
+            original_response_id = response_id_part.split("response_id:", 1)[1]
+
+            user_id = None
+            team_id = None
+            for part in metadata_parts:
+                key, separator, value = part.partition(":")
+                if not separator:
+                    continue
+                if key == "user_id":
+                    user_id = value or None
+                elif key == "team_id":
+                    team_id = value or None
+
+            return original_response_id, user_id, team_id
         return response_id, None, None
 
     def _get_signing_key(self) -> Optional[str]:
