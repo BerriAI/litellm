@@ -3936,3 +3936,39 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_transform_usage_objects_non_streaming_preserves_prompt_and_completion_tokens():
+    """_transform_usage_objects must set result.usage as a dict, not a Usage object,
+    or model_dump() silently drops prompt_tokens/completion_tokens (ResponseAPIUsage
+    schema mismatch)."""
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    response = ResponsesAPIResponse(
+        id="resp-test-001",
+        created_at=1700000000,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+    )
+
+    logging_obj = LitellmLogging(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="responses",
+        start_time=time.time(),
+        litellm_call_id="test-usage-preservation",
+        function_id="test-fn-usage",
+    )
+
+    result = logging_obj._transform_usage_objects(response)
+
+    assert isinstance(result.usage, dict), f"Expected usage to be a dict, got {type(result.usage)}"
+    assert result.usage.get("prompt_tokens") == 100
+    assert result.usage.get("completion_tokens") == 50
+    assert result.usage.get("total_tokens") == 150
+
+    dumped_usage = result.model_dump().get("usage", {})
+    assert dumped_usage.get("prompt_tokens") == 100, f"prompt_tokens lost after model_dump(): {dumped_usage}"
+    assert dumped_usage.get("completion_tokens") == 50, f"completion_tokens lost after model_dump(): {dumped_usage}"
+    assert dumped_usage.get("total_tokens") == 150, f"total_tokens lost after model_dump(): {dumped_usage}"

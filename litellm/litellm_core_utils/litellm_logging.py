@@ -1778,7 +1778,17 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
             transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(result.usage)
-            setattr(result, "usage", transformed_usage)
+            # Convert to dict: ResponseAPIUsage has no prompt_tokens/completion_tokens
+            # fields, so model_dump() would silently drop them from a raw Usage object.
+            setattr(
+                result,
+                "usage",
+                (
+                    transformed_usage.model_dump()
+                    if hasattr(transformed_usage, "model_dump")
+                    else dict(transformed_usage)
+                ),
+            )
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
                 response_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result)
                 # Ensure usage is properly included with transformed chat format
