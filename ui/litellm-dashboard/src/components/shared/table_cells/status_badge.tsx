@@ -26,11 +26,7 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ tone, label, tooltip, dataTestId }: StatusBadgeProps) {
   const badge = (
-    <Badge
-      variant="outline"
-      data-testid={dataTestId}
-      className={cn("rounded whitespace-nowrap font-normal", TONE_CLASS[tone])}
-    >
+    <Badge variant="outline" data-testid={dataTestId} className={cn("whitespace-nowrap font-normal", TONE_CLASS[tone])}>
       {label}
     </Badge>
   );
