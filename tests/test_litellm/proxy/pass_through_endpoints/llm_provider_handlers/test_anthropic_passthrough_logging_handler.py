@@ -2,9 +2,10 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.types.utils import StandardPassThroughResponseObject
 
 
 class TestAnthropicLoggingHandlerModelFallback:
@@ -192,6 +194,29 @@ class TestAnthropicLoggingHandlerModelFallback:
             model = logging_obj.model_call_details.get("model")
 
         assert model == ""  # Should remain empty
+
+
+def test_count_tokens_response_logs_as_passthrough_response():
+    response_body = {"input_tokens": 12}
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    result = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=httpx.Response(200, json=response_body),
+        response_body=response_body,
+        logging_obj=logging_obj,
+        url_route="/anthropic/v1/messages/count_tokens",
+        result=json.dumps(response_body),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={
+            "model": "claude-3-5-haiku-20241022",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert result["result"] == StandardPassThroughResponseObject(response=response_body)
 
 
 class TestAzureAnthropicCostCalculation:
@@ -1697,9 +1722,6 @@ class TestStreamFalseDeduplication:
         This is the _is_assembled_stream_success gate: with stream=False it
         always returned False and the guard was permanently disabled.
         """
-        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-            EndpointType,
-        )
         from litellm.types.utils import ModelResponse
 
         # Simulate what pass_through_endpoints.py now does after stream detection
