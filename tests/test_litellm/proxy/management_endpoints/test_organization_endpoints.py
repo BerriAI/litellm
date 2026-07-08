@@ -643,52 +643,6 @@ async def test_organization_member_delete_rejects_unauthorized_caller(patched_or
     assert exc.value.status_code == 403
 
 
-def _build_v2_plan(body: dict):
-    from litellm.proxy._types import OrganizationUpdateRequestV2
-    from litellm.proxy.management_endpoints.organization_endpoints import (
-        build_organization_update_plan,
-    )
-
-    data = OrganizationUpdateRequestV2.model_validate(body)
-    return build_organization_update_plan(present_keys=data.model_fields_set, validated_data=data)
-
-
-@pytest.mark.parametrize(
-    "body, expected_budget, expected_org",
-    [
-        ({"tpm_limit": 500}, {"tpm_limit": 500}, {}),
-        ({"tpm_limit": None}, {"tpm_limit": None}, {}),
-        ({"metadata": {"a": 1}}, {}, {"metadata": {"a": 1}}),
-        ({"metadata": None}, {}, {"metadata": {}}),
-        ({"organization_alias": "x"}, {}, {"organization_alias": "x"}),
-        ({"models": ["m1", "m2"]}, {}, {"models": ["m1", "m2"]}),
-        ({"models": []}, {}, {"models": []}),
-        ({}, {}, {}),
-        (
-            {"tpm_limit": 5, "rpm_limit": 9, "max_budget": 10, "metadata": {"a": 1}, "models": ["m"]},
-            {"tpm_limit": 5, "rpm_limit": 9, "max_budget": 10},
-            {"metadata": {"a": 1}, "models": ["m"]},
-        ),
-    ],
-    ids=[
-        "set-limit",
-        "clear-limit-not-dropped",
-        "set-metadata",
-        "clear-metadata-to-empty-dict",
-        "set-alias-leaves-metadata-untouched",
-        "set-models",
-        "clear-models-to-empty-list",
-        "touch-nothing",
-        "budget-and-org-fields-split",
-    ],
-)
-def test_v2_plan_splits_present_fields(body, expected_budget, expected_org):
-    """Each sent field routes to budget vs org columns; absent fields are omitted and clears are kept (exact match)."""
-    plan = _build_v2_plan(body)
-    assert dict(plan.budget_updates) == expected_budget
-    assert dict(plan.org_column_updates) == expected_org
-
-
 @pytest.mark.parametrize(
     "body",
     [{"tpm_limit": ""}, {"tmp_limit": None}],

@@ -13,8 +13,7 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-from dataclasses import dataclass
-from typing import AbstractSet, Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -107,36 +106,6 @@ async def _verify_org_access(
 _STR_OBJECT_DICT_ADAPTER = TypeAdapter(Dict[str, object])
 _BUDGET_SETTABLE_FIELDS = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
 _ORG_COLUMN_FIELDS = frozenset({"organization_alias", "models"})
-
-
-@dataclass(frozen=True, slots=True)
-class OrganizationUpdatePlan:
-    """Columns and budget fields a validated /v2/organization update should write."""
-
-    org_column_updates: Mapping[str, object]
-    budget_updates: Mapping[str, object]
-
-
-def build_organization_update_plan(
-    present_keys: AbstractSet[str],
-    validated_data: OrganizationUpdateRequestV2,
-) -> OrganizationUpdatePlan:
-    """
-    Split the fields the caller sent (``present_keys`` is ``model_fields_set``) into budget-row
-    writes and org-column writes. A cleared ``metadata`` is written as ``{}`` since its column is
-    non-nullable.
-    """
-    field_values = _STR_OBJECT_DICT_ADAPTER.validate_python(validated_data.model_dump())
-    budget_updates = {field: field_values[field] for field in present_keys if field in _BUDGET_SETTABLE_FIELDS}
-    org_column_updates = {field: field_values[field] for field in present_keys if field in _ORG_COLUMN_FIELDS}
-    metadata_update: Mapping[str, object] = (
-        {"metadata": validated_data.metadata or {}} if "metadata" in present_keys else {}
-    )
-
-    return OrganizationUpdatePlan(
-        org_column_updates={**org_column_updates, **metadata_update},
-        budget_updates=budget_updates,
-    )
 
 
 def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
@@ -698,9 +667,15 @@ async def update_organization_v2(
             detail={"error": f"Organization not found for organization_id={organization_id}"},
         )
 
-    plan = build_organization_update_plan(present_keys=data.model_fields_set, validated_data=data)
+    field_values = _STR_OBJECT_DICT_ADAPTER.validate_python(data.model_dump())
+    present_fields = data.model_fields_set
+    budget_updates = {field: field_values[field] for field in present_fields if field in _BUDGET_SETTABLE_FIELDS}
+    org_column_updates: Mapping[str, object] = {
+        **{field: field_values[field] for field in present_fields if field in _ORG_COLUMN_FIELDS},
+        **({"metadata": data.metadata or {}} if "metadata" in present_fields else {}),
+    }
 
-    object_permission_cleared = "object_permission" in data.model_fields_set and data.object_permission is None
+    object_permission_cleared = "object_permission" in present_fields and data.object_permission is None
     object_permission_write: Mapping[str, object] = (
         {"object_permission": data.object_permission.model_dump(exclude_none=True)}
         if data.object_permission is not None
@@ -709,7 +684,7 @@ async def update_organization_v2(
 
     organization_write_data = prisma_client.jsonify_object(
         {
-            **plan.org_column_updates,
+            **org_column_updates,
             **object_permission_write,
             "updated_by": user_api_key_dict.user_id,
         }
@@ -721,11 +696,11 @@ async def update_organization_v2(
         )
 
     async with prisma_client.db.tx() as tx:
-        if plan.budget_updates:
+        if budget_updates:
             await tx.litellm_budgettable.update(
                 where={"budget_id": existing_organization_row.budget_id},
                 data=prisma_client.jsonify_object(
-                    dict(build_budget_write_data(plan.budget_updates, user_api_key_dict.user_id))
+                    dict(build_budget_write_data(budget_updates, user_api_key_dict.user_id))
                 ),
             )
         response = await tx.litellm_organizationtable.update(
