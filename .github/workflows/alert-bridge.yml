@@ -8,11 +8,16 @@ on:
         type: choice
         options:
           - list
+          - get
           - dismiss
       dismissals:
         required: false
         default: '[]'
         description: 'JSON array of {number,reason,comment}'
+      alert_number:
+        required: false
+        default: ''
+        description: 'Alert number to fetch full detail for (mode=get)'
 
 permissions:
   security-events: write
@@ -40,6 +45,18 @@ jobs:
           name: alerts
           path: alerts.json
           overwrite: true
+
+      - name: Get alert
+        if: inputs.mode == 'get'
+        env:
+          ALERT_NUMBER: ${{ inputs.alert_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/code-scanning/alerts/$ALERT_NUMBER" > alert.json
+          jq -r '"rule: \(.rule.id) [\(.rule.severity // .rule.security_severity_level)]\nstate: \(.state)\nmost_recent_instance.ref: \(.most_recent_instance.ref)\nlocation: \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)\nhtml_url: \(.html_url)"' alert.json | tee -a $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat alert.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Dismiss alerts
         if: inputs.mode == 'dismiss'
