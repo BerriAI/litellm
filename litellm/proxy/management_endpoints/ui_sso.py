@@ -2134,12 +2134,16 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
-            user_db_obj = await get_user_object(
-                user_id=user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-            )
+            try:
+                user_db_obj = await get_user_object(
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                )
+            except ValueError as e:
+                verbose_proxy_logger.debug(f"CLI poll: user lookup failed, proceeding without user budget: {e}")
+                user_db_obj = None
             user_budget = user_db_obj.max_budget if user_db_obj is not None else None
 
             team_budget: Optional[float] = None
