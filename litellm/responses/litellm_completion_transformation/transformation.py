@@ -1190,7 +1190,9 @@ class LiteLLMCompletionResponsesConfig:
             "detail",
         ]:
             if hasattr(item, attr):
-                item_dict[attr] = getattr(item, attr)
+                val = getattr(item, attr)
+                if val is not None:
+                    item_dict[attr] = val
         return item_dict
 
     @staticmethod

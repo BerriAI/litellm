@@ -7210,9 +7210,7 @@ def is_cached_message(message: AllMessageValues) -> bool:
 
     # Check message-level cache_control (set by cache_control_injection_points hook for string content)
     message_level_cache_control = (
-        message.get("cache_control")
-        if isinstance(message, dict)
-        else getattr(message, "cache_control", None)
+        message.get("cache_control") if isinstance(message, dict) else getattr(message, "cache_control", None)
     )
     if message_level_cache_control is not None:
         cc_type = (
@@ -7243,14 +7241,9 @@ def is_cached_message(message: AllMessageValues) -> bool:
             cache_control = getattr(content_item, "cache_control", None)
             item_type = getattr(content_item, "type", None)
 
-        if (
-            item_type == "text"
-            and cache_control is not None
-        ):
+        if item_type == "text" and cache_control is not None:
             cc_type = (
-                cache_control.get("type")
-                if isinstance(cache_control, dict)
-                else getattr(cache_control, "type", None)
+                cache_control.get("type") if isinstance(cache_control, dict) else getattr(cache_control, "type", None)
             )
             if cc_type == "ephemeral":
                 return True
