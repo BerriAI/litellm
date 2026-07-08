@@ -189,6 +189,32 @@ describe("CreateMCPServer", () => {
       ).not.toBeInTheDocument();
     });
 
+    it.each([["True Passthrough (no LiteLLM auth)"], ["OAuth Delegate (client-supplied upstream token)"]])(
+      "should show the browser-only authorize section when %s is selected",
+      async (optionLabel) => {
+        await selectHttpTransport();
+
+        await selectAntOption("Authentication", optionLabel);
+
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
+        });
+        expect(screen.getByText("OAuth Client ID (optional, not saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional, not saved)")).toBeInTheDocument();
+      },
+    );
+
+    it("should not show the browser-only authorize section for API Key auth", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "API Key");
+
+      await waitFor(() => {
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).not.toBeInTheDocument();
+    });
+
     it("should not require auth value when creating a server with API Key auth type", async () => {
       await selectHttpTransport();
 

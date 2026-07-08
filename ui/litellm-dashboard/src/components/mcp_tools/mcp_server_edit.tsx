@@ -19,6 +19,7 @@ import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import TruePassthroughWarning from "./TruePassthroughWarning";
+import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
@@ -172,20 +173,40 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       };
     },
     onTokenReceived: (token) => {
-      if (token?.access_token) {
-        const credentials = {
-          access_token: token.access_token,
-          ...(token.refresh_token && { refresh_token: token.refresh_token }),
-          ...(token.expires_in && { expires_in: token.expires_in }),
-          ...(token.scope && { scope: token.scope }),
-        };
-
-        form.setFieldsValue({ credentials });
-
-        NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
-        );
+      if (!token?.access_token) {
+        return;
       }
+
+      const effectiveAuthType = form.getFieldValue("auth_type") ?? mcpServer.auth_type;
+      if (effectiveAuthType === AUTH_TYPE.TRUE_PASSTHROUGH || effectiveAuthType === AUTH_TYPE.OAUTH_DELEGATE) {
+        setToken(
+          mcpServer.server_id,
+          {
+            access_token: token.access_token,
+            expires_in: token.expires_in,
+            refresh_token: token.refresh_token,
+            token_type: token.token_type,
+          },
+          userID,
+        );
+        NotificationsManager.success(
+          "Token held for this browser session. Tools can now be loaded and configured; nothing was saved to LiteLLM.",
+        );
+        return;
+      }
+
+      const credentials = {
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+      };
+
+      form.setFieldsValue({ credentials });
+
+      NotificationsManager.success(
+        "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
+      );
     },
     onBeforeRedirect: persistEditUiState,
     flowSource: "edit",
@@ -369,7 +390,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         oauth2_flow: mcpServer.oauth2_flow,
         delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
       }) === "passthrough";
-    if (isPassthrough) {
+    const isBrowserHeldTokenMode =
+      mcpServer.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH || mcpServer.auth_type === AUTH_TYPE.OAUTH_DELEGATE;
+    if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
         (isTokenValid(mcpServer.server_id, userID)
@@ -377,7 +400,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           : null);
       if (!token) {
         setTools([]);
-        setToolsError("Authenticate with this server in the Tools tab to load and configure its tools.");
+        setToolsError(
+          isBrowserHeldTokenMode
+            ? "Authorize with the upstream (browser-only, in the Authentication section) to load and configure this server's tools."
+            : "Authenticate with this server in the Tools tab to load and configure its tools.",
+        );
         return;
       }
       customHeaders = buildMcpPassthroughAuthHeader(mcpServer.alias, token);
@@ -893,6 +920,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   </Select>
                 </Form.Item>
                 <TruePassthroughWarning authType={authType} />
+                <PassthroughAuthorizeSection
+                  authType={authType}
+                  oauthFlow={{
+                    startOAuthFlow,
+                    status: oauthStatus,
+                    error: oauthError,
+                    tokenResponse: oauthTokenResponse,
+                  }}
+                />
               </>
             )}
 

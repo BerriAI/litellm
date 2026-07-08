@@ -1322,7 +1322,11 @@ if MCP_AVAILABLE:
                 mcp_auth_header = credentials.get("auth_value")
 
         oauth2_headers: Optional[Dict[str, str]] = None
-        if new_mcp_server_request.auth_type == MCPAuth.oauth2:
+        if new_mcp_server_request.auth_type in {
+            MCPAuth.oauth2,
+            MCPAuth.true_passthrough,
+            MCPAuth.oauth_delegate,
+        }:
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
