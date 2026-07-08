@@ -1295,6 +1295,25 @@ async def test_handle_streamable_http_mcp_per_server_header_skips_preemptive_cha
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type", [MCPAuth.oauth_delegate, MCPAuth.true_passthrough])
+async def test_handle_streamable_http_mcp_sanitized_per_server_header_skips_preemptive_challenge(auth_type):
+    """A dashboard client sends x-mcp-{sanitize_mcp_alias_for_header(alias)}-authorization, so the
+    alias 'pt-server' arrives as the header key 'pt_server'. Egress resolves that via the sanitized
+    alias, so the connect gate must too, or it 401s a token egress would forward."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp  # noqa: F401
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    challenged, _ = await _run_passthrough_connect(
+        auth_type=auth_type,
+        server_names=["pt-server"],
+        mcp_server_auth_headers={"pt_server": {"Authorization": "Bearer upstream-token"}},
+    )
+    assert challenged is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth_delegate, MCPAuth.true_passthrough])
 async def test_handle_streamable_http_mcp_aggregate_does_not_preemptively_challenge(auth_type):
     """A multi-server aggregate must degrade gracefully: the preemptive 401 is single-server only, so
     one server missing a token cannot 401 the whole connect (the listing absorbs per-server failures)."""
