@@ -19,6 +19,7 @@ from typing import Iterator
 
 import pytest
 
+from model_matrix import ANTHROPIC_CHAT, GEMINI_CHAT, OPENAI_EMBEDDING
 from models import LiteLLMParamsBody
 from spend_e2e_client import SpendClient, build_client
 
@@ -31,9 +32,9 @@ def _driver_params(provider_model: str, env_var: str) -> LiteLLMParamsBody:
 
 
 DRIVER_MODELS: tuple[tuple[str, str, str], ...] = (
-    ("gemini-2.5-flash", "gemini/gemini-2.5-flash", "GEMINI_API_KEY"),
-    ("claude-haiku-4-5", "anthropic/claude-haiku-4-5", "ANTHROPIC_API_KEY"),
-    ("openai-text-embedding-3-small", "openai/text-embedding-3-small", "OPENAI_API_KEY"),
+    (GEMINI_CHAT.alias, GEMINI_CHAT.backend, "GEMINI_API_KEY"),
+    (ANTHROPIC_CHAT.alias, ANTHROPIC_CHAT.backend, "ANTHROPIC_API_KEY"),
+    (OPENAI_EMBEDDING.alias, OPENAI_EMBEDDING.backend, "OPENAI_API_KEY"),
 )
 
 

@@ -13,6 +13,7 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
@@ -26,7 +27,7 @@ class TestAnthropicMessages:
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"
+                model=ANTHROPIC_CHAT.backend, api_key="os.environ/ANTHROPIC_API_KEY"
             ),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))

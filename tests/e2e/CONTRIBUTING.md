@@ -9,7 +9,7 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with a throwaway Postgres and Redis; `docker compose down -v` resets everything, so no state leaks between runs. The proxy config is inlined in the compose file under `configs`, prewired with example models (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) whose keys come from your `.env`. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that inline config and read it back in the test rather than hardcoding values
+The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with a throwaway Postgres and Redis; `docker compose down -v` resets everything, so no state leaks between runs. The proxy config is inlined in the compose file under `configs`, prewired with the models pinned in `model_matrix.py` (kept in sync by `tests/code_coverage_tests/check_e2e_model_freshness.py`) whose keys come from your `.env`. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that inline config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 
@@ -113,7 +113,7 @@ class TestPromptCompression:
 
     def test_prompt_compression_accumulate_spend(self, key_id, user_id):
         for _ in range(10):
-            response = self.resources.gateway.post("gemini-2.5-flash", key_id, user_id)
+            response = self.resources.gateway.post(GEMINI_CHAT.alias, key_id, user_id)
         compressed_value = ...
         assert response.cost == compressed_value  # the cost was actually reduced
 ```

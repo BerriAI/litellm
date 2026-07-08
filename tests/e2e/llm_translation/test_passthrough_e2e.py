@@ -4,7 +4,7 @@ Each test sends a NATIVE provider request through the proxy's passthrough route
 and verifies the proxy still logged a costed SpendLogs row
 (call_type="pass_through_endpoint"), correlated by the x-litellm-call-id header.
 
-Covered: gemini ("gemini-2.5-flash") + anthropic ("claude-haiku-4-5"), streaming +
+Covered: gemini (GEMINI_CHAT.alias) + anthropic (ANTHROPIC_CHAT.alias), streaming +
 non-streaming, plus native tool calls. See LLM_TRANSLATION_COVERAGE_MATRIX.md.
 
 A passthrough call returning non-2xx fails hard (never a skip); once it returns
@@ -15,6 +15,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from model_matrix import ANTHROPIC_CHAT, GEMINI_CHAT
 from models import SpendLogRow
 from passthrough_client import (
     AnthropicTool,
@@ -55,7 +56,7 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
 ) -> None:
     tag = f"e2e-passthrough-{unique_marker()}"
     result = client.gemini_generate(
-        scoped_key, "gemini-2.5-flash", "Say hello in one word", tags=[tag, "gemini"]
+        scoped_key, GEMINI_CHAT.alias, "Say hello in one word", tags=[tag, "gemini"]
     )
     require_successful_call(result)
 
@@ -68,7 +69,7 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
 def test_gemini_passthrough_streaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
-    result = client.gemini_stream(scoped_key, "gemini-2.5-flash", "Count to five")
+    result = client.gemini_stream(scoped_key, GEMINI_CHAT.alias, "Count to five")
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
@@ -81,7 +82,7 @@ def test_gemini_passthrough_tool_call_logs_cost(
 ) -> None:
     result = client.gemini_generate(
         scoped_key,
-        "gemini-2.5-flash",
+        GEMINI_CHAT.alias,
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
             GeminiTool(
@@ -112,7 +113,7 @@ def test_gemini_passthrough_tool_call_logs_cost(
 def test_anthropic_passthrough_nonstreaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
-    result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Say hello")
+    result = client.anthropic_message(scoped_key, ANTHROPIC_CHAT.alias, "Say hello")
     require_successful_call(result)
 
     row = _fetch_cost_breakdown(client, result)
@@ -124,7 +125,7 @@ def test_anthropic_passthrough_streaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
     result = client.anthropic_message(
-        scoped_key, "claude-haiku-4-5", "Count to five", stream=True
+        scoped_key, ANTHROPIC_CHAT.alias, "Count to five", stream=True
     )
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
@@ -138,7 +139,7 @@ def test_anthropic_passthrough_tool_call_logs_cost(
 ) -> None:
     result = client.anthropic_message(
         scoped_key,
-        "claude-haiku-4-5",
+        ANTHROPIC_CHAT.alias,
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
             AnthropicTool(

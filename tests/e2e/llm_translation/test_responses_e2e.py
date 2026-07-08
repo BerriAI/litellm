@@ -13,6 +13,7 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, ResponsesResult
 from lifecycle import ResourceManager
+from model_matrix import OPENAI_CHAT_MINI
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
@@ -25,7 +26,7 @@ class TestResponses:
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+            LiteLLMParamsBody(model=OPENAI_CHAT_MINI.backend, api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

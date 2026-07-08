@@ -13,6 +13,7 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, RerankResult
 from lifecycle import ResourceManager
+from model_matrix import COHERE_RERANK
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
@@ -32,7 +33,7 @@ class TestRerank:
         model = f"e2e-rerank-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(model="cohere/rerank-v3.5", api_key="os.environ/COHERE_API_KEY"),
+            LiteLLMParamsBody(model=COHERE_RERANK.backend, api_key="os.environ/COHERE_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

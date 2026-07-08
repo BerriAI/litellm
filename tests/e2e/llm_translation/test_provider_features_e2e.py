@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from e2e_config import unique_marker
 from e2e_http import unwrap
 from lifecycle import ResourceManager
+from model_matrix import BEDROCK_ANTHROPIC_CHAT, OPENAI_CHAT
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
 
@@ -86,7 +87,7 @@ class TestServiceTier:
         model_id = client.gateway.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY"
+                model=OPENAI_CHAT.backend, api_key="os.environ/OPENAI_API_KEY"
             ),
         )
         resources.defer(lambda: client.gateway.delete_model(model_id))
@@ -121,7 +122,7 @@ class TestPromptCaching:
         model_id = client.gateway.create_model(
             model,
             LiteLLMParamsBody(
-                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                model=BEDROCK_ANTHROPIC_CHAT.backend,
                 aws_region_name="us-east-1",
             ),
         )
