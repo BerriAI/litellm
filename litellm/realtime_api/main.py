@@ -515,6 +515,9 @@ async def _realtime_health_check(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     realtime_protocol: Optional[str] = None,
+    vertex_credentials: Optional[str] = None,
+    vertex_project: Optional[str] = None,
+    vertex_location: Optional[str] = None,
 ):
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -550,14 +553,14 @@ async def _realtime_health_check(
     elif custom_llm_provider == "xai":
         url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
     elif custom_llm_provider == "vertex_ai":
-        vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
-        resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
+        resolved_vertex_location = vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
+        resolved_location = vertex_llm_base.get_vertex_region(vertex_region=resolved_vertex_location, model=model)
         (
             access_token,
             resolved_project,
         ) = await vertex_llm_base._ensure_access_token_async(
-            credentials=None,
-            project_id=litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT"),
+            credentials=vertex_credentials,
+            project_id=vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT"),
             custom_llm_provider="vertex_ai",
         )
         vertex_realtime_config = VertexAIRealtimeConfig(
