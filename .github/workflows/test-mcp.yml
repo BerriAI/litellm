@@ -21,6 +21,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-backend-changes
+
       - name: Thank You Message
         run: |
           echo "### 🙏 Thank you for contributing to LiteLLM!" >> $GITHUB_STEP_SUMMARY
@@ -37,10 +41,12 @@ jobs:
           version: "0.10.9"
 
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv lock --check
           .github/scripts/uv_sync_with_retries.sh --frozen --group proxy-dev --extra proxy --extra semantic-router
 
       - name: Run MCP tests
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --durations=5
