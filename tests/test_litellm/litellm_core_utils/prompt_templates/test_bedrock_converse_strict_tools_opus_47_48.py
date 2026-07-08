@@ -48,6 +48,18 @@ _STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        # Sonnet 5 rejects toolSpec.strict on Bedrock Converse too (verified
+        # against a live Converse call: strict -> ValidationException
+        # "tools.0.custom.strict: Extra inputs are not permitted", stripped -> 200).
+        "anthropic.claude-sonnet-5",
+        "bedrock/global.anthropic.claude-sonnet-5",
+        "bedrock/us.anthropic.claude-sonnet-5",
+        "bedrock/eu.anthropic.claude-sonnet-5",
+        # Fable 5 likewise rejects toolSpec.strict on Bedrock Converse (verified
+        # live: strict -> "tools.0.custom.strict: Extra inputs are not permitted",
+        # stripped -> 200).
+        "anthropic.claude-fable-5",
+        "bedrock/us.anthropic.claude-fable-5",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
@@ -129,6 +141,10 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         )
         is False
     )
+    # Sonnet 5 and Fable 5 reject strict on Bedrock Converse too
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-sonnet-5") is False
+    assert bedrock_converse_supports_strict_tools("anthropic.claude-sonnet-5") is False
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-fable-5") is False
 
 
 @pytest.mark.parametrize(
@@ -143,6 +159,16 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         "us.anthropic.claude-sonnet-4-20250514-v1:0",
         "eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        "anthropic.claude-sonnet-5",
+        "global.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-sonnet-5",
+        "eu.anthropic.claude-sonnet-5",
+        "au.anthropic.claude-sonnet-5",
+        "jp.anthropic.claude-sonnet-5",
+        "anthropic.claude-fable-5",
+        "global.anthropic.claude-fable-5",
+        "us.anthropic.claude-fable-5",
+        "eu.anthropic.claude-fable-5",
     ],
 )
 def test_strict_tools_flag_set_in_model_cost_map(cost_map_key: str) -> None:
