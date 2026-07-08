@@ -2619,8 +2619,9 @@ _CACHE_PRICING_FIELDS = (
 
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> Optional[Dict[str, Any]]:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
-    whose shape ``get_model_info`` cannot resolve (double provider prefixes
-    like ``bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region aliases).
+    whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
+    like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
+    aliases).
 
     Returns a copy of the matching entry so the caller can inherit its defaults
     (most importantly cache pricing) without mutating the shared built-in.

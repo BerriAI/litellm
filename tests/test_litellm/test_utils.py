@@ -1093,6 +1093,13 @@ def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_bas
     assert info["key"] == "anthropic.claude-opus-4-8"
 
 
+def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost_map):
+    """A doubled bedrock/ prefix routes at runtime via strip_bedrock_routing_prefix,
+    so model info must resolve it to the same entry the request actually bills as."""
+    info = litellm.get_model_info(model="bedrock/bedrock/us.anthropic.claude-sonnet-4-6")
+    assert info["key"] == "us.anthropic.claude-sonnet-4-6"
+
+
 def test_openai_models_in_model_info():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
