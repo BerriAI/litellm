@@ -95,6 +95,17 @@ class HealthCheckHelpers:
         """
         import litellm
 
+        logging_obj = filtered_model_params.get("litellm_logging_obj")
+        if logging_obj is not None:
+            api_base = filtered_model_params.get("api_base")
+            logging_obj.update_from_kwargs(
+                kwargs=filtered_model_params,
+                model=filtered_model_params.get("model"),
+                user=None,
+                optional_params={},
+                litellm_params={"api_base": api_base} if api_base else None,
+            )
+
         if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.alist_batches(**filtered_model_params)
         else:

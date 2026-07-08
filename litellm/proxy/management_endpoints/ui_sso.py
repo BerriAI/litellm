@@ -113,7 +113,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -3737,8 +3737,7 @@ class MicrosoftSSOHandler:
     Handles Microsoft SSO callback response and returns a CustomOpenID object
     """
 
-    graph_api_base_url = "https://graph.microsoft.com/v1.0"
-    graph_api_user_groups_endpoint = f"{graph_api_base_url}/me/memberOf"
+    DEFAULT_GRAPH_API_BASE_URL = "https://graph.microsoft.com/v1.0"
 
     """
     Constants
@@ -3747,6 +3746,19 @@ class MicrosoftSSOHandler:
 
     # used for debugging to show the user groups litellm found from Graph API
     GRAPH_API_RESPONSE_KEY = "graph_api_user_groups"
+
+    @staticmethod
+    def get_graph_api_base_url() -> str:
+        """
+        Returns the Microsoft Graph API base URL, configurable via the
+        `MICROSOFT_GRAPH_ENDPOINT` env var so non-default clouds such as Azure
+        Government (GCC High) can point at `https://graph.microsoft.us/v1.0`
+        """
+        return get_secret_str("MICROSOFT_GRAPH_ENDPOINT") or MicrosoftSSOHandler.DEFAULT_GRAPH_API_BASE_URL
+
+    @staticmethod
+    def get_graph_api_user_groups_endpoint() -> str:
+        return f"{MicrosoftSSOHandler.get_graph_api_base_url()}/me/memberOf"
 
     @staticmethod
     async def get_microsoft_callback_response(
@@ -3924,7 +3936,7 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            next_link: Optional[str] = MicrosoftSSOHandler.get_graph_api_user_groups_endpoint()
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -4007,7 +4019,7 @@ class MicrosoftSSOHandler:
 
         Users use Enterprise Applications to manage Groups and Users on Microsoft Entra ID
         """
-        base_url = "https://graph.microsoft.com/v1.0"
+        base_url = MicrosoftSSOHandler.get_graph_api_base_url()
         # Endpoint to get app role assignments for the given service principal
         endpoint = f"/servicePrincipals/{service_principal_id}/appRoleAssignedTo"
         url = base_url + endpoint
