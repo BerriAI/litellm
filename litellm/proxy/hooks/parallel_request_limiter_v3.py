@@ -3445,17 +3445,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         traceback_str: Optional[str] = None,
     ) -> None:
         """
-        Release any TPM reservation when the request is rejected after the
-        pre-call hook reserved tokens but before the LLM call ran (e.g. a
-        downstream guardrail/auth hook raised). Without this, those
-        reservations are stranded — async_log_failure_event is a litellm
-        completion-level callback and never fires for proxy-side rejections.
+        Release the parallel-request slot and any TPM reservation when the
+        request is rejected after the pre-call hook acquired them but before
+        the LLM call ran (e.g. a downstream guardrail/auth hook raised).
+        Without this, those resources are stranded — async_log_failure_event
+        is a litellm completion-level callback and never fires for proxy-side
+        rejections, so a leaked slot would occupy the gauge for the full
+        PARALLEL_REQUEST_SLOT_TTL_SECONDS.
 
-        Idempotent via TPM_RESERVATION_RELEASED_KEY: if both this hook and
+        Idempotent: the slot release clears the acquisition marker (and slot
+        removal is a no-op ZREM on a second run), and the TPM refund is
+        guarded by TPM_RESERVATION_RELEASED_KEY — if both this hook and
         async_log_failure_event end up running in the same flow, only the
-        first refund applies.
+        first release/refund applies.
         """
         try:
+            acquisition = self._get_parallel_slot_acquisition(kwargs=request_data)
+            if acquisition is not None:
+                await self._release_parallel_request_slots(
+                    acquisition=acquisition,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                self._clear_parallel_slot_marker(request_data)
+
             if self._is_reservation_released(kwargs=request_data):
                 return
             reserved_tokens = self._get_reserved_tokens_from_kwargs(kwargs=request_data)

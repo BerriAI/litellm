@@ -3561,6 +3561,66 @@ async def test_release_on_disconnect_works_when_key_config_changed_v3():
 
 
 @pytest.mark.asyncio
+async def test_post_call_failure_hook_releases_parallel_slot_v3():
+    """
+    A proxy-level rejection raised by a downstream hook after the rate
+    limiter's pre-call hook acquired a slot (guardrail, budget check) must
+    release that slot via async_post_call_failure_hook:
+    async_log_failure_event never fires for proxy-side rejections, so
+    without this the slot lingers for the full slot TTL and moderate
+    rejection rates wedge the key at its limit. The release must also be
+    idempotent with a later failure callback in the same flow.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    admitted_data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=admitted_data,
+        call_type="",
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 1
+
+    await handler.async_post_call_failure_hook(
+        request_data=admitted_data,
+        original_exception=Exception("guardrail rejected the request"),
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 0
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "metadata": admitted_data["metadata"],
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 0
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+
+@pytest.mark.asyncio
 async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     """
     When Redis scripting fails after having worked, the local cache holds the
