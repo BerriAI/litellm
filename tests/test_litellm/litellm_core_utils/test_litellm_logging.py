@@ -3707,3 +3707,43 @@ def test_set_cost_breakdown_stores_reasoning_cost():
         cost_for_built_in_tools_cost_usd_dollar=0.0,
     )
     assert "reasoning_cost" not in no_reasoning.cost_breakdown
+
+
+def test_get_assembled_streaming_response_handles_dict_response(logging_obj):
+    """
+    Regression test for streaming /v1/responses spend logging crash.
+
+    In the async streaming Responses path, ResponseCompletedEvent.response is a
+    plain dict at runtime (the base models allow extra fields), so accessing
+    result.response.usage raised AttributeError and the success handler crashed
+    before writing a SpendLogs row. The assembly helper must accept a dict
+    response and transform its Responses-API usage into chat-completion usage.
+    """
+    from datetime import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    event = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={
+            "id": "resp_dict",
+            "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+        },
+    )
+    assert isinstance(event.response, dict)
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert isinstance(assembled, dict)
+    assert assembled["usage"]["prompt_tokens"] == 11
+    assert assembled["usage"]["completion_tokens"] == 7
+    assert assembled["usage"]["total_tokens"] == 18
