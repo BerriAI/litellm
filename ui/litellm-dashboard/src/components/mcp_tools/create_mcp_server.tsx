@@ -17,6 +17,7 @@ import {
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
+import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -979,6 +980,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         </Form.Item>
 
                         <TruePassthroughWarning authType={authType} />
+
+                        <PassthroughAuthorizeSection
+                          authType={authType}
+                          oauthFlow={{
+                            startOAuthFlow,
+                            status: oauthStatus,
+                            error: oauthError,
+                            tokenResponse: oauthTokenResponse,
+                          }}
+                        />
 
                         {shouldShowAuthValueField && (
                           <Form.Item

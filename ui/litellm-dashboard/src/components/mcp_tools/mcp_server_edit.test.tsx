@@ -922,6 +922,55 @@ describe("MCPServerEdit (tool list fetch)", () => {
     expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
   });
 
+  it("forwards the sessionStorage token as the x-mcp header for an oauth_delegate server", async () => {
+    mockIsTokenValid.mockReturnValue(true);
+    mockGetToken.mockReturnValue({ access_token: "browser-token" });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "oauth_delegate" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(networking.listMCPTools).toHaveBeenCalledWith(
+        "access-token",
+        "oauth_server_1",
+        { "x-mcp-oauth_server-authorization": "Bearer browser-token" },
+        true,
+      );
+    });
+    expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
+  });
+
+  it("prompts for the browser-only authorize when a true_passthrough server has no token", async () => {
+    mockIsTokenValid.mockReturnValue(false);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
+        "Authorize with the upstream (browser-only",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
+  });
+
   it("uses the staged OAuth token to load passthrough tools after authorize", async () => {
     const passthroughServer = { ...interactiveOAuthServer, delegate_auth_to_upstream: true };
     mockIsTokenValid.mockReturnValue(false);

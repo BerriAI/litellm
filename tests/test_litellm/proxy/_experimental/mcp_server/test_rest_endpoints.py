@@ -593,6 +593,59 @@ class TestTestToolsList:
         assert captured["oauth2_headers"] == oauth_headers
         assert oauth_call_counter["count"] == 1
 
+    @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    async def test_extracts_oauth2_headers_for_client_forwarded_modes(self, monkeypatch, auth_type):
+        """The browser-only authorize flow sends the upstream token as Authorization; the preview
+        must thread it through for the client-forwarded token modes so the passthrough arm can
+        forward it, instead of probing the upstream unauthenticated."""
+
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["mcp_auth_header"] = mcp_auth_header
+            captured["oauth2_headers"] = oauth2_headers
+            return {
+                "tools": [],
+                "error": None,
+                "message": "Successfully retrieved tools",
+            }
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        oauth_headers = {"Authorization": "Bearer upstream-token"}
+
+        monkeypatch.setattr(
+            auth_mcp.MCPRequestHandler,
+            "_get_oauth2_headers_from_headers",
+            staticmethod(lambda headers: oauth_headers),
+            raising=False,
+        )
+
+        request = _build_request({"authorization": "Bearer upstream-token"})
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=auth_type,
+        )
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["message"] == "Successfully retrieved tools"
+        assert captured["mcp_auth_header"] is None
+        assert captured["oauth2_headers"] == oauth_headers
+
 
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
