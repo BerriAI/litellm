@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from coverage_registry.collector import compute_coverage
+from coverage_registry.collector import (
+    compute_coverage,
+    render,
+    render_json,
+    render_prometheus,
+)
 from coverage_registry.registry import load_registry
 from coverage_registry.schema import (
     GuardrailCell,
@@ -102,6 +107,46 @@ def test_llm_cells_roll_up_by_core_endpoint() -> None:
         non_core.p0_total,
         non_core.p0_covered,
     ) == (2, 1, 1, 1)
+
+
+def test_text_render_uses_plain_coverage_language() -> None:
+    report = compute_coverage(
+        (_llm("llm.chat", Tier.P0), _llm("llm.batches", Tier.P0, "batches")),
+        frozenset({"llm.chat"}),
+    )
+
+    text = render(report)
+
+    assert "COVERAGE" in text
+    assert "Headline coverage: 1/2  (50.0%)" in text
+    assert "P0 COVERED" not in text
+
+
+def test_json_render_exposes_module_coverage_for_grafana_jobs() -> None:
+    report = compute_coverage(
+        (_llm("llm.chat", Tier.P0), _llm("llm.batches", Tier.P0, "batches")),
+        frozenset({"llm.chat"}),
+    )
+
+    payload = render_json(report)
+
+    assert '"coverage_percent": 50.0' in payload
+    assert '"module": "Core LLMs"' in payload
+    assert '"module": "Non-Core LLMs"' in payload
+
+
+def test_prometheus_render_exposes_module_coverage_timeseries() -> None:
+    report = compute_coverage(
+        (_llm("llm.chat", Tier.P0), _llm("llm.batches", Tier.P0, "batches")),
+        frozenset({"llm.chat"}),
+    )
+
+    metrics = render_prometheus(report)
+
+    assert 'litellm_e2e_coverage_cells{module="Core LLMs",state="covered"} 1' in metrics
+    assert 'litellm_e2e_coverage_percent{module="Core LLMs"} 100.000000' in metrics
+    assert 'litellm_e2e_coverage_percent{module="Non-Core LLMs"} 0.000000' in metrics
+    assert "litellm_e2e_coverage_orphan_markers 0" in metrics
 
 
 def test_real_registry_loads_and_ids_are_unique() -> None:

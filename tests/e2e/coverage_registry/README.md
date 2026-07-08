@@ -3,7 +3,8 @@
 This directory is the **denominator** for e2e test coverage: the set of behaviors we
 want covered, one row per behavior, checked into the repo so coverage is a number we
 can track instead of a guess. It implements the plan in the "E2E Coverage Tracking"
-note; the naming grammar lives in `tests/e2e/CLAUDE.md`.
+note; the naming grammar lives in `tests/e2e/CLAUDE.md`. The Grafana dashboard contract
+lives in `GRAFANA_DASHBOARD.md`.
 
 ## The model
 
@@ -40,9 +41,12 @@ proxy. Whether a covered cell currently passes or fails is a separate, live conc
 cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
 ```
 
-The headline is P0 coverage. The collector also lists markers that point at ids not in
-the registry, so a typo or an unenumerated behavior surfaces instead of being silently
-dropped.
+Use `--format prometheus` or `--format json` for CI jobs that publish coverage to
+Grafana.
+
+The headline is overall coverage. The collector also lists markers that point at ids
+not in the registry, so a typo or an unenumerated behavior surfaces instead of being
+silently dropped.
 
 Use strict mode in CI once existing draft markers are reconciled:
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
@@ -75,6 +76,10 @@ class ModuleCoverage:
     p0_total: int
     p0_covered: int
 
+    @property
+    def coverage_percent(self) -> float:
+        return _percent(self.covered, self.total)
+
 
 @dataclass(frozen=True, slots=True)
 class CoverageReport:
@@ -86,6 +91,14 @@ class CoverageReport:
     p0_gaps: tuple[str, ...]
     orphan_markers: tuple[str, ...]
     collection_errors: tuple[str, ...]
+
+    @property
+    def coverage_percent(self) -> float:
+        return _percent(self.covered, self.total)
+
+
+def _percent(covered: int, total: int) -> float:
+    return (100.0 * covered / total) if total else 0.0
 
 
 def _module_coverage(
@@ -121,25 +134,20 @@ def compute_coverage(
     )
 
 
-def _row(label: str, covered: int, total: int, p0_covered: int, p0_total: int) -> str:
+def _row(label: str, covered: int, total: int) -> str:
     frac = f"{covered}/{total}"
-    p0 = f"{p0_covered}/{p0_total}"
-    return f"{label:30}{frac:>12}{p0:>14}"
+    return f"{label:30}{frac:>12}{_percent(covered, total):>11.1f}%"
 
 
 def render(report: CoverageReport) -> str:
-    rows = tuple(
-        _row(m.module, m.covered, m.total, m.p0_covered, m.p0_total)
-        for m in report.modules
-    )
-    pct = (100.0 * report.p0_covered / report.p0_total) if report.p0_total else 0.0
+    rows = tuple(_row(m.module, m.covered, m.total) for m in report.modules)
     lines = (
-        f"{'MODULE':30}{'COVERED':>12}{'P0 COVERED':>14}",
+        f"{'MODULE':30}{'COVERED':>12}{'COVERAGE':>12}",
         *rows,
-        "-" * 56,
-        _row("ALL", report.covered, report.total, report.p0_covered, report.p0_total),
+        "-" * 54,
+        _row("ALL", report.covered, report.total),
         "",
-        f"Headline (P0 coverage): {report.p0_covered}/{report.p0_total}  ({pct:.1f}%)",
+        f"Headline coverage: {report.covered}/{report.total}  ({report.coverage_percent:.1f}%)",
     )
     orphans = (
         (
@@ -162,8 +170,83 @@ def render(report: CoverageReport) -> str:
     return "\n".join((*lines, *orphans, *warning))
 
 
+def _report_dict(report: CoverageReport) -> dict[str, object]:
+    return {
+        "covered": report.covered,
+        "total": report.total,
+        "coverage_percent": report.coverage_percent,
+        "modules": [
+            {
+                "module": m.module,
+                "covered": m.covered,
+                "total": m.total,
+                "coverage_percent": m.coverage_percent,
+                "p0_covered": m.p0_covered,
+                "p0_total": m.p0_total,
+            }
+            for m in report.modules
+        ],
+        "orphan_markers": list(report.orphan_markers),
+        "collection_errors": list(report.collection_errors),
+    }
+
+
+def render_json(report: CoverageReport) -> str:
+    return json.dumps(_report_dict(report), indent=2, sort_keys=True)
+
+
+def _label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def render_prometheus(report: CoverageReport) -> str:
+    lines = [
+        "# HELP litellm_e2e_coverage_cells E2E coverage registry cells by module and state.",
+        "# TYPE litellm_e2e_coverage_cells gauge",
+    ]
+    for module in report.modules:
+        label = _label_value(module.module)
+        lines.append(
+            f'litellm_e2e_coverage_cells{{module="{label}",state="covered"}} {module.covered}'
+        )
+        lines.append(
+            f'litellm_e2e_coverage_cells{{module="{label}",state="total"}} {module.total}'
+        )
+    lines.extend(
+        [
+            f'litellm_e2e_coverage_cells{{module="ALL",state="covered"}} {report.covered}',
+            f'litellm_e2e_coverage_cells{{module="ALL",state="total"}} {report.total}',
+            "# HELP litellm_e2e_coverage_percent E2E coverage percent by module.",
+            "# TYPE litellm_e2e_coverage_percent gauge",
+        ]
+    )
+    for module in report.modules:
+        label = _label_value(module.module)
+        lines.append(
+            f'litellm_e2e_coverage_percent{{module="{label}"}} {module.coverage_percent:.6f}'
+        )
+    lines.extend(
+        [
+            f'litellm_e2e_coverage_percent{{module="ALL"}} {report.coverage_percent:.6f}',
+            "# HELP litellm_e2e_coverage_orphan_markers Coverage markers not found in the registry.",
+            "# TYPE litellm_e2e_coverage_orphan_markers gauge",
+            f"litellm_e2e_coverage_orphan_markers {len(report.orphan_markers)}",
+            "# HELP litellm_e2e_coverage_collection_errors Pytest nodes that failed during collection.",
+            "# TYPE litellm_e2e_coverage_collection_errors gauge",
+            f"litellm_e2e_coverage_collection_errors {len(report.collection_errors)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = ArgumentParser()
+    parser.add_argument(
+        "--format",
+        choices=("text", "json", "prometheus"),
+        default="text",
+        help="Output format. Use prometheus or json for Grafana ingestion jobs.",
+    )
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -178,7 +261,14 @@ def main() -> int:
     cells = load_registry()
     covered, errors = collect_covered_ids()
     report = compute_coverage(cells, covered, errors)
-    print(render(report))  # noqa: T201  # CLI entrypoint output
+    output = {
+        "text": render,
+        "json": render_json,
+        "prometheus": render_prometheus,
+    }[
+        args.format
+    ](report)
+    print(output)  # noqa: T201  # CLI entrypoint output
     if args.strict and report.orphan_markers:
         return 1
     if args.fail_on_collection_errors and report.collection_errors:
