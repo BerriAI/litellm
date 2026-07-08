@@ -506,7 +506,7 @@ class GraySwanGuardrail(CustomGuardrail):
         self,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Optional[Dict[str, str]]:
+    ) -> Optional[dict[str, str]]:
         headers = request_data.get("proxy_server_request", {}).get("headers")
         if not headers:
             headers = request_data.get("headers")
@@ -528,12 +528,12 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _prepare_payload(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         dynamic_body: dict,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Optional[Dict[str, Any]]:
-        payload: Dict[str, Any] = {"messages": messages}
+    ) -> Optional[dict[str, Any]]:
+        payload: dict[str, Any] = {"messages": messages}
 
         categories = dynamic_body.get("categories") or self.categories
         if categories:
