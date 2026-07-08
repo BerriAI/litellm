@@ -320,17 +320,13 @@ def test_build_inspection_messages_joins_multimodal_text_parts():
             }
         ]
     }
-    assert build_inspection_messages(data) == [
-        {"role": "user", "content": "first part\nsecond part"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "user", "content": "first part\nsecond part"}]
 
 
 def test_build_inspection_messages_lifts_responses_api_input():
     """fniVO9-F: ``input`` must be visible to hooks that POST messages to a remote API."""
     data = {"input": "responses-api content"}
-    assert build_inspection_messages(data) == [
-        {"role": "user", "content": "responses-api content"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "user", "content": "responses-api content"}]
 
 
 def test_build_inspection_messages_drops_messages_with_no_text():
