@@ -433,13 +433,13 @@ describe("CreateMCPServer", () => {
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
       await selectHttpTransport();
 
-      const user = userEvent.setup({ delay: null });
-
-      const nameInput = getServerNameInput();
-      await user.type(nameInput, "TE_Server");
+      // fireEvent.change over user.type: this test asserts payload shape, not
+      // keystroke behavior, and char-by-char typing re-renders the whole form
+      // per character, which pushed this test past the 30s CI timeout.
+      fireEvent.change(getServerNameInput(), { target: { value: "TE_Server" } });
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://upstream.example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://upstream.example.com/mcp" } });
 
       await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
 
@@ -447,12 +447,15 @@ describe("CreateMCPServer", () => {
         expect(screen.getByPlaceholderText("https://idp.example.com/oauth2/token")).toBeInTheDocument();
       });
 
-      await user.type(
-        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
-        "https://idp.example.com/oauth2/token",
-      );
-      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "te-client-id");
-      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "te-client-secret");
+      fireEvent.change(screen.getByPlaceholderText("https://idp.example.com/oauth2/token"), {
+        target: { value: "https://idp.example.com/oauth2/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "te-client-id" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), {
+        target: { value: "te-client-secret" },
+      });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-te",
@@ -489,10 +492,13 @@ describe("CreateMCPServer", () => {
     it("makes scope required when the Entra OBO profile is selected", async () => {
       await selectHttpTransport();
 
-      const user = userEvent.setup({ delay: null });
-
-      await user.type(getServerNameInput(), "Entra_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://upstream.example.com/mcp");
+      // fireEvent.change over user.type for the same reason as the payload
+      // test above: char-by-char typing re-renders the whole form per
+      // character and pushes this test toward the 30s CI timeout.
+      fireEvent.change(getServerNameInput(), { target: { value: "Entra_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
 
       await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
       await waitFor(() => {
@@ -501,12 +507,15 @@ describe("CreateMCPServer", () => {
 
       await selectAntOption("Profile", "Microsoft Entra OBO");
 
-      await user.type(
-        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
-        "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
-      );
-      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "entra-client");
-      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "entra-secret");
+      fireEvent.change(screen.getByPlaceholderText("https://idp.example.com/oauth2/token"), {
+        target: { value: "https://login.microsoftonline.com/tenant/oauth2/v2.0/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "entra-client" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), {
+        target: { value: "entra-secret" },
+      });
 
       // Selecting Entra OBO makes the scope required; submitting without one is blocked by validation
       // (rfc8693 would not require it), which confirms the profile selection took effect.
