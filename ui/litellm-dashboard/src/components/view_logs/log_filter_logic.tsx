@@ -13,6 +13,7 @@ export interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
+  total_is_capped?: boolean;
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): [T, React.Dispatch<React.SetStateAction<T>>] {

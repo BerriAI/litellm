@@ -758,6 +758,12 @@ async def _common_key_generation_helper(
         premium_user=premium_user,
     )
 
+    if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
+        )
+
     if data.metadata is not None and data.metadata.get("service_account_id") is not None and data.team_id is None:
         await validate_team_id_used_in_service_account_request(
             team_id=data.team_id,
@@ -1483,12 +1489,14 @@ async def generate_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
+    - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -2317,6 +2325,16 @@ async def _validate_update_key_data(
         or "budget_limits" in data.model_fields_set
     )
 
+    _existing_metadata = getattr(existing_key_row, "metadata", None)
+    _existing_throttle = (
+        _existing_metadata.get("throttle_on_budget_exceeded") if isinstance(_existing_metadata, dict) else None
+    )
+    if data.throttle_on_budget_exceeded is True and _existing_throttle is not True and not _is_proxy_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
+        )
+
     # Personal-key bypass: the caller both created the key AND still owns it
     # (user_id == caller).  Checking only created_by would let a demoted admin
     # who originally created a key for another user continue editing it without
@@ -2497,6 +2515,7 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
+    - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -2507,6 +2526,7 @@ async def update_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -3533,6 +3553,7 @@ async def generate_key_helper_fn(
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
+    tag_rpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     policies: Optional[list] = None,
     prompts: Optional[list] = None,
@@ -3606,6 +3627,9 @@ async def generate_key_helper_fn(
     if mcp_rpm_limit is not None:
         metadata = metadata or {}
         metadata["mcp_rpm_limit"] = mcp_rpm_limit
+    if tag_rpm_limit is not None:
+        metadata = metadata or {}
+        metadata["tag_rpm_limit"] = tag_rpm_limit
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails

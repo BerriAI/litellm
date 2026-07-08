@@ -31,7 +31,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.proxy.auth.auth_utils import (
+    get_key_tag_rpm_limit,
+    get_model_rate_limit_from_metadata,
+)
+from litellm.proxy.auth.budget_throttle import throttled_limit
+from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
@@ -1299,6 +1304,43 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
+    def _add_tag_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,
+        descriptors: list[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add per-request-tag rpm limit descriptors for the API key.
+
+        Each tag carried on the request that has a configured limit gets its own
+        ``{api_key}:{tag}`` counter, so a burst on one tag/group never consumes
+        another's budget. Tags without a configured limit fall through to the
+        key-level descriptor.
+        """
+        if not user_api_key_dict.api_key:
+            return
+
+        tag_rpm_limit = get_key_tag_rpm_limit(user_api_key_dict) or {}
+        if not tag_rpm_limit:
+            return
+
+        for tag in dict.fromkeys(get_tags_from_request_body(data)):
+            rpm_limit = tag_rpm_limit.get(tag)
+            if rpm_limit is None:
+                continue
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="tag_per_key",
+                    value=f"{user_api_key_dict.api_key}:{tag}",
+                    rate_limit={
+                        "requests_per_unit": rpm_limit,
+                        "tokens_per_unit": None,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
+
     def _add_mcp_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1549,18 +1591,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             or user_api_key_dict.tpm_limit is not None
             or user_api_key_dict.max_parallel_requests is not None
         ):
+            throttle_pct = user_api_key_dict.budget_throttle_pct
             descriptors.append(
                 RateLimitDescriptor(
                     key="api_key",
                     value=user_api_key_dict.api_key,
                     rate_limit={
                         "requests_per_unit": self._get_enforced_limit(
-                            limit_value=user_api_key_dict.rpm_limit,
+                            limit_value=throttled_limit(user_api_key_dict.rpm_limit, throttle_pct),
                             limit_type=rpm_limit_type,
                             model_has_failures=model_has_failures,
                         ),
                         "tokens_per_unit": self._get_enforced_limit(
-                            limit_value=user_api_key_dict.tpm_limit,
+                            limit_value=throttled_limit(user_api_key_dict.tpm_limit, throttle_pct),
                             limit_type=tpm_limit_type,
                             model_has_failures=model_has_failures,
                         ),
@@ -1640,6 +1683,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._add_model_per_key_rate_limit_descriptor(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
+            descriptors=descriptors,
+        )
+
+        # Per-request-tag rate limits scoped to this key
+        self._add_tag_per_key_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
             descriptors=descriptors,
         )
 
@@ -1959,6 +2009,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Org Level Rate Limits
         descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
+
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
             # First pass: RPM and max_parallel_requests sliding-window check.

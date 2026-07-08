@@ -1,9 +1,15 @@
 "use client";
 
 import WorkflowRuns from "./WorkflowRuns";
+import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Workflows() {
   const { accessToken } = useAuthorized();
-  return <WorkflowRuns accessToken={accessToken} />;
+  return (
+    <>
+      <DeprecationBanner featureName="Workflows" />
+      <WorkflowRuns accessToken={accessToken} />
+    </>
+  );
 }

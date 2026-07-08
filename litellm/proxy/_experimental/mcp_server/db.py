@@ -46,6 +46,35 @@ from litellm.types.mcp import MCPCredentials
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+_AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
+    {
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    }
+)
+
+# Token-exchange settings with dedicated columns that also exist on
+# ``MCPCredentials`` as a legacy shape (rows and REST callers that predate the
+# columns). Every write lifts blob values into the columns and strips them from
+# the stored blob, so the read-time ``column or blob`` fallback only serves rows
+# the current code has never written — a cleared column can then never be
+# silently resurrected by a stale blob copy. These keys are stored plaintext
+# (endpoints/identifiers, not secrets), so values lift as-is.
+_TOKEN_EXCHANGE_COLUMN_FIELDS: frozenset = frozenset(
+    {
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    }
+)
+
 
 def _is_global_env_var_scope(scope: Any) -> bool:
     """``scope="user"`` entries are placeholders the user fills in; everything
@@ -241,6 +270,14 @@ def _prepare_mcp_server_data(
     # Handle credentials serialization
     credentials = data_dict.get("credentials")
     if credentials is not None:
+        # Lift legacy blob-shaped token-exchange settings into their dedicated
+        # columns (an explicit top-level value wins, including an explicit
+        # null) and strip them from the blob so it never seeds the read-time
+        # fallback for rows written by current code.
+        for te_field in _TOKEN_EXCHANGE_COLUMN_FIELDS:
+            blob_value = credentials.pop(te_field, None)
+            if blob_value is not None and te_field not in data_dict:
+                data_dict[te_field] = blob_value
         data_dict["credentials"] = encrypt_credentials(credentials=credentials, encryption_key=_get_salt_key())
         data_dict["credentials"] = safe_dumps(data_dict["credentials"])
 
@@ -603,18 +640,40 @@ async def update_mcp_server(
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
     has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
-    if data.auth_type or has_credentials:
+    # An explicit token-exchange column write (set or clear) also migrates the
+    # legacy blob copies below, so the existing row is needed for those updates.
+    explicit_te_write = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
+    if data.auth_type or has_credentials or explicit_te_write:
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
+    auth_type_changed = bool(
+        data.auth_type and existing and existing.auth_type is not None and existing.auth_type != data.auth_type
+    )
+
     # Clear stale credentials when auth_type changes but no new credentials provided
-    if (
-        data.auth_type
-        and "credentials" not in data_dict
-        and existing
-        and existing.auth_type is not None
-        and existing.auth_type != data.auth_type
-    ):
+    if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
+
+    if auth_type_changed:
+        data_dict.update({field: None for field in _AUTH_FLOW_SCOPED_FIELDS if field not in data_dict})
+
+    # An explicit column write that does not touch credentials must still migrate
+    # the row's legacy blob copies: lift values for columns the caller left
+    # untouched, strip every copy from the blob. Without this, clearing a column
+    # (e.g. to re-enable RFC 9728/8414 discovery) would leave the blob copy in
+    # place, and the next credentials update's migrate-on-write would silently
+    # repopulate the column the admin just cleared. (When credentials ARE in the
+    # update, the merge below performs the same migration.)
+    if explicit_te_write and "credentials" not in data_dict and existing is not None and existing.credentials:
+        existing_creds = (
+            json.loads(existing.credentials) if isinstance(existing.credentials, str) else dict(existing.credentials)
+        )
+        if _TOKEN_EXCHANGE_COLUMN_FIELDS & existing_creds.keys():
+            for te_field in _TOKEN_EXCHANGE_COLUMN_FIELDS:
+                legacy_value = existing_creds.pop(te_field, None)
+                if legacy_value is not None and te_field not in data_dict and getattr(existing, te_field, None) is None:
+                    data_dict[te_field] = legacy_value
+            data_dict["credentials"] = safe_dumps(existing_creds)
 
     # Merge credentials: preserve existing fields not present in the update.
     # Without this, a partial credential update (e.g. changing only region)
@@ -638,6 +697,19 @@ async def update_mcp_server(
                 )
                 # New values override existing; existing keys not in update are preserved
                 merged = {**existing_creds, **new_creds}
+                # Migrate-on-write for legacy rows: token-exchange settings the
+                # old blob shape carried move to their dedicated columns (unless
+                # the caller set the column this update, or the row already has
+                # one) and are never re-persisted in the blob. Stored plaintext,
+                # so the merged value lifts as-is.
+                for te_field in _TOKEN_EXCHANGE_COLUMN_FIELDS:
+                    legacy_value = merged.pop(te_field, None)
+                    if (
+                        legacy_value is not None
+                        and te_field not in data_dict
+                        and getattr(existing, te_field, None) is None
+                    ):
+                        data_dict[te_field] = legacy_value
                 data_dict["credentials"] = safe_dumps(merged)
 
     # Add audit fields

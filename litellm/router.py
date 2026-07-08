@@ -2692,7 +2692,20 @@ class Router:
                 return self
 
             async def __anext__(self):
-                chunk = await self._async_generator.__anext__()
+                try:
+                    chunk = await self._async_generator.__anext__()
+                except StopAsyncIteration:
+                    # The inner generator is exhausted. If we never sniffed a
+                    # terminal event off a chunk (the bridge path emits the
+                    # final response.completed via common_done_event_logic,
+                    # which raises StopAsyncIteration after returning it),
+                    # fall back to whatever the source iterator latched so
+                    # the proxy's container-ownership hook still sees a
+                    # completed_response instead of logging a spurious
+                    # "no completed_response" warning.
+                    if self.completed_response is None:
+                        self.completed_response = getattr(source_iterator, "completed_response", None)
+                    raise
                 # Sniff the terminal stream event off each forwarded chunk
                 # so ``self.completed_response`` is populated regardless of
                 # which inner iterator produced it (source_iterator,
@@ -8355,13 +8368,8 @@ class Router:
             # deployment sharing the same backend model name.
             # Each deployment's full pricing is already stored under its
             # unique model_id above.
-            _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
-            _shared_model_info = {
-                k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
-            }
-            _existing_shared_mode = (
-                cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}
-            ).get("mode")
+            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
+            _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
             _deployment_mode = _shared_model_info.get("mode")
             # Keep the built-in bridge mode stable for shared backend keys.
             # Multiple aliases can point at the same provider/model backend,
@@ -9107,10 +9115,7 @@ class Router:
         # deployment sharing the same backend model name.
         # Each deployment's full pricing is already stored under its
         # unique model_id above (when present).
-        _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
-        _shared_model_info = {
-            k: v for k, v in _model_info_dict.items() if k not in _custom_pricing_fields
-        }
+        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
         _backend_alias_cost = {_model_name: _shared_model_info}
         if "responses/" in _model_name:
             _stripped_model_name = _model_name.replace("responses/", "")
