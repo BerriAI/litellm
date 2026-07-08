@@ -389,6 +389,78 @@ async def test_get_user_groups_error_handling():
         assert len(result) == 0
 
 
+@pytest.mark.asyncio
+async def test_get_user_groups_uses_default_graph_endpoint(monkeypatch):
+    monkeypatch.delenv("MICROSOFT_GRAPH_ENDPOINT", raising=False)
+
+    requested_urls: list[str] = []
+
+    async def mock_get(url, *args, **kwargs):
+        requested_urls.append(url)
+        mock = MagicMock()
+        mock.json.return_value = {"value": []}
+        return mock
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+    ) as mock_client:
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
+
+    assert requested_urls == ["https://graph.microsoft.com/v1.0/me/memberOf"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_groups_uses_configured_graph_endpoint(monkeypatch):
+    monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0")
+
+    requested_urls: list[str] = []
+
+    async def mock_get(url, *args, **kwargs):
+        requested_urls.append(url)
+        mock = MagicMock()
+        mock.json.return_value = {"value": []}
+        return mock
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+    ) as mock_client:
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
+
+    assert requested_urls == ["https://graph.microsoft.us/v1.0/me/memberOf"]
+
+
+@pytest.mark.asyncio
+async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoint(monkeypatch):
+    monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0")
+
+    requested_urls: list[str] = []
+
+    async def mock_get(url, *args, **kwargs):
+        requested_urls.append(url)
+        mock = MagicMock()
+        mock.json.return_value = {"value": []}
+        return mock
+
+    async_client = MagicMock()
+    async_client.get = mock_get
+
+    await MicrosoftSSOHandler.get_group_ids_from_service_principal(
+        service_principal_id="sp-123",
+        async_client=async_client,
+        access_token="mock_token",
+    )
+
+    assert requested_urls == [
+        "https://graph.microsoft.us/v1.0/servicePrincipals/sp-123/appRoleAssignedTo"
+    ]
+
+
 def test_get_group_ids_from_graph_api_response():
     # Arrange
     mock_response = MicrosoftGraphAPIUserGroupResponse(
