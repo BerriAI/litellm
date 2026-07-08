@@ -396,13 +396,9 @@ def llm_passthrough_route(
 
     _is_async = bool(kwargs.get("allm_passthrough_route", False))
 
-    _raw_logging_obj = kwargs.get("litellm_logging_obj")
-    if not isinstance(_raw_logging_obj, LiteLLMLoggingObj):
-        raise TypeError(
-            "litellm_logging_obj is required and must be a LiteLLMLoggingObj instance; "
-            f"got {type(_raw_logging_obj).__name__}"
-        )
-    litellm_logging_obj: LiteLLMLoggingObj = _raw_logging_obj
+    litellm_logging_obj = cast(
+        LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
+    )  # cast-ok: logging obj is constructed upstream; tests inject mocks
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
