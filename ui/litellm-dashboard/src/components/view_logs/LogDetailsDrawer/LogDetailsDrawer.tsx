@@ -217,6 +217,7 @@ export function LogDetailsDrawer({
       setIsSidebarCollapsed(false);
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
+      setSessionSortMode("duration");
       setCopiedLeftPanelId(false);
     }
   }, [open, isSessionMode]);
