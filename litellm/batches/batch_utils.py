@@ -118,6 +118,7 @@ def _batch_cost_calculator(
     total_cost = _get_batch_job_cost_from_file_content(
         file_content_dictionary=file_content_dictionary,
         custom_llm_provider=custom_llm_provider,
+        model_name=model_name,
         model_info=model_info,
     )
     verbose_logger.debug("total_cost=%s", total_cost)
@@ -363,6 +364,7 @@ def _count_entry_tokens(
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
+    model_name: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
@@ -377,9 +379,15 @@ def _get_batch_job_cost_from_file_content(
         for _item in file_content_dictionary:
             if _batch_response_was_successful(_item, custom_llm_provider):
                 _response_body = _get_response_from_batch_job_output_file(_item, custom_llm_provider)
-                if model_info is not None or custom_llm_provider == "anthropic":
+                if model_info is not None or custom_llm_provider in ("anthropic", "bedrock"):
                     usage = _get_batch_job_usage_from_response_body(_response_body, custom_llm_provider)
-                    model = _response_body.get("model", "")
+                    # Bedrock batch output lines report a short internal model id
+                    # (e.g. "claude-sonnet-4-6") that is not in the cost map; use the
+                    # deployment model name for pricing when available.
+                    if custom_llm_provider == "bedrock" and model_name:
+                        model = model_name
+                    else:
+                        model = _response_body.get("model") or model_name or ""
                     prompt_cost, completion_cost = batch_cost_calculator(
                         usage=usage,
                         model=model,
@@ -485,7 +493,7 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     """
     Get the tokens of a batch job from the response body
     """
-    if custom_llm_provider == "anthropic":
+    if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
         return AnthropicConfig().calculate_usage(
@@ -513,6 +521,8 @@ def _get_response_from_batch_job_output_file(batch_job_output_file: dict, custom
     """
     if custom_llm_provider == "anthropic":
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
+    if custom_llm_provider == "bedrock":
+        return batch_job_output_file.get("modelOutput", None) or {}
     _response: dict = batch_job_output_file.get("response", None) or {}
     _response_body = _response.get("body", None) or {}
     return _response_body
@@ -523,9 +533,12 @@ def _batch_response_was_successful(batch_job_output_file: dict, custom_llm_provi
     Check if the batch job response was successful
 
     OpenAI-shaped output rows report ``response.status_code == 200``; Anthropic
-    message batch results lines report ``result.type == "succeeded"``.
+    message batch results lines report ``result.type == "succeeded"``; Bedrock
+    batch output lines report ``modelOutput`` (and no ``error``).
     """
     if custom_llm_provider == "anthropic":
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
+    if custom_llm_provider == "bedrock":
+        return batch_job_output_file.get("modelOutput") is not None and batch_job_output_file.get("error") is None
     _response: dict = batch_job_output_file.get("response", None) or {}
     return _response.get("status_code", None) == 200
