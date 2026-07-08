@@ -57,8 +57,8 @@ interface UseMcpOAuthPkceFlowConfig {
   storageKeys: McpOAuthStorageKeys;
   /** URL to return to after the OAuth redirect completes. */
   buildReturnUrl: () => string;
-  /** Persist the exchanged token (sessionStorage, backend DB, etc.). */
-  persistToken: (token: McpOAuthTokenResult, flowState: McpOAuthFlowState) => Promise<void> | void;
+  /** Persist the exchanged token (sessionStorage, backend DB, etc.). Awaited; any resolved value is ignored. */
+  persistToken: (token: McpOAuthTokenResult, flowState: McpOAuthFlowState) => Promise<unknown> | void;
   /** Invoked after the token is persisted so the caller can refresh UI state. */
   onSuccess: (accessToken: string) => void;
 }
