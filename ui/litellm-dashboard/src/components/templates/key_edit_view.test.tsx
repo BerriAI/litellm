@@ -1024,5 +1024,48 @@ describe("KeyEditView", () => {
       expect(labels.filter((label) => label === "All Proxy Models")).toHaveLength(1);
       expect(labels).not.toContain("all-proxy-models");
     });
+
+    it("should collapse the selection to all-proxy-models when the sentinel is picked alongside a model", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const clickOption = async (label: string) => {
+        const option = await waitFor(() => {
+          const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+            (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+          );
+          expect(match).toBeTruthy();
+          return match as HTMLElement;
+        });
+        fireEvent.click(option);
+      };
+
+      await clickOption("gpt-4");
+      await clickOption("All Proxy Models");
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].models).toEqual(["all-proxy-models"]);
+    });
   });
 });

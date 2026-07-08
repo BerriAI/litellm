@@ -358,7 +358,15 @@ export function KeyEditView({
                   style={{ width: "100%" }}
                   disabled={isDisabled}
                   value={isDisabled ? [] : models}
-                  onChange={(value) => setFieldValue("models", value)}
+                  onChange={(value) => {
+                    if (value.includes("all-team-models")) {
+                      setFieldValue("models", ["all-team-models"]);
+                    } else if (value.includes("all-proxy-models")) {
+                      setFieldValue("models", ["all-proxy-models"]);
+                    } else {
+                      setFieldValue("models", value);
+                    }
+                  }}
                 >
                   {keyData.team_id != null ? (
                     team != null && <Select.Option value="all-team-models">All Team Models</Select.Option>
