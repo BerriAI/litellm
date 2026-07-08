@@ -13,6 +13,8 @@ ruleTester.run("no-long-condition-chain", rule as never, {
     "const x = a && b;",
     "if (a || b || c) {}",
     "const x = a ?? b ?? c;",
+    "const url = a ?? b ?? c ?? d;",
+    "const x = (a && b) ?? c ?? d;",
     { code: "const x = a && b && c && d;", options: [{ minConditions: 5 }] },
   ],
   invalid: [
@@ -40,6 +42,10 @@ ruleTester.run("no-long-condition-chain", rule as never, {
     {
       code: "const x = (a && b && c && d) || (e && f && g && h);",
       errors: [{ messageId: "tooMany", data: { count: 8 } }],
+    },
+    {
+      code: "const x = (a && b && c && d) ?? fallback;",
+      errors: [{ messageId: "tooMany", data: { count: 4 } }],
     },
   ],
 });

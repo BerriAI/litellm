@@ -1,7 +1,10 @@
 const DEFAULT_MIN_CONDITIONS = 4;
 
+const isBooleanLogical = (node) =>
+  node?.type === "LogicalExpression" && (node.operator === "&&" || node.operator === "||");
+
 const countConditions = (node) =>
-  node.type === "LogicalExpression" ? countConditions(node.left) + countConditions(node.right) : 1;
+  isBooleanLogical(node) ? countConditions(node.left) + countConditions(node.right) : 1;
 
 const rule = {
   meta: {
@@ -25,7 +28,8 @@ const rule = {
     const minConditions = context.options[0]?.minConditions ?? DEFAULT_MIN_CONDITIONS;
     return {
       LogicalExpression(node) {
-        if (node.parent?.type === "LogicalExpression") return;
+        if (!isBooleanLogical(node)) return;
+        if (isBooleanLogical(node.parent)) return;
         const count = countConditions(node);
         if (count < minConditions) return;
         context.report({ node, messageId: "tooMany", data: { count } });
