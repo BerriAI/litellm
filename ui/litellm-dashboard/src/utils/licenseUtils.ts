@@ -35,15 +35,17 @@ export const getLicenseExpiryTier = (expirationDate: string | null, now: Date = 
   return "none";
 };
 
+const EXPIRY_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+};
+
 export const formatExpiryDate = (expirationDate: string): string => {
   const date = new Date(`${expirationDate}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) {
     return expirationDate;
   }
-  return date.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+  return date.toLocaleDateString("en-US", EXPIRY_DATE_FORMAT);
 };

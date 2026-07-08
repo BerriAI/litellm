@@ -29,6 +29,16 @@ const describeCountdown = (days: number): string => {
   return `expires in ${days} days`;
 };
 
+const expiryDescription = (tier: "warning" | "critical" | "expired"): React.ReactNode => {
+  if (tier === "expired") {
+    return <>Enterprise features are now disabled. Reach out to {salesLink} to restore access</>;
+  }
+  if (tier === "critical") {
+    return <>Renew now to avoid losing enterprise features. Reach out to {salesLink}</>;
+  }
+  return <>Renew before it lapses to keep enterprise features. Reach out to {salesLink}</>;
+};
+
 export const LicenseExpiryBannerView: React.FC<LicenseExpiryBannerViewProps> = ({ licenseInfo }) => {
   const [locallyDismissed, setLocallyDismissed] = useState(false);
 
@@ -56,14 +66,7 @@ export const LicenseExpiryBannerView: React.FC<LicenseExpiryBannerViewProps> = (
       ? `Your LiteLLM Enterprise license expired on ${formattedDate}`
       : `Your LiteLLM Enterprise license ${describeCountdown(days)} (${formattedDate})`;
 
-  const description =
-    tier === "expired" ? (
-      <>Enterprise features are now disabled. Reach out to {salesLink} to restore access</>
-    ) : tier === "critical" ? (
-      <>Renew now to avoid losing enterprise features. Reach out to {salesLink}</>
-    ) : (
-      <>Renew before it lapses to keep enterprise features. Reach out to {salesLink}</>
-    );
+  const description = expiryDescription(tier);
 
   const handleClose = () => {
     if (typeof window !== "undefined") {
