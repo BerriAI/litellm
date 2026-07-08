@@ -38536,6 +38536,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.z.ai/guides/overview/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true
     },
@@ -38548,6 +38549,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
         "supports_function_calling": true,
         "supports_reasoning": true
     },
@@ -38560,6 +38562,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
         "supports_function_calling": true,
         "supports_reasoning": true
     },
