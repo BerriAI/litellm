@@ -95,6 +95,26 @@ class HealthCheckHelpers:
         """
         import litellm
 
+        # alist_batches never calls update_environment_variables and @client skips
+        # function_setup() when litellm_logging_obj already exists in kwargs.
+        _logging_obj = filtered_model_params.get("litellm_logging_obj")
+        _litellm_metadata = filtered_model_params.get("litellm_metadata")
+        if _logging_obj is not None and isinstance(_litellm_metadata, dict):
+            _metadata_copy = _litellm_metadata.copy()
+            _litellm_params: Dict = {
+                "metadata": _metadata_copy,
+                "litellm_metadata": _metadata_copy,
+            }
+            _api_base = filtered_model_params.get("api_base")
+            if _api_base:
+                _litellm_params["api_base"] = _api_base
+            _logging_obj.update_environment_variables(
+                model=filtered_model_params.get("model"),
+                user="",
+                optional_params={},
+                litellm_params=_litellm_params,
+            )
+
         if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.alist_batches(**filtered_model_params)
         else:
