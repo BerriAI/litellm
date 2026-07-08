@@ -140,6 +140,45 @@ def test_prepare_payload_sanitizes_headers_when_litellm_metadata_absent(
     assert "litellm_metadata" not in payload
 
 
+def test_prepare_payload_extracts_headers_from_logging_obj(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {}
+    logging_obj = type(
+        "LoggingObj",
+        (),
+        {
+            "model_call_details": {
+                "litellm_params": {
+                    "metadata": {
+                        "headers": {
+                            "shade_scan_id": "scan-from-logging",
+                            "authorization": "Bearer secret",
+                        }
+                    }
+                }
+            }
+        },
+    )()
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data, logging_obj)
+
+    assert payload["litellm_metadata"] == {
+        "headers": {"shade_scan_id": "scan-from-logging"},
+    }
+
+
+def test_prepare_payload_ignores_logging_obj_without_model_call_details(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, {}, object())
+
+    assert "litellm_metadata" not in payload
+
+
 def test_process_response_does_not_block_under_threshold(
     grayswan_guardrail: GraySwanGuardrail,
 ) -> None:
