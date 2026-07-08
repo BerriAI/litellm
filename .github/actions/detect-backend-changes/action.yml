@@ -1,15 +1,23 @@
-name: "Detect backend-relevant changes"
+name: "Detect relevant changes"
 description: >-
   Classify the pull request's changed files with .circleci/scripts/classify_changes.sh
-  and expose decision=run|skip. decision=skip means only ui/**, **.md or **.mdx files
-  changed, so callers can short-circuit expensive steps while the job still completes
-  successfully and satisfies its required status check. The decision defaults to run for
-  any non pull_request event or whenever the changed set cannot be resolved, so tests are
-  never skipped when the classification is uncertain.
+  and expose decision=run|skip. With category=backend, decision=skip means only ui/**,
+  **.md or **.mdx files changed; with category=client, decision=skip means only docs
+  (**.md, **.mdx, docs/**) changed so ui/** changes still run. Callers can short-circuit
+  expensive steps while the job still completes successfully and satisfies its required
+  status check. The decision defaults to run for any non pull_request event or whenever
+  the changed set cannot be resolved, so tests are never skipped when the classification
+  is uncertain.
+
+inputs:
+  category:
+    description: "backend (skip on ui/docs-only) or client (skip on docs-only)"
+    required: false
+    default: "backend"
 
 outputs:
   decision:
-    description: "run when backend-relevant files changed, otherwise skip"
+    description: "run when category-relevant files changed, otherwise skip"
     value: ${{ steps.classify.outputs.decision }}
 
 runs:
@@ -19,6 +27,7 @@ runs:
       shell: bash
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        CATEGORY: ${{ inputs.category }}
       run: |
         set -uo pipefail
         if [ -z "${BASE_SHA:-}" ]; then
@@ -43,6 +52,6 @@ runs:
         fi
         echo "detect-backend-changes: changed files vs ${BASE_SHA}:"
         printf '%s\n' "${changed}" | sed 's/^/  /'
-        decision="$(printf '%s\n' "${changed}" | bash .circleci/scripts/classify_changes.sh backend)" || decision="run"
+        decision="$(printf '%s\n' "${changed}" | bash .circleci/scripts/classify_changes.sh "${CATEGORY}")" || decision="run"
         echo "detect-backend-changes: decision=${decision}"
         echo "decision=${decision}" >> "${GITHUB_OUTPUT}"

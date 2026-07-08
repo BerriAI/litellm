@@ -26,16 +26,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-backend-changes
+        with:
+          category: client
+
       - name: Free up disk space
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
           sudo apt-get clean
           df -h /
 
       - name: Set up Docker Buildx
+        if: steps.changes.outputs.decision != 'skip'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build Docker image
+        if: steps.changes.outputs.decision != 'skip'
         uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
         with:
           context: .
@@ -45,6 +54,7 @@ jobs:
           push: false
 
       - name: Start LiteLLM container with SERVER_ROOT_PATH
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           docker run -d \
             --name litellm-test \
@@ -55,6 +65,7 @@ jobs:
             --detailed_debug
 
       - name: Wait for container to be healthy
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           echo "Waiting for LiteLLM to start..."
           max_attempts=30
@@ -79,10 +90,11 @@ jobs:
           sleep 5
 
       - name: Show container logs
-        if: always()
+        if: always() && steps.changes.outputs.decision != 'skip'
         run: docker logs litellm-test
 
       - name: Test UI endpoint with root path
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           ROOT_PATH="${{ matrix.root_path }}"
           echo "Testing UI at: http://localhost:4000${ROOT_PATH}/ui/"
@@ -102,11 +114,13 @@ jobs:
           exit 1
 
       - name: Setup Node for Playwright
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
 
       - name: Install UI deps and Chromium
+        if: steps.changes.outputs.decision != 'skip'
         working-directory: ui/litellm-dashboard
         run: |
           retry() {
@@ -131,13 +145,14 @@ jobs:
           retry npx playwright install --with-deps chromium
 
       - name: Run SERVER_ROOT_PATH redirect e2e
+        if: steps.changes.outputs.decision != 'skip'
         working-directory: ui/litellm-dashboard
         env:
           SERVER_ROOT_PATH: ${{ matrix.root_path }}
         run: npx playwright test --config=e2e_tests/serverRootPath.config.ts
 
       - name: Upload Playwright artifacts on failure
-        if: failure()
+        if: failure() && steps.changes.outputs.decision != 'skip'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-trace-${{ strategy.job-index }}
@@ -145,7 +160,7 @@ jobs:
           retention-days: 7
 
       - name: Cleanup
-        if: always()
+        if: always() && steps.changes.outputs.decision != 'skip'
         run: |
           docker stop litellm-test || true
           docker rm litellm-test || true
