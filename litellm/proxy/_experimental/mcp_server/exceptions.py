@@ -73,3 +73,18 @@ class MCPUpstreamAuthError(Exception):
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPToolResultError(Exception):
+    """An MCP tool call completed with ``isError=True`` in its result.
+
+    Never raised on the wire path: streamable HTTP MCP correctly returns tool
+    failures as HTTP 200 with ``result.isError: true`` per the MCP spec. This
+    exception only drives the standard failure logging (``status="failure"``
+    payload, OTel ERROR span) for such results.
+
+    Lives here rather than ``utils.py`` deliberately: tests reload ``utils``
+    to re-read its env-derived constants, and a reload would fork this class
+    into two identities, breaking ``isinstance`` checks against instances
+    created before the reload.
+    """
