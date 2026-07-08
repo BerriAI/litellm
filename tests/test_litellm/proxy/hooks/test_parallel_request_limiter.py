@@ -14,6 +14,8 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
+from litellm.exceptions import RateLimitType
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 
 @pytest.mark.parametrize(
@@ -393,3 +395,84 @@ async def test_async_log_failure_event_decrements_when_limit_configured():
         litellm_parent_otel_span=None,
     )
     assert current["current_requests"] == 0, "failure decrement should happen when limit is configured"
+
+
+@pytest.mark.asyncio
+async def test_check_key_in_limits_tpm_zero_triggers_tokens_type():
+    """base case: tpm_limit=0 should raise with rate_limit_type=TOKENS (line 97-98)."""
+    internal_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(internal_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.check_key_in_limits(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={},
+            call_type="completion",
+            max_parallel_requests=10,
+            tpm_limit=0,
+            rpm_limit=10,
+            current=None,
+            request_count_api_key="test-key::minute::request_count",
+            rate_limit_type="key",
+            values_to_update_in_cache=[],
+        )
+    assert exc_info.value.rate_limit_type == RateLimitType.TOKENS
+
+
+@pytest.mark.asyncio
+async def test_check_key_in_limits_rpm_zero_triggers_requests_type():
+    """base case: rpm_limit=0 (only) should fall to the else -> REQUESTS (line 99)."""
+    internal_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(internal_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.check_key_in_limits(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={},
+            call_type="completion",
+            max_parallel_requests=10,
+            tpm_limit=10,
+            rpm_limit=0,
+            current=None,
+            request_count_api_key="test-key::minute::request_count",
+            rate_limit_type="key",
+            values_to_update_in_cache=[],
+        )
+    assert exc_info.value.rate_limit_type == RateLimitType.REQUESTS
+
+
+@pytest.mark.asyncio
+async def test_check_key_in_limits_writes_new_val_when_no_current():
+    """current=None, no dimension is 0 -> writes initial new_val (lines 107-111)."""
+    internal_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(internal_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    values_to_update_in_cache = []
+
+    result = await handler.check_key_in_limits(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data={},
+        call_type="completion",
+        max_parallel_requests=10,
+        tpm_limit=1000,
+        rpm_limit=10,
+        current=None,
+        request_count_api_key="test-key::minute::request_count",
+        rate_limit_type="key",
+        values_to_update_in_cache=values_to_update_in_cache,
+    )
+    assert result == {"current_requests": 1, "current_tpm": 0, "current_rpm": 1}
+    assert values_to_update_in_cache == [
+        ("test-key::minute::request_count", {"current_requests": 1, "current_tpm": 0, "current_rpm": 1})
+    ]
