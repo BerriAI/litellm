@@ -14,6 +14,7 @@ from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 
 def test_update_model_params_with_health_check_tracking_information():
@@ -140,3 +141,139 @@ async def test_ahealth_check_failure_masks_raw_request_headers():
         assert headers["Content-Type"] == "application/json"
 
     print(f"Masked Authorization header: {headers.get('Authorization', 'NOT FOUND')}")
+
+
+@pytest.mark.asyncio
+async def test_batch_health_check_bridges_metadata_into_logging_obj():
+    """_batch_health_check must call update_from_kwargs on the pre-injected
+    logging object so callbacks receive identity/tracking fields in
+    model_call_details["litellm_params"]["metadata"]."""
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.update_from_kwargs = MagicMock()
+
+    litellm_metadata = {
+        "tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME],
+        "user_api_key_alias": "health-check-key",
+    }
+
+    filtered_model_params = {
+        "model": "openai/gpt-4",
+        "api_base": "https://api.openai.com",
+        "litellm_logging_obj": mock_logging_obj,
+        "litellm_metadata": litellm_metadata,
+    }
+
+    with patch("litellm.alist_batches", new_callable=AsyncMock, return_value={}):
+        await HealthCheckHelpers._batch_health_check(
+            custom_llm_provider="openai",
+            model_params={"model": "openai/gpt-4"},
+            filtered_model_params=filtered_model_params,
+        )
+
+    mock_logging_obj.update_from_kwargs.assert_called_once()
+    call_kwargs = mock_logging_obj.update_from_kwargs.call_args[1]
+    assert call_kwargs["model"] == "openai/gpt-4"
+    assert call_kwargs["kwargs"] is filtered_model_params
+    assert call_kwargs["litellm_params"] == {"api_base": "https://api.openai.com"}
+
+
+@pytest.mark.asyncio
+async def test_batch_health_check_omits_api_base_when_absent():
+    """api_base must not appear in litellm_params when the provider resolves
+    it implicitly (bedrock, vertex, gemini)."""
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.update_from_kwargs = MagicMock()
+
+    litellm_metadata = {"tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]}
+
+    filtered_model_params = {
+        "model": "bedrock/anthropic.claude-v2",
+        "litellm_logging_obj": mock_logging_obj,
+        "litellm_metadata": litellm_metadata,
+    }
+
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value={}):
+        await HealthCheckHelpers._batch_health_check(
+            custom_llm_provider="bedrock",
+            model_params={"model": "bedrock/anthropic.claude-v2"},
+            filtered_model_params=filtered_model_params,
+        )
+
+    call_kwargs = mock_logging_obj.update_from_kwargs.call_args[1]
+    assert call_kwargs["litellm_params"] is None
+
+
+@pytest.mark.asyncio
+async def test_batch_health_check_skips_bridge_when_no_logging_obj():
+    """When litellm_logging_obj is absent, dispatch still proceeds."""
+    litellm_metadata = {"tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]}
+
+    filtered_model_params = {
+        "model": "openai/gpt-4",
+        "litellm_metadata": litellm_metadata,
+    }
+
+    with patch(
+        "litellm.alist_batches", new_callable=AsyncMock, return_value={}
+    ) as mock_alist:
+        await HealthCheckHelpers._batch_health_check(
+            custom_llm_provider="openai",
+            model_params={"model": "openai/gpt-4"},
+            filtered_model_params=filtered_model_params,
+        )
+        mock_alist.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_health_check_uses_alist_batches_for_supported_providers():
+    """Providers in LIST_BATCHES_SUPPORTED_PROVIDERS dispatch to alist_batches."""
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.update_from_kwargs = MagicMock()
+
+    litellm_metadata = {"tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]}
+
+    for provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
+        filtered_model_params = {
+            "model": f"{provider}/some-model",
+            "litellm_logging_obj": mock_logging_obj,
+            "litellm_metadata": litellm_metadata,
+        }
+
+        with patch(
+            "litellm.alist_batches", new_callable=AsyncMock, return_value={}
+        ) as mock_alist:
+            await HealthCheckHelpers._batch_health_check(
+                custom_llm_provider=provider,
+                model_params={"model": f"{provider}/some-model"},
+                filtered_model_params=filtered_model_params,
+            )
+            mock_alist.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
+    """Providers not in LIST_BATCHES_SUPPORTED_PROVIDERS fall back to acompletion."""
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.update_from_kwargs = MagicMock()
+
+    litellm_metadata = {"tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]}
+
+    filtered_model_params = {
+        "model": "bedrock/anthropic.claude-v2",
+        "litellm_logging_obj": mock_logging_obj,
+        "litellm_metadata": litellm_metadata,
+    }
+
+    model_params = {"model": "bedrock/anthropic.claude-v2", "messages": []}
+
+    with (
+        patch("litellm.alist_batches", new_callable=AsyncMock) as mock_alist,
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value={}) as mock_acompletion,
+    ):
+        await HealthCheckHelpers._batch_health_check(
+            custom_llm_provider="bedrock",
+            model_params=model_params,
+            filtered_model_params=filtered_model_params,
+        )
+        mock_alist.assert_not_called()
+        mock_acompletion.assert_called_once_with(**model_params)
