@@ -588,6 +588,56 @@ class TestMergePromptManagementMessagesIntoInput:
         assert REASONING_ITEM not in result
         mock_warn.assert_called_once()
 
+    def test_trailing_non_message_items_reattached_after_last_message(self):
+        """A tool-result turn: input ENDS with non-message items (function_call +
+        function_call_output) that trail the last message. They must be re-attached
+        immediately after that surviving message, in order."""
+        original = [USER_MESSAGE, ASSISTANT_MESSAGE, FUNCTION_CALL, FUNCTION_CALL_OUTPUT]
+        merged = [USER_MESSAGE, ASSISTANT_MESSAGE]  # passthrough; same objects
+
+        with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
+            result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result == [
+            USER_MESSAGE,
+            ASSISTANT_MESSAGE,
+            FUNCTION_CALL,
+            FUNCTION_CALL_OUTPUT,
+        ]
+        # trailing items kept their order and stayed after the last message
+        assert result.index(FUNCTION_CALL) == result.index(ASSISTANT_MESSAGE) + 1
+        assert result.index(FUNCTION_CALL_OUTPUT) == result.index(FUNCTION_CALL) + 1
+        mock_warn.assert_not_called()
+
+    def test_trailing_reasoning_prepended_by_template_stays_after_its_message(self):
+        """Trailing item + a hook that PREPENDS a template message (identity of the
+        originals preserved). The trailing item still lands after the last original
+        message, and the injected preamble stays at the front."""
+        system_msg = {"role": "system", "content": "Template preamble."}
+        original = [USER_MESSAGE, ASSISTANT_MESSAGE, FUNCTION_CALL_OUTPUT]
+        merged = [system_msg, USER_MESSAGE, ASSISTANT_MESSAGE]  # prepend, same originals
+
+        result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result == [system_msg, USER_MESSAGE, ASSISTANT_MESSAGE, FUNCTION_CALL_OUTPUT]
+
+    def test_trailing_item_dropped_and_warns_when_last_message_removed(self):
+        """If the last message (the trailing item's anchor) is removed/replaced by the
+        hook, the trailing orphan is dropped with a warning rather than re-attached to
+        an unrelated message."""
+        original = [ASSISTANT_MESSAGE, FUNCTION_CALL_OUTPUT]  # trailing FCO anchored to ASSISTANT
+        merged = [
+            {"role": "system", "content": "New a."},
+            {"role": "user", "content": "New b."},
+        ]  # 2 new messages (count differs from 1 original) -> best-effort identity path
+
+        with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
+            result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result == merged
+        assert FUNCTION_CALL_OUTPUT not in result
+        mock_warn.assert_called_once()
+
 
 class TestResponsesReasoningPreservationEndToEnd:
     """[#32335] Reasoning/non-message items survive all the way to the downstream
