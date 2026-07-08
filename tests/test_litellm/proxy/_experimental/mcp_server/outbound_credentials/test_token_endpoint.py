@@ -178,6 +178,59 @@ async def test_fetch_missing_access_token_is_upstream_unavailable():
     assert result.error.tag == "upstream_unavailable"
 
 
+@pytest.mark.asyncio
+async def test_fetch_http_error_does_not_leak_endpoint_url():
+    error_resp = MagicMock()
+    error_resp.status_code = 403
+    error_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Forbidden", request=MagicMock(), response=error_resp
+    )
+    with patch(_PATCH_TARGET, return_value=_client(error_resp)):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+        )
+
+    assert isinstance(result, Error)
+    assert _ENDPOINT not in result.error.summary
+    assert "idp.example.com" not in result.error.summary
+
+
+@pytest.mark.asyncio
+async def test_fetch_none_response_does_not_leak_endpoint_url():
+    with patch(_PATCH_TARGET, return_value=_client(None)):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+        )
+
+    assert isinstance(result, Error)
+    assert _ENDPOINT not in result.error.summary
+    assert "idp.example.com" not in result.error.summary
+
+
+@pytest.mark.asyncio
+async def test_fetch_missing_access_token_does_not_leak_endpoint_url():
+    bad = MagicMock()
+    bad.json.return_value = {"token_type": "Bearer"}
+    bad.raise_for_status = MagicMock()
+    with patch(_PATCH_TARGET, return_value=_client(bad)):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+        )
+
+    assert isinstance(result, Error)
+    assert _ENDPOINT not in result.error.summary
+    assert "idp.example.com" not in result.error.summary
+
+
 def _ok_token(value="cached") -> Result[ExchangedToken, CredError]:
     return Ok(ExchangedToken(access_token=value, expires_in=3600))
 

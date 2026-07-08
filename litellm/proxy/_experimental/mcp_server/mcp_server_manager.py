@@ -78,6 +78,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    IdJagConfig,
     ServerSpec,
     TokenExchangeConfig,
 )
@@ -2156,9 +2157,10 @@ class MCPServerManager:
                 )
                 if not conflicts:
                     return auth, extra_headers
-                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
+                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig)):
                     # The resolver owns the per-user credential here (token_exchange's exchanged
-                    # token, authorization_code's stored token). It is authoritative: a guardrail such
+                    # token, authorization_code's stored token, id_jag's minted assertion). It is
+                    # authoritative: a guardrail such
                     # as MCPJWTSigner, static_headers, or any other injected Authorization must NOT
                     # shadow it (otherwise the upstream gets e.g. the signer's JWT instead of the
                     # exchanged token and rejects it). Drop the conflicting header so the resolved
@@ -2253,15 +2255,15 @@ class MCPServerManager:
         provider = cred_provider or self._cred_provider
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
         # so it wins - except for the per-user modes the v2 resolver owns (authorization_code's
-        # stored token and token_exchange's RFC 8693 minted token). A caller must not be able to
-        # substitute another user's stored credential, nor silently disable the OBO exchange and
-        # forward an arbitrary bearer upstream, so we keep the v2 spec and ignore the override for
-        # both; the REST tools preview supplies its not-yet-persisted token through the resolver
-        # (cred_provider), never this path.
+        # stored token, token_exchange's RFC 8693 minted token, and id_jag's minted assertion). A
+        # caller must not be able to substitute another user's stored credential, nor silently
+        # disable the OBO / ID-JAG exchange and forward an arbitrary bearer upstream, so we keep the
+        # v2 spec and ignore the override for all three; the REST tools preview supplies its
+        # not-yet-persisted token through the resolver (cred_provider), never this path.
         if (
             spec is not None
             and mcp_auth_header
-            and not isinstance(spec.config, (AuthorizationCodeConfig, TokenExchangeConfig))
+            and not isinstance(spec.config, (AuthorizationCodeConfig, TokenExchangeConfig, IdJagConfig))
         ):
             spec = None
         auth_value = (

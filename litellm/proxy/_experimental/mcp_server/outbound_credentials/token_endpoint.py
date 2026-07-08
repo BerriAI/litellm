@@ -25,6 +25,7 @@ import jwt
 from pydantic import BaseModel, ValidationError
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
@@ -77,17 +78,22 @@ class TokenEndpointClient:
         try:
             raw = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
+            verbose_proxy_logger.warning(
+                "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
+            )
             return Error(
-                CredError.of_upstream_unavailable(
-                    f"token endpoint {endpoint} failed with status {exc.response.status_code}"
-                )
+                CredError.of_upstream_unavailable(f"token exchange failed with status {exc.response.status_code}")
             )
         if raw is None:
-            return Error(CredError.of_upstream_unavailable(f"token endpoint {endpoint} returned no response"))
+            verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
+            return Error(CredError.of_upstream_unavailable("token exchange failed: no response from token endpoint"))
         try:
             parsed = _TokenEndpointResponse.model_validate(raw)
         except ValidationError:
-            return Error(CredError.of_upstream_unavailable(f"token endpoint {endpoint} response missing access_token"))
+            verbose_proxy_logger.warning("MCP token endpoint %s response missing access_token", endpoint)
+            return Error(
+                CredError.of_upstream_unavailable("token exchange failed: token endpoint response missing access_token")
+            )
         return Ok(ExchangedToken(access_token=parsed.access_token, expires_in=parsed.expires_in))
 
 
