@@ -2651,6 +2651,23 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> Optional[Dict[
     return None
 
 
+def _resolve_base_model_cost_entry(base_model: Optional[str], provider: str) -> Optional[Dict[str, Any]]:
+    """Resolve a built-in ``model_cost`` entry from a deployment's ``base_model``.
+
+    Deployments that price via ``model_info.base_model`` (e.g. an Azure
+    deployment aliasing ``azure/text-embedding-3-large``) carry no cost keys on
+    their own key, so ``register_model`` would otherwise warn about missing cache
+    pricing even though the base model fully describes it. Falls back to the
+    prefix/region resolver for base models whose exact key is not present.
+    """
+    if not isinstance(base_model, str) or not base_model:
+        return None
+    entry = litellm.model_cost.get(base_model)
+    if entry is not None and entry.get("litellm_provider") is not None:
+        return dict(entry)
+    return _resolve_builtin_model_cost_entry(key=base_model, provider=provider)
+
+
 def register_model(model_cost: Union[str, dict]):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -2698,6 +2715,10 @@ def register_model(model_cost: Union[str, dict]):
                 existing_model = {}
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
+                if builtin_entry is None:
+                    builtin_entry = _resolve_base_model_cost_entry(
+                        base_model=value.get("base_model"), provider=provider
+                    )
                 if builtin_entry is not None:
                     for field in _CACHE_PRICING_FIELDS:
                         if value.get(field) is None and builtin_entry.get(field) is not None:

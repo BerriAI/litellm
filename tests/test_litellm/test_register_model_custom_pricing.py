@@ -439,6 +439,41 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
         litellm.model_cost.pop(registered_key, None)
 
 
+def test_register_model_no_warning_when_base_model_resolves_cache_pricing(caplog):
+    """Regression for https://github.com/BerriAI/litellm/issues/32484.
+
+    A deployment priced via ``model_info.base_model`` (e.g. an Azure deployment
+    aliasing ``azure/text-embedding-3-large``) carries no cost keys on its own
+    key, so ``register_model`` used to warn that cache cost fields default to 0
+    even though the base model fully describes pricing. When ``base_model``
+    resolves to a built-in entry the warning must not fire.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "azure/my-deployment-name-32484"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "litellm_provider": "azure",
+                        "base_model": "azure/text-embedding-3-large",
+                    }
+                }
+            )
+
+        assert not any(
+            registered_key in record.message and "cache_creation_input_token_cost" in record.message
+            for record in caplog.records
+        ), "did not expect a cache-pricing warning when base_model resolves to a built-in entry"
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
 def test_register_model_router_add_deployment_custom_pricing_applies():
     """End-to-end regression for https://github.com/BerriAI/litellm/issues/28336.
 
