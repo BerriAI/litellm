@@ -21155,6 +21155,8 @@ export interface components {
             mask?: string[] | null;
             /** Mask[] */
             "mask[]"?: string[] | null;
+            /** Style Image */
+            style_image?: string[] | null;
         };
         /** Body_image_edit_api_openai_deployments__model__images_edits_post */
         Body_image_edit_api_openai_deployments__model__images_edits_post: {
@@ -21166,6 +21168,8 @@ export interface components {
             mask?: string[] | null;
             /** Mask[] */
             "mask[]"?: string[] | null;
+            /** Style Image */
+            style_image?: string[] | null;
         };
         /** Body_image_edit_api_v1_images_edits_post */
         Body_image_edit_api_v1_images_edits_post: {
@@ -21177,6 +21181,8 @@ export interface components {
             mask?: string[] | null;
             /** Mask[] */
             "mask[]"?: string[] | null;
+            /** Style Image */
+            style_image?: string[] | null;
         };
         /** Body_test_model_connection_health_test_connection_post */
         Body_test_model_connection_health_test_connection_post: {
