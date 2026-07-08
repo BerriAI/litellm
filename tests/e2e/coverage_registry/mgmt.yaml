@@ -4,6 +4,7 @@
 - {id: mgmt.key.generate.happy_path, module: mgmt, tier: P0, surface: ui, assertions: [happy_path], source: "ui_sso.py:420", rationale: "SSO-driven key gen (UI path)"}
 - {id: mgmt.key.update.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:2462", rationale: "Budget/model changes persist"}
 - {id: mgmt.key.update.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:2462", rationale: "Non-admin cannot escalate perms"}
+- {id: mgmt.key.update.happy_path, module: mgmt, tier: P1, surface: ui, assertions: [happy_path], source: "key_management_endpoints.py:2462", rationale: "Key edit through the dashboard"}
 - {id: mgmt.key.delete.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3122", rationale: "Deletion revokes future calls"}
 - {id: mgmt.key.delete.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:3122", rationale: "Non-owner cannot delete"}
 - {id: mgmt.key.info.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3380", rationale: "Info reflects all writes"}
