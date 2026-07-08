@@ -102,13 +102,14 @@ export const useMcpOAuthPkceFlow = ({
       let clientSecret: string | undefined;
 
       if (!clientId) {
+        const registration = {
+          client_name: serverAlias || serverId,
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+        };
         try {
-          const reg = await registerMcpOAuthClient(accessToken, serverId, {
-            client_name: serverAlias || serverId,
-            grant_types: ["authorization_code", "refresh_token"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "none",
-          });
+          const reg = await registerMcpOAuthClient(accessToken, serverId, registration);
           clientId = reg?.client_id;
           clientSecret = reg?.client_secret;
         } catch (_) {
@@ -122,14 +123,15 @@ export const useMcpOAuthPkceFlow = ({
       const redirectUri = buildCallbackUrl();
       const scopeString = scopes?.filter((s) => s.trim()).join(" ");
 
-      const authorizeUrl = buildMcpOAuthAuthorizeUrl({
+      const authorizeParams = {
         serverId,
         clientId,
         redirectUri,
         state,
         codeChallenge: challenge,
         scope: scopeString,
-      });
+      };
+      const authorizeUrl = buildMcpOAuthAuthorizeUrl(authorizeParams);
 
       const flowState: McpOAuthFlowState = {
         state,
@@ -202,7 +204,7 @@ export const useMcpOAuthPkceFlow = ({
       }
 
       setStatus("exchanging");
-      const token: McpOAuthTokenResult = await exchangeMcpOAuthToken({
+      const exchangeParams = {
         serverId: flowState.serverId,
         code: payload.code as string,
         clientId: flowState.clientId,
@@ -210,7 +212,8 @@ export const useMcpOAuthPkceFlow = ({
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
         accessToken,
-      });
+      };
+      const token: McpOAuthTokenResult = await exchangeMcpOAuthToken(exchangeParams);
 
       await callbacksRef.current.persistToken(token, flowState);
 

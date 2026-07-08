@@ -72,13 +72,15 @@ export const useUserMcpOAuthFlow = ({
     },
     // Persist the token for this user via the backend.
     // accessToken comes from props — it is never stored in sessionStorage.
-    persistToken: (token, flowState) =>
-      storeMCPOAuthUserCredential(accessToken, flowState.serverId, {
+    persistToken: (token, flowState) => {
+      const credential = {
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         expires_in: token.expires_in,
         scopes: flowState.scopes,
-      }),
+      };
+      return storeMCPOAuthUserCredential(accessToken, flowState.serverId, credential);
+    },
     // Explicitly drop the base hook's access_token argument: this flow keeps the
     // token server-side, so the public onSuccess deliberately exposes none.
     onSuccess: () => onSuccess(),

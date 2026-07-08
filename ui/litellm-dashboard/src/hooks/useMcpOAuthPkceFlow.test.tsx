@@ -24,7 +24,6 @@ const TOOLS_RESULT_KEY = "litellm-tools-mcp-oauth-result";
 const USER_FLOW_STATE_KEY = "litellm-user-mcp-oauth-flow-state";
 const USER_RESULT_KEY = "litellm-user-mcp-oauth-result";
 
-/** Seed the storage for a completed IdP redirect, keyed for a specific flow. */
 function seedCompletedRedirect(flowStateKey: string, resultKey: string, extra: Record<string, unknown> = {}) {
   setSecureItem(resultKey, JSON.stringify({ state: "state-1", code: "code-1" }));
   setSecureItem(
@@ -84,7 +83,6 @@ describe("MCP OAuth PKCE flow wrappers", () => {
         useToolsOAuthFlow({ accessToken: "user-token", serverId: "server-1", onSuccess }),
       );
 
-      // Give the on-mount resume a chance to (not) run.
       await Promise.resolve();
       expect(networking.exchangeMcpOAuthToken).not.toHaveBeenCalled();
       expect(result.current.status).toBe("idle");
@@ -126,7 +124,6 @@ describe("MCP OAuth PKCE flow wrappers", () => {
       });
       expect(setTokenSpy).not.toHaveBeenCalled();
       expect(onSuccess).toHaveBeenCalledTimes(1);
-      // The user flow keeps the token server-side: onSuccess must receive no token.
       expect(onSuccess).toHaveBeenCalledWith();
     });
 

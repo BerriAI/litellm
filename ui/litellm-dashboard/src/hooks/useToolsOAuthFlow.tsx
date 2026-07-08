@@ -70,17 +70,15 @@ export const useToolsOAuthFlow = ({
     // Return to the current page (Tools tab) after the OAuth redirect.
     buildReturnUrl: () => window.location.href,
     // Store in sessionStorage only — no backend DB write.
-    persistToken: (token, flowState) =>
-      setToken(
-        flowState.serverId,
-        {
-          access_token: token.access_token,
-          expires_in: token.expires_in,
-          refresh_token: token.refresh_token,
-          token_type: token.token_type,
-        },
-        userId,
-      ),
+    persistToken: (token, flowState) => {
+      const stored = {
+        access_token: token.access_token,
+        expires_in: token.expires_in,
+        refresh_token: token.refresh_token,
+        token_type: token.token_type,
+      };
+      setToken(flowState.serverId, stored, userId);
+    },
     onSuccess,
   };
   return useMcpOAuthPkceFlow(config);
