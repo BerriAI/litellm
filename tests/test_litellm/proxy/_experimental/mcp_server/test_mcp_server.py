@@ -4164,6 +4164,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             _get_tools_from_mcp_servers,
         )
         from litellm.proxy._types import UserAPIKeyAuth
+        from mcp.types import Tool as MCPTool
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -4177,12 +4178,20 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     server_a.auth_type = None
     server_a.extra_headers = None
 
-    tool_1 = MagicMock()
-    tool_1.name = "server_a-tool_1"
+    tool_1 = MCPTool(
+        name="server_a-tool_1",
+        description="test tool",
+        inputSchema={"type": "object"},
+    )
 
     dummy_logging_obj = MagicMock()
     dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
     dummy_logging_obj.async_success_handler = AsyncMock()
+    function_setup_kwargs = {}
+
+    def _capture_function_setup(*_args, **kwargs):
+        function_setup_kwargs.update(kwargs)
+        return dummy_logging_obj, None
 
     with (
         patch(
@@ -4206,7 +4215,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.function_setup",
-            return_value=(dummy_logging_obj, None),
+            side_effect=_capture_function_setup,
         ),
     ):
         mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
@@ -4218,13 +4227,15 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             mcp_server_auth_headers=None,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="mcp_protocol",
+            request_tags=["team-a"],
         )
 
     assert tools == [tool_1]
     dummy_logging_obj.async_success_handler.assert_awaited_once()
     assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [
-        tool_1
+        tool_1.model_dump(mode="json")
     ]
+    assert function_setup_kwargs["metadata"]["tags"] == ["team-a"]
 
     spend_meta = dummy_logging_obj.model_call_details["metadata"]["spend_logs_metadata"]
     assert spend_meta["tool_count_total"] == 1
@@ -5173,6 +5184,10 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     legacy_server.server_id = "legacy-m2m-id"
     legacy_server.auth_type = MCPAuth.oauth2
     legacy_server.oauth2_flow = None  # Legacy: field not set in DB
+    legacy_server.token_exchange_endpoint = None
+    legacy_server.audience = None
+    legacy_server.subject_token_type = None
+    legacy_server.token_exchange_profile = None
     legacy_server.token_url = "https://oauth.example.com/token"
     legacy_server.authorization_url = None
     legacy_server.client_id = "client-id"
@@ -6581,3 +6596,65 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
     assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
     prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
+    """
+    Finding 3 regression: the call_mcp_tool path must apply the same request-time
+    oauth2_flow backstop the listing path does. A legacy DB row with oauth2_flow=NULL
+    but the M2M credential shape must reach execute_mcp_tool resolved to
+    client_credentials, or the caller's Authorization would be forwarded to an M2M
+    upstream on tool execution during a backfill gap (the list path was covered, the
+    call path was not).
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+
+    legacy_server = MCPServer(
+        server_id="legacy-m2m-id",
+        name="legacy_m2m",
+        alias="legacy_m2m",
+        server_name="legacy_m2m",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow=None,  # legacy: unstamped
+        token_url="https://oauth.example.com/token",
+        client_id="client-id",
+        client_secret="client-secret",
+    )
+    assert legacy_server.has_client_credentials is False
+
+    captured_servers = {}
+
+    async def capture_execute(*args, **kwargs):
+        captured_servers["allowed"] = kwargs.get("allowed_mcp_servers")
+        return MagicMock(name="call_tool_result")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+            side_effect=capture_execute,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers: allowed_mcp_servers),
+        ),
+    ):
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+
+        await call_mcp_tool(name="legacy_m2m-tool", arguments={}, user_api_key_auth=user_auth)
+
+    resolved = captured_servers["allowed"]
+    assert resolved and resolved[0].oauth2_flow == "client_credentials"
+    assert resolved[0].has_client_credentials is True

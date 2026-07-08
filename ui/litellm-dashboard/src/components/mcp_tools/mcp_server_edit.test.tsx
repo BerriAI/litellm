@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 import MCPServerEdit from "./mcp_server_edit";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { selectAntOption } from "./testUtils";
 
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
@@ -64,11 +65,19 @@ vi.mock("./mcp_tool_configuration", () => ({
       <button
         type="button"
         onClick={() => {
-          onToolNameToDisplayNameChange({ read_user: "Read User" });
+          onToolNameToDisplayNameChange({ read_user: "ReadUser" });
           onToolNameToDescriptionChange({ read_user: "Reads users" });
         }}
       >
         Set tool overrides
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onToolNameToDisplayNameChange({ read_user: "Read User" });
+        }}
+      >
+        Set invalid tool override
       </button>
     </div>
   ),
@@ -298,6 +307,81 @@ describe("MCPServerEdit (delegate auth)", () => {
   });
 });
 
+describe("MCPServerEdit (auth type switch)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("clears stale oauth2 endpoint overrides when switching to token exchange", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth2_token_exchange",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://old-idp.example.com/oauth/token",
+          authorization_url: "https://old-idp.example.com/oauth/authorize",
+          registration_url: "https://old-idp.example.com/oauth/register",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2_token_exchange");
+    expect(payload.token_url).toBeNull();
+    expect(payload.authorization_url).toBeNull();
+    expect(payload.registration_url).toBeNull();
+  });
+
+  it("keeps oauth2 endpoint overrides when the auth type is unchanged", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://idp.example.com/oauth/token",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2");
+    expect(payload.token_url).toBe("https://idp.example.com/oauth/token");
+  });
+});
+
 describe("MCPServerEdit (tool allowlist)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -381,7 +465,7 @@ describe("MCPServerEdit (tool allowlist)", () => {
   it("saves tool overrides for legacy unrestricted servers", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...interactiveOAuthServer,
-      tool_name_to_display_name: { read_user: "Read User" },
+      tool_name_to_display_name: { read_user: "ReadUser" },
       tool_name_to_description: { read_user: "Reads users" },
     });
 
@@ -415,8 +499,35 @@ describe("MCPServerEdit (tool allowlist)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.mcp_info.tool_allowlist_enforced).toBe(false);
     expect(payload.allowed_tools).toBeUndefined();
-    expect(payload.tool_name_to_display_name).toEqual({ read_user: "Read User" });
+    expect(payload.tool_name_to_display_name).toEqual({ read_user: "ReadUser" });
     expect(payload.tool_name_to_description).toEqual({ read_user: "Reads users" });
+  });
+
+  it("blocks save and does not call the API when a tool display name contains a space", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          allowed_tools: [],
+          mcp_info: { server_name: "OAuthServer" },
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Set invalid tool override" }));
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
   });
 });
 
@@ -504,6 +615,68 @@ describe("MCPServerEdit (interactive OAuth)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.token_validation).toEqual({ organization: "my-org" });
+  });
+
+  it("includes credentials.token_endpoint_auth_method in update payload when client_secret_basic is selected", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
+    });
+
+    await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials?.token_endpoint_auth_method).toBe("client_secret_basic");
+  });
+
+  it("omits token_endpoint_auth_method from the update payload when the selector is left blank", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials?.token_endpoint_auth_method).toBeUndefined();
   });
 
   it("does not include token_validation in payload when field is empty and server had none", async () => {
@@ -938,5 +1111,277 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     });
     expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
     expect(mockSetToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCPServerEdit oauth2_flow selector", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function saveAndGetPayload(server: Record<string, unknown>) {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it("never writes oauth2_flow for a legacy null-flow server with a token_url", async () => {
+    const payload = await saveAndGetPayload({
+      token_url: "https://idp.example.com/oauth/token",
+      oauth2_flow: null,
+    });
+    expect(payload).not.toHaveProperty("oauth2_flow");
+  });
+
+  it("re-writes an explicit client_credentials row with its own prefilled value", async () => {
+    const payload = await saveAndGetPayload({
+      oauth2_flow: "client_credentials",
+      token_url: "https://idp.example.com/oauth/token",
+    });
+    expect(payload.oauth2_flow).toBe("client_credentials");
+  });
+
+  it("re-writes the DCR authorization_code stamp with its own prefilled value", async () => {
+    const payload = await saveAndGetPayload({
+      oauth2_flow: "authorization_code",
+      token_url: "https://idp.example.com/oauth/token",
+    });
+    expect(payload.oauth2_flow).toBe("authorization_code");
+  });
+
+  it("persists client_credentials when the admin selects M2M on a legacy null-flow row", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://idp.example.com/oauth/token",
+          oauth2_flow: null,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.oauth2_flow).toBe("client_credentials");
+  });
+
+  it("persists authorization_code when the admin selects Interactive on a legacy null-flow row", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          token_url: "https://idp.example.com/oauth/token",
+          oauth2_flow: null,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("OAuth Flow Type", "Interactive (PKCE)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.oauth2_flow).toBe("authorization_code");
+  });
+});
+
+describe("MCPServerEdit OAuth flow prefill display", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function renderEdit(server: Record<string, unknown>) {
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+  }
+
+  it("shows the placeholder and preselects nothing for a null-flow server (prompts the user to define it)", () => {
+    renderEdit({ oauth2_flow: null, token_url: "https://idp.example.com/oauth/token" });
+
+    // The select renders its placeholder (undefined value), not a guessed option.
+    expect(screen.getByText("Select OAuth flow")).toBeInTheDocument();
+    // Neither flow is preselected as the current value.
+    expect(screen.queryByText("Machine-to-Machine (M2M)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Interactive (PKCE)")).not.toBeInTheDocument();
+  });
+
+  it("prefills Machine-to-Machine (M2M) for a stored client_credentials server", () => {
+    renderEdit({ oauth2_flow: "client_credentials" });
+
+    expect(screen.getByText("Machine-to-Machine (M2M)")).toBeInTheDocument();
+    expect(screen.queryByText("Select OAuth flow")).not.toBeInTheDocument();
+  });
+
+  it("prefills Interactive (PKCE) for a stored authorization_code server", () => {
+    renderEdit({ oauth2_flow: "authorization_code" });
+
+    expect(screen.getByText("Interactive (PKCE)")).toBeInTheDocument();
+    expect(screen.queryByText("Select OAuth flow")).not.toBeInTheDocument();
+  });
+
+  it("warns when a server has no OAuth flow set", () => {
+    renderEdit({ oauth2_flow: null, token_url: "https://idp.example.com/oauth/token" });
+
+    expect(screen.getByText("This server has no OAuth flow set")).toBeInTheDocument();
+  });
+
+  it("does not warn when the flow is already set", () => {
+    renderEdit({ oauth2_flow: "client_credentials" });
+
+    expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
+  });
+
+  it("does not warn for a delegate (PKCE passthrough) server even with no flow set", () => {
+    renderEdit({ oauth2_flow: null, delegate_auth_to_upstream: true });
+
+    expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
+  });
+
+  it("clears the warning once the admin selects a flow", async () => {
+    renderEdit({ oauth2_flow: null, token_url: "https://idp.example.com/oauth/token" });
+
+    expect(screen.getByText("This server has no OAuth flow set")).toBeInTheDocument();
+
+    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+
+    await waitFor(() => {
+      expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe("MCPServerEdit (max concurrent requests)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const limitedServer = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    max_concurrent_requests: 5,
+  };
+
+  it("prefills the existing limit and sends an updated value in the payload", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...limitedServer,
+      max_concurrent_requests: 2,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={limitedServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const limitInput = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
+    expect(limitInput.value).toBe("5");
+
+    fireEvent.change(limitInput, { target: { value: "2" } });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBe(2);
+  });
+
+  it("sends null when the limit is cleared so the backend unsets it", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...limitedServer,
+      max_concurrent_requests: null,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={limitedServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const limitInput = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
+    expect(limitInput.value).toBe("5");
+
+    fireEvent.change(limitInput, { target: { value: "" } });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBeNull();
   });
 });

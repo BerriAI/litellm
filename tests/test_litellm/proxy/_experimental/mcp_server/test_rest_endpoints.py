@@ -1,6 +1,8 @@
+import asyncio
 import json
+from datetime import datetime
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -330,7 +332,8 @@ class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_m2m_does_not_build_presented_store(self, monkeypatch):
         """M2M (client_credentials): to_server_spec returns None, so no presented provider is built;
-        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before)."""
+        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before).
+        """
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
@@ -377,7 +380,8 @@ class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_token_exchange_does_not_build_presented_store(self, monkeypatch):
         """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2): excluded by the
-        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs."""
+        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs.
+        """
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
@@ -839,6 +843,76 @@ class TestListToolsRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers == {"www-authenticate": challenge}
 
+    async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
+        """The multi-server aggregate listing degrades a server whose upstream
+        rejects auth to an empty contribution and still returns the healthy
+        server's tools with a 200, rather than surfacing a 401."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            def __init__(self, name):
+                self.alias = name
+                self.server_name = name
+                self.name = name
+                self.allowed_tools = None
+                self.mcp_info = {"server_name": name}
+                self.available_on_public_internet = True
+
+        good = StubServer("good")
+        bad = StubServer("bad")
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["good", "bad"]
+
+        async def fake_get_tools(server, *args, **kwargs):
+            if server.server_name == "bad":
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate='Bearer realm="x"',
+                    server_name="bad",
+                )
+            return ["good-tool"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: {"good": good, "bad": bad}.get(server_id),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == ["good-tool"]
+        assert result["error"] is None
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
@@ -975,6 +1049,292 @@ class TestListToolsRestAPI:
         assert result["tools"] == []
         assert result["error"] == "unexpected_error"
         assert "access_denied" in result["message"]
+
+    async def test_mcp_server_name_query_param_resolves_to_server(self, monkeypatch):
+        """mcp_server_name is a name-based alias for server_id: it should
+        resolve to the matching server and scope the response to it."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-abc-123",
+            name="my-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "my-server"
+        stub_server.server_name = "my-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "my-server"}
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["uuid-abc-123"]
+
+        captured = {"called": False, "server_arg": None}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["called"] = True
+            captured["server_arg"] = server
+            return ["tool-x"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda name: stub_server if name == "my-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "uuid-abc-123" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            mcp_server_name="my-server",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert captured["called"] is True
+        assert captured["server_arg"] is stub_server
+        assert result["tools"] == ["tool-x"]
+        assert result["error"] is None
+
+    async def test_mcp_server_name_filter_uses_real_catalog_with_tool_search(self, monkeypatch):
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-search-123",
+            name="search-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "search-server"
+        stub_server.server_name = "search-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "search-server"}
+        user_api_key_dict = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+                mcp_servers=["uuid-search-123"],
+            )
+        )
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["uuid-search-123"]
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            return ["scoped-tool"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda name: stub_server if name == "search-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "uuid-search-123" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            mcp_server_name="search-server",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert result["tools"] == ["scoped-tool"]
+        assert result["error"] is None
+
+    async def test_toolset_name_query_param_scopes_to_toolset_servers(self, monkeypatch):
+        """toolset_name should resolve the toolset, apply its scope to the
+        caller's UserAPIKeyAuth via _apply_toolset_scope, and only list tools
+        from servers the scoped auth is allowed to see."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        scoped_auth = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="toolset-scope",
+                mcp_tool_search_enabled=True,
+                mcp_servers=["toolset-server-1"],
+            )
+        )
+
+        class StubToolset:
+            toolset_id = "toolset-1"
+
+        class StubServer:
+            alias = "toolset-server-1"
+            server_name = "toolset-server-1"
+            name = "toolset-server-1"
+            allowed_tools = None
+            mcp_info = {"server_name": "toolset-server-1"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_toolset_by_name_cached(prisma_client, toolset_name):
+            assert toolset_name == "research_tools"
+            return StubToolset()
+
+        async def fake_apply_toolset_scope(user_api_key_auth, toolset_id):
+            assert toolset_id == "toolset-1"
+            return scoped_auth
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(**kwargs):
+            assert kwargs["user_api_key_auth"] is scoped_auth
+            return ["toolset-server-1"]
+
+        async def fake_get_tools(server, server_auth_header, *args, **kwargs):
+            return ["toolset-tool-1"]
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            lambda *args, **kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_toolset_by_name_cached",
+            fake_get_toolset_by_name_cached,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_apply_toolset_scope",
+            fake_apply_toolset_scope,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "toolset-server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            toolset_name="research_tools",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == ["toolset-tool-1"]
+        assert result["error"] is None
+
+    async def test_toolset_name_not_found_returns_error(self, monkeypatch):
+        async def fake_get_toolset_by_name_cached(prisma_client, toolset_name):
+            return None
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            lambda *args, **kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_toolset_by_name_cached",
+            fake_get_toolset_by_name_cached,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id=None,
+                toolset_name="does-not-exist",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 404
+        assert "does-not-exist" in str(exc_info.value.detail)
 
     async def test_oauth2_user_token_injected_for_single_server(self, monkeypatch):
         """For a single-server OAuth2 request, _get_user_oauth_extra_headers is called
@@ -1196,6 +1556,13 @@ class TestCallToolRestAPI:
             fake_execute_mcp_tool,
             raising=False,
         )
+        fire_logging = AsyncMock(side_effect=RuntimeError("logging failed"))
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_success_logging",
+            fire_logging,
+            raising=False,
+        )
 
         request_payload = {
             "server_id": "server-1",
@@ -1217,6 +1584,23 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+        fire_logging.assert_awaited_once()
+
+    async def test_success_logging_cancellation_propagates(self, monkeypatch):
+        fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_success_logging",
+            fire_logging,
+            raising=False,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._safe_fire_mcp_success_logging(
+                object(), {"result": "ok"}, datetime.now(), datetime.now()
+            )
+
+        fire_logging.assert_awaited_once()
 
 
 class TestGetToolsForSingleServer:
@@ -1809,9 +2193,9 @@ class TestPreviewOpenAPITools:
         names = [t["name"] for t in result["tools"]]
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in names:
-            assert anthropic_re.match(name), (
-                f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
-            )
+            assert anthropic_re.match(
+                name
+            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in names
         assert "pulls_list-files" in names
 
@@ -1868,7 +2252,9 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
+        def fake_create_tool_function(
+            path, method, operation, base_url
+        ):  # noqa: ANN001
             def _f():
                 return None
 
@@ -1881,7 +2267,9 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
+            def register_tool(
+                self, name, description, input_schema, handler
+            ):  # noqa: ANN001
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(
