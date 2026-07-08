@@ -10,6 +10,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     Union,
     cast,
@@ -508,14 +509,10 @@ async def aresponses(
         if isinstance(
             litellm_logging_obj, LiteLLMLoggingObj
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
-            if isinstance(input, str):
-                client_input: List[AllMessageValues] = [{"role": "user", "content": input}]
-            else:
-                client_input = [
-                    item  # type: ignore[misc]
-                    for item in input
-                    if isinstance(item, dict) and "role" in item
-                ]
+            # Only role-bearing message items are handed to the hook; non-message items
+            # (reasoning/function_call/...) are re-merged afterwards so they are not
+            # dropped. See https://github.com/BerriAI/litellm/issues/32335.
+            client_input = _extract_message_items_for_prompt_management(input)
             (
                 model,
                 merged_input,
@@ -529,7 +526,7 @@ async def aresponses(
                 prompt_label=kwargs.get("prompt_label", None),
                 prompt_version=kwargs.get("prompt_version", None),
             )
-            input = cast(Union[str, ResponseInputParam], merged_input)
+            input = _merge_prompt_management_messages_into_input(input, merged_input)
             if model != original_model:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             kwargs.pop("prompt_id", None)
@@ -601,6 +598,187 @@ async def aresponses(
         )
 
 
+def _is_responses_message_item(item: Any) -> bool:
+    """Return True for role-bearing (chat-style) Responses API input items.
+
+    Message items carry a ``role`` key (e.g. ``{"role": "user", ...}`` or
+    ``{"type": "message", "role": "assistant", ...}``). Non-message items such as
+    ``reasoning``, ``function_call`` and ``function_call_output`` do not, and must
+    NOT be handed to the prompt-management hooks (which expect chat messages).
+    """
+    return isinstance(item, dict) and "role" in item
+
+
+def _extract_message_items_for_prompt_management(
+    input: Union[str, ResponseInputParam],
+) -> List[AllMessageValues]:
+    """Extract only the role-bearing message items to feed the prompt-management hook.
+
+    The hooks (``get_chat_completion_prompt`` / ``async_get_chat_completion_prompt``)
+    operate on chat-style messages, so non-message items are filtered out here and
+    re-merged afterwards by ``_merge_prompt_management_messages_into_input``.
+    """
+    if isinstance(input, str):
+        return [{"role": "user", "content": input}]
+    return [
+        cast(AllMessageValues, item)
+        for item in input
+        if _is_responses_message_item(item)
+    ]
+
+
+def _index_of_identity(items: List[Any], target: Any) -> int:
+    """Return the index of ``target`` in ``items`` by object identity, or -1."""
+    for idx, item in enumerate(items):
+        if item is target:
+            return idx
+    return -1
+
+
+def _splice_messages_positional(
+    original_items: List[Any], merged_messages: List[AllMessageValues]
+) -> List[Any]:
+    """Substitute message items 1:1, in order, keeping non-message items in place.
+
+    Used when the hook returned the same number of messages it was given but did not
+    preserve object identity (e.g. the anthropic cache-control hook deep-copies the
+    messages before editing them). An order-preserving in-place transform maps cleanly
+    slot-for-slot, so each original message position takes the next hook message.
+    """
+    merged_iter = iter(merged_messages)
+    result: List[Any] = []
+    for item in original_items:
+        if _is_responses_message_item(item):
+            result.append(next(merged_iter))
+        else:
+            result.append(item)
+    return result
+
+
+def _splice_messages_by_identity(
+    original_items: List[Any], merged_messages: List[AllMessageValues]
+) -> Tuple[List[Any], int]:
+    """Re-attach each non-message item next to the original message it was adjacent to,
+    located in the hook output by object identity.
+
+    Each non-message item is anchored to the message that immediately follows it in the
+    original input (a ``reasoning`` item -> its assistant ``message``), or to the
+    message it immediately follows if it is trailing. It is then re-inserted next to
+    that same message object wherever the hook placed it. This is position-independent,
+    so it is correct no matter where the hook injected or edited messages -- front
+    (prompt-template prepend), middle, or ``insert(-1)`` (vector-store context).
+
+    A non-message item is only ever placed next to *its own* message, never a different
+    one, so a mis-paired request can never be produced. Returns
+    ``(reconstructed, dropped)`` where ``dropped`` counts non-message items whose anchor
+    message the hook removed/replaced (so they could not be safely placed).
+    """
+    # Group leading non-message items by the message that follows them, plus any
+    # trailing items that follow the last message.
+    before_groups: List[Tuple[Any, List[Any]]] = []
+    pending: List[Any] = []
+    last_message: Optional[Any] = None
+    for item in original_items:
+        if _is_responses_message_item(item):
+            if pending:
+                before_groups.append((item, pending))
+                pending = []
+            last_message = item
+        else:
+            pending.append(item)
+    trailing = pending
+
+    result: List[Any] = list(merged_messages)
+    dropped = 0
+
+    for anchor, items in before_groups:
+        idx = _index_of_identity(result, anchor)
+        if idx == -1:
+            # Anchor message was removed/replaced by the hook -> cannot place safely.
+            dropped += len(items)
+            continue
+        for offset, non_message_item in enumerate(items):
+            result.insert(idx + offset, non_message_item)
+
+    if trailing:
+        idx = _index_of_identity(result, last_message) if last_message is not None else -1
+        if idx == -1:
+            dropped += len(trailing)
+        else:
+            for offset, non_message_item in enumerate(trailing):
+                result.insert(idx + 1 + offset, non_message_item)
+
+    return result, dropped
+
+
+def _merge_prompt_management_messages_into_input(
+    original_input: Union[str, ResponseInputParam],
+    merged_messages: List[AllMessageValues],
+) -> Union[str, ResponseInputParam]:
+    """Recombine the prompt-management hook's message output with the non-message items
+    (``reasoning`` / ``function_call`` / ``function_call_output`` / ...) that were
+    filtered out before the hook ran, so they are not dropped.
+
+    Before this fix the hook output replaced ``input`` wholesale, silently discarding
+    every non-message item. For Azure's Responses API that breaks the required
+    ``reasoning`` -> ``message`` pairing and yields ``"Item 'msg_...' of type 'message'
+    was provided without its required 'reasoning' item: 'rs_...'"``. See
+    https://github.com/BerriAI/litellm/issues/32335.
+
+    Strategy (validated against the real hooks in litellm/integrations):
+      * identity match -- the hook kept the original message objects (pass-through,
+        vector-store ``insert(-1)`` context, prompt-template ``template + messages``
+        prepend): re-attach each non-message item next to its own message, wherever the
+        hook moved it. Position-independent and never mis-pairs.
+      * else equal count with no surviving identity -- the hook deep-copied but
+        preserved order and count (anthropic cache-control): substitute messages
+        slot-for-slot.
+      * else -- the hook replaced/removed messages (e.g. a prompt template that
+        replaces the incoming conversation): re-attach whatever is still identifiable,
+        drop the rest, and warn. Nothing is ever attached to the wrong message.
+    """
+    if isinstance(original_input, str):
+        # No non-message items to preserve.
+        return cast(ResponseInputParam, merged_messages)
+
+    original_items: List[Any] = list(original_input)
+    original_messages = [item for item in original_items if _is_responses_message_item(item)]
+    num_original_messages = len(original_messages)
+
+    # No non-message items to preserve -> hook output is authoritative (pure chat
+    # input; behavior unchanged).
+    if num_original_messages == len(original_items):
+        return cast(ResponseInputParam, merged_messages)
+
+    merged_identities = {id(m) for m in merged_messages}
+    num_surviving = sum(1 for m in original_messages if id(m) in merged_identities)
+
+    if num_surviving == num_original_messages:
+        # All original messages present by identity: safest, position-independent path.
+        reconstructed, dropped = _splice_messages_by_identity(original_items, merged_messages)
+    elif num_surviving == 0 and len(merged_messages) == num_original_messages:
+        # Same count, no identity preserved -> in-place deep-copy transform
+        # (e.g. anthropic cache-control). Map slot-for-slot.
+        return cast(
+            ResponseInputParam,
+            _splice_messages_positional(original_items, merged_messages),
+        )
+    else:
+        # The hook replaced/removed messages. Preserve whatever we can still identify.
+        reconstructed, dropped = _splice_messages_by_identity(original_items, merged_messages)
+
+    if dropped:
+        verbose_logger.warning(
+            "litellm.responses: prompt-management hook removed/replaced message items, so "
+            "%s non-message item(s) (reasoning/function_call/...) could not be re-attached "
+            "to their original message and were dropped. This can happen when a prompt "
+            "template replaces the incoming conversation.",
+            dropped,
+        )
+
+    return cast(ResponseInputParam, reconstructed)
+
+
 def _apply_prompt_management_to_responses_call(
     input: Union[str, ResponseInputParam],
     model: str,
@@ -619,18 +797,13 @@ def _apply_prompt_management_to_responses_call(
     prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
     original_model = model
 
-    if isinstance(input, str):
-        client_input: List[AllMessageValues] = [{"role": "user", "content": input}]
-    else:
-        client_input = [
-            item  # type: ignore[misc]
-            for item in input
-            if isinstance(item, dict) and "role" in item
-        ]
-
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
         prompt_id=prompt_id, non_default_params=kwargs
     ):
+        # Only role-bearing message items are handed to the hook; non-message items
+        # (reasoning/function_call/...) are re-merged afterwards so they are not
+        # dropped. See https://github.com/BerriAI/litellm/issues/32335.
+        client_input = _extract_message_items_for_prompt_management(input)
         (
             model,
             merged_input,
@@ -644,7 +817,7 @@ def _apply_prompt_management_to_responses_call(
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
         )
-        input = cast(Union[str, ResponseInputParam], merged_input)
+        input = _merge_prompt_management_messages_into_input(input, merged_input)
         local_vars["input"] = input
         local_vars["model"] = model
         if model != original_model:
