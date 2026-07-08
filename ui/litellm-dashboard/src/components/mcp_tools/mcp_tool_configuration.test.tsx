@@ -109,4 +109,78 @@ describe("MCPToolConfiguration", () => {
       expect(screen.getAllByText("Disabled")).toHaveLength(2);
     });
   });
+
+  it("shows a validation error for a display name containing a space", async () => {
+    const Wrapper = () => {
+      const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+
+      return (
+        <MCPToolConfiguration
+          accessToken="token"
+          formValues={{ url: "https://example.com/mcp", transport: "http", auth_type: "none" }}
+          allowedTools={[]}
+          existingAllowedTools={null}
+          onAllowedToolsChange={vi.fn()}
+          toolNameToDisplayName={toolNameToDisplayName}
+          toolNameToDescription={{}}
+          onToolNameToDisplayNameChange={setToolNameToDisplayName}
+          onToolNameToDescriptionChange={vi.fn()}
+          externalTools={tools}
+          externalCanFetch
+          isEditMode
+        />
+      );
+    };
+
+    render(<Wrapper />);
+
+    fireEvent.click(screen.getByText("Flat List"));
+    fireEvent.click(screen.getAllByTitle("Edit display name and description")[0]);
+
+    const input = screen.getByPlaceholderText("read_user");
+    fireEvent.change(input, { target: { value: "Browse Repo Docs" } });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Only letters, digits, underscores, and hyphens are allowed (no spaces)."),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("accepts a Bedrock-safe display name without showing a validation error", async () => {
+    const Wrapper = () => {
+      const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+
+      return (
+        <MCPToolConfiguration
+          accessToken="token"
+          formValues={{ url: "https://example.com/mcp", transport: "http", auth_type: "none" }}
+          allowedTools={[]}
+          existingAllowedTools={null}
+          onAllowedToolsChange={vi.fn()}
+          toolNameToDisplayName={toolNameToDisplayName}
+          toolNameToDescription={{}}
+          onToolNameToDisplayNameChange={setToolNameToDisplayName}
+          onToolNameToDescriptionChange={vi.fn()}
+          externalTools={tools}
+          externalCanFetch
+          isEditMode
+        />
+      );
+    };
+
+    render(<Wrapper />);
+
+    fireEvent.click(screen.getByText("Flat List"));
+    fireEvent.click(screen.getAllByTitle("Edit display name and description")[0]);
+
+    const input = screen.getByPlaceholderText("read_user");
+    fireEvent.change(input, { target: { value: "browse_repo_docs" } });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Only letters, digits, underscores, and hyphens are allowed (no spaces)."),
+      ).not.toBeInTheDocument();
+    });
+  });
 });
