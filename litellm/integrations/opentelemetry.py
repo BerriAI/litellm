@@ -28,6 +28,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     parse_semconv_opt_in,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
@@ -961,7 +962,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if dynamic_headers is not None:
             # Create spans using a temporary tracer with dynamic headers
             tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
-            verbose_logger.debug("[OTEL DEBUG] Using DYNAMIC tracer with headers: %s", dynamic_headers)
+            verbose_logger.debug(
+                "[OTEL DEBUG] Using DYNAMIC tracer with headers: %s", redact_string(str(dynamic_headers))
+            )
         else:
             # For langfuse_otel without dynamic headers, create a provider with env var credentials
             if hasattr(self, "callback_name") and self.callback_name == "langfuse_otel":
@@ -2814,14 +2817,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "OpenTelemetry Logger, initializing span processor \nexporter: %s\nendpoint: %s\nheaders: %s",
             otel_exporter,
             otel_endpoint,
-            otel_headers,
+            redact_string(str(otel_headers)),
         )
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(headers=dynamic_headers or otel_headers)
 
         if dynamic_headers:
             verbose_logger.debug(
                 "[OTEL DEBUG] Creating span processor with DYNAMIC headers: %s",
-                {k: v[:20] + "..." if len(str(v)) > 20 else v for k, v in _split_otel_headers.items()},
+                redact_string(str(_split_otel_headers)),
             )
         elif config_override:
             verbose_logger.debug(
@@ -2897,7 +2900,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "OpenTelemetry Logger, initializing log exporter \nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
             self.OTEL_EXPORTER,
             self.OTEL_ENDPOINT,
-            self.OTEL_HEADERS,
+            redact_string(str(self.OTEL_HEADERS)),
         )
 
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
@@ -2984,7 +2987,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "OpenTelemetry Logger, initializing metric reader\nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
             self.OTEL_EXPORTER,
             self.OTEL_ENDPOINT,
-            self.OTEL_HEADERS,
+            redact_string(str(self.OTEL_HEADERS)),
         )
 
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)

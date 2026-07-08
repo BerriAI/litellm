@@ -540,6 +540,42 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert tracer is logger.tracer
         assert logger._tracer_provider_cache == {}
 
+    def test_key_credentials_never_passed_to_debug_logger(self):
+        """The span-processor debug logs must receive a redacted header value, so the
+        key-scoped Langfuse secret never enters a log record regardless of downstream
+        handler configuration, while the exporter still gets the real header."""
+        import base64
+
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
+        from litellm.integrations import opentelemetry as otel_module
+
+        secret = base64.b64encode(b"key_public:key_secret").decode()
+
+        recorded_arguments = []
+
+        def _spy(message, *args, **kwargs):
+            recorded_arguments.append(" ".join(str(part) for part in (message, *args)))
+
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            with patch.object(otel_module.verbose_logger, "debug", side_effect=_spy):
+                logger.get_tracer_to_use_for_request(
+                    {"standard_callback_dynamic_params": self._dynamic_params()}
+                )
+
+        logged = "\n".join(recorded_arguments)
+        assert "initializing span processor" in logged
+        assert secret not in logged
+        assert f"Basic {secret}" not in logged
+
+        provider = next(iter(logger._tracer_provider_cache.values()))
+        exporter = provider._active_span_processor._span_processors[0].span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._headers == {"Authorization": f"Basic {secret}"}
+
 
 class TestLangfuseOtelResponsesAPI:
     """Test suite for Langfuse OTEL integration with ResponsesAPI"""
