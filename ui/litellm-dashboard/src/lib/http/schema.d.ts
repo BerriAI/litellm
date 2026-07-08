@@ -22081,6 +22081,7 @@ export interface components {
         };
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | components["schemas"]["ChatCompletionTextObject"][];
             /**
