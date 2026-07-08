@@ -10,7 +10,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Tuple,
     Type,
     Union,
     cast,
@@ -610,8 +609,8 @@ def _is_responses_message_item(item: Any) -> bool:
 
 
 def _extract_message_items_for_prompt_management(
-    input: Union[str, ResponseInputParam],
-) -> List[AllMessageValues]:
+    input: str | ResponseInputParam,
+) -> list[AllMessageValues]:
     """Extract only the role-bearing message items to feed the prompt-management hook.
 
     The hooks (``get_chat_completion_prompt`` / ``async_get_chat_completion_prompt``)
@@ -620,14 +619,10 @@ def _extract_message_items_for_prompt_management(
     """
     if isinstance(input, str):
         return [{"role": "user", "content": input}]
-    return [
-        cast(AllMessageValues, item)
-        for item in input
-        if _is_responses_message_item(item)
-    ]
+    return [cast(AllMessageValues, item) for item in input if _is_responses_message_item(item)]
 
 
-def _index_of_identity(items: List[Any], target: Any) -> int:
+def _index_of_identity(items: list[Any], target: Any) -> int:
     """Return the index of ``target`` in ``items`` by object identity, or -1."""
     for idx, item in enumerate(items):
         if item is target:
@@ -650,7 +645,7 @@ def _message_id_key(item: Any) -> Optional[str]:
     return None
 
 
-def _locate_anchor_message(items: List[Any], anchor: Any) -> int:
+def _locate_anchor_message(items: list[Any], anchor: Any) -> int:
     """Find ``anchor`` (a message) in ``items`` by object identity first, then by its
     message id. Returns the index or -1.
 
@@ -672,9 +667,7 @@ def _locate_anchor_message(items: List[Any], anchor: Any) -> int:
     return -1
 
 
-def _splice_messages_positional(
-    original_items: List[Any], merged_messages: List[AllMessageValues]
-) -> List[Any]:
+def _splice_messages_positional(original_items: list[Any], merged_messages: list[AllMessageValues]) -> list[Any]:
     """Substitute message items 1:1, in order, keeping non-message items in place.
 
     Used when the hook returned the same number of messages it was given but did not
@@ -683,7 +676,7 @@ def _splice_messages_positional(
     slot-for-slot, so each original message position takes the next hook message.
     """
     merged_iter = iter(merged_messages)
-    result: List[Any] = []
+    result: list[Any] = []
     for item in original_items:
         if _is_responses_message_item(item):
             result.append(next(merged_iter))
@@ -693,8 +686,8 @@ def _splice_messages_positional(
 
 
 def _splice_messages_by_anchor(
-    original_items: List[Any], merged_messages: List[AllMessageValues]
-) -> Tuple[List[Any], int]:
+    original_items: list[Any], merged_messages: list[AllMessageValues]
+) -> tuple[list[Any], int]:
     """Re-attach each non-message item next to the original message it was adjacent to,
     located in the hook output by object identity or message id (see
     ``_locate_anchor_message``).
@@ -713,8 +706,8 @@ def _splice_messages_by_anchor(
     """
     # Group leading non-message items by the message that follows them, plus any
     # trailing items that follow the last message.
-    before_groups: List[Tuple[Any, List[Any]]] = []
-    pending: List[Any] = []
+    before_groups: list[tuple[Any, list[Any]]] = []
+    pending: list[Any] = []
     last_message: Optional[Any] = None
     for item in original_items:
         if _is_responses_message_item(item):
@@ -726,7 +719,7 @@ def _splice_messages_by_anchor(
             pending.append(item)
     trailing = pending
 
-    result: List[Any] = list(merged_messages)
+    result: list[Any] = list(merged_messages)
     dropped = 0
 
     for anchor, items in before_groups:
@@ -750,9 +743,9 @@ def _splice_messages_by_anchor(
 
 
 def _merge_prompt_management_messages_into_input(
-    original_input: Union[str, ResponseInputParam],
-    merged_messages: List[AllMessageValues],
-) -> Union[str, ResponseInputParam]:
+    original_input: str | ResponseInputParam,
+    merged_messages: list[AllMessageValues],
+) -> str | ResponseInputParam:
     """Recombine the prompt-management hook's message output with the non-message items
     (``reasoning`` / ``function_call`` / ``function_call_output`` / ...) that were
     filtered out before the hook ran, so they are not dropped.
@@ -785,7 +778,7 @@ def _merge_prompt_management_messages_into_input(
         # No non-message items to preserve.
         return cast(ResponseInputParam, merged_messages)
 
-    original_items: List[Any] = list(original_input)
+    original_items: list[Any] = list(original_input)
     original_messages = [item for item in original_items if _is_responses_message_item(item)]
     num_original_messages = len(original_messages)
 
@@ -796,9 +789,7 @@ def _merge_prompt_management_messages_into_input(
 
     # A message counts as "locatable" if we can find it in the hook output by object
     # identity or by its message id.
-    num_locatable = sum(
-        1 for m in original_messages if _locate_anchor_message(merged_messages, m) != -1
-    )
+    num_locatable = sum(1 for m in original_messages if _locate_anchor_message(merged_messages, m) != -1)
 
     if num_locatable == num_original_messages:
         # Every anchor is locatable: safest, position-independent path (no drops).
