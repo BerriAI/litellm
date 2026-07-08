@@ -93,6 +93,27 @@ class SingulrGuardrail(CustomGuardrail):
 
         return SingulrGuardrailConfigModel
 
+    @staticmethod
+    def _request_data_with_fallback_messages(
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Callers like the /apply_guardrail test-playground endpoint only
+        populate inputs["texts"], not request_data["messages"]. Fall back to
+        wrapping those texts as user messages so the guardrail still has
+        something to scan instead of silently no-opping."""
+        if request_data.get("messages"):
+            return request_data
+
+        texts = inputs.get("texts") or []
+        if not texts:
+            return request_data
+
+        return {
+            **request_data,
+            "messages": [{"role": "user", "content": text} for text in texts],
+        }
+
     def _build_payload(
         self,
         request_data: dict[str, Any],
@@ -185,7 +206,10 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: str,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        payload = self._build_payload(cast(dict[str, Any], request_data), input_type)
+        payload = self._build_payload(
+            self._request_data_with_fallback_messages(inputs, cast(dict[str, Any], request_data)),
+            input_type,
+        )
         verbose_proxy_logger.debug("Singulr: payload=%s", payload)
         if not payload:
             return inputs
