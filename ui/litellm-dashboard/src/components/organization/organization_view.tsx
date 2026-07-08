@@ -1,6 +1,7 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -196,7 +197,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       render: (_: unknown, record: Member) => {
         const orgMember =
           record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <Typography.Text>${formatNumberWithCommas(orgMember?.spend ?? 0, 4)}</Typography.Text>;
+        return <MoneyCell value={orgMember?.spend} decimals={4} />;
       },
     },
     {

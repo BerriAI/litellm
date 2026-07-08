@@ -1,6 +1,7 @@
 import { BarChart } from "@tremor/react";
 import { Segmented } from "antd";
 import { useState } from "react";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { DataTable } from "../../../view_logs/table";
 
@@ -31,10 +32,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
       header: "Spend (USD)",
       accessorKey: "spend",
       meta: { numeric: true },
-      cell: (info: any) => {
-        const value = info.getValue();
-        return `$${formatNumberWithCommas(value, 2)}`;
-      },
+      cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
     },
     {
       header: "Successful",
