@@ -455,7 +455,13 @@ async def milvus_proxy_route(
     request_body = await get_request_body(request)
 
     # check collectionName
-    collection_name = cast(str | None, request_body.get("collectionName"))
+    _raw_collection_name = request_body.get("collectionName")
+    if _raw_collection_name is not None and not isinstance(_raw_collection_name, str):
+        raise HTTPException(
+            status_code=400,
+            detail=f"collectionName must be a string. Got {type(_raw_collection_name).__name__}",
+        )
+    collection_name: str | None = _raw_collection_name
     extra_headers = {}
     base_target_url: str | None = None
     if not collection_name:

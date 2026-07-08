@@ -10,8 +10,10 @@ from functools import partial
 from typing import (
     Any,
     AsyncGenerator,
+    AsyncIterator,
     Coroutine,
     Generator,
+    Iterator,
     List,
     cast,
 )
@@ -30,6 +32,16 @@ from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
+
+
+async def _as_async_generator(iterable: AsyncIterator[bytes]) -> AsyncGenerator[bytes, Any]:
+    async for chunk in iterable:
+        yield chunk
+
+
+def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, Any, Any]:
+    for chunk in iterable:
+        yield chunk
 
 
 class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
@@ -80,7 +92,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
                 self._initialized = True
                 try:
                     self._response.raise_for_status()
-                    self._iterator = cast(AsyncGenerator[bytes, Any], self._response.aiter_bytes())
+                    self._iterator = _as_async_generator(self._response.aiter_bytes())
                 except Exception:  # noqa: BLE001
                     try:
                         await self._response.aclose()
@@ -123,7 +135,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         if not self._initialized:
             await self
         try:
-            chunk = await self._iterator.__anext__()
+            chunk = await anext(self._iterator)
             self._raw_bytes.append(chunk)
             return chunk
         except Exception:  # noqa: BLE001
@@ -148,6 +160,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         self._start_flush()
         try:
             if self._initialized:
+                await self._iterator.aclose()
                 await self._response.aclose()
         except Exception:  # noqa: BLE001
             pass
@@ -165,7 +178,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         self.status_code = response.status_code
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
-        self._iterator: Generator[bytes, Any, Any] = cast(Generator[bytes, Any, Any], response.iter_bytes())
+        self._iterator: Generator[bytes, Any, Any] = _as_generator(response.iter_bytes())
         self._raw_bytes: List[bytes] = []
         self._flush_scheduled = False
 
@@ -383,7 +396,13 @@ def llm_passthrough_route(
 
     _is_async = bool(kwargs.get("allm_passthrough_route", False))
 
-    litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+    _raw_logging_obj = kwargs.get("litellm_logging_obj")
+    if not isinstance(_raw_logging_obj, LiteLLMLoggingObj):
+        raise TypeError(
+            "litellm_logging_obj is required and must be a LiteLLMLoggingObj instance; "
+            f"got {type(_raw_logging_obj).__name__}"
+        )
+    litellm_logging_obj: LiteLLMLoggingObj = _raw_logging_obj
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,

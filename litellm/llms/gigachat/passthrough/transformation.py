@@ -178,10 +178,9 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             )
             translated_chunk = gigachat_iterator.chunk_parser(chunk=message)
 
-            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(
-                cast(dict, translated_chunk)
-            ):
+            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(translated_chunk):
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
+                    # cast-ok: validated TypedDict
                     cast(GenericStreamingChunk, translated_chunk)
                 )
             elif isinstance(translated_chunk, ModelResponseStream):
