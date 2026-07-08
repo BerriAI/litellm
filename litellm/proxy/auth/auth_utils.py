@@ -975,6 +975,20 @@ def get_team_mcp_rpm_limit(
     return None
 
 
+def get_key_tag_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[dict[str, int]]:
+    """
+    Get the per-request-tag rpm limit configured on a given api key.
+
+    The returned dict is keyed by request tag, so each tag/group tracked on
+    the key gets its own independent RPM counter.
+    """
+    if user_api_key_dict.metadata:
+        return user_api_key_dict.metadata.get("tag_rpm_limit")
+    return None
+
+
 def get_project_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
