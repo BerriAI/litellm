@@ -5079,6 +5079,37 @@ def test_success_handler_computes_cost_for_dict_response():
         assert logging_obj.model_call_details["response_cost"] == expected_cost
 
 
+def test_transform_usage_objects_non_streaming_preserves_prompt_and_completion_tokens():
+    response = ResponsesAPIResponse(
+        id="resp-test-001",
+        created_at=1700000000,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+    )
+
+    logging_obj = LitellmLogging(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="responses",
+        start_time=time.time(),
+        litellm_call_id="test-usage-preservation",
+        function_id="test-fn-usage",
+    )
+
+    result = logging_obj._transform_usage_objects(response)
+
+    assert isinstance(result.usage, dict)
+    assert result.usage.get("prompt_tokens") == 100
+    assert result.usage.get("completion_tokens") == 50
+    assert result.usage.get("total_tokens") == 150
+
+    dumped_usage = result.model_dump().get("usage", {})
+    assert dumped_usage.get("prompt_tokens") == 100
+    assert dumped_usage.get("completion_tokens") == 50
+    assert dumped_usage.get("total_tokens") == 150
+
+
 def test_success_handler_preserves_precomputed_cost_for_dict_response():
     """Precomputed response_cost on model_call_details must not be overwritten."""
     logging_obj = _make_dict_logging_obj()
