@@ -70,6 +70,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     to_server_spec,
     to_subject,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    InvalidatableOAuthTokenStore,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
@@ -689,9 +692,16 @@ class MCPServerManager:
         """
         return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
 
-    def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
+    def __init__(
+        self,
+        cred_provider: Optional[UpstreamCredentialProvider] = None,
+        per_user_oauth_token_store: Optional[InvalidatableOAuthTokenStore] = None,
+    ):
+        self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
+            self.get_mcp_server_by_id
+        )
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
+            oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
@@ -715,8 +725,10 @@ class MCPServerManager:
         # Per-server outbound tool-call concurrency limiters, lazily created from
         # each server's max_concurrent_requests. Keyed by server_id so the cap
         # survives the registry atomic-swap on config reload; a missing key means
-        # the server has no configured limit.
-        self._server_call_semaphores: dict[str, asyncio.Semaphore] = {}
+        # the server has no configured limit. The limit is cached alongside the
+        # semaphore so an edited limit rebuilds it instead of keeping the old cap
+        # until restart.
+        self._server_call_semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
         self.tool_name_to_mcp_server_name_mapping: dict[str, str] = {}
         """
         {
@@ -3594,10 +3606,11 @@ class MCPServerManager:
         limit = mcp_server.max_concurrent_requests
         if limit is None or limit <= 0:
             return None
-        semaphore = self._server_call_semaphores.get(mcp_server.server_id)
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(limit)
-            self._server_call_semaphores[mcp_server.server_id] = semaphore
+        cached = self._server_call_semaphores.get(mcp_server.server_id)
+        if cached is not None and cached[0] == limit:
+            return cached[1]
+        semaphore = asyncio.Semaphore(limit)
+        self._server_call_semaphores[mcp_server.server_id] = (limit, semaphore)
         return semaphore
 
     @asynccontextmanager
@@ -3918,6 +3931,19 @@ class MCPServerManager:
         if spec is None:
             return False
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
+
+    async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
+        """Drop the v2 chain's cached token for ``(user_id, server_id)`` after the credential row
+        changes (re-auth, revoke), so the next resolve reads the new row instead of serving the
+        replaced token until its cache TTL. Best-effort: a cache-drop failure is logged, never
+        raised, because the DB write already succeeded and the TTL remains the backstop.
+        """
+        try:
+            await self._per_user_oauth_token_store.invalidate(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,

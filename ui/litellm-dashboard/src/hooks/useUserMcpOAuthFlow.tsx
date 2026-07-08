@@ -10,7 +10,12 @@
  */
 
 import { storeMCPOAuthUserCredential } from "@/components/networking";
-import { McpOAuthStorageKeys, McpOAuthPkceStatus, useMcpOAuthPkceFlow } from "./useMcpOAuthPkceFlow";
+import {
+  McpOAuthStorageKeys,
+  McpOAuthPkceStatus,
+  UseMcpOAuthPkceFlowConfig,
+  useMcpOAuthPkceFlow,
+} from "./useMcpOAuthPkceFlow";
 
 export type UserMcpOAuthStatus = McpOAuthPkceStatus;
 
@@ -46,8 +51,8 @@ export const useUserMcpOAuthFlow = ({
   scopes,
   clientId,
   onSuccess,
-}: UseUserMcpOAuthFlowOptions): UseUserMcpOAuthFlowResult =>
-  useMcpOAuthPkceFlow({
+}: UseUserMcpOAuthFlowOptions): UseUserMcpOAuthFlowResult => {
+  const config: UseMcpOAuthPkceFlowConfig = {
     accessToken,
     serverId,
     serverAlias,
@@ -69,4 +74,6 @@ export const useUserMcpOAuthFlow = ({
         scopes: flowState.scopes,
       }),
     onSuccess,
-  });
+  };
+  return useMcpOAuthPkceFlow(config);
+};

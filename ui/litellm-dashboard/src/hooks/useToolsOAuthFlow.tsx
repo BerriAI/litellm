@@ -15,7 +15,12 @@
  */
 
 import { setToken } from "@/utils/mcpTokenStore";
-import { McpOAuthStorageKeys, McpOAuthPkceStatus, useMcpOAuthPkceFlow } from "./useMcpOAuthPkceFlow";
+import {
+  McpOAuthStorageKeys,
+  McpOAuthPkceStatus,
+  UseMcpOAuthPkceFlowConfig,
+  useMcpOAuthPkceFlow,
+} from "./useMcpOAuthPkceFlow";
 
 export type ToolsOAuthStatus = McpOAuthPkceStatus;
 
@@ -49,8 +54,8 @@ export const useToolsOAuthFlow = ({
   scopes,
   clientId,
   onSuccess,
-}: UseToolsOAuthFlowOptions): UseToolsOAuthFlowResult =>
-  useMcpOAuthPkceFlow({
+}: UseToolsOAuthFlowOptions): UseToolsOAuthFlowResult => {
+  const config: UseMcpOAuthPkceFlowConfig = {
     accessToken,
     serverId,
     serverAlias,
@@ -72,4 +77,6 @@ export const useToolsOAuthFlow = ({
         userId,
       ),
     onSuccess,
-  });
+  };
+  return useMcpOAuthPkceFlow(config);
+};

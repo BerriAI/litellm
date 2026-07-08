@@ -448,6 +448,12 @@ async def _store_per_user_token_server_side(
         )
         return  # Don't warm Redis if DB write failed
 
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+
+    await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server.server_id)
+
     # Warm the Redis cache so the first subsequent MCP call is a cache hit
     ttl = _compute_per_user_token_ttl(server, expires_in)
     await mcp_per_user_token_cache.set(
@@ -575,8 +581,12 @@ async def exchange_token_with_server(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
+    # The id and secret must come from the same source. When the server-side client_id wins,
+    # falling back to the caller's secret pairs the persisted client with a foreign secret; the
+    # register short-circuit hands clients a placeholder secret ("dummy"), so a re-auth against a
+    # persisted public PKCE client (no stored secret) would send that placeholder and the IdP 401s.
     resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
-    resolved_client_secret = mcp_server.client_secret if mcp_server.client_secret else client_secret
+    resolved_client_secret = mcp_server.client_secret if mcp_server.client_id else client_secret
     try:
         client_auth = build_token_endpoint_client_auth(
             auth_method=mcp_server.token_endpoint_auth_method,

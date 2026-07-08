@@ -48,7 +48,7 @@ export interface McpOAuthStorageKeys {
   returnUrl: string;
 }
 
-interface UseMcpOAuthPkceFlowConfig {
+export interface UseMcpOAuthPkceFlowConfig {
   accessToken: string;
   serverId: string;
   serverAlias?: string | null;
