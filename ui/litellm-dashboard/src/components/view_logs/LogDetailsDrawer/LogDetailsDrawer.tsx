@@ -387,18 +387,17 @@ export function LogDetailsDrawer({
                 </div>
               )}
               {isSessionMode && (
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">Sort by</span>
-                  <Segmented
-                    size="small"
-                    options={[
-                      { label: "Duration", value: "duration" },
-                      { label: "Start time", value: "start_time" },
-                    ]}
-                    value={sessionSortMode}
-                    onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
-                  />
-                </div>
+                <Segmented
+                  block
+                  size="small"
+                  className="mt-1.5 [&_.ant-segmented-item-label]:text-[11px]"
+                  options={[
+                    { label: "Duration", value: "duration" },
+                    { label: "Start time", value: "start_time" },
+                  ]}
+                  value={sessionSortMode}
+                  onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                />
               )}
             </div>
 
