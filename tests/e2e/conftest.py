@@ -33,6 +33,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",
     )
+    config.addinivalue_line(
+        "markers",
+        "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
+    )
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:

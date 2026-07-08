@@ -1556,6 +1556,10 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
     mock_mcp_server.oauth2_flow = None
+    mock_mcp_server.token_exchange_endpoint = None
+    mock_mcp_server.audience = None
+    mock_mcp_server.subject_token_type = None
+    mock_mcp_server.token_exchange_profile = None
     # Additional fields used by build_mcp_server_from_table
     mock_mcp_server.extra_headers = None
     mock_mcp_server.allow_all_keys = False
@@ -1615,6 +1619,10 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
     mock_mcp_server.oauth2_flow = None
+    mock_mcp_server.token_exchange_endpoint = None
+    mock_mcp_server.audience = None
+    mock_mcp_server.subject_token_type = None
+    mock_mcp_server.token_exchange_profile = None
     # Additional fields used by build_mcp_server_from_table
     mock_mcp_server.extra_headers = None
     mock_mcp_server.allow_all_keys = False
@@ -1674,6 +1682,10 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
     mock_mcp_server.oauth2_flow = None
+    mock_mcp_server.token_exchange_endpoint = None
+    mock_mcp_server.audience = None
+    mock_mcp_server.subject_token_type = None
+    mock_mcp_server.token_exchange_profile = None
     # Additional fields used by build_mcp_server_from_table - set explicitly
     # to avoid MagicMock objects being passed to Pydantic MCPServer constructor
     mock_mcp_server.extra_headers = None
