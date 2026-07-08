@@ -409,6 +409,33 @@ def test_hashicorp_custom_mount_and_prefix(hashicorp_secret_manager):
         hashicorp_secret_manager.vault_namespace = original_namespace
 
 
+@pytest.mark.parametrize(
+    "malicious_secret_name",
+    [
+        "../../../other-app/creds",
+        "litellm/../../secret",
+        "foo\nbar",
+        "foo bar",
+        "foo bar",
+        "foo\x85bar",
+    ],
+)
+def test_hashicorp_get_url_rejects_path_traversal(monkeypatch, malicious_secret_name):
+    """
+    Regression test: get_url must reject an invalid secret_name instead of
+    building a URL from it.
+
+    Uses monkeypatch + a directly-constructed manager (not the shared
+    hashicorp_secret_manager fixture) so this runs in CI without real Vault
+    credentials configured; get_url performs no I/O.
+    """
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-for-get-url-only")
+    manager = HashicorpSecretManager()
+
+    with pytest.raises(ValueError):
+        manager.get_url(malicious_secret_name)
+
+
 mock_old_vault_response = {
     "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
     "lease_id": "",
