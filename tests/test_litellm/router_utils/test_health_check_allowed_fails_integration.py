@@ -214,6 +214,36 @@ class TestHealthCheckCooldownIntegration:
         )
         assert result is True
 
+    def test_allowed_fails_policy_zero_cooldowns_on_first_failure(self):
+        """Regression for #32425.
+
+        AllowedFails=0 means cooldown on the very first failure. The value 0 was
+        previously discarded by an `or` fallback (`policy_value or self.allowed_fails`),
+        so the generic allowed_fails default was used instead and the first failure
+        did not cool the deployment down.
+        """
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+            # A permissive generic threshold that must NOT be used when the policy says 0.
+            allowed_fails=100,
+        )
+
+        rate_limit_exc = litellm.RateLimitError(
+            message="rate limited", model="gpt-4", llm_provider="openai"
+        )
+
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=rate_limit_exc,
+        )
+        assert result is True
+
     def test_health_check_failure_falls_back_to_allowed_fails(self):
         """When policy has no matching field, fall back to generic allowed_fails."""
         from litellm.router_utils.cooldown_handlers import (
