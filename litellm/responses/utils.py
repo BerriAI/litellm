@@ -204,6 +204,17 @@ class ResponsesAPIRequestUtils:
         if response_id is None:
             return responses_api_response
 
+        # Guard against double-encoding. When aresponses_api_with_mcp makes
+        # inner aresponses() calls (each wrapped by @client), the returned
+        # response ID is already a LiteLLM-managed base64 ID. The outer
+        # aresponses() wrapper would otherwise re-encode it a second time,
+        # producing a ~730-character ID that cannot be decoded in one pass on
+        # turn 2, causing a 422 from upstream providers (OpenAI enforces a
+        # 64-character maximum for previous_response_id).
+        _already_decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        if _already_decoded.get("custom_llm_provider") is not None:
+            return responses_api_response
+
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,

@@ -142,6 +142,44 @@ class TestResponsesAPIRequestUtils:
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
 
+    def test_update_responses_api_response_id_with_model_id_is_idempotent(self):
+        """
+        Calling _update_responses_api_response_id_with_model_id on an already-encoded
+        LiteLLM response ID must be a no-op (return the ID unchanged).
+
+        This guards the double-encoding bug (issue #32031): when
+        aresponses_api_with_mcp makes inner aresponses() calls, each @client
+        wrapper encodes the response ID once. The outer aresponses() wrapper
+        must NOT re-encode an ID that is already LiteLLM-managed.
+        """
+        # Build a response object with a plain upstream ID and encode it once.
+        first_pass = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            responses_api_response={"id": "resp_abc123"},
+            custom_llm_provider="openai",
+            litellm_metadata={"model_info": {"id": "gpt-4o"}},
+        )
+        once_encoded_id = first_pass["id"]
+
+        # Simulate the outer @client wrapper trying to encode the same response again.
+        second_pass = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            responses_api_response={"id": once_encoded_id},
+            custom_llm_provider="openai",
+            litellm_metadata={"model_info": {"id": "gpt-4o"}},
+        )
+        twice_encoded_id = second_pass["id"]
+
+        # The ID must not have grown a second encoding layer.
+        assert (
+            twice_encoded_id == once_encoded_id
+        ), "Applying _update_responses_api_response_id_with_model_id to an already-managed ID must be a no-op"
+
+        # Decoding must still yield the original upstream ID in one pass.
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            twice_encoded_id
+        )
+        assert decoded.get("response_id") == "resp_abc123"
+        assert decoded.get("custom_llm_provider") == "openai"
+
     def test_build_decode_container_id_omits_none_model_id(self):
         """model_id=None must not round-trip as the truthy string 'None'."""
         encoded = ResponsesAPIRequestUtils._build_container_id(
