@@ -5,6 +5,7 @@ Integration test for CyberArk Conjur Secret Manager.
 import os
 import sys
 import pytest
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,6 +41,82 @@ def create_mock_response(status_code: int, text: str = ""):
         mock_response.raise_for_status.side_effect = error
 
     return mock_response
+
+
+@pytest.mark.asyncio
+async def test_cyberark_write_secret_rejects_yaml_injection():
+    """
+    Regression test: async_write_secret must reject a secret_name that is not
+    safe to embed in the Conjur policy body, before any HTTP call is made.
+    """
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        malicious_secret_name = "foo\n- !grant\n  role: !!admin\n  member: attacker"
+
+        mock_sync_client = MagicMock()
+        mock_async_client = AsyncMock()
+
+        with (
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                return_value=mock_sync_client,
+            ),
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            cyberark_manager = CyberArkSecretManager()
+
+            response = await cyberark_manager.async_write_secret(
+                secret_name=malicious_secret_name,
+                secret_value="sk-1234",
+            )
+
+            assert response["status"] == "error"
+            assert "Invalid secret_name" in response["message"]
+            # The malicious policy YAML must never reach the wire.
+            mock_sync_client.client.post.assert_not_called()
+            mock_async_client.post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "secret_name",
+    [
+        "foo: bar",
+        "foo # bar",
+        "plain-alias",
+        "team/user@example.com",
+    ],
+)
+def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(secret_name):
+    """
+    Regression test: _ensure_variable_exists must escape secret_name (not just
+    denylist-check it) so the policy body always parses back to exactly one
+    '!variable' scalar node holding the untouched secret_name.
+    """
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        captured = {}
+
+        def _capture_post(url, headers=None, content=None):
+            captured["content"] = content
+            return create_mock_response(status_code=201, text="")
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.side_effect = _capture_post
+
+        with patch(
+            "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+            return_value=mock_sync_client,
+        ):
+            cyberark_manager = CyberArkSecretManager()
+            cyberark_manager._ensure_variable_exists(secret_name)
+
+        policy_yaml = captured["content"]
+        parsed = yaml.compose(policy_yaml)
+        assert len(parsed.value) == 1
+        node = parsed.value[0]
+        assert node.tag == "!variable"
+        assert node.value == secret_name
 
 
 @pytest.mark.asyncio
