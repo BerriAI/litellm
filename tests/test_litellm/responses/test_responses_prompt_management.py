@@ -14,6 +14,7 @@ Covers:
 """
 
 import asyncio
+import copy
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -55,6 +56,32 @@ FUNCTION_CALL_OUTPUT = {
     "call_id": "call_1",
     "output": "sunny",
 }
+
+# Pristine snapshot of the shared items, taken once at import.
+_CANONICAL_SHARED_ITEMS = {
+    "REASONING_ITEM": copy.deepcopy(REASONING_ITEM),
+    "ASSISTANT_MESSAGE": copy.deepcopy(ASSISTANT_MESSAGE),
+    "USER_MESSAGE": copy.deepcopy(USER_MESSAGE),
+    "FUNCTION_CALL": copy.deepcopy(FUNCTION_CALL),
+    "FUNCTION_CALL_OUTPUT": copy.deepcopy(FUNCTION_CALL_OUTPUT),
+}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_shared_items():
+    """Give every test its own fresh copies of the shared message/non-message items.
+
+    The merge logic is identity/id based, so tests intentionally reuse the *same*
+    objects within a test to simulate identity-preserving hooks. Rebinding fresh
+    deep-copies of the module-level items before each test preserves that within-test
+    identity while isolating tests from one another, so a future test that mutates a
+    shared item can never leak state into another test.
+    """
+    module_globals = globals()
+    for name, template in _CANONICAL_SHARED_ITEMS.items():
+        module_globals[name] = copy.deepcopy(template)
+    yield
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -552,13 +579,12 @@ class TestMergePromptManagementMessagesIntoInput:
         # reasoning immediately precedes its OWN assistant message, not the context msg
         assert result.index(REASONING_ITEM) == result.index(ASSISTANT_MESSAGE) - 1
 
-    def test_cache_control_deepcopy_same_count_maps_positionally(self):
-        """Mirrors AnthropicCacheControlHook: messages are deep-copied (identity lost)
-        but count and order are preserved. Reasoning must still precede its message."""
-        import copy
-
+    def test_cache_control_deepcopy_reattaches_via_message_id(self):
+        """Mirrors AnthropicCacheControlHook: messages are deep-copied (object identity
+        lost) but their message ids are preserved. The reasoning item is re-attached to
+        its message via the id fallback, not object identity."""
         original = [REASONING_ITEM, ASSISTANT_MESSAGE, USER_MESSAGE]
-        merged = copy.deepcopy([ASSISTANT_MESSAGE, USER_MESSAGE])  # different identities
+        merged = copy.deepcopy([ASSISTANT_MESSAGE, USER_MESSAGE])  # new objects, same ids
 
         with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
             result = _merge_prompt_management_messages_into_input(original, merged)
@@ -566,7 +592,51 @@ class TestMergePromptManagementMessagesIntoInput:
         # value-equal to the paired ordering; reasoning stays in front of its message
         assert result == [REASONING_ITEM, ASSISTANT_MESSAGE, USER_MESSAGE]
         assert result[0] is REASONING_ITEM
-        assert result[1] is merged[0]  # the deep-copied assistant message was used
+        assert result[1] is merged[0]  # the deep-copied assistant message (matched by id)
+        mock_warn.assert_not_called()
+
+    def test_deepcopy_without_ids_maps_positionally(self):
+        """When messages carry NO ids and are deep-copied (neither identity nor id can
+        locate them) but the count is preserved, fall back to positional slot-for-slot
+        mapping so the reasoning item still precedes its message."""
+        reasoning = {"type": "reasoning", "id": "rs_x", "summary": [], "encrypted_content": "e"}
+        assistant_no_id = {"role": "assistant", "content": "hi"}  # no id
+        user_no_id = {"role": "user", "content": "next"}  # no id
+        original = [reasoning, assistant_no_id, user_no_id]
+        merged = copy.deepcopy([assistant_no_id, user_no_id])  # no ids, no identity
+
+        with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
+            result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result[0] is reasoning
+        assert result == [reasoning, merged[0], merged[1]]
+        mock_warn.assert_not_called()
+
+    def test_partial_replacement_reattaches_surviving_items_via_id(self):
+        """The partial-identity + equal-count case: the hook keeps some messages by
+        identity and deep-copies another (new object, SAME id), preserving count. The id
+        fallback re-attaches BOTH reasoning items correctly -- under identity-only
+        matching the second one would have been dropped."""
+        a1 = {
+            "type": "message", "id": "msg_1", "role": "assistant",
+            "content": [{"type": "output_text", "text": "one", "annotations": []}],
+        }
+        a2 = {
+            "type": "message", "id": "msg_2", "role": "assistant",
+            "content": [{"type": "output_text", "text": "two", "annotations": []}],
+        }
+        r1 = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "e1"}
+        r2 = {"type": "reasoning", "id": "rs_2", "summary": [], "encrypted_content": "e2"}
+        u = {"role": "user", "content": "go"}
+        original = [r1, a1, r2, a2, u]
+        # a1 kept by identity, a2 deep-copied (same id), u kept by identity; count preserved
+        merged = [a1, copy.deepcopy(a2), u]
+
+        with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
+            result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result == [r1, a1, r2, merged[1], u]
+        assert r2 in result  # preserved via id fallback (would be dropped under identity-only)
         mock_warn.assert_not_called()
 
     def test_full_template_replacement_drops_non_message_items_with_warning(self):

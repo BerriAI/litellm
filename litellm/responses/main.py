@@ -635,6 +635,43 @@ def _index_of_identity(items: List[Any], target: Any) -> int:
     return -1
 
 
+def _message_id_key(item: Any) -> Optional[str]:
+    """Return a message item's stable Responses API id (e.g. ``msg_...``), if any.
+
+    Used as a fallback anchor key when a hook deep-copies messages into new objects
+    but preserves their id (e.g. the anthropic cache-control hook). Only message items
+    are considered -- non-message items (reasoning/function_call) also carry ids, but
+    they are never used as anchors.
+    """
+    if _is_responses_message_item(item):
+        message_id = item.get("id")
+        if isinstance(message_id, str) and message_id:
+            return message_id
+    return None
+
+
+def _locate_anchor_message(items: List[Any], anchor: Any) -> int:
+    """Find ``anchor`` (a message) in ``items`` by object identity first, then by its
+    message id. Returns the index or -1.
+
+    Object identity handles the common hooks that keep the original message objects
+    (pass-through, vector-store, prompt-template prepend). The id fallback additionally
+    handles hooks that deep-copy messages into new objects while preserving their id
+    (anthropic cache-control), so a non-message item can still be re-attached to the
+    correct message. Only message items are matched by id so non-message items -- which
+    also carry ids -- are never matched.
+    """
+    idx = _index_of_identity(items, anchor)
+    if idx != -1:
+        return idx
+    anchor_id = _message_id_key(anchor)
+    if anchor_id is not None:
+        for i, item in enumerate(items):
+            if _is_responses_message_item(item) and item.get("id") == anchor_id:
+                return i
+    return -1
+
+
 def _splice_messages_positional(
     original_items: List[Any], merged_messages: List[AllMessageValues]
 ) -> List[Any]:
@@ -655,17 +692,18 @@ def _splice_messages_positional(
     return result
 
 
-def _splice_messages_by_identity(
+def _splice_messages_by_anchor(
     original_items: List[Any], merged_messages: List[AllMessageValues]
 ) -> Tuple[List[Any], int]:
     """Re-attach each non-message item next to the original message it was adjacent to,
-    located in the hook output by object identity.
+    located in the hook output by object identity or message id (see
+    ``_locate_anchor_message``).
 
     Each non-message item is anchored to the message that immediately follows it in the
     original input (a ``reasoning`` item -> its assistant ``message``), or to the
     message it immediately follows if it is trailing. It is then re-inserted next to
-    that same message object wherever the hook placed it. This is position-independent,
-    so it is correct no matter where the hook injected or edited messages -- front
+    that same message wherever the hook placed it. This is position-independent, so it
+    is correct no matter where the hook injected or edited messages -- front
     (prompt-template prepend), middle, or ``insert(-1)`` (vector-store context).
 
     A non-message item is only ever placed next to *its own* message, never a different
@@ -692,7 +730,7 @@ def _splice_messages_by_identity(
     dropped = 0
 
     for anchor, items in before_groups:
-        idx = _index_of_identity(result, anchor)
+        idx = _locate_anchor_message(result, anchor)
         if idx == -1:
             # Anchor message was removed/replaced by the hook -> cannot place safely.
             dropped += len(items)
@@ -701,7 +739,7 @@ def _splice_messages_by_identity(
             result.insert(idx + offset, non_message_item)
 
     if trailing:
-        idx = _index_of_identity(result, last_message) if last_message is not None else -1
+        idx = _locate_anchor_message(result, last_message) if last_message is not None else -1
         if idx == -1:
             dropped += len(trailing)
         else:
@@ -725,17 +763,20 @@ def _merge_prompt_management_messages_into_input(
     was provided without its required 'reasoning' item: 'rs_...'"``. See
     https://github.com/BerriAI/litellm/issues/32335.
 
-    Strategy (validated against the real hooks in litellm/integrations):
-      * identity match -- the hook kept the original message objects (pass-through,
-        vector-store ``insert(-1)`` context, prompt-template ``template + messages``
-        prepend): re-attach each non-message item next to its own message, wherever the
-        hook moved it. Position-independent and never mis-pairs.
-      * else equal count with no surviving identity -- the hook deep-copied but
-        preserved order and count (anthropic cache-control): substitute messages
-        slot-for-slot.
-      * else -- the hook replaced/removed messages (e.g. a prompt template that
-        replaces the incoming conversation): re-attach whatever is still identifiable,
-        drop the rest, and warn. Nothing is ever attached to the wrong message.
+    Strategy (validated against the real hooks in litellm/integrations). A message is
+    "locatable" in the hook output if it is found by object identity or by its message
+    id (see ``_locate_anchor_message``):
+      * all messages locatable -- the hook kept the original message objects
+        (pass-through, vector-store ``insert(-1)`` context, prompt-template
+        ``template + messages`` prepend) or deep-copied them while preserving their ids
+        (anthropic cache-control): re-attach each non-message item next to its own
+        message, wherever the hook moved it. Position-independent and never mis-pairs.
+      * no message locatable but equal count -- the hook deep-copied messages that had
+        no ids, preserving order and count: substitute messages slot-for-slot.
+      * otherwise -- the hook replaced/removed some messages (e.g. a prompt template
+        that replaces the incoming conversation): re-attach every non-message item whose
+        anchor is still locatable (by identity or id), drop the rest, and warn. Nothing
+        is ever attached to the wrong message.
     """
     if isinstance(original_input, str):
         # No non-message items to preserve.
@@ -750,22 +791,26 @@ def _merge_prompt_management_messages_into_input(
     if num_original_messages == len(original_items):
         return cast(ResponseInputParam, merged_messages)
 
-    merged_identities = {id(m) for m in merged_messages}
-    num_surviving = sum(1 for m in original_messages if id(m) in merged_identities)
+    # A message counts as "locatable" if we can find it in the hook output by object
+    # identity or by its message id.
+    num_locatable = sum(
+        1 for m in original_messages if _locate_anchor_message(merged_messages, m) != -1
+    )
 
-    if num_surviving == num_original_messages:
-        # All original messages present by identity: safest, position-independent path.
-        reconstructed, dropped = _splice_messages_by_identity(original_items, merged_messages)
-    elif num_surviving == 0 and len(merged_messages) == num_original_messages:
-        # Same count, no identity preserved -> in-place deep-copy transform
-        # (e.g. anthropic cache-control). Map slot-for-slot.
+    if num_locatable == num_original_messages:
+        # Every anchor is locatable: safest, position-independent path (no drops).
+        reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages)
+    elif num_locatable == 0 and len(merged_messages) == num_original_messages:
+        # No anchor locatable but the count is preserved -> an in-place deep-copy
+        # transform on messages that carry no ids. Map slot-for-slot.
         return cast(
             ResponseInputParam,
             _splice_messages_positional(original_items, merged_messages),
         )
     else:
-        # The hook replaced/removed messages. Preserve whatever we can still identify.
-        reconstructed, dropped = _splice_messages_by_identity(original_items, merged_messages)
+        # The hook replaced/removed some messages. Preserve every item whose anchor is
+        # still locatable (by identity or id); drop and warn for the rest.
+        reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages)
 
     if dropped:
         verbose_logger.warning(
