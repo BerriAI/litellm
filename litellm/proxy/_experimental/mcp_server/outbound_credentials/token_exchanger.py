@@ -27,6 +27,9 @@ from typing import Literal, Protocol
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     InProcessRefreshCoordinator,
@@ -38,9 +41,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
     Result,
-)
-from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
-    build_token_endpoint_client_auth,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
