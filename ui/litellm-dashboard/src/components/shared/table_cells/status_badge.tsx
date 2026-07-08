@@ -9,12 +9,12 @@ import { CellTooltip } from "./cell_tooltip";
 
 export type StatusTone = "success" | "error" | "warning" | "neutral" | "info";
 
-const DOT_CLASS: Record<StatusTone, string> = {
-  success: "bg-emerald-500",
-  error: "bg-red-500",
-  warning: "bg-amber-500",
-  neutral: "bg-gray-400",
-  info: "bg-blue-500",
+const TONE_CLASS: Record<StatusTone, string> = {
+  success: "border-green-200 bg-green-50 text-green-600",
+  error: "border-red-200 bg-red-50 text-red-600",
+  warning: "border-amber-200 bg-amber-50 text-amber-600",
+  neutral: "border-gray-200 bg-gray-50 text-gray-600",
+  info: "border-blue-200 bg-blue-50 text-blue-600",
 };
 
 interface StatusBadgeProps {
@@ -29,9 +29,8 @@ export function StatusBadge({ tone, label, tooltip, dataTestId }: StatusBadgePro
     <Badge
       variant="outline"
       data-testid={dataTestId}
-      className="gap-1.5 whitespace-nowrap font-normal text-muted-foreground"
+      className={cn("rounded whitespace-nowrap font-normal", TONE_CLASS[tone])}
     >
-      <span aria-hidden="true" className={cn("size-1.5 rounded-full", DOT_CLASS[tone])} />
       {label}
     </Badge>
   );

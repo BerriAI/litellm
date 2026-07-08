@@ -4,29 +4,28 @@ import { describe, expect, it } from "vitest";
 
 import { StatusBadge, type StatusTone } from "./status_badge";
 
-const dotOf = (label: string) => screen.getByText(label).querySelector("[aria-hidden]");
-
 describe("StatusBadge", () => {
-  const dotClasses: Record<StatusTone, string> = {
-    success: "bg-emerald-500",
-    error: "bg-red-500",
-    warning: "bg-amber-500",
-    neutral: "bg-gray-400",
-    info: "bg-blue-500",
+  const toneClasses: Record<StatusTone, string[]> = {
+    success: ["border-green-200", "bg-green-50", "text-green-600"],
+    error: ["border-red-200", "bg-red-50", "text-red-600"],
+    warning: ["border-amber-200", "bg-amber-50", "text-amber-600"],
+    neutral: ["border-gray-200", "bg-gray-50", "text-gray-600"],
+    info: ["border-blue-200", "bg-blue-50", "text-blue-600"],
   };
 
-  (Object.entries(dotClasses) as [StatusTone, string][]).forEach(([tone, dotClass]) => {
-    it(`renders a ${dotClass} dot for the ${tone} tone`, () => {
+  (Object.entries(toneClasses) as [StatusTone, string[]][]).forEach(([tone, classes]) => {
+    it(`renders a tinted pill (${classes.join(" ")}) for the ${tone} tone`, () => {
       render(<StatusBadge tone={tone} label={tone} />);
-      expect(dotOf(tone)?.className).toContain(dotClass);
+      const badge = screen.getByText(tone);
+      classes.forEach((cls) => expect(badge.className).toContain(cls));
     });
   });
 
-  it("renders the label text inside an outline badge", () => {
+  it("renders the label text inside an outline badge with no status dot", () => {
     render(<StatusBadge tone="success" label="Active" />);
     const badge = screen.getByText("Active");
-    expect(badge).toBeInTheDocument();
     expect(badge.dataset.variant).toBe("outline");
+    expect(badge.querySelector("[aria-hidden]")).toBeNull();
   });
 
   it("passes dataTestId through", () => {
