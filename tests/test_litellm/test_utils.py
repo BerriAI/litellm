@@ -3066,6 +3066,34 @@ def test_model_info_for_openrouter_kimi_k2_5():
     print("openrouter kimi-k2.5 model info", model_info)
 
 
+def test_model_info_for_openai_kimi_and_glm_aliases(local_model_cost_map):
+    kimi = litellm.get_model_info(model="openai/kimi-k2.7-code", custom_llm_provider="openai")
+    assert kimi is not None
+    assert kimi["litellm_provider"] == "openai"
+    assert kimi["input_cost_per_token"] == 9.5e-07
+    assert kimi["output_cost_per_token"] == 4e-06
+    assert kimi["cache_read_input_token_cost"] == 1.9e-07
+    assert kimi["max_input_tokens"] == 262144
+
+    kimi_highspeed = litellm.get_model_info(
+        model="openai/kimi-k2.7-code-highspeed", custom_llm_provider="openai"
+    )
+    assert kimi_highspeed is not None
+    assert kimi_highspeed["litellm_provider"] == "openai"
+    assert kimi_highspeed["input_cost_per_token"] == 9.5e-07
+    assert kimi_highspeed["output_cost_per_token"] == 4e-06
+    assert kimi_highspeed["cache_read_input_token_cost"] == 1.9e-07
+    assert kimi_highspeed["max_input_tokens"] == 262144
+
+    glm = litellm.get_model_info(model="openai/glm-5.2", custom_llm_provider="openai")
+    assert glm is not None
+    assert glm["litellm_provider"] == "openai"
+    assert glm["input_cost_per_token"] == 1.4e-06
+    assert glm["output_cost_per_token"] == 4.4e-06
+    assert glm["cache_read_input_token_cost"] == 2.6e-07
+    assert glm["max_input_tokens"] == 262144
+
+
 def test_gemini_embedding_2_ga_in_cost_map():
     """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
     import json
