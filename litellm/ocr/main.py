@@ -188,12 +188,13 @@ def _rust_bridge_api_base(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
 ) -> str | None:
-    if prepared_request.api_base is not None:
-        return prepared_request.api_base
     if prepared_request.custom_llm_provider == "azure_ai":
         model = prepared_request.model.lower()
         if "doc-intelligence" in model or "documentintelligence" in model:
-            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") or prepared_request.api_base
+    if prepared_request.api_base is not None:
+        return prepared_request.api_base
+    if prepared_request.custom_llm_provider == "azure_ai":
         return resolve_secret("AZURE_AI_API_BASE")
     return None
 
