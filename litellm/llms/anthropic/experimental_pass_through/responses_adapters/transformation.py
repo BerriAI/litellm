@@ -6,6 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
+from numbers import Number
 from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -30,6 +31,50 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicUsage,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+
+
+def _get_usage_value(usage: Any, key: str) -> Any:
+    if isinstance(usage, dict):
+        return usage.get(key)
+    return getattr(usage, key, None)
+
+
+def _get_int_usage_value(usage: Any, key: str) -> int:
+    value = _get_usage_value(usage, key)
+    if isinstance(value, Number):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return 0
+
+
+def _get_responses_cached_tokens(usage: Any) -> int:
+    input_tokens_details = _get_usage_value(usage, "input_tokens_details")
+    if input_tokens_details is None:
+        return 0
+    return _get_int_usage_value(input_tokens_details, "cached_tokens")
+
+
+def translate_responses_usage_to_anthropic_usage(usage: Any) -> AnthropicUsage:
+    input_tokens = _get_int_usage_value(usage, "input_tokens")
+    output_tokens = _get_int_usage_value(usage, "output_tokens")
+    cache_creation_tokens = _get_int_usage_value(usage, "cache_creation_input_tokens")
+
+    responses_cached_tokens = _get_responses_cached_tokens(usage)
+    if responses_cached_tokens:
+        cache_read_tokens = responses_cached_tokens
+        # OpenAI Responses input_tokens includes cached tokens. Anthropic Messages
+        # input_tokens excludes cache-read tokens, so only subtract for this source.
+        input_tokens = max(0, input_tokens - responses_cached_tokens)
+    else:
+        cache_read_tokens = _get_int_usage_value(usage, "cache_read_input_tokens")
+
+    return AnthropicUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_creation_input_tokens=cache_creation_tokens,
+        cache_read_input_tokens=cache_read_tokens,
+    )
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -394,8 +439,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseReasoningItem,
         )
 
-        from litellm.types.llms.openai import ResponseAPIUsage
-
         content: List[Dict[str, Any]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
@@ -461,15 +504,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if response.status == "incomplete":
             stop_reason = "max_tokens"
 
-        # usage
-        raw_usage: Optional[ResponseAPIUsage] = response.usage
-        input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
-
-        anthropic_usage = AnthropicUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+        anthropic_usage = translate_responses_usage_to_anthropic_usage(response.usage)
 
         return AnthropicMessagesResponse(
             id=response.id,
