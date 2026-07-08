@@ -188,6 +188,12 @@ class HealthCheckHelpers:
                 api_base=model_params.get("api_base", None),
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
+                vertex_credentials=model_params.get("vertex_credentials", None)
+                or model_params.get("vertex_ai_credentials", None),
+                vertex_project=model_params.get("vertex_project", None)
+                or model_params.get("vertex_ai_project", None),
+                vertex_location=model_params.get("vertex_location", None)
+                or model_params.get("vertex_ai_location", None),
             ),
             "batch": lambda: HealthCheckHelpers._batch_health_check(
                 custom_llm_provider=custom_llm_provider,
