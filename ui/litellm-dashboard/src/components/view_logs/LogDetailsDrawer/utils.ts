@@ -3,6 +3,27 @@
  * These functions handle data formatting, validation, and guardrail calculations.
  */
 
+import { MCP_CALL_TYPES } from "../constants";
+
+export type SessionLogSortMode = "grouped" | "chronological";
+
+export function sortSessionLogs<T extends { call_type: string; startTime: string }>(
+  rows: T[],
+  mode: SessionLogSortMode,
+): T[] {
+  if (mode === "chronological") {
+    return [...rows].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }
+  return [...rows].sort((a, b) => {
+    const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
+    const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
+    if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
+    // Newest first, matching the all-sessions logs overview. MCP calls
+    // stay grouped last (above), newest-first within that group too.
+    return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
+  });
+}
+
 /**
  * Formats data for display. If input is a string, attempts to parse as JSON.
  * @param input - Data to format (string or object)
