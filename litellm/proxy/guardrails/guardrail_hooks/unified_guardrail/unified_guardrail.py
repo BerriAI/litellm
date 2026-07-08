@@ -374,6 +374,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         mutated_text_per_choice: dict[int, str],
         emitted_text_per_choice: dict[int, str],
         holdback_per_choice: dict[int, int],
+        finish_reason_per_choice: dict[int, Optional[str]],
         is_final: bool,
     ) -> Optional[ModelResponseStream]:
         """Build the synthetic chunk carrying the newly-guardrailed deltas.
@@ -381,16 +382,20 @@ class UnifiedLLMGuardrails(CustomLogger):
         For each choice, the new delta is the mutated accumulated text past what
         has already been emitted, minus a trailing holdback (forced to 0 on the
         final flush). ``emitted_text_per_choice`` holds the exact bytes already
-        sent per choice and is extended in place. Returns None when there is
-        nothing to emit and this is not the final chunk.
+        sent per choice and is extended in place. Returns None when there is no
+        text to emit (e.g. a tool-call-only turn) or nothing new and this is not
+        the final chunk.
 
         Raises HTTPException(400, stream_transform_underflow) when the guardrail's
         transform is not a forward extension of what has already been streamed
-        (shorter than, or rewriting, the already-sent prefix), since emitted bytes
+        (shorter than, or rewrites, the already-sent prefix), since emitted bytes
         cannot be retracted. This makes the framework fail closed rather than
         silently leave un-transformed text on the wire; a guardrail that needs to
         rewrite recent output must withhold it first via ``stream_holdback_chars``.
         """
+        if not mutated_text_per_choice:
+            return None
+
         deltas: dict[int, str] = {}
         for choice_idx, text in mutated_text_per_choice.items():
             already = emitted_text_per_choice.get(choice_idx, "")
@@ -412,29 +417,38 @@ class UnifiedLLMGuardrails(CustomLogger):
             end = max(len(already), len(text) - holdback)
             deltas[choice_idx] = text[len(already) : end]
 
-        if not is_final and not any(deltas.values()):
-            return None
-
-        role = "assistant" if not any(emitted_text_per_choice.values()) else None
-
+        # Iterate the mutated choices (not just those in reference_chunk) so a
+        # choice with pending text is never dropped for n > 1. finish_reason is
+        # taken per choice from the accumulated map (a choice can finish in an
+        # earlier chunk than the stream's last one); tool_calls are dropped since
+        # v1 does not transform streamed tool calls (they pass through raw).
         synthetic_choices: list[StreamingChoices] = []
-        for choice in getattr(reference_chunk, "choices", []) or []:
-            idx = getattr(choice, "index", 0) or 0
-            # Preserve each choice's own finish_reason on the flush (n > 1 can
-            # finish choices independently, e.g. "stop" vs "length"). tool_calls
-            # are intentionally dropped: v1 does not transform streamed tool calls,
-            # and passing the raw upstream ones through would bypass the guardrail.
-            finish_reason = getattr(choice, "finish_reason", None) if is_final else None
+        for choice_idx in mutated_text_per_choice:
+            delta_text = deltas.get(choice_idx, "")
+            finish_reason = finish_reason_per_choice.get(choice_idx) if is_final else None
+            # Skip a choice with nothing to say: no new content and no
+            # finish_reason to deliver. This avoids emitting an empty delta for an
+            # already-finished choice (e.g. one that terminated via a passed-through
+            # tool-call chunk, which already carried its own finish_reason).
+            if not delta_text and finish_reason is None:
+                continue
+            # role="assistant" on this choice's first emitted delta only.
+            role = "assistant" if not emitted_text_per_choice.get(choice_idx) else None
             synthetic_choices.append(
                 StreamingChoices(
-                    index=idx,
-                    delta=Delta(content=deltas.get(idx, ""), role=role, tool_calls=None),
+                    index=choice_idx,
+                    delta=Delta(content=delta_text, role=role, tool_calls=None),
                     finish_reason=finish_reason,
                 )
             )
 
-        for choice_idx, delta in deltas.items():
-            emitted_text_per_choice[choice_idx] = emitted_text_per_choice.get(choice_idx, "") + delta
+        if not synthetic_choices:
+            return None
+
+        for choice_idx in mutated_text_per_choice:
+            emitted_text_per_choice[choice_idx] = emitted_text_per_choice.get(choice_idx, "") + deltas.get(
+                choice_idx, ""
+            )
 
         return ModelResponseStream(
             id=getattr(reference_chunk, "id", None),
@@ -455,6 +469,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: list[Any],
         responses_yielded: list[Any],
         emitted_text_per_choice: dict[int, str],
+        finish_reason_per_choice: dict[int, Optional[str]],
         is_final: bool,
     ) -> AsyncGenerator[Any, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
@@ -482,6 +497,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 mutated_text_per_choice=sink.mutated_text_per_choice,
                 emitted_text_per_choice=emitted_text_per_choice,
                 holdback_per_choice=sink.holdback_per_choice,
+                finish_reason_per_choice=finish_reason_per_choice,
                 is_final=is_final,
             )
         except ModifyResponseException as e:
@@ -528,6 +544,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: list[Any] = []
         responses_yielded: list[Any] = []
         emitted_text_per_choice: dict[int, str] = {}
+        finish_reason_per_choice: dict[int, Optional[str]] = {}
         chunk_counter = 0
         last_chunk: Optional[Any] = None
 
@@ -542,14 +559,28 @@ class UnifiedLLMGuardrails(CustomLogger):
                 responses_so_far=responses_so_far,
                 responses_yielded=responses_yielded,
                 emitted_text_per_choice=emitted_text_per_choice,
+                finish_reason_per_choice=finish_reason_per_choice,
                 is_final=is_final,
             )
 
         try:
             async for item in response:
+                # v1 transforms only text. A chunk carrying tool_calls is passed
+                # through raw so function-calling turns are not dropped by the
+                # withhold-and-diff path; it is not accumulated (its content, if
+                # any, would otherwise be re-emitted as a synthetic text delta).
+                # Its finish_reason is deliberately NOT recorded here: it rides on
+                # the raw chunk, and recording it would make the final flush emit a
+                # spurious empty delta for an already-finished choice.
+                if self._chunk_has_tool_calls(item):
+                    responses_yielded.append(item)
+                    yield item
+                    continue
+
                 chunk_counter += 1
                 responses_so_far.append(item)
                 last_chunk = item
+                self._record_finish_reasons(item, finish_reason_per_choice)
                 # Skip the sampled round for a terminal chunk: the end-of-stream
                 # flush below processes it once with holdback forced to 0, so a
                 # sampled round here would guardrail the same content twice.
@@ -566,6 +597,21 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield out
         except _StreamTerminated:
             return
+
+    @staticmethod
+    def _chunk_has_tool_calls(item: Any) -> bool:
+        for choice in getattr(item, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            if getattr(delta, "tool_calls", None):
+                return True
+        return False
+
+    @staticmethod
+    def _record_finish_reasons(item: Any, finish_reason_per_choice: dict[int, Optional[str]]) -> None:
+        for choice in getattr(item, "choices", None) or []:
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason is not None:
+                finish_reason_per_choice[getattr(choice, "index", 0) or 0] = finish_reason
 
     @staticmethod
     def _chunk_has_finish_reason(item: Any) -> bool:

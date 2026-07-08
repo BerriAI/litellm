@@ -889,18 +889,14 @@ class TestStreamingTransform:
     def test_final_chunk_preserves_per_choice_finish_reason(self):
         """The final flush must carry each choice's own finish_reason, not
         choices[0]'s, for n > 1 (e.g. "stop" vs "length")."""
-        reference_chunk = ModelResponseStream(
-            choices=[
-                StreamingChoices(index=0, delta=Delta(content="a"), finish_reason="stop"),
-                StreamingChoices(index=1, delta=Delta(content="b"), finish_reason="length"),
-            ],
-        )
+        reference_chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="a"))])
 
         synthetic = UnifiedLLMGuardrails()._build_transform_chunk(
             reference_chunk=reference_chunk,
             mutated_text_per_choice={0: "A", 1: "B"},
             emitted_text_per_choice={},
             holdback_per_choice={},
+            finish_reason_per_choice={0: "stop", 1: "length"},
             is_final=True,
         )
 
@@ -938,6 +934,7 @@ class TestStreamingTransform:
             mutated_text_per_choice={0: "HI"},
             emitted_text_per_choice={},
             holdback_per_choice={},
+            finish_reason_per_choice={},
             is_final=False,
         )
 
@@ -959,11 +956,138 @@ class TestStreamingTransform:
                 mutated_text_per_choice={0: "My SSN is [REDACTED]"},
                 emitted_text_per_choice={0: "My SSN is 123"},
                 holdback_per_choice={},
+                finish_reason_per_choice={},
                 is_final=False,
             )
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail["error"] == "stream_transform_underflow"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_chunks_pass_through_and_not_dropped(self):
+        """A tool-call chunk is passed through raw under incremental_diff (v1 does
+        not transform tool calls) rather than being withheld and dropped, and no
+        bogus empty-choices chunk is emitted for a tool-call-only turn."""
+        guardrail = _StreamingTextGuardrail()
+
+        tool_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, [tool_chunk])
+
+        assert len(out) == 1
+        assert out[0].choices[0].delta.tool_calls
+        assert out[0].choices[0].finish_reason == "tool_calls"
+        # No text content was sent, so the guardrail's response path never ran.
+        assert guardrail.received_texts == []
+
+    @pytest.mark.asyncio
+    async def test_per_choice_finish_reason_when_choices_finish_in_different_chunks(self):
+        """n>1: a choice finishing before the stream's last chunk keeps its own
+        finish_reason (it must not be lost because it is not on last_chunk)."""
+        guardrail = _StreamingTextGuardrail()
+        guardrail.streaming_end_of_stream_only = True  # only the flush emits
+
+        chunks = [
+            _stream_chunk("aa", index=0),
+            _stream_chunk("bb", index=1),
+            _stream_chunk("", finish_reason="stop", index=0),
+            _stream_chunk("", finish_reason="length", index=1),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        by_index = {}
+        for item in out:
+            for choice in item.choices:
+                if choice.finish_reason is not None:
+                    by_index[choice.index] = choice.finish_reason
+        assert by_index == {0: "stop", 1: "length"}
+
+    @pytest.mark.asyncio
+    async def test_short_guardrail_texts_withheld_not_leaked(self):
+        """If the guardrail returns fewer texts than sent (contract violation),
+        the unmatched choice is withheld (fail closed), not emitted raw."""
+
+        class _DropsSecondChoice(_StreamingTextGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                texts = inputs.get("texts", [])
+                if input_type != "response":
+                    return {"texts": [t.upper() for t in texts]}
+                # Return only the first choice's transformed text.
+                return {"texts": [texts[0].upper()] if texts else []}
+
+        guardrail = _DropsSecondChoice()
+        guardrail.streaming_end_of_stream_only = True
+
+        chunks = [
+            _stream_chunk("secret-a", index=0),
+            _stream_chunk("secret-b", index=1),
+            _stream_chunk("", finish_reason="stop", index=0),
+            _stream_chunk("", finish_reason="stop", index=1),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        streamed = "".join(_delta_text(i) for i in out)
+        assert "SECRET-A" in streamed
+        # Choice 1 had no guardrailed text returned: withheld, never leaked raw.
+        assert "secret-b" not in streamed
+        assert "SECRET-B" not in streamed
+
+    @pytest.mark.asyncio
+    async def test_no_spurious_chunk_after_text_then_tool_call_finish(self):
+        """When a choice streams text and then finishes via a tool-call chunk, the
+        raw tool-call chunk carries the finish_reason and no spurious empty chunk
+        for that choice is emitted afterwards (protocol: no delta after finish)."""
+        guardrail = _StreamingTextGuardrail()
+
+        tool_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+        chunks = [_stream_chunk("let me check "), tool_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        # Exactly: one synthetic text delta, then the raw tool-call chunk. No
+        # trailing empty chunk for choice 0 after it already finished.
+        assert len(out) == 2
+        assert _delta_text(out[0]) == "LET ME CHECK "
+        assert out[1].choices[0].delta.tool_calls
+        assert out[1].choices[0].finish_reason == "tool_calls"
 
     @pytest.mark.asyncio
     async def test_guardrail_always_sees_raw_accumulated_text(self):

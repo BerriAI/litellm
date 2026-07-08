@@ -634,11 +634,24 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
 
-        guardrailed_texts = guardrailed_inputs.get("texts") or texts_to_check
+        returned_texts = guardrailed_inputs.get("texts")
+        # No "texts" key means the guardrail made no change (action NONE): the raw
+        # accumulated text is the guardrailed text. A present-but-shorter list is a
+        # guardrail contract violation; those choices are omitted below (withheld,
+        # not emitted raw) so a malformed response fails closed instead of leaking.
+        if returned_texts is None:
+            returned_texts = texts_to_check
+        elif len(returned_texts) < len(texts_to_check):
+            verbose_proxy_logger.warning(
+                "OpenAI Chat Completions: guardrail returned %s transformed texts for %s inputs on the "
+                "streaming transform path; withholding the unmatched choices to fail closed.",
+                len(returned_texts),
+                len(texts_to_check),
+            )
+
         holdback = guardrailed_inputs.get("stream_holdback_chars") or []
         sink.mutated_text_per_choice = {
-            idx: (guardrailed_texts[i] if i < len(guardrailed_texts) else texts_to_check[i])
-            for i, idx in enumerate(indices)
+            idx: returned_texts[i] for i, idx in enumerate(indices) if i < len(returned_texts)
         }
         sink.holdback_per_choice = {
             indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
