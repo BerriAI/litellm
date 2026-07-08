@@ -8,7 +8,6 @@ from litellm.proxy.guardrails._content_utils import (
     walk_user_text,
 )
 
-
 # ── iter_message_text ────────────────────────────────────────────────────────────
 
 
@@ -101,6 +100,55 @@ def test_iter_message_text_empty_data():
     assert list(iter_message_text({"input": ""})) == []
 
 
+def test_iter_message_text_responses_api_input_text_and_output_text_parts():
+    """LIT-4294: Responses-API content parts use ``input_text`` (request) and
+    ``output_text`` (assistant); reading only ``type == "text"`` skipped every
+    ``/v1/responses`` body and every text guardrail was a no-op on that path."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "user text"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "assistant text"}],
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == ["user text", "assistant text"]
+
+
+def test_iter_message_text_responses_api_tool_call_taxonomy():
+    """LIT-4294: a Responses ``input`` list freely mixes message items,
+    ``function_call`` (no ``role``), and ``function_call_output`` items. The
+    old ``all(item has 'role')`` gate wrapped the whole list as one blob and
+    yielded nothing; every text fragment must be visited independently."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "sunny"}],
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == ["hello", "sunny"]
+
+
 # ── walk_user_text ────────────────────────────────────────────────────────────
 
 
@@ -158,6 +206,72 @@ def test_walk_user_text_redacts_responses_api_list_input():
     assert visited == 1
     assert data["input"][0] == {"type": "text", "text": "[redacted]AKIAEXAMPLE[/]"}
     assert data["input"][1] == {"type": "image_url", "image_url": {"url": "..."}}
+
+
+def test_walk_user_text_redacts_responses_input_text_and_output_text_parts():
+    """LIT-4294: ``walk_user_text`` must recognise the Responses text-part
+    variants so masking guardrails (secret detection, PII) actually redact
+    ``/v1/responses`` bodies instead of no-op'ing on them."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "AKIAEXAMPLE"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "AKIAEXAMPLE too"}],
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    assert data["input"][0]["content"][0] == {
+        "type": "input_text",
+        "text": "[REDACTED]",
+    }
+    assert data["input"][1]["content"][0] == {
+        "type": "output_text",
+        "text": "[REDACTED] too",
+    }
+
+
+def test_walk_user_text_redacts_function_call_output_text():
+    """LIT-4294: tool-call round-trips carry secrets in
+    ``function_call_output.output``; the redact walker must descend into it
+    while leaving ``function_call`` items (call_id, arguments) untouched."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "AKIAEXAMPLE user"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": '{"AKIAEXAMPLE": 1}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "AKIAEXAMPLE tool"}],
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    assert data["input"][0]["content"][0]["text"] == "[REDACTED] user"
+    assert data["input"][1] == {
+        "type": "function_call",
+        "call_id": "c1",
+        "name": "get_weather",
+        "arguments": '{"AKIAEXAMPLE": 1}',
+    }
+    assert data["input"][2]["output"][0]["text"] == "[REDACTED] tool"
 
 
 def test_walk_user_text_redacts_mixed_list_input():
@@ -231,6 +345,56 @@ def test_build_inspection_messages_drops_messages_with_no_text():
         ]
     }
     assert build_inspection_messages(data) == [{"role": "user", "content": "kept"}]
+
+
+def test_build_inspection_messages_responses_api_tool_call_taxonomy():
+    """LIT-4294: mixed Responses ``input`` (message + function_call +
+    function_call_output) must produce a non-empty inspection list — an
+    empty ``messages`` posted to AIM's ``/fw/v1/analyze`` gets rejected with
+    a 422 ``No messages in the request`` and every other guardrail silently
+    scans nothing."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "sunny"}],
+            },
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "user", "content": "hello"},
+        {"role": "user", "content": "sunny"},
+    ]
+
+
+def test_build_inspection_messages_coerces_non_standard_role_to_user():
+    """LIT-4294: the OpenAI chat schema requires ``tool_call_id`` on a
+    ``tool`` message; AIM validates the posted payload and rejects tool
+    messages missing that field. The inspection payload only carries text,
+    so any role outside {system, user, assistant} collapses to ``user``."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "tool text"}],
+            },
+        ]
+    }
+    result = build_inspection_messages(data)
+    assert result == [{"role": "user", "content": "tool text"}]
 
 
 def test_build_inspection_messages_empty_data():
