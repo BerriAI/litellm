@@ -3,12 +3,12 @@ Integration tests for responses API background cost tracking
 """
 
 import asyncio
-import json
 import os
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -670,18 +670,8 @@ def _fake_get_response(status, with_usage):
         ),
     }
 
-    class _Resp:
-        status_code = 200
-        headers = {}
-        text = json.dumps(payload)
-
-        def json(self):
-            return payload
-
-        def raise_for_status(self):
-            return None
-
-    return _Resp()
+    request = httpx.Request("GET", "https://api.openai.com/v1/responses/resp_finalize_test")
+    return httpx.Response(status_code=200, json=payload, request=request)
 
 
 async def _capture_aget_responses(status, with_usage):
@@ -704,6 +694,8 @@ async def _capture_aget_responses(status, with_usage):
             await asyncio.sleep(0.1)
     finally:
         litellm.callbacks = original_callbacks
+
+    assert capture.events, "success logging callback never fired for the retrieved response"
     return capture.events
 
 
