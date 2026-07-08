@@ -30,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -2252,11 +2253,22 @@ async def test_pass_through_request_query_params_forwarding():
                         assert call_kwargs["_parsed_body"] == test_body
 
 
+class _FakeManagedFilesHook:
+    def __init__(self, file_row: SimpleNamespace):
+        self._file_row = file_row
+
+    async def get_unified_file_id(self, file_id: str, litellm_parent_otel_span=None) -> SimpleNamespace:
+        return self._file_row
+
+
 async def _run_pass_through_and_capture_wire_url(
     target: str,
     incoming_query: str,
     merge_query_params: bool = False,
     default_query_params: Optional[dict] = None,
+    custom_llm_provider: Optional[str] = None,
+    managed_files_hook: Optional[_FakeManagedFilesHook] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> httpx.URL:
     import litellm
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -2273,7 +2285,11 @@ async def _run_pass_through_and_capture_wire_url(
         params={"timeout": resolve_pass_through_request_timeout(None)},
     )
     cache_dict = litellm.in_memory_llm_clients_cache.cache_dict
-    cache_key = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    cache_key = next((key for key, cached in cache_dict.items() if cached is real_handler), None)
+    assert cache_key is not None, (
+        "PassThroughEndpoint client not found in in_memory_llm_clients_cache; "
+        "get_async_httpx_client may not be caching this provider."
+    )
     cache_dict[cache_key] = SimpleNamespace(
         client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler))
     )
@@ -2290,16 +2306,29 @@ async def _run_pass_through_and_capture_wire_url(
     )
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files_hook)
 
     try:
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging):
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+            )
+            if managed_files_hook is not None:
+                stack.enter_context(
+                    patch(
+                        "litellm.proxy.proxy_server.general_settings",
+                        {"passthrough_managed_object_ids": True},
+                    )
+                )
+                stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", None))
             response = await pass_through_request(
                 request=mock_request,
                 target=target,
                 custom_headers={},
-                user_api_key_dict=MagicMock(),
+                user_api_key_dict=user_api_key_dict if user_api_key_dict is not None else MagicMock(),
                 merge_query_params=merge_query_params,
                 default_query_params=default_query_params,
+                custom_llm_provider=custom_llm_provider,
             )
     finally:
         cache_dict[cache_key] = real_handler
@@ -2355,6 +2384,32 @@ async def test_pass_through_request_without_merge_replaces_target_query():
         incoming_query="q=litellm",
     )
     assert dict(wire_url.params) == {"q": "litellm"}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_merge_query_params_rewrites_managed_ids_on_the_wire():
+    """
+    Regression test: on merge-enabled endpoints the managed-ID rewrite must see
+    the incoming query params before they are folded into the URL. Folding
+    first bakes the un-rewritten managed ID into the URL and hands the rewriter
+    None, leaking the managed ID upstream.
+    """
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import new_managed_id
+
+    managed_id = new_managed_id("openai", "file-raw-123")
+    hook = _FakeManagedFilesHook(SimpleNamespace(created_by="user-1", team_id=None))
+    wire_url = await _run_pass_through_and_capture_wire_url(
+        target="https://api.openai.com/v1/files/content?api-version=preview",
+        incoming_query=f"file_id={managed_id}",
+        merge_query_params=True,
+        custom_llm_provider="openai",
+        managed_files_hook=hook,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+    assert dict(wire_url.params) == {
+        "api-version": "preview",
+        "file_id": "file-raw-123",
+    }
 
 
 @pytest.mark.asyncio

@@ -822,20 +822,6 @@ async def pass_through_request(
 
         requested_query_params: Optional[dict] = query_params or dict(request.query_params)
 
-        # Apply default query parameters if provided, regardless of merge_query_params setting
-        if default_query_params or merge_query_params:
-            # Create a new URL with the merged query params
-            url = url.copy_with(
-                query=urlencode(
-                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
-                        existing_url=url,
-                        request_query_params=requested_query_params,
-                        default_query_params=default_query_params,
-                    )
-                ).encode("ascii")
-            )
-            requested_query_params = None
-
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
         # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
@@ -1020,6 +1006,20 @@ async def pass_through_request(
                     request.url.path,
                     request.method,
                 )
+
+        # Apply default query parameters if provided, regardless of merge_query_params setting
+        if default_query_params or merge_query_params:
+            # Create a new URL with the merged query params
+            url = url.copy_with(
+                query=urlencode(
+                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+                        existing_url=url,
+                        request_query_params=requested_query_params,
+                        default_query_params=default_query_params,
+                    )
+                ).encode("ascii")
+            )
+            requested_query_params = None
 
         ## PASSTHROUGH MANAGED LIST (DB-only response) ##
         # For GET /v1/files and GET /v1/batches passthrough routes, serve the
