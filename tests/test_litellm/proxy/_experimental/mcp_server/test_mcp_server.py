@@ -6601,7 +6601,7 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
 
 # --------------------------------------------------------------------------- #
-#  MCP tool-call isError failure logging (LIT-4081)
+#  MCP tool-call isError failure logging
 # --------------------------------------------------------------------------- #
 
 
@@ -6639,7 +6639,7 @@ def test_extract_mcp_tool_result_error_message():
 
 @pytest.mark.asyncio
 async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
-    """Regression test for LIT-4081: a CallToolResult with isError=True must go
+    """Regression test: a CallToolResult with isError=True must go
     down the failure logging path (async_failure_handler + post_call_failure_hook),
     never async_success_handler."""
     from litellm.proxy._experimental.mcp_server.server import (
@@ -6734,6 +6734,45 @@ async def test_fire_mcp_tool_call_logging_iserror_without_auth_skips_failure_hoo
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_strips_credentials_from_failure_hook():
+    """Credential-bearing request_data fields (raw request headers, upstream MCP
+    auth headers, OAuth tokens) must never reach post_call_failure_hook
+    callbacks; non-credential fields must survive untouched."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+
+    logging_obj = _mock_mcp_logging_obj()
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+    request_data = {
+        "name": "explode",
+        "litellm_call_id": "cid",
+        "raw_headers": {"authorization": "Bearer sk-caller-secret"},
+        "mcp_auth_header": "upstream-secret",
+        "mcp_server_auth_headers": {"srv": {"authorization": "Bearer srv-secret"}},
+        "oauth2_headers": {"authorization": "Bearer oauth-secret"},
+        "user_api_key_auth": user_auth,
+    }
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        await _fire_mcp_tool_call_logging(
+            logging_obj=logging_obj,
+            result=_call_tool_result(True, "boom"),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            user_api_key_auth=user_auth,
+            request_data=request_data,
+        )
+
+    proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
+    hook_request_data = proxy_logging_mock.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert hook_request_data == {"name": "explode", "litellm_call_id": "cid"}
+    assert "secret" not in str(hook_request_data)
+
+
 def _real_mcp_logging_obj(call_id: str):
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -6820,7 +6859,7 @@ async def test_fire_mcp_tool_call_logging_success_builds_success_payload(monkeyp
 
 @pytest.mark.asyncio
 async def test_fire_mcp_tool_call_logging_iserror_emits_otel_error_span(monkeypatch):
-    """End-to-end regression for LIT-4081's OTel symptom: an isError=True tool
+    """End-to-end regression for the OTel symptom: an isError=True tool
     result must reach OTel as an MCP span with StatusCode.ERROR and the tool's
     error message, while isError=False stays non-error."""
     pytest.importorskip("opentelemetry")

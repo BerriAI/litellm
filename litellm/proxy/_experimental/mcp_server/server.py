@@ -2748,6 +2748,16 @@ if MCP_AVAILABLE:
 
         return response
 
+    _MCP_CREDENTIAL_REQUEST_FIELDS = frozenset(
+        {
+            "raw_headers",
+            "mcp_auth_header",
+            "mcp_server_auth_headers",
+            "oauth2_headers",
+            "user_api_key_auth",
+        }
+    )
+
     async def _fire_mcp_tool_call_logging(
         logging_obj: LiteLLMLoggingObj,
         result: Any,
@@ -2765,6 +2775,12 @@ if MCP_AVAILABLE:
         to ``isError=True`` in that hook. Raised exceptions never reach here (the
         ``@client`` wrapper and ``call_mcp_tool``'s except path log those), so
         this cannot double-log a failure.
+
+        ``request_data`` may carry credential-bearing fields (the REST path puts
+        ``raw_headers``, ``mcp_auth_header``, ``mcp_server_auth_headers``, and
+        ``oauth2_headers`` at the top level of its data dict), so those are
+        stripped before the dict is handed to ``post_call_failure_hook``
+        callbacks.
         """
         logging_obj.post_call(original_response=result)
         await logging_obj.async_post_mcp_tool_call_hook(
@@ -2790,8 +2806,11 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         if proxy_logging_obj:
+            sanitized_request_data = {
+                key: value for key, value in (request_data or {}).items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
+            }
             await proxy_logging_obj.post_call_failure_hook(
-                request_data=dict(request_data) if request_data else {},
+                request_data=sanitized_request_data,
                 original_exception=tool_error,
                 user_api_key_dict=user_api_key_auth,
                 route="/mcp/call_tool",
