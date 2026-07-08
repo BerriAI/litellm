@@ -509,8 +509,6 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
       <DataTable
         data={toolsets}
         columns={columns}
-        renderSubComponent={() => <div />}
-        getRowCanExpand={() => false}
         isLoading={isLoading}
         noDataMessage="No toolsets yet. Click 'New Toolset' to create one."
         loadingMessage="Loading toolsets..."

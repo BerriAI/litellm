@@ -2507,9 +2507,6 @@
   "src/components/view_logs/table.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_user_spend.tsx": {
