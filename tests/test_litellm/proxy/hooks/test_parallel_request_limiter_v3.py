@@ -18,6 +18,10 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    MAX_PARALLEL_SLOT_ACQUIRED_KEY,
+    PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
@@ -566,10 +570,9 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
 
     # Verify that the correct token count was used based on the rate limit type
     assert (
-        len(captured_operations) == 2
-    ), "Should have 2 operations: max_parallel_requests decrement and TPM increment"
+        len(captured_operations) == 1
+    ), "Should have 1 operation: the TPM increment (parallel slots are released via the gauge, not the pipeline)"
 
-    # Find the TPM increment operation (not the max_parallel_requests decrement)
     tpm_operation = None
     for op in captured_operations:
         if op["key"].endswith(":tokens"):
@@ -655,7 +658,10 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(
 @pytest.mark.asyncio
 async def test_async_log_failure_event_v3():
     """
-    Simple test for async_log_failure_event - should decrement max_parallel_requests by 1
+    async_log_failure_event releases exactly this request's slot id: the
+    first release removes it, and repeated or unknown-slot releases are
+    no-ops that can never free another request's slot (releasing more than
+    was acquired is what previously let concurrency exceed the limit).
     """
     _api_key = "sk-12345"
     _api_key = hash_token(_api_key)
@@ -663,33 +669,236 @@ async def test_async_log_failure_event_v3():
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
-    # Mock kwargs with user_api_key via standard_logging_object
-    mock_kwargs = {
-        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}
-    }
+    await _seed_max_parallel_requests_slots(local_cache, counter_key, ["slot-a", "slot-b"])
 
-    # Capture pipeline operations
-    captured_ops = []
+    def kwargs_with_slot(slot_id):
+        return {
+            "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: slot_id},
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        }
 
-    async def mock_pipeline(increment_list, **kwargs):
-        captured_ops.extend(increment_list)
+    async def in_flight():
+        return parallel_request_handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=counter_key)
+        )
 
-    parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_pipeline
-    )
-
-    # Call async_log_failure_event
     await parallel_request_handler.async_log_failure_event(
-        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None
+        kwargs=kwargs_with_slot("slot-a"), response_obj=None, start_time=None, end_time=None
+    )
+    assert await in_flight() == 1
+
+    for slot_id in ("slot-a", "slot-unknown", "slot-a"):
+        await parallel_request_handler.async_log_failure_event(
+            kwargs=kwargs_with_slot(slot_id), response_obj=None, start_time=None, end_time=None
+        )
+    assert await in_flight() == 1
+
+    await parallel_request_handler.async_log_failure_event(
+        kwargs=kwargs_with_slot("slot-b"), response_obj=None, start_time=None, end_time=None
+    )
+    assert await in_flight() == 0
+
+
+@pytest.mark.asyncio
+async def test_failure_event_without_acquired_slot_does_not_release_v3():
+    """
+    Failure callbacks also fire for requests rejected at pre-call, which never
+    acquired a parallel slot. Releasing on those frees a slot still owned by
+    another in-flight request, so every 429 would raise effective concurrency
+    above the configured limit. Without the acquired-slot marker the gauge
+    must stay untouched.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await _seed_max_parallel_requests_slots(
+        local_cache, counter_key, ["slot-a", "slot-b", "slot-c"]
     )
 
-    # Verify correct operation was created
-    assert len(captured_ops) == 1
-    op = captured_ops[0]
-    assert op["key"] == f"{{api_key:{_api_key}}}:max_parallel_requests"
-    assert op["increment_value"] == -1
-    assert op["ttl"] == 60  # default window size
+    await handler.async_log_failure_event(
+        kwargs={
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert (
+        handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=counter_key)
+        )
+        == 3
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_parallel_requests_not_reset_by_window_roll_v3():
+    """
+    max_parallel_requests is a concurrency gauge, not a windowed counter: the
+    rate-limit window rolling over must not reset it while requests are still
+    in flight. Previously the gauge shared the sliding-window reset with
+    RPM/TPM, so every window roll forgot all in-flight requests and admitted
+    a fresh batch of `limit` on top of what was still running.
+    """
+    controller = TimeController()
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=controller.now,
+    )
+    _api_key = hash_token("sk-12345")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
+
+    for _ in range(2):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+
+    controller.advance(handler.window_size + 1)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    assert "max_parallel_requests" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rejected_request_does_not_consume_parallel_slot_v3():
+    """
+    A 429-rejected request must not occupy a parallel-request slot: nothing
+    ever releases a slot for a request that was never admitted, so the old
+    increment-then-check behavior wedged the gauge above the limit and
+    rejected requests that should have been admitted after a release.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    _api_key = hash_token("sk-12345")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+
+    admitted_data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=admitted_data,
+        call_type="",
+    )
+    acquired_slot_id = admitted_data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
+    assert isinstance(acquired_slot_id, str) and acquired_slot_id
+
+    for _ in range(3):
+        with pytest.raises(HTTPException):
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            )
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: acquired_slot_id},
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_parallel_gauge_uses_atomic_redis_script_v3():
+    """
+    With Redis available, gauge admission goes through the atomic
+    check-and-acquire script (limit, slot TTL, and this request's slot id as
+    args), the returned in-flight count is mirrored into the local cache,
+    and an over-limit script result maps to a 429 without occupying a slot.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    _api_key = hash_token("sk-12345")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    captured_calls = []
+
+    async def fake_acquire(keys, args):
+        captured_calls.append((list(keys), list(args)))
+        return [0, 3]
+
+    handler.parallel_acquire_script = fake_acquire
+
+    data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="",
+    )
+    stashed_slot_id = data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
+    assert isinstance(stashed_slot_id, str) and stashed_slot_id
+    assert captured_calls == [
+        ([counter_key], [5, PARALLEL_REQUEST_SLOT_TTL_SECONDS, stashed_slot_id])
+    ]
+    assert (
+        await handler.internal_usage_cache.async_get_cache(
+            key=counter_key, litellm_parent_otel_span=None, local_only=True
+        )
+        == 3
+    )
+    gauge_statuses = [
+        s
+        for s in data["litellm_proxy_rate_limit_response"]["statuses"]
+        if s["rate_limit_type"] == "max_parallel_requests"
+    ]
+    assert gauge_statuses == [
+        {
+            "code": "OK",
+            "current_limit": 5,
+            "limit_remaining": 2,
+            "rate_limit_type": "max_parallel_requests",
+            "descriptor_key": "api_key",
+        }
+    ]
+
+    async def fake_acquire_over_limit(keys, args):
+        return [1, 1, 5, 5]
+
+    handler.parallel_acquire_script = fake_acquire_over_limit
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    assert "max_parallel_requests" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -3227,27 +3436,28 @@ def test_get_key_mcp_rpm_limit_precedence():
     assert get_team_mcp_rpm_limit(none_set) is None
 
 
-async def _seed_max_parallel_requests_counter(
-    dual_cache: DualCache, counter_key: str, window_size: int
+_TEST_SLOT_ID = "slot-disconnect-test"
+
+
+async def _seed_max_parallel_requests_slots(
+    dual_cache: DualCache, counter_key: str, slot_ids: List[str]
 ) -> None:
-    await dual_cache.async_increment_cache_pipeline(
-        increment_list=[
-            RedisPipelineIncrementOperation(
-                key=counter_key, increment_value=1, ttl=window_size
-            )
-        ]
+    await dual_cache.async_set_cache(
+        key=counter_key,
+        value={slot_id: time.time() for slot_id in slot_ids},
+        local_only=True,
     )
 
 
 async def _build_seeded_limiter():
-    """Build a v3 limiter whose api-key counter already holds the pre-call +1."""
+    """Build a v3 limiter whose api-key slot registry already holds the pre-call slot."""
     api_key = hash_token("sk-disconnect")
     cache = DualCache()
     limiter = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(cache)
     )
     counter_key = f"{{api_key:{api_key}}}:max_parallel_requests"
-    await _seed_max_parallel_requests_counter(cache, counter_key, limiter.window_size)
+    await _seed_max_parallel_requests_slots(cache, counter_key, [_TEST_SLOT_ID])
     user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
     return limiter, cache, counter_key, user_api_key_dict
 
@@ -3286,14 +3496,19 @@ async def test_release_max_parallel_requests_on_disconnect_v3():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
-    await _seed_max_parallel_requests_counter(
-        local_cache, counter_key, handler.window_size
+    await _seed_max_parallel_requests_slots(local_cache, counter_key, [_TEST_SLOT_ID])
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 1
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        user_api_key_dict,
+        request_data={"metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID}},
     )
-    assert await local_cache.async_get_cache(key=counter_key) == 1
 
-    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
-
-    assert await local_cache.async_get_cache(key=counter_key) == 0
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 0
 
 
 @pytest.mark.asyncio
@@ -3338,7 +3553,9 @@ async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
-    assert await cache.async_get_cache(key=counter_key) == 1
+    assert limiter._gauge_in_flight_from_cache_value(
+        await cache.async_get_cache(key=counter_key)
+    ) == 1
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
@@ -3354,7 +3571,10 @@ async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
         gen = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
             response=upstream(),
             user_api_key_dict=user_api_key_dict,
-            request_data={"model": "claude-test"},
+            request_data={
+                "model": "claude-test",
+                "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID},
+            },
             proxy_logging_obj=proxy_logging_obj,
         )
         await gen.__anext__()
@@ -3365,7 +3585,9 @@ async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
             await gen.aclose()
         await _drain_release_task()
 
-    assert await cache.async_get_cache(key=counter_key) == 0
+    assert limiter._gauge_in_flight_from_cache_value(
+        await cache.async_get_cache(key=counter_key)
+    ) == 0
 
 
 @pytest.mark.parametrize("disconnect", ["cancel", "aclose"])
@@ -3399,7 +3621,10 @@ async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect
             gen = proxy_server.async_data_generator(
                 response=upstream(),
                 user_api_key_dict=user_api_key_dict,
-                request_data={"model": "gpt-test"},
+                request_data={
+                    "model": "gpt-test",
+                    "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID},
+                },
             )
             await gen.__anext__()
             if disconnect == "cancel":
@@ -3408,7 +3633,9 @@ async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect
             else:
                 await gen.aclose()
             await _drain_release_task()
-        assert await cache.async_get_cache(key=counter_key) == 0
+        assert limiter._gauge_in_flight_from_cache_value(
+            await cache.async_get_cache(key=counter_key)
+        ) == 0
     finally:
         if saved_hook is not None:
             proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = (
@@ -3452,12 +3679,17 @@ async def test_async_data_generator_releases_counter_when_wrapped_v3():
             gen = proxy_server.async_data_generator(
                 response=upstream(),
                 user_api_key_dict=user_api_key_dict,
-                request_data={"model": "gpt-test"},
+                request_data={
+                    "model": "gpt-test",
+                    "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID},
+                },
             )
             await gen.__anext__()
             await gen.aclose()
             await _drain_release_task()
-        assert await cache.async_get_cache(key=counter_key) == 0
+        assert limiter._gauge_in_flight_from_cache_value(
+            await cache.async_get_cache(key=counter_key)
+        ) == 0
     finally:
         if saved_hook is not None:
             proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = (
