@@ -507,7 +507,7 @@ class GraySwanGuardrail(CustomGuardrail):
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Optional[dict[str, str]]:
-        headers = request_data.get("proxy_server_request", {}).get("headers")
+        headers = (request_data.get("proxy_server_request") or {}).get("headers")
         if not headers:
             headers = request_data.get("headers")
         if not headers:
@@ -560,7 +560,6 @@ class GraySwanGuardrail(CustomGuardrail):
             cleaned_litellm_metadata["headers"] = (
                 {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
             )
-        # cleaned_litellm_metadata.pop("user_api_key_auth", None)
         if cleaned_litellm_metadata:
             sanitized = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
             if isinstance(sanitized, dict) and sanitized:
