@@ -3621,6 +3621,202 @@ async def test_post_call_failure_hook_releases_parallel_slot_v3():
 
 
 @pytest.mark.asyncio
+async def test_success_event_releases_parallel_slot_v3(monkeypatch):
+    """
+    A successful completion must release exactly the slot its pre-call
+    acquired, freeing capacity for the next request; without it every
+    completed request would keep occupying the gauge until TTL pruning.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    admitted_data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=admitted_data,
+        call_type="",
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 1
+
+    await handler.async_log_success_event(
+        kwargs={
+            "metadata": admitted_data["metadata"],
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=ModelResponse(
+            usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 0
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_only_gauge_check_counts_without_acquiring_v3():
+    """
+    read_only callers (e.g. the context-compaction pre-check) must observe
+    the in-flight count via the count script without registering a slot, and
+    a count-script failure must degrade to the local mirror instead of
+    raising.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    descriptors = [
+        {
+            "key": "api_key",
+            "value": _api_key,
+            "rate_limit": {"max_parallel_requests": 5},
+        }
+    ]
+
+    captured_calls = []
+
+    async def fake_count(keys, args):
+        captured_calls.append((list(keys), list(args)))
+        return [3]
+
+    handler.parallel_count_script = fake_count
+
+    response = await handler.should_rate_limit(descriptors=descriptors, read_only=True)
+    assert captured_calls == [
+        ([counter_key], [PARALLEL_REQUEST_SLOT_TTL_SECONDS])
+    ]
+    assert response["overall_code"] == "OK"
+    assert response["statuses"] == [
+        {
+            "code": "OK",
+            "current_limit": 5,
+            "limit_remaining": 2,
+            "rate_limit_type": "max_parallel_requests",
+            "descriptor_key": "api_key",
+        }
+    ]
+    assert await local_cache.async_get_cache(key=counter_key) is None
+
+    async def failing_count(keys, args):
+        raise ConnectionError("redis unavailable")
+
+    handler.parallel_count_script = failing_count
+    await _seed_max_parallel_requests_slots(
+        local_cache, counter_key, ["s1", "s2", "s3", "s4", "s5"]
+    )
+    response = await handler.should_rate_limit(descriptors=descriptors, read_only=True)
+    assert response["overall_code"] == "OVER_LIMIT"
+    assert response["statuses"][0]["rate_limit_type"] == "max_parallel_requests"
+
+
+@pytest.mark.asyncio
+async def test_redis_release_script_updates_local_mirror_v3():
+    """
+    With Redis available, releases go through the release script with this
+    request's slot id per gauge key, and the returned in-flight counts are
+    mirrored into the local cache so the local first-pass check stays fresh.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    captured_calls = []
+
+    async def fake_release(keys, args):
+        captured_calls.append((list(keys), list(args)))
+        return [2]
+
+    handler.parallel_release_script = fake_release
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "metadata": {
+                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                    "slot_id": "slot-redis-test",
+                    "counter_keys": [counter_key],
+                }
+            },
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert captured_calls == [([counter_key], ["slot-redis-test"])]
+    assert await local_cache.async_get_cache(key=counter_key) == 2
+
+
+@pytest.mark.asyncio
+async def test_tpm_over_limit_rejection_releases_parallel_slot_v3(monkeypatch):
+    """
+    When the TPM reservation phase rejects a request AFTER the gauge slot was
+    acquired earlier in the same pre-call hook, the slot must be released
+    before the 429 is raised; otherwise every TPM rejection would leak a
+    slot until TTL pruning.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key, max_parallel_requests=5, tpm_limit=100
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    async def over_limit_reservation(descriptors, estimated_tokens, parent_otel_span=None):
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 100,
+                    "limit_remaining": 0,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "api_key",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(handler, "reserve_tpm_tokens", over_limit_reservation)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 0
+
+
+@pytest.mark.asyncio
 async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     """
     When Redis scripting fails after having worked, the local cache holds the
