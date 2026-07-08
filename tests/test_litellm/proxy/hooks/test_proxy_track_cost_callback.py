@@ -14,6 +14,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _ProxyDBLogger,
     _get_budget_reservation_from_metadata,
+    _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
 
@@ -1176,4 +1177,89 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         assert (
             kwargs["litellm_params"]["metadata"]["user_api_key_user_id"]
             == "mcp-user@example.com"
+        )
+
+
+@pytest.mark.parametrize(
+    "call_type, expected",
+    [
+        ("pass_through_endpoint", True),
+        ("llm_passthrough_route", True),
+        ("allm_passthrough_route", True),
+        ("acompletion", False),
+        ("call_mcp_tool", False),
+        (None, False),
+    ],
+)
+def test_should_track_cost_callback_pass_through_without_owner(call_type, expected):
+    """Regression for LIT-3782: unauthenticated pass-through requests (auth=false)
+    carry no key/user/team/end-user, yet must still be tracked so they land in
+    LiteLLM_SpendLogs. Other call types with no owner stay untracked."""
+    assert (
+        _should_track_cost_callback(
+            user_api_key=None,
+            user_id=None,
+            team_id=None,
+            end_user_id=None,
+            call_type=call_type,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "call_type, expect_spend_log",
+    [
+        ("pass_through_endpoint", True),
+        ("acompletion", False),
+        (None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
+    call_type, expect_spend_log
+):
+    """Regression for LIT-3782: a pass-through request with auth=false reaches the
+    cost callback with no key/user/team/end-user. Before the fix the spend-log
+    write was skipped and the request never appeared in request/usage logs. It
+    must now be written for pass-through call types while other unauthenticated
+    calls remain skipped."""
+    logger = _ProxyDBLogger()
+
+    kwargs = {
+        "call_type": call_type,
+        "model": "unknown",
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": {
+            "response_cost": 0.0,
+            "request_tags": None,
+        },
+        "stream": False,
+    }
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.update_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
+            1 if expect_spend_log else 0
         )
