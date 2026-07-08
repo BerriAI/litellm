@@ -5184,6 +5184,10 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     legacy_server.server_id = "legacy-m2m-id"
     legacy_server.auth_type = MCPAuth.oauth2
     legacy_server.oauth2_flow = None  # Legacy: field not set in DB
+    legacy_server.token_exchange_endpoint = None
+    legacy_server.audience = None
+    legacy_server.subject_token_type = None
+    legacy_server.token_exchange_profile = None
     legacy_server.token_url = "https://oauth.example.com/token"
     legacy_server.authorization_url = None
     legacy_server.client_id = "client-id"
@@ -6592,3 +6596,65 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
     assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
     prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
+    """
+    Finding 3 regression: the call_mcp_tool path must apply the same request-time
+    oauth2_flow backstop the listing path does. A legacy DB row with oauth2_flow=NULL
+    but the M2M credential shape must reach execute_mcp_tool resolved to
+    client_credentials, or the caller's Authorization would be forwarded to an M2M
+    upstream on tool execution during a backfill gap (the list path was covered, the
+    call path was not).
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+
+    legacy_server = MCPServer(
+        server_id="legacy-m2m-id",
+        name="legacy_m2m",
+        alias="legacy_m2m",
+        server_name="legacy_m2m",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow=None,  # legacy: unstamped
+        token_url="https://oauth.example.com/token",
+        client_id="client-id",
+        client_secret="client-secret",
+    )
+    assert legacy_server.has_client_credentials is False
+
+    captured_servers = {}
+
+    async def capture_execute(*args, **kwargs):
+        captured_servers["allowed"] = kwargs.get("allowed_mcp_servers")
+        return MagicMock(name="call_tool_result")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+            side_effect=capture_execute,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers: allowed_mcp_servers),
+        ),
+    ):
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+
+        await call_mcp_tool(name="legacy_m2m-tool", arguments={}, user_api_key_auth=user_auth)
+
+    resolved = captured_servers["allowed"]
+    assert resolved and resolved[0].oauth2_flow == "client_credentials"
+    assert resolved[0].has_client_credentials is True

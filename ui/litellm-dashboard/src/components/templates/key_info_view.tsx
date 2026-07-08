@@ -542,6 +542,9 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <Text>TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}</Text>
                   <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
+                  {Boolean(currentKeyData.metadata?.throttle_on_budget_exceeded) && (
+                    <Text>Throttle on budget exceeded: Yes</Text>
+                  )}
                 </div>
               </Card>
 
