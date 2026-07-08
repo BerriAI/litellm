@@ -819,6 +819,58 @@ def test_convert_schema_types_type_array_conversion():
     assert input_schema["required"] == ["studio"]
 
 
+def test_convert_schema_types_output_is_stable_across_hash_seeds():
+    """
+    The serialized Vertex schema for a nullable object tool param must be byte-identical
+    regardless of the interpreter's hash seed. _convert_schema_types used to iterate a set
+    when moving object-specific fields into the anyOf branch, so the JSON key order of
+    "properties"/"required" varied per process. That broke byte-level VCR request matching
+    in CI and forced live Vertex calls (and 429 flakes) on runs whose seed produced the
+    ordering that was not in the cassette.
+    """
+    import json
+    import subprocess
+
+    script = (
+        "import json\n"
+        "from litellm.llms.vertex_ai.common_utils import _build_vertex_schema\n"
+        "params = {\n"
+        "    'type': 'object',\n"
+        "    'additionalProperties': False,\n"
+        "    'required': ['ticket_id', 'customer_context'],\n"
+        "    'properties': {\n"
+        "        'ticket_id': {'type': 'string'},\n"
+        "        'customer_context': {\n"
+        "            'type': ['object', 'null'],\n"
+        "            'additionalProperties': False,\n"
+        "            'required': ['user_id', 'plan'],\n"
+        "            'properties': {'user_id': {'type': 'string'}, 'plan': {'type': 'string'}},\n"
+        "        },\n"
+        "    },\n"
+        "}\n"
+        "print(json.dumps(_build_vertex_schema(params), separators=(',', ':')))\n"
+    )
+    outputs = frozenset(
+        subprocess.run(
+            [sys.executable, "-c", script],
+            env={
+                **os.environ,
+                "PYTHONHASHSEED": str(seed),
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for seed in range(6)
+    )
+    assert len(outputs) == 1
+
+    object_variant = json.loads(next(iter(outputs)))["properties"]["customer_context"]["anyOf"][0]
+    assert object_variant["required"] == ["user_id", "plan"]
+    assert set(object_variant["properties"]) == {"user_id", "plan"}
+
+
 def test_fix_enum_empty_strings():
     """
     Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.

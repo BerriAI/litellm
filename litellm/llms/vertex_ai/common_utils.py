@@ -898,7 +898,7 @@ def _convert_schema_types(schema, depth=0):
         if isinstance(type_val, list) and len(type_val) > 1:
             # Convert type arrays to anyOf format
             # Fields that are specific to object/array types and should move into anyOf
-            type_specific_fields = {
+            type_specific_fields = (
                 "properties",
                 "required",
                 "additionalProperties",
@@ -907,7 +907,7 @@ def _convert_schema_types(schema, depth=0):
                 "maxItems",
                 "minProperties",
                 "maxProperties",
-            }
+            )
 
             any_of: List[Dict[str, Any]] = []
             for t in type_val:
