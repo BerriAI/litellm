@@ -2823,6 +2823,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 "[OTEL DEBUG] Creating span processor with DYNAMIC headers: %s",
                 {k: v[:20] + "..." if len(str(v)) > 20 else v for k, v in _split_otel_headers.items()},
             )
+        elif config_override:
+            verbose_logger.debug(
+                "[OTEL DEBUG] Creating span processor with DYNAMIC config, endpoint: %s",
+                otel_endpoint,
+            )
         else:
             verbose_logger.debug("[OTEL DEBUG] Creating span processor with GLOBAL headers")
 
