@@ -2586,6 +2586,243 @@ jobs:
       - store_test_results:
           path: test-results
 
+  claude_code_compat_pr_gate:
+    # Pre-merge gate for the Claude Code Compatibility Matrix.
+    #
+    # Boots the LiteLLM proxy from the PR's code, installs the `claude`
+    # CLI at a version selected at run time from npm (newest version
+    # whose publish timestamp is >= 3 days old; the 3-day window is a
+    # security review buffer), and runs every test under
+    # `tests/e2e/claude_code/`. A red status on this job blocks merge —
+    # see issue #26479 / PRD #26476 for the design.
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            # `uv sync` resolves and installs Python packages declared
+            # in the PR's `pyproject.toml` / `uv.lock`. A malicious PR
+            # could add a dependency whose build backend or
+            # post-install hook reads ANTHROPIC_API_KEY / AWS_* /
+            # VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN out of
+            # `os.environ` during the install and exfiltrates them.
+            # Run the install under `env -i` with the same minimal
+            # allowlist as the resolver / npm install / pytest steps
+            # below so PR-controlled install code cannot see provider
+            # credentials. Public PyPI does not require auth and uv's
+            # cache lives under `$HOME`, so this allowlist is
+            # sufficient.
+            env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              USER="${USER:-circleci}" \
+              TERM="${TERM:-dumb}" \
+              LANG="${LANG:-C.UTF-8}" \
+              LC_ALL="${LC_ALL:-}" \
+              TMPDIR="${TMPDIR:-/tmp}" \
+              uv sync --frozen --all-groups --all-extras --python 3.12
+      - start_postgres
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Resolve Claude Code CLI version (newest published >= 3 days ago)
+          command: |
+            # The resolver is PR-controlled Python code: a malicious PR
+            # could otherwise modify this module to read ANTHROPIC_API_KEY
+            # / AWS_* / VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN out of
+            # the job env (CircleCI injects project + context env vars
+            # into every step) and exfiltrate them via the outbound npm
+            # HTTPS call. Run the resolver under `env -i` with a
+            # minimal allowlist so it sees only PATH/HOME/TMPDIR/locale
+            # vars — enough for uv, Python's TLS stack, and the npm
+            # registry HTTPS call to function, but no credentials.
+            # BASH_ENV is intentionally NOT passed through, so the
+            # resolver subshell skips sourcing any prior step's exports.
+            CLAUDE_CODE_VERSION=$(env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              USER="${USER:-circleci}" \
+              TERM="${TERM:-dumb}" \
+              LANG="${LANG:-C.UTF-8}" \
+              LC_ALL="${LC_ALL:-}" \
+              TMPDIR="${TMPDIR:-/tmp}" \
+              PYTHONPATH="$PWD/tests/e2e" \
+              uv run --no-sync python -m claude_code.pr_gate_version_resolver)
+            # The resolver lives under tests/e2e/claude_code/ and is therefore
+            # PR-controlled: a malicious PR could make it print a value
+            # containing a newline + shell snippet. Reject anything that
+            # is not a strict `N.N.N` semver before persisting, and
+            # shell-quote on write so a bypass of the regex still cannot
+            # break out of the `export` assignment when CircleCI sources
+            # $BASH_ENV at the start of every subsequent step (which
+            # happens before our `env -i` wrappers can run and would
+            # otherwise execute the injected snippet with provider
+            # credentials in scope).
+            if ! [[ "$CLAUDE_CODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "pr_gate_version_resolver returned a non-semver value; refusing to persist" >&2
+              exit 1
+            fi
+            echo "Selected @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+            printf 'export CLAUDE_CODE_VERSION=%q\n' "$CLAUDE_CODE_VERSION" >> "$BASH_ENV"
+      - run:
+          name: Install Node.js 20 + Claude Code CLI
+          command: |
+            # The machine image ships with nvm preinstalled; use it to
+            # pin Node 20 (Claude Code's officially supported runtime).
+            export NVM_DIR="$HOME/.nvm"
+            # shellcheck source=/dev/null
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
+            NODE_BIN_DIR="$(dirname "$(command -v node)")"
+            echo "export PATH=\"${NODE_BIN_DIR}:\$PATH\"" >> "$BASH_ENV"
+            # `npm install -g @anthropic-ai/claude-code` runs the
+            # package's `postinstall: node install.cjs` script, which
+            # downloads the platform-specific `claude` binary — it
+            # executes arbitrary code from npm with the full job env.
+            # `claude --version` on the next line also runs package
+            # code. Both must not see provider credentials: a
+            # compromised package release (or transitive registry
+            # hijack) could exfiltrate ANTHROPIC_API_KEY / AWS_* /
+            # VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN. Run them
+            # under `env -i` with the same allowlist as the resolver
+            # step plus CLAUDE_CODE_VERSION (for package-spec
+            # interpolation) and the Node toolchain bits. We cannot
+            # use `--ignore-scripts`: the postinstall is the step that
+            # fetches the platform binary, so skipping it would leave
+            # the install unusable.
+            env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              USER="${USER:-circleci}" \
+              TERM="${TERM:-dumb}" \
+              LANG="${LANG:-C.UTF-8}" \
+              LC_ALL="${LC_ALL:-}" \
+              TMPDIR="${TMPDIR:-/tmp}" \
+              NVM_DIR="$NVM_DIR" \
+              CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" \
+              bash -c 'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude --version'
+      - run:
+          name: Run LiteLLM proxy from PR's code
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+              -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+              -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+              -e AWS_REGION_NAME="us-east-1" \
+              -e VERTEXAI_CREDENTIALS="$VERTEXAI_CREDENTIALS" \
+              -e VERTEXAI_PROJECT="$VERTEXAI_PROJECT" \
+              -e VERTEXAI_LOCATION="$VERTEXAI_LOCATION" \
+              -e AZURE_FOUNDRY_API_KEY="$AZURE_FOUNDRY_API_KEY" \
+              -e AZURE_FOUNDRY_API_BASE="$AZURE_FOUNDRY_API_BASE" \
+              -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
+              --add-host host.docker.internal:host-gateway \
+              --name compat-proxy \
+              -v $(pwd)/tests/e2e/claude_code/test_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Stream proxy logs
+          command: docker logs -f compat-proxy
+          background: true
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
+      - run:
+          name: Run Claude Code compatibility test suite
+          command: |
+            mkdir -p test-results compat-artifacts
+            # The proxy already runs in its own container with the
+            # provider credentials passed via `docker -e`. Pytest only
+            # needs to talk to the proxy at localhost:4000 — it has no
+            # legitimate reason to see ANTHROPIC_API_KEY / AWS_* /
+            # VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN in its own
+            # env. Wrap the pytest invocation in `env -i` so PR-
+            # controlled test code under tests/e2e/claude_code/ cannot
+            # read provider creds out of `os.environ` and exfiltrate
+            # them via an outbound call from inside a test or
+            # conftest hook (a sibling vector to the model-controlled
+            # Bash concern handled separately by the per-cell
+            # `Bash(echo pong) + dontAsk` restriction).
+            #
+            # COMPAT_RESULTS_PATH / COMPAT_RATE_LIMIT_SUMMARY_PATH
+            # point the conftest's tagged-union artifacts at a
+            # directory we explicitly persist below via
+            # store_artifacts; without these overrides the conftest
+            # writes to the working directory and no CI step collects
+            # them, so reviewers can't pull the per-cell pass/fail
+            # breakdown when a red gate needs triage.
+            #
+            # `long_context_1m` is excluded from the pytest run:
+            # the row sends a ~210k-token prompt to Sonnet + Opus
+            # across five providers (~$19 / run by the row's own
+            # cost note). That price tag is acceptable on the daily
+            # cron but not on a per-PR merge gate -- a busy main
+            # branch would burn hundreds of dollars/day on this one
+            # row alone. The daily cron in
+            # tests/e2e/claude_code/cron_vm/run_daily.sh still exercises
+            # it and publishes the cell.
+            #
+            # `web_search` is excluded from the gate too: the
+            # assertion ("a `tool_use` block with name=WebSearch
+            # appeared") depends on the model deciding to call the
+            # tool. `--allowed-tools WebSearch` permits the call but
+            # cannot force it, and Haiku 4.5 in particular routinely
+            # answers from training data instead. Running it inside
+            # the merge-blocking gate would flake on non-deterministic
+            # model behaviour; the daily cron still exercises the row
+            # and publishes the cell to the matrix.
+            env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              USER="${USER:-circleci}" \
+              TERM="${TERM:-dumb}" \
+              LANG="${LANG:-C.UTF-8}" \
+              LC_ALL="${LC_ALL:-}" \
+              TMPDIR="${TMPDIR:-/tmp}" \
+              LITELLM_PROXY_BASE_URL="http://localhost:4000" \
+              LITELLM_PROXY_API_KEY="sk-1234" \
+              COMPAT_RESULTS_PATH="$(pwd)/compat-artifacts/compat-results.json" \
+              COMPAT_RATE_LIMIT_SUMMARY_PATH="$(pwd)/compat-artifacts/compat-rate-limit-summary.json" \
+              uv run --no-sync python -m pytest -vv tests/e2e/claude_code/ \
+                --ignore=tests/e2e/claude_code/_driver_unit_tests \
+                --ignore=tests/e2e/claude_code/_builder_unit_tests \
+                --ignore=tests/e2e/claude_code/_publisher_unit_tests \
+                --ignore=tests/e2e/claude_code/_pr_gate_unit_tests \
+                --ignore=tests/e2e/claude_code/long_context_1m \
+                --ignore=tests/e2e/claude_code/web_search \
+                --junitxml=test-results/junit.xml \
+                --durations=10
+          no_output_timeout: 30m
+
+      # Store test results (JUnit) for CircleCI's test-summary view.
+      - store_test_results:
+          path: test-results
+      # Persist the compat-matrix artifacts (per-cell tagged-union JSON
+      # + per-provider rate-limit summary) so a red gate can be triaged
+      # from the CircleCI UI without re-running. `store_test_results`
+      # only handles JUnit-shaped XML, so these JSON blobs need their
+      # own store_artifacts step.
+      - store_artifacts:
+          path: compat-artifacts
+          destination: compat-artifacts
+
   upload-coverage:
     docker:
       - *python312_image
@@ -3088,6 +3325,10 @@ workflows:
             - build_docker_database_image
           filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
+          requires:
+            - build_docker_database_image
+          filters: *main_branches
+      - claude_code_compat_pr_gate:
           requires:
             - build_docker_database_image
           filters: *main_branches

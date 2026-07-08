@@ -1,0 +1,38 @@
+{
+  "schema_version": "1",
+  "generated_at": "2026-04-25T00:00:00Z",
+  "litellm_version": "v1.83.0-stable",
+  "claude_code_version": "2.1.120",
+  "providers": [
+    "anthropic",
+    "bedrock_invoke"
+  ],
+  "features": [
+    {
+      "id": "basic_messaging_non_streaming",
+      "name": "Basic messaging (non-streaming)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "not_tested"
+        }
+      }
+    },
+    {
+      "id": "tool_use",
+      "name": "Tool use",
+      "providers": {
+        "anthropic": {
+          "status": "fail",
+          "error": "[claude-sonnet-4-6] tool call dropped"
+        },
+        "bedrock_invoke": {
+          "status": "not_applicable",
+          "reason": "tool use not yet wired up for Bedrock Invoke"
+        }
+      }
+    }
+  ]
+}
