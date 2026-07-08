@@ -1216,6 +1216,101 @@ async def test_handle_streamable_http_mcp_oauth_delegate_with_forwarded_token_sk
     assert mock_handle_request.await_count == 1
 
 
+async def _run_passthrough_connect(
+    *,
+    auth_type,
+    server_names,
+    mcp_server_auth_headers,
+    scope_extra_headers=None,
+):
+    """Drive handle_streamable_http_mcp through the preemptive-401 gate and report whether it
+    challenged (raised) or forwarded to the session manager. Returns (challenged, www_authenticate)."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+        session_manager_stateless,
+    )
+
+    scope = _passthrough_mode_scope(server_names[0], extra_headers=scope_extra_headers)
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "u1"
+    server = _build_passthrough_mode_server(server_names[0], auth_type)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, server_names, mcp_server_auth_headers, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=server,
+        ),
+        patch.object(session_manager_stateless, "handle_request", new_callable=AsyncMock) as mock_handle_request,
+        patch.object(session_manager_stateless, "_server_instances", {}),
+    ):
+        try:
+            await handle_streamable_http_mcp(scope, receive, send)
+        except HTTPException as exc:
+            return True, (exc.headers or {}).get("www-authenticate")
+    return mock_handle_request.await_count == 0, None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth_delegate, MCPAuth.true_passthrough])
+async def test_handle_streamable_http_mcp_per_server_header_skips_preemptive_challenge(auth_type):
+    """A per-server x-mcp-{alias}-authorization header binds the upstream token to one server; the
+    connect gate must recognize it and forward instead of spuriously 401-ing, since egress already
+    honors it. Without this, the mandatory multi-server binding is unusable at connect."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp  # noqa: F401
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    challenged, _ = await _run_passthrough_connect(
+        auth_type=auth_type,
+        server_names=["pt_server"],
+        mcp_server_auth_headers={"pt_server": {"Authorization": "Bearer upstream-token"}},
+    )
+    assert challenged is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth_delegate, MCPAuth.true_passthrough])
+async def test_handle_streamable_http_mcp_aggregate_does_not_preemptively_challenge(auth_type):
+    """A multi-server aggregate must degrade gracefully: the preemptive 401 is single-server only, so
+    one server missing a token cannot 401 the whole connect (the listing absorbs per-server failures)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp  # noqa: F401
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    challenged, _ = await _run_passthrough_connect(
+        auth_type=auth_type,
+        server_names=["pt_server", "pt_server_2"],
+        mcp_server_auth_headers=None,
+    )
+    assert challenged is False
+
+
 @pytest.mark.asyncio
 async def test_handle_streamable_http_mcp_true_passthrough_without_token_surfaces_verbatim_upstream_challenge():
     """true_passthrough is a transparent proxy: with no client Authorization the

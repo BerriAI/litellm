@@ -1441,6 +1441,35 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    def _client_has_per_server_auth_header(
+        server: MCPServer,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+    ) -> bool:
+        """True if the request carries a per-server ``x-mcp-{alias}-authorization``
+        header for this server. This is the multi-server binding: it names one
+        upstream, so it is unambiguously the caller's upstream token regardless of
+        auth mode (never the LiteLLM admission credential).
+        """
+        if not mcp_server_auth_headers:
+            return False
+        for key in (server.alias, server.server_name, server.name):
+            if not key:
+                continue
+            server_headers = None
+            for k, v in mcp_server_auth_headers.items():
+                if k.lower() == key.lower():
+                    server_headers = v
+                    break
+            if server_headers is None:
+                continue
+            if isinstance(server_headers, str) and server_headers.strip():
+                return True
+            if isinstance(server_headers, dict):
+                for hk in server_headers.keys():
+                    if hk.lower() == "authorization":
+                        return True
+        return False
+
     def _client_has_passthrough_authorization(
         server: MCPServer,
         oauth2_headers: Optional[Dict[str, str]],
@@ -1458,24 +1487,7 @@ if MCP_AVAILABLE:
             for k in oauth2_headers.keys():
                 if k.lower() == "authorization":
                     return True
-        if mcp_server_auth_headers:
-            for key in (server.alias, server.server_name, server.name):
-                if not key:
-                    continue
-                server_headers = None
-                for k, v in mcp_server_auth_headers.items():
-                    if k.lower() == key.lower():
-                        server_headers = v
-                        break
-                if server_headers is None:
-                    continue
-                if isinstance(server_headers, str) and server_headers.strip():
-                    return True
-                if isinstance(server_headers, dict):
-                    for hk in server_headers.keys():
-                        if hk.lower() == "authorization":
-                            return True
-        return False
+        return _client_has_per_server_auth_header(server, mcp_server_auth_headers)
 
     async def _get_user_oauth_extra_headers_from_db(
         server: MCPServer,
@@ -3540,7 +3552,13 @@ if MCP_AVAILABLE:
                     headers={"www-authenticate": www_authenticate},
                 )
 
-            if server and server.is_oauth_delegate and _get_forwarded_auth_from_scope(scope) is None:
+            if (
+                server
+                and server.is_oauth_delegate
+                and len(mcp_servers or []) == 1
+                and _get_forwarded_auth_from_scope(scope) is None
+                and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
+            ):
                 www_authenticate = _get_passthrough_www_authenticate(
                     scope=scope,
                     server_name=server_name,
@@ -3551,7 +3569,13 @@ if MCP_AVAILABLE:
                     headers={"www-authenticate": www_authenticate},
                 )
 
-            if server and server.is_true_passthrough and not _scope_has_authorization_header(scope):
+            if (
+                server
+                and server.is_true_passthrough
+                and len(mcp_servers or []) == 1
+                and not _scope_has_authorization_header(scope)
+                and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
+            ):
                 upstream_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", "")
                 if upstream_status == 401 and upstream_www_authenticate:
                     raise HTTPException(
