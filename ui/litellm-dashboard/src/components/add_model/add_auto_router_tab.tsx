@@ -147,6 +147,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
         return;
       }
 
+      if (!currentFormValues.auto_router_embedding_model && !currentFormValues.custom_embedding_model) {
+        NotificationManager.fromBackend("Please select an Embedding Model");
+        return;
+      }
+
       form.setFieldsValue({
         custom_llm_provider: "auto_router",
         model: currentFormValues.auto_router_name,
@@ -330,15 +335,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
               {/* Auto Router Embedding Model */}
               <Form.Item
+                rules={[{ required: routerType === "semantic", message: "Embedding model is required" }]}
                 label="Embedding Model"
                 name="auto_router_embedding_model"
-                tooltip="Optional: Embedding model to use for semantic routing decisions"
+                tooltip="Embedding model used to compute semantic similarity for routing decisions"
                 labelCol={{ span: 10 }}
                 labelAlign="left"
               >
                 <AntdSelect
                   value={form.getFieldValue("auto_router_embedding_model")}
-                  placeholder="Select an embedding model (optional)"
+                  placeholder="Select an embedding model"
                   onChange={(value) => {
                     setShowCustomEmbeddingModel(value === "custom");
                     form.setFieldValue("auto_router_embedding_model", value);

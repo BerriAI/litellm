@@ -106,7 +106,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         auto_router_config: JSON.stringify(routerConfig),
         auto_router_default_model: values.auto_router_default_model,
-        auto_router_embedding_model: values.auto_router_embedding_model || undefined,
+        auto_router_embedding_model: values.auto_router_embedding_model,
       };
 
       // Prepare updated model_info
@@ -205,15 +205,18 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           </Form.Item>
 
           {/* Embedding Model */}
-          <Form.Item label="Embedding Model" name="auto_router_embedding_model">
+          <Form.Item
+            label="Embedding Model"
+            name="auto_router_embedding_model"
+            rules={[{ required: true, message: "Embedding model is required" }]}
+          >
             <AntdSelect
-              placeholder="Select an embedding model (optional)"
+              placeholder="Select an embedding model"
               onChange={(value) => {
                 setShowCustomEmbeddingModel(value === "custom");
               }}
               options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
               showSearch={true}
-              allowClear
             />
           </Form.Item>
 
