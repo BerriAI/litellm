@@ -591,10 +591,19 @@ class MCPRequestHandler:
 
         ASGI headers are in format: List[List[bytes, bytes]]
         We need to convert them to the format Headers expects.
+
+        Collapsing the ASGI list into a dict keeps the last value for a duplicated
+        header name, so a request carrying more than one ``Authorization`` is
+        rejected first: for the client-forwarded token modes the gateway relays the
+        caller's ``Authorization`` upstream, so a duplicate would make which token is
+        forwarded ambiguous (and diverge from what admission inspected). Multiple
+        ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
+        a comma-combinable field), so fail closed with a 400.
         """
+        raw_headers = scope.get("headers", [])
+        MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
-            raw_headers = scope.get("headers", [])
             # Convert bytes to strings and create dict for Headers constructor
             headers_dict = {name.decode("latin-1"): value.decode("latin-1") for name, value in raw_headers}
             return Headers(headers_dict)
@@ -602,6 +611,26 @@ class MCPRequestHandler:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
             # Return empty Headers object with empty dict
             return Headers({})
+
+    @staticmethod
+    def _reject_duplicate_authorization(raw_headers: object) -> None:
+        """Raise 400 when the raw ASGI headers carry more than one ``Authorization`` header."""
+        if not isinstance(raw_headers, (list, tuple)):
+            return
+        count = 0
+        for entry in raw_headers:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 1:
+                continue
+            name = entry[0]
+            if isinstance(name, (bytes, bytearray)) and bytes(name).lower() == b"authorization":
+                count += 1
+            elif isinstance(name, str) and name.lower() == "authorization":
+                count += 1
+        if count > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Multiple Authorization headers are not allowed",
+            )
 
     @staticmethod
     async def get_allowed_mcp_servers(
