@@ -2,7 +2,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_guardrail import (
+        CustomGuardrail,
+        ModifyResponseException,
+    )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
@@ -29,11 +32,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Convert to dict if it's a Pydantic object
-        user_dict = (
-            user_api_key_dict.model_dump()
-            if hasattr(user_api_key_dict, "model_dump")
-            else user_api_key_dict
-        )
+        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
 
         if not isinstance(user_dict, dict):
             return {}
@@ -101,6 +100,30 @@ class BaseTranslation(ABC):
         Optional to override in subclasses.
         """
         return responses_so_far
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Optional[list[Any]] = None,
+    ) -> Optional[list[bytes]]:
+        """
+        Build the streaming chunks that deliver a guardrail block message and
+        cleanly terminate the stream in this provider's wire format.
+
+        ``stream_started`` is True when real chunks were already sent to the
+        client: the result must *continue* the in-progress message (e.g. close
+        the open content block and append the block message) rather than start
+        a new one, which clients reject. ``responses_so_far`` provides the prior
+        chunks needed to do so. When False, nothing has been sent and a
+        standalone block message is emitted.
+
+        Returns None when the format has no safe terminator; the caller then
+        re-raises ``exc`` so the proxy can surface a clean error instead.
+        Override in provider subclasses that support synthesizing a block
+        stream.
+        """
+        return None
 
     def get_structured_messages(self, data: dict) -> Optional[List["AllMessageValues"]]:
         """

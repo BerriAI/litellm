@@ -43,9 +43,7 @@ class RequestSizeLimitMiddleware:
 
         content_length = _get_content_length(scope=scope)
         if content_length is not None and content_length > max_request_size_bytes:
-            await _send_request_too_large(
-                send=send, max_request_size_mb=max_request_size_mb
-            )
+            await _send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
             return
 
         received_body_bytes = 0
@@ -75,9 +73,7 @@ class RequestSizeLimitMiddleware:
         except RequestEntityTooLarge:
             if response_started:
                 raise
-            await _send_request_too_large(
-                send=send, max_request_size_mb=max_request_size_mb
-            )
+            await _send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
 
 
 def _mb_to_bytes(max_request_size_mb: Optional[Union[int, float]]) -> Optional[int]:

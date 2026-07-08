@@ -1,11 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -32,9 +27,7 @@ export const accessGroupKeys = createQueryKeys("accessGroups");
 
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const fetchAccessGroups = async (
-  accessToken: string,
-): Promise<AccessGroupResponse[]> => {
+const fetchAccessGroups = async (accessToken: string): Promise<AccessGroupResponse[]> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/v1/access_group`;
 
@@ -64,7 +57,6 @@ export const useAccessGroups = () => {
   return useQuery<AccessGroupResponse[]>({
     queryKey: accessGroupKeys.list({}),
     queryFn: async () => fetchAccessGroups(accessToken!),
-    enabled:
-      Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
+    enabled: Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
   });
 };

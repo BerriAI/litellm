@@ -98,11 +98,7 @@ def _merge_query_params_into_data(data: dict, request: Request) -> dict:
     raw_template = query_params.get("litellm_params_template")
     if raw_template:
         try:
-            template = (
-                json.loads(raw_template)
-                if isinstance(raw_template, str)
-                else raw_template
-            )
+            template = json.loads(raw_template) if isinstance(raw_template, str) else raw_template
         except (json.JSONDecodeError, ValueError):
             template = {}
         if isinstance(template, dict):

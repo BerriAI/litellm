@@ -14,10 +14,7 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
  */
 test.describe("Premium license wiring", () => {
   test("admin session JWT carries premium_user=true when LITELLM_LICENSE is set", () => {
-    test.skip(
-      !process.env.LITELLM_LICENSE,
-      "LITELLM_LICENSE not set in test env — proxy is running unlicensed",
-    );
+    test.skip(!process.env.LITELLM_LICENSE, "LITELLM_LICENSE not set in test env — proxy is running unlicensed");
 
     const storage = JSON.parse(fs.readFileSync(ADMIN_STORAGE_PATH, "utf-8"));
     const tokenCookie = storage.cookies?.find((c: { name: string }) => c.name === "token");
@@ -28,9 +25,7 @@ test.describe("Premium license wiring", () => {
     const jwtParts = tokenCookie.value.split(".");
     expect(jwtParts.length, "token cookie is not a 3-part JWT").toBe(3);
     const [, payloadB64] = jwtParts;
-    const payload = JSON.parse(
-      Buffer.from(payloadB64, "base64url").toString("utf-8"),
-    );
+    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf-8"));
 
     expect(payload.premium_user).toBe(true);
   });

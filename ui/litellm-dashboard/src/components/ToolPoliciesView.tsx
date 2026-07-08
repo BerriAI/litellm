@@ -4,9 +4,7 @@ import React, { useState } from "react";
 import { ToolDetail } from "@/components/ToolDetail";
 import { ToolPolicies } from "@/components/ToolPolicies";
 
-type View =
-  | { type: "overview" }
-  | { type: "detail"; toolName: string };
+type View = { type: "overview" } | { type: "detail"; toolName: string };
 
 interface ToolPoliciesViewProps {
   accessToken: string | null;
@@ -27,17 +25,9 @@ export default function ToolPoliciesView({ accessToken, userRole }: ToolPolicies
   return (
     <div className="p-6 w-full min-w-0 flex-1">
       {view.type === "detail" ? (
-        <ToolDetail
-          toolName={view.toolName}
-          onBack={handleBack}
-          accessToken={accessToken}
-        />
+        <ToolDetail toolName={view.toolName} onBack={handleBack} accessToken={accessToken} />
       ) : (
-        <ToolPolicies
-          accessToken={accessToken}
-          userRole={userRole}
-          onSelectTool={handleSelectTool}
-        />
+        <ToolPolicies accessToken={accessToken} userRole={userRole} onSelectTool={handleSelectTool} />
       )}
     </div>
   );

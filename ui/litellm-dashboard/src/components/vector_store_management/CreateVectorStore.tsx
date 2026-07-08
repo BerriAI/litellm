@@ -14,6 +14,7 @@ import {
   getProviderSpecificFields,
   VectorStoreFieldConfig,
 } from "../vector_store_providers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NotificationsManager from "../molecules/notifications_manager";
 import S3VectorsConfig from "./S3VectorsConfig";
 
@@ -133,9 +134,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
         if (!doc.originFileObj) continue;
 
         // Update document status to uploading
-        setDocuments((prev) =>
-          prev.map((d) => (d.uid === doc.uid ? { ...d, status: "uploading" as const } : d))
-        );
+        setDocuments((prev) => prev.map((d) => (d.uid === doc.uid ? { ...d, status: "uploading" as const } : d)));
 
         try {
           const result = await ragIngestCall(
@@ -145,7 +144,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
             vectorStoreId, // Use the same vector store ID for subsequent uploads
             vectorStoreName || undefined,
             vectorStoreDescription || undefined,
-            providerParams
+            providerParams,
           );
 
           // Store the vector store ID from the first successful ingest
@@ -156,22 +155,18 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
           results.push(result);
 
           // Update document status to done
-          setDocuments((prev) =>
-            prev.map((d) => (d.uid === doc.uid ? { ...d, status: "done" as const } : d))
-          );
+          setDocuments((prev) => prev.map((d) => (d.uid === doc.uid ? { ...d, status: "done" as const } : d)));
         } catch (error) {
           console.error(`Error ingesting ${doc.name}:`, error);
           // Update document status to error
-          setDocuments((prev) =>
-            prev.map((d) => (d.uid === doc.uid ? { ...d, status: "error" as const } : d))
-          );
+          setDocuments((prev) => prev.map((d) => (d.uid === doc.uid ? { ...d, status: "error" as const } : d)));
           throw error; // Stop processing on first error
         }
       }
 
       setIngestResults(results);
       NotificationsManager.success(
-        `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`
+        `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`,
       );
 
       if (onSuccess && vectorStoreId) {
@@ -213,9 +208,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
             <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
           </p>
           <p className="ant-upload-text">Click or drag files to this area to upload</p>
-          <p className="ant-upload-hint">
-            Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD
-          </p>
+          <p className="ant-upload-hint">Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD</p>
         </Dragger>
       </Card>
 
@@ -302,7 +295,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                     <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
                       <div className="flex items-center space-x-2">
                         <img
-                          src={vectorStoreProviderLogoMap[providerDisplayName]}
+                          src={resolveLogoSrc(vectorStoreProviderLogoMap[providerDisplayName])}
                           alt={`${providerEnum} logo`}
                           className="w-5 h-5"
                           onError={(e) => {
@@ -356,9 +349,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                     >
                       <Input
                         value={providerParams[field.name] || ""}
-                        onChange={(e) =>
-                          setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
-                        }
+                        onChange={(e) => setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))}
                         placeholder={field.placeholder}
                         size="large"
                         className="rounded-md"
@@ -383,9 +374,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                     <Input
                       type={field.type === "password" ? "password" : "text"}
                       value={providerParams[field.name] || ""}
-                      onChange={(e) =>
-                        setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
-                      }
+                      onChange={(e) => setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))}
                       placeholder={field.placeholder}
                       size="large"
                       className="rounded-md"

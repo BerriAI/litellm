@@ -22,6 +22,7 @@ import React, { useEffect, useState } from "react";
 
 import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
 import EmailSettings from "./email_settings";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const { Title, Paragraph } = Typography;
@@ -53,7 +54,7 @@ interface genericCallbackParams {
   litellm_callback_params: string[] | null; // known required params for this callback
 }
 
-const assetsLogoFolder = "../ui/assets/logos/";
+const assetsLogoFolder = "/ui/assets/logos/";
 
 interface DynamicParamsFieldsProps {
   params: string[];
@@ -96,14 +97,14 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input.Password
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             ) : paramType === "number" ? (
               <Input
                 type="number"
                 size="large"
                 placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
                 min={0}
                 max={1}
                 step={0.1}
@@ -112,7 +113,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             )}
           </FormItem>
@@ -156,10 +157,11 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
       >
         {callbackConfigs.map((callbackConfig) => {
           const logo = callbackConfig.logo;
-          const logoSrc =
+          const logoSrc = resolveLogoSrc(
             logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
               ? logo
-              : `${assetsLogoFolder}${logo}`;
+              : `${assetsLogoFolder}${logo}`,
+          );
 
           return (
             <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
@@ -169,7 +171,7 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                   <img
                     src={logoSrc}
                     alt={`${callbackConfig.displayName} logo`}
-                    className="w-6 h-6 rounded object-contain"
+                    className="w-6 h-6 rounded-sm object-contain"
                     onError={(e) => {
                       e.currentTarget.style.display = "none";
                     }}

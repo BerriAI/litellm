@@ -19,18 +19,18 @@ const isPageAccessibleToInternalUsers = (pageRoles?: string[]): boolean => {
   if (!pageRoles || pageRoles.length === 0) {
     return true; // No role restrictions
   }
-  
+
   // Check if any of the page's roles match internal user roles
-  return pageRoles.some(role => internalUserRoles.includes(role));
+  return pageRoles.some((role) => internalUserRoles.includes(role));
 };
 
 describe("Page Utils - LeftNav Sync", () => {
   it("should return all pages from leftnav configuration", () => {
     const availablePages = getAvailablePages();
-    
+
     // Should have pages
     expect(availablePages.length).toBeGreaterThan(0);
-    
+
     // Each page should have required fields
     availablePages.forEach((page) => {
       expect(page).toHaveProperty("page");
@@ -47,21 +47,17 @@ describe("Page Utils - LeftNav Sync", () => {
   it("should include all navigable pages from menuGroups", () => {
     const availablePages = getAvailablePages();
     const availablePageKeys = availablePages.map((p) => p.page);
-    
+
     // Collect all page keys from menuGroups (excluding parent containers and pages not accessible to internal users)
     const menuPageKeys: string[] = [];
     const excludedParents = ["tools", "experimental", "settings"];
-    
+
     menuGroups.forEach((group) => {
       group.items.forEach((item) => {
-        if (
-          item.page &&
-          !excludedParents.includes(item.page) &&
-          isPageAccessibleToInternalUsers(item.roles)
-        ) {
+        if (item.page && !excludedParents.includes(item.page) && isPageAccessibleToInternalUsers(item.roles)) {
           menuPageKeys.push(item.page);
         }
-        
+
         // Add children (only if accessible to internal users)
         if (item.children) {
           item.children.forEach((child) => {
@@ -72,43 +68,35 @@ describe("Page Utils - LeftNav Sync", () => {
         }
       });
     });
-    
+
     // Every menu page accessible to internal users should be in available pages
     menuPageKeys.forEach((pageKey) => {
-      expect(
-        availablePageKeys,
-        `Page "${pageKey}" from menuGroups should be in getAvailablePages() output`
-      ).toContain(pageKey);
+      expect(availablePageKeys, `Page "${pageKey}" from menuGroups should be in getAvailablePages() output`).toContain(
+        pageKey,
+      );
     });
   });
 
   it("should not include parent container pages (tools, experimental, settings)", () => {
     const availablePages = getAvailablePages();
     const availablePageKeys = availablePages.map((p) => p.page);
-    
+
     const excludedParents = ["tools", "experimental", "settings"];
-    
+
     excludedParents.forEach((parent) => {
-      expect(
-        availablePageKeys,
-        `Parent container "${parent}" should not be in available pages`
-      ).not.toContain(parent);
+      expect(availablePageKeys, `Parent container "${parent}" should not be in available pages`).not.toContain(parent);
     });
   });
 
   it("should have descriptions for all pages", () => {
     const availablePages = getAvailablePages();
-    
+
     availablePages.forEach((page) => {
-      expect(
-        page.description,
-        `Page "${page.page}" should have a description`
-      ).toBeTruthy();
-      
-      expect(
-        page.description,
-        `Page "${page.page}" should not have placeholder description`
-      ).not.toBe("No description available");
+      expect(page.description, `Page "${page.page}" should have a description`).toBeTruthy();
+
+      expect(page.description, `Page "${page.page}" should not have placeholder description`).not.toBe(
+        "No description available",
+      );
     });
   });
 
@@ -116,13 +104,13 @@ describe("Page Utils - LeftNav Sync", () => {
     // Collect all page keys from menuGroups
     const menuPageKeys: string[] = [];
     const excludedParents = ["tools", "experimental", "settings"];
-    
+
     menuGroups.forEach((group) => {
       group.items.forEach((item) => {
         if (item.page && !excludedParents.includes(item.page)) {
           menuPageKeys.push(item.page);
         }
-        
+
         if (item.children) {
           item.children.forEach((child) => {
             menuPageKeys.push(child.page);
@@ -130,7 +118,7 @@ describe("Page Utils - LeftNav Sync", () => {
         }
       });
     });
-    
+
     // Every menu page should have a description
     const missingDescriptions: string[] = [];
     menuPageKeys.forEach((pageKey) => {
@@ -138,10 +126,10 @@ describe("Page Utils - LeftNav Sync", () => {
         missingDescriptions.push(pageKey);
       }
     });
-    
+
     expect(
       missingDescriptions,
-      `These pages are missing descriptions in page_metadata.ts: ${missingDescriptions.join(", ")}`
+      `These pages are missing descriptions in page_metadata.ts: ${missingDescriptions.join(", ")}`,
     ).toHaveLength(0);
   });
 
@@ -149,13 +137,13 @@ describe("Page Utils - LeftNav Sync", () => {
     // Collect all page keys from menuGroups
     const menuPageKeys: string[] = [];
     const excludedParents = ["tools", "experimental", "settings"];
-    
+
     menuGroups.forEach((group) => {
       group.items.forEach((item) => {
         if (item.page && !excludedParents.includes(item.page)) {
           menuPageKeys.push(item.page);
         }
-        
+
         if (item.children) {
           item.children.forEach((child) => {
             menuPageKeys.push(child.page);
@@ -163,7 +151,7 @@ describe("Page Utils - LeftNav Sync", () => {
         }
       });
     });
-    
+
     // Check for descriptions that don't match any menu page
     const orphanedDescriptions: string[] = [];
     Object.keys(pageDescriptions).forEach((descKey) => {
@@ -171,35 +159,30 @@ describe("Page Utils - LeftNav Sync", () => {
         orphanedDescriptions.push(descKey);
       }
     });
-    
+
     expect(
       orphanedDescriptions,
-      `These descriptions don't match any page in menuGroups: ${orphanedDescriptions.join(", ")}. Remove them or add the pages to leftnav.`
+      `These descriptions don't match any page in menuGroups: ${orphanedDescriptions.join(", ")}. Remove them or add the pages to leftnav.`,
     ).toHaveLength(0);
   });
 
   it("should have proper group hierarchy for nested pages", () => {
     const availablePages = getAvailablePages();
-    
+
     // Find pages that should be nested (children of Tools, Experimental, Settings)
-    const nestedPages = availablePages.filter((page) => 
-      page.group.includes(" > ")
-    );
-    
+    const nestedPages = availablePages.filter((page) => page.group.includes(" > "));
+
     // Each nested page should have parent > child format
     nestedPages.forEach((page) => {
       const parts = page.group.split(" > ");
-      expect(
-        parts.length,
-        `Nested page "${page.page}" should have exactly 2 parts in group hierarchy`
-      ).toBe(2);
-      
+      expect(parts.length, `Nested page "${page.page}" should have exactly 2 parts in group hierarchy`).toBe(2);
+
       // Parent should be one of the group labels
       const parentGroup = parts[0];
       const groupLabels = menuGroups.map((g) => g.groupLabel);
       expect(
         groupLabels,
-        `Parent group "${parentGroup}" for page "${page.page}" should be a valid group label`
+        `Parent group "${parentGroup}" for page "${page.page}" should be a valid group label`,
       ).toContain(parentGroup);
     });
   });
@@ -208,16 +191,13 @@ describe("Page Utils - LeftNav Sync", () => {
     const availablePages = getAvailablePages();
     const pageKeys = availablePages.map((p) => p.page);
     const uniquePageKeys = new Set(pageKeys);
-    
-    expect(
-      pageKeys.length,
-      "All page keys should be unique (no duplicates)"
-    ).toBe(uniquePageKeys.size);
+
+    expect(pageKeys.length, "All page keys should be unique (no duplicates)").toBe(uniquePageKeys.size);
   });
 
   it("should match the structure expected by PageVisibilitySettings component", () => {
     const availablePages = getAvailablePages();
-    
+
     // Group pages by their group (same logic as in PageVisibilitySettings)
     const grouped: Record<string, typeof availablePages> = {};
     availablePages.forEach((page) => {
@@ -226,16 +206,13 @@ describe("Page Utils - LeftNav Sync", () => {
       }
       grouped[page.group].push(page);
     });
-    
+
     // Should have multiple groups
     expect(Object.keys(grouped).length).toBeGreaterThan(1);
-    
+
     // Each group should have at least one page
     Object.entries(grouped).forEach(([groupName, pages]) => {
-      expect(
-        pages.length,
-        `Group "${groupName}" should have at least one page`
-      ).toBeGreaterThan(0);
+      expect(pages.length, `Group "${groupName}" should have at least one page`).toBeGreaterThan(0);
     });
   });
 });

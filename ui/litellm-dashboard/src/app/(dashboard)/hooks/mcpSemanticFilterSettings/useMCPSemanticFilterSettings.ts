@@ -3,9 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import useAuthorized from "../useAuthorized";
 
-const mcpSemanticFilterSettingsKeys = createQueryKeys(
-  "mcpSemanticFilterSettings"
-);
+const mcpSemanticFilterSettingsKeys = createQueryKeys("mcpSemanticFilterSettings");
 
 export const useMCPSemanticFilterSettings = () => {
   const { accessToken } = useAuthorized();

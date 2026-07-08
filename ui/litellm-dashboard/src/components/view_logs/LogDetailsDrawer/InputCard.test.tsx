@@ -118,7 +118,7 @@ describe("InputCard", () => {
     });
 
     expect(copyButton).toBeInTheDocument();
-    
+
     await act(async () => {
       fireEvent.click(copyButton!);
     });

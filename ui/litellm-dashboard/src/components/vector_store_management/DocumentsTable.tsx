@@ -60,10 +60,7 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
       render: (_: any, record: DocumentUpload) => (
         <div className="flex items-center space-x-2">
           <Tooltip title="View details">
-            <EyeOutlined
-              className="cursor-pointer text-gray-600 hover:text-blue-500"
-              onClick={() => console.log("View", record)}
-            />
+            <EyeOutlined className="cursor-pointer text-gray-600 hover:text-blue-500" onClick={() => {}} />
           </Tooltip>
           <Tooltip title="Copy ID">
             <CopyOutlined

@@ -4,9 +4,7 @@ import traceback
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import inspect
 
@@ -28,11 +26,7 @@ class MyCustomHandler(CustomLogger):
         print_verbose(f"{blue_color_code}Initialized LiteLLM custom logger")
         try:
             print_verbose("Logger Initialized with following methods:")
-            methods = [
-                method
-                for method in dir(self)
-                if inspect.ismethod(getattr(self, method))
-            ]
+            methods = [method for method in dir(self) if inspect.ismethod(getattr(self, method))]
 
             # Pretty print_verbose the methods
             for method in methods:

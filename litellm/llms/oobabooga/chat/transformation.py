@@ -25,9 +25,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
         status_code: int,
         headers: Optional[Union[dict, httpx.Headers]] = None,
     ) -> BaseLLMException:
-        return OobaboogaError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return OobaboogaError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_response(
         self,
@@ -55,9 +53,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
         try:
             completion_response = raw_response.json()
         except Exception:
-            raise OobaboogaError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise OobaboogaError(message=raw_response.text, status_code=raw_response.status_code)
         if "error" in completion_response:
             raise OobaboogaError(
                 message=completion_response["error"],

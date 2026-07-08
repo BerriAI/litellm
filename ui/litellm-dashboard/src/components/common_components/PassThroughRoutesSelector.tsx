@@ -40,7 +40,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
           const routes = response.endpoints.flatMap((endpoint: PassThroughEndpoint) => {
             const path = endpoint.path;
             const methods = endpoint.methods;
-            
+
             // If methods are specified, create one entry per method
             if (methods && methods.length > 0) {
               return methods.map((method) => ({
@@ -48,12 +48,14 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
                 value: path, // Keep value as path for backward compatibility
               }));
             }
-            
+
             // If no methods specified, show just the path (all methods supported)
-            return [{
-              label: path,
-              value: path,
-            }];
+            return [
+              {
+                label: path,
+                value: path,
+              },
+            ];
           });
           setPassThroughRoutes(routes);
         }
@@ -86,4 +88,3 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
 };
 
 export default PassThroughRoutesSelector;
-

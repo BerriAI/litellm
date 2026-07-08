@@ -28,9 +28,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/recraft/v3/text-to-image"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Recraft v3.
         """

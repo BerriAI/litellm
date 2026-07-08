@@ -53,19 +53,13 @@ class AmazonTitanG1Config:
     def get_supported_openai_params(self) -> List[str]:
         return []
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         return optional_params
 
-    def _transform_request(
-        self, input: str, inference_params: dict
-    ) -> AmazonTitanG1EmbeddingRequest:
+    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanG1EmbeddingRequest:
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
-    def _transform_response(
-        self, response_list: List[dict], model: str
-    ) -> EmbeddingResponse:
+    def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
         transformed_responses: List[Embedding] = []

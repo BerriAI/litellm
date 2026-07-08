@@ -71,7 +71,7 @@ export interface QuickActionsProps {
 
 export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnselectAll, hasSelectedEntities }) => {
   return (
-    <div className="bg-gray-50 p-5 rounded-lg mb-6 border border-gray-200 shadow-sm">
+    <div className="bg-gray-50 p-5 rounded-lg mb-6 border border-gray-200 shadow-xs">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center">
           <Text strong className="text-gray-700 text-base">
@@ -138,7 +138,7 @@ export const PiiEntityList: React.FC<PiiEntityListProps> = ({
   entityToCategoryMap,
 }) => {
   return (
-    <div className="border rounded-lg overflow-hidden shadow-sm">
+    <div className="border rounded-lg overflow-hidden shadow-xs">
       <div className="bg-gray-50 px-5 py-3 border-b flex">
         <Text strong className="flex-1 text-gray-700">
           PII Type

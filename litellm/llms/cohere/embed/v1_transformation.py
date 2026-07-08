@@ -27,9 +27,7 @@ class CohereEmbeddingConfig:
     def get_supported_openai_params(self) -> List[str]:
         return ["encoding_format"]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = v
@@ -143,9 +141,7 @@ class CohereEmbeddingConfig:
         """
         embeddings = response_json["embeddings"]
         output_data = []
-        is_embeddings_by_type = (
-            response_json.get("response_type") == "embeddings_by_type"
-        )
+        is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
 
         if isinstance(embeddings, dict):
             is_embeddings_by_type = True
@@ -163,9 +159,7 @@ class CohereEmbeddingConfig:
                     )
         else:
             for idx, embedding in enumerate(embeddings):
-                output_data.append(
-                    {"object": "embedding", "index": idx, "embedding": embedding}
-                )
+                output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model

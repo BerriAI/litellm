@@ -51,7 +51,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           s.description?.toLowerCase().includes(q) ||
           s.domain?.toLowerCase().includes(q) ||
           s.namespace?.toLowerCase().includes(q) ||
-          s.keywords?.some((k) => k.toLowerCase().includes(q))
+          s.keywords?.some((k) => k.toLowerCase().includes(q)),
       );
     }
     return result;
@@ -94,9 +94,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Search + filters + table */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">
-            All {publicPage ? "Public " : ""}Skills
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-700">All {publicPage ? "Public " : ""}Skills</h3>
           <div className="flex items-center gap-2">
             <Select
               placeholder="All Domains"
@@ -117,11 +115,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           </div>
         </div>
         <ModelDataTable
-          columns={skillHubColumns(
-            (skill) => setSelectedSkill(skill),
-            copyToClipboard,
-            publicPage
-          )}
+          columns={skillHubColumns((skill) => setSelectedSkill(skill), copyToClipboard, publicPage)}
           data={filteredSkills}
           isLoading={false}
           defaultSorting={[{ id: "name", desc: false }]}

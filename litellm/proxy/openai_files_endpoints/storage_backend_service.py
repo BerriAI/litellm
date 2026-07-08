@@ -81,19 +81,15 @@ class StorageBackendFileService:
             file_naming_strategy="uuid",
         )
 
-        verbose_proxy_logger.debug(
-            f"Storage backend upload complete: backend={target_storage}, url={storage_url}"
-        )
+        verbose_proxy_logger.debug(f"Storage backend upload complete: backend={target_storage}, url={storage_url}")
 
         # Create file object with storage metadata
-        file_object = (
-            StorageBackendFileService._create_file_object_with_storage_metadata(
-                file_content=file_content,
-                filename=filename,
-                purpose=purpose,
-                target_storage=target_storage,
-                storage_url=storage_url,
-            )
+        file_object = StorageBackendFileService._create_file_object_with_storage_metadata(
+            file_content=file_content,
+            filename=filename,
+            purpose=purpose,
+            target_storage=target_storage,
+            storage_url=storage_url,
         )
 
         # Store in managed files if target_model_names provided
@@ -143,10 +139,7 @@ class StorageBackendFileService:
         )
 
         # Store storage metadata in hidden params
-        if (
-            not hasattr(file_object, "_hidden_params")
-            or file_object._hidden_params is None
-        ):
+        if not hasattr(file_object, "_hidden_params") or file_object._hidden_params is None:
             file_object._hidden_params = {}
         file_object._hidden_params.update(
             {
@@ -174,19 +167,15 @@ class StorageBackendFileService:
         Returns:
             str: Base64-encoded unified file ID
         """
-        unified_file_id_str = (
-            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-                file_type,
-                str(uuid_module.uuid4()),
-                ",".join(target_model_names),
-                file_id,
-                None,
-            )
+        unified_file_id_str = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            file_type,
+            str(uuid_module.uuid4()),
+            ",".join(target_model_names),
+            file_id,
+            None,
         )
 
-        base64_unified_file_id = (
-            base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
-        )
+        base64_unified_file_id = base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
 
         return base64_unified_file_id
 
@@ -213,12 +202,8 @@ class StorageBackendFileService:
             user_api_key_dict: User API key authentication data
         """
         managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
-        if not managed_files_obj or not isinstance(
-            managed_files_obj, BaseFileEndpoints
-        ):
-            verbose_proxy_logger.warning(
-                "Managed files hook not available, skipping managed files storage"
-            )
+        if not managed_files_obj or not isinstance(managed_files_obj, BaseFileEndpoints):
+            verbose_proxy_logger.warning("Managed files hook not available, skipping managed files storage")
             return
         managed_files_obj = cast(Any, managed_files_obj)
 

@@ -43,9 +43,7 @@ export default function SSOSettings() {
     if (!values.team_mappings?.team_ids_jwt_field) {
       return <span className="text-gray-400 italic">Not configured</span>;
     }
-    return (
-      <Tag>{values.team_mappings.team_ids_jwt_field}</Tag>
-    );
+    return <Tag>{values.team_mappings.team_ids_jwt_field}</Tag>;
   };
 
   const descriptionsConfig = {
@@ -113,10 +111,12 @@ export default function SSOSettings() {
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
-        isTeamMappingsEnabled ? {
-          label: "Team IDs JWT Field",
-          render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
-        } : null,
+        isTeamMappingsEnabled
+          ? {
+              label: "Team IDs JWT Field",
+              render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
+            }
+          : null,
       ],
     },
     generic: {
@@ -143,10 +143,12 @@ export default function SSOSettings() {
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
-        isTeamMappingsEnabled ? {
-          label: "Team IDs JWT Field",
-          render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
-        } : null,
+        isTeamMappingsEnabled
+          ? {
+              label: "Team IDs JWT Field",
+              render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
+            }
+          : null,
       ],
     },
   };
@@ -173,11 +175,14 @@ export default function SSOSettings() {
             <span>{config.providerText}</span>
           </div>
         </Descriptions.Item>
-        {config.fields.map((field, index) => field && (
-          <Descriptions.Item key={index} label={field.label}>
-            {field.render(values)}
-          </Descriptions.Item>
-        ))}
+        {config.fields.map(
+          (field, index) =>
+            field && (
+              <Descriptions.Item key={index} label={field.label}>
+                {field.render(values)}
+              </Descriptions.Item>
+            ),
+        )}
       </Descriptions>
     );
   };

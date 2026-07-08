@@ -97,9 +97,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 if key == "size":
                     if "image_config" not in mapped_params:
                         mapped_params["image_config"] = {}
-                    mapped_params["image_config"]["aspect_ratio"] = (
-                        self._map_size_to_aspect_ratio(cast(str, value))
-                    )
+                    mapped_params["image_config"]["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
                 elif key == "quality":
                     image_size = self._map_quality_to_image_size(cast(str, value))
                     if image_size:
@@ -139,11 +137,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        base_url = (
-            api_base
-            or get_secret_str("OPENROUTER_API_BASE")
-            or "https://openrouter.ai/api/v1"
-        )
+        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
         base_url = base_url.rstrip("/")
         if not base_url.endswith("/chat/completions"):
             return f"{base_url}/chat/completions"
@@ -344,17 +338,15 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                     model_response._hidden_params = {}
                 if "additional_headers" not in model_response._hidden_params:
                     model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"][
-                    "llm_provider-x-litellm-response-cost"
-                ] = float(cost)
+                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                    cost
+                )
 
             cost_details = usage_data.get("cost_details", {})
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(
-                    cost_details
-                )
+                model_response._hidden_params["response_cost_details"].update(cost_details)
 
         model_response._hidden_params["model"] = response_json.get("model", model)
 

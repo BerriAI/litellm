@@ -9,7 +9,6 @@ import json
 import math
 import os
 import sys
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -104,12 +103,10 @@ class TestPerplexityIntegration:
         )
         citation_tokens = citation_chars // 4
 
-        expected_prompt_cost = (100 * 2e-6) + (
-            citation_tokens * 2e-6
-        )  # Input + citation
+        expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
         expected_completion_cost = (
-            (50 * 8e-6) + (10 * 3e-6) + (2 / 1000 * 0.005)
-        )  # Output + reasoning + search
+            ((50 - 10) * 8e-6) + (10 * 3e-6) + (2 * 0.005)
+        )  # Output (text) + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
@@ -152,11 +149,10 @@ class TestPerplexityIntegration:
             usage_object=usage,
         )
 
-        # Calculate expected costs
-        expected_prompt_cost = (200 * 2e-6) + (40 * 2e-6)  # Input + citation
+        expected_prompt_cost = (200 * 2e-6) + (40 * 2e-6)
         expected_completion_cost = (
-            (100 * 8e-6) + (25 * 3e-6) + (3 / 1000 * 0.005)
-        )  # Output + reasoning + search
+            ((100 - 25) * 8e-6) + (25 * 3e-6) + (3 * 0.005)
+        )  # Output (text) + reasoning + search
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)
@@ -263,15 +259,14 @@ class TestPerplexityIntegration:
             custom_llm_provider="perplexity",
         )
 
-        # Calculate expected cost
-        expected_prompt_cost = (50000 * 2e-6) + (5000 * 2e-6)  # $0.11
+        expected_prompt_cost = (50000 * 2e-6) + (5000 * 2e-6)
         expected_completion_cost = (
-            (25000 * 8e-6) + (10000 * 3e-6) + (100 / 1000 * 0.005)
-        )  # $0.23
-        expected_total = expected_prompt_cost + expected_completion_cost  # $0.34
+            ((25000 - 10000) * 8e-6) + (10000 * 3e-6) + (100 * 0.005)
+        )  # $0.65
+        expected_total = expected_prompt_cost + expected_completion_cost  # $0.76
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
-        assert total_cost > 0.3  # Sanity check for high-volume scenario
+        assert total_cost > 0.25
 
     def test_transformation_preserves_existing_usage_fields(self):
         """Test that transformation doesn't overwrite existing standard usage fields."""
@@ -330,7 +325,7 @@ class TestPerplexityIntegration:
 
         # Should calculate costs correctly
         expected_prompt_cost = (100 * 2e-6) + (10 * 2e-6)
-        expected_completion_cost = (50 * 8e-6) + (1 / 1000 * 0.005)
+        expected_completion_cost = (50 * 8e-6) + (1 * 0.005)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)

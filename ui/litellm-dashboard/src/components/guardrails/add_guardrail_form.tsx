@@ -1,7 +1,12 @@
 import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings, modelAvailableCall } from "../networking";
+import {
+  createGuardrailCall,
+  getGuardrailProviderSpecificParams,
+  getGuardrailUISettings,
+  modelAvailableCall,
+} from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
   choiceToSkipSystemForCreate,
@@ -15,6 +20,7 @@ import {
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
 } from "./guardrail_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
@@ -588,18 +594,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
        * the selected provider and ONLY pass those recognised params.
        ******************************/
 
-      console.log("values: ", JSON.stringify(values));
-
       // Use pre-fetched provider params to copy recognised params
       // Skip for providers that handle their own litellm_params (llm_as_a_judge, tool_permission, content filter, PII)
       if (providerParams && selectedProvider && guardrailProvider !== "llm_as_a_judge") {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-        console.log("providerKey: ", providerKey);
         const providerSpecificParams = providerParams[providerKey] || {};
 
         const allowedParams = new Set<string>();
-
-        console.log("providerSpecificParams: ", JSON.stringify(providerSpecificParams));
 
         // Add root-level parameters (like api_key, api_base, api_version)
         Object.keys(providerSpecificParams).forEach((paramName) => {
@@ -615,7 +616,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           });
         }
 
-        console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
           // Check for both direct parameter name and nested optional_params object
           let paramValue = values[paramName];
@@ -633,7 +633,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         throw new Error("No access token available");
       }
 
-      console.log("Sending guardrail data:", JSON.stringify(guardrailData));
       await createGuardrailCall(accessToken, guardrailData);
 
       NotificationsManager.success("Guardrail created successfully");
@@ -684,7 +683,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                   <div style={{ display: "flex", alignItems: "center" }}>
                     {guardrailLogoMap[value] && (
                       <img
-                        src={guardrailLogoMap[value]}
+                        src={resolveLogoSrc(guardrailLogoMap[value])}
                         alt=""
                         style={{
                           height: "20px",
@@ -705,7 +704,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 <div style={{ display: "flex", alignItems: "center" }}>
                   {guardrailLogoMap[value] && (
                     <img
-                      src={guardrailLogoMap[value]}
+                      src={resolveLogoSrc(guardrailLogoMap[value])}
                       alt=""
                       style={{
                         height: "20px",
@@ -824,13 +823,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && !shouldRenderLLMJudgeFields(selectedProvider) && (
-          <GuardrailProviderFields
-            selectedProvider={selectedProvider}
-            accessToken={accessToken}
-            providerParams={providerParams}
-          />
-        )}
+        {!isToolPermissionProvider &&
+          !shouldRenderContentFilterConfigSettings(selectedProvider) &&
+          !shouldRenderLLMJudgeFields(selectedProvider) && (
+            <GuardrailProviderFields
+              selectedProvider={selectedProvider}
+              accessToken={accessToken}
+              providerParams={providerParams}
+            />
+          )}
       </>
     );
   };
@@ -909,8 +910,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       return null;
     }
 
-    console.log("guardrail_provider_map: ", guardrail_provider_map);
-    console.log("selectedProvider: ", selectedProvider);
     const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
     const providerFields = providerParams && providerParams[providerKey];
 
@@ -998,8 +997,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       <div className="space-y-6">
         <div>
           <p className="text-sm text-gray-500">
-            Configure settings for a specific call type. Most guardrails don't need this — skip it
-            unless you're using a specific endpoint like <code>/v1/realtime</code>.
+            Configure settings for a specific call type. Most guardrails don't need this — skip it unless you're using a
+            specific endpoint like <code>/v1/realtime</code>.
           </p>
         </div>
 
@@ -1041,12 +1040,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             {endpointSettingsOpen && (
               <div className="space-y-5 px-4 py-4 border-t border-gray-200">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    End session after X violations
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">End session after X violations</label>
                   <p className="text-xs text-gray-400 mb-2">
-                    Automatically close the session after this many guardrail violations. Leave
-                    empty to never auto-close.
+                    Automatically close the session after this many guardrail violations. Leave empty to never
+                    auto-close.
                   </p>
                   <input
                     type="number"
@@ -1054,18 +1051,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     placeholder="e.g. 3"
                     value={endSessionAfterNFails ?? ""}
                     onChange={(e) =>
-                      setEndSessionAfterNFails(
-                        e.target.value ? parseInt(e.target.value, 10) : undefined
-                      )
+                      setEndSessionAfterNFails(e.target.value ? parseInt(e.target.value, 10) : undefined)
                     }
-                    className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32"
+                    className="border border-gray-300 rounded-sm px-3 py-1.5 text-sm w-32"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    On violation
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">On violation</label>
                   <div className="space-y-2">
                     {(["warn", "end_session"] as const).map((opt) => (
                       <label key={opt} className="flex items-start gap-2 cursor-pointer">
@@ -1093,19 +1086,17 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Message the user hears
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Message the user hears</label>
                   <p className="text-xs text-gray-400 mb-2">
-                    What the bot says aloud when this guardrail fires. Falls back to the default
-                    violation message if empty.
+                    What the bot says aloud when this guardrail fires. Falls back to the default violation message if
+                    empty.
                   </p>
                   <textarea
                     rows={3}
                     placeholder="e.g. I'm not able to continue this conversation. Please contact us at 1-800-774-2678."
                     value={realtimeViolationMessage}
                     onChange={(e) => setRealtimeViolationMessage(e.target.value)}
-                    className="border border-gray-300 rounded px-3 py-2 text-sm w-full resize-none"
+                    className="border border-gray-300 rounded-sm px-3 py-2 text-sm w-full resize-none"
                   />
                 </div>
               </div>
@@ -1145,6 +1136,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       title={null}
       open={visible}
       onCancel={handleClose}
+      maskClosable={false}
       footer={null}
       width={1000}
       closable={false}
@@ -1184,9 +1176,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
               return (
                 <div key={index} className="relative flex gap-4" style={{ paddingBottom: isLast ? 0 : 8 }}>
                   {/* Vertical line + step indicator */}
-                  <div className="flex flex-col items-center flex-shrink-0" style={{ width: 24 }}>
+                  <div className="flex flex-col items-center shrink-0" style={{ width: 24 }}>
                     <div
-                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium shrink-0"
                       style={{
                         background: isDone ? "#4f46e5" : isCurrent ? "#fff" : "#f8fafc",
                         color: isDone ? "#fff" : isCurrent ? "#4f46e5" : "#94a3b8",

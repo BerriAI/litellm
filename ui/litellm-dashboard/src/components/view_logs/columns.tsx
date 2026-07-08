@@ -119,11 +119,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Time",
     accessorKey: "startTime",
+    size: 200,
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
     header: "Type",
     id: "type",
+    size: 90,
     cell: (info: any) => {
       const row = info.row.original;
       const sessionCount = row.session_total_count || 1;
@@ -162,16 +164,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
       ].filter(Boolean);
-      return (
-        <Tooltip title={tooltipParts.join(" • ")}>
-          {sessionTypeBadge}
-        </Tooltip>
-      );
+      return <Tooltip title={tooltipParts.join(" • ")}>{sessionTypeBadge}</Tooltip>;
     },
   },
   {
     header: "Status",
     accessorKey: "metadata.status",
+    size: 100,
     cell: (info: any) => {
       const status = info.getValue() || "Success";
       const isSuccess = status.toLowerCase() !== "failure";
@@ -190,6 +189,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Session ID",
     accessorKey: "session_id",
+    size: 120,
     cell: (info: any) => {
       const value = String(info.getValue() || "");
       const onSessionClick = info.row.original.onSessionClick;
@@ -230,6 +230,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Cost",
     accessorKey: "spend",
+    size: 110,
     cell: (info: any) => {
       const row = info.row.original;
       const mcpCount = row.mcp_tool_call_count || 0;
@@ -305,6 +306,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -314,6 +316,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Key Hash",
     accessorKey: "metadata.user_api_key",
+    size: 110,
     cell: (info: any) => {
       const value = String(info.getValue() || "-");
       const onKeyHashClick = info.row.original.onKeyHashClick;
@@ -331,8 +334,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Key Name",
+    header: "Key Alias",
     accessorKey: "metadata.user_api_key_alias",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -352,6 +356,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Model",
     accessorKey: "model",
+    size: 200,
     cell: (info: any) => {
       const row = info.row.original;
       const provider = row.custom_llm_provider;
@@ -389,6 +394,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Tokens",
     accessorKey: "total_tokens",
+    size: 140,
     cell: (info: any) => {
       const row = info.row.original;
       return (
@@ -404,6 +410,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Internal User",
     accessorKey: "user",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -413,6 +420,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "End User",
     accessorKey: "end_user",
+    size: 140,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -423,6 +431,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Tags",
     accessorKey: "request_tags",
+    size: 150,
     cell: (info: any) => {
       const tags = info.getValue();
       if (!tags || Object.keys(tags).length === 0) return "-";
@@ -490,7 +499,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
           <h3 className="text-sm font-medium">Request</h3>
           <button
             onClick={() => copyToClipboard(requestStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded-sm"
             title="Copy request"
           >
             <svg
@@ -509,7 +518,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap wrap-break-word">{requestStr}</pre>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-gray-50">
@@ -517,7 +526,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
           <h3 className="text-sm font-medium">Response</h3>
           <button
             onClick={() => copyToClipboard(responseStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded-sm"
             title="Copy response"
           >
             <svg
@@ -536,7 +545,9 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{responseStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap wrap-break-word">
+          {responseStr}
+        </pre>
       </div>
     </div>
   );
@@ -557,7 +568,7 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
         {isExpanded ? "Hide JSON" : "Show JSON"} ({Object.keys(jsonData).length} fields)
       </button>
       {isExpanded && (
-        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
+        <pre className="mt-2 p-2 bg-gray-50 border rounded-sm text-xs overflow-auto max-h-60">{jsonString}</pre>
       )}
     </div>
   );
@@ -601,7 +612,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
             onClick={toggleHandler}
             style={{ cursor: "pointer" }}
             aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
+            className="w-6 h-6 flex items-center justify-center focus:outline-hidden"
           >
             <svg
               className={`w-4 h-4 transform transition-transform ${localExpanded ? "rotate-90" : ""}`}

@@ -48,9 +48,7 @@ class DDSpanTagger:
         """
         try:
             if user_api_key_dict.key_alias:
-                set_active_span_tag(
-                    "litellm.key_alias", str(user_api_key_dict.key_alias)
-                )
+                set_active_span_tag("litellm.key_alias", str(user_api_key_dict.key_alias))
             if user_api_key_dict.token:
                 set_active_span_tag("litellm.key_hash", str(user_api_key_dict.token))
             if requested_model:

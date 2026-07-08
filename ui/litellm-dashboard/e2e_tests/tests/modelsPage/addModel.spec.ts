@@ -154,10 +154,7 @@ test.describe("Add Model", () => {
     // The Team-BYOK switch is gated on `premiumUser` — without a license set
     // for the proxy under test, the toggle is disabled and this manual-QA
     // step cannot be exercised.
-    test.skip(
-      !process.env.LITELLM_LICENSE,
-      "LITELLM_LICENSE not set in test env — Team-BYOK switch is disabled",
-    );
+    test.skip(!process.env.LITELLM_LICENSE, "LITELLM_LICENSE not set in test env — Team-BYOK switch is disabled");
 
     // Make the test idempotent across retries and local reruns: delete any
     // Cohere model already scoped to the e2e team before we start, and again
@@ -170,10 +167,11 @@ test.describe("Add Model", () => {
       const res = await request.get("/v2/model/info", { headers: auth });
       if (!res.ok()) return;
       const body = await res.json();
-      const matches: Array<{ id: string }> = (body?.data ?? []).filter((m: any) =>
-        typeof m?.model_name === "string" &&
-        m.model_name.startsWith("cohere") &&
-        m?.model_info?.team_id === E2E_TEAM_CRUD_ID,
+      const matches: Array<{ id: string }> = (body?.data ?? []).filter(
+        (m: any) =>
+          typeof m?.model_name === "string" &&
+          m.model_name.startsWith("cohere") &&
+          m?.model_info?.team_id === E2E_TEAM_CRUD_ID,
       );
       for (const m of matches) {
         await request.post("/model/delete", { headers: auth, data: { id: m.id } });
@@ -208,9 +206,7 @@ test.describe("Add Model", () => {
       const teamDropdown = page.getByTestId("team-dropdown");
       await expect(teamDropdown).toBeVisible({ timeout: 5_000 });
       await teamDropdown.click();
-      const teamOption = page.locator(".ant-select-dropdown:visible")
-        .getByText(E2E_TEAM_CRUD_ID)
-        .first();
+      const teamOption = page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ID).first();
       await expect(teamOption).toBeVisible({ timeout: 5_000 });
       await teamOption.click();
 
@@ -219,8 +215,9 @@ test.describe("Add Model", () => {
       // Scope the success toast to antd's notification container so a stale
       // success message from an earlier test in the same context can't satisfy
       // the assertion.
-      await expect(page.locator(".ant-notification").getByText("created successfully").last())
-        .toBeVisible({ timeout: 15_000 });
+      await expect(page.locator(".ant-notification").getByText("created successfully").last()).toBeVisible({
+        timeout: 15_000,
+      });
 
       // Verify the model is now in All Models with the team_id attached. The
       // Models table renders team-scoped models with the team id in the row.
@@ -237,16 +234,16 @@ test.describe("Add Model", () => {
       // Confirm the search returned at least one result — gives a clear
       // failure message when the table is empty instead of timing out on a
       // row assertion.
-      await expect(page.getByTestId("models-results-count")).toHaveText(
-        /Showing \d+ - \d+ of \d+ results/,
-        { timeout: 15_000 },
-      );
+      await expect(page.getByTestId("models-results-count")).toHaveText(/Showing \d+ - \d+ of \d+ results/, {
+        timeout: 15_000,
+      });
 
       // Stronger than "alias appears somewhere in tbody" — pin the assertion
       // to a single row that has BOTH the cohere model_name AND the seeded
       // team alias, so a stale cohere row from "Add wildcard route" (no team)
       // can't satisfy the check.
-      const teamCohereRow = page.locator("table tbody tr")
+      const teamCohereRow = page
+        .locator("table tbody tr")
         .filter({ hasText: "cohere/" })
         .filter({ hasText: E2E_TEAM_CRUD_ALIAS });
       await expect(teamCohereRow).toHaveCount(1, { timeout: 15_000 });

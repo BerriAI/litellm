@@ -17,8 +17,7 @@ def build_retrieval_tool(available_keys: List[str]) -> dict:
             "description": (
                 "Retrieve the full content of a file or message that was "
                 "compressed to save tokens. Use this when you need the complete "
-                "content to answer accurately. Available keys: "
-                + ", ".join(available_keys)
+                "content to answer accurately. Available keys: " + ", ".join(available_keys)
             ),
             "parameters": {
                 "type": "object",

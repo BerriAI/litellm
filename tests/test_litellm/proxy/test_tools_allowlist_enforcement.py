@@ -70,6 +70,22 @@ class TestExtractRequestToolNames:
         }
         assert extract_request_tool_names("/v1/responses", data) == ["dmcp"]
 
+    def test_openai_responses_custom_tools(self):
+        """Custom tools become callable function tools on the Chat Completions
+        bridge, so their names must be extracted for allowlist enforcement;
+        otherwise a restricted key could invoke a disallowed tool by declaring
+        it with type "custom" (VERIA finding on PR #32258)."""
+        data = {
+            "tools": [
+                {"type": "custom", "name": "apply_patch", "description": "x"},
+                {"type": "function", "name": "get_current_weather"},
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "apply_patch",
+            "get_current_weather",
+        ]
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [
@@ -142,6 +158,20 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "get_weather" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_custom_tool_raises_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["other_tool"]})
+        body = {"tools": [{"type": "custom", "name": "restricted_tool"}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "restricted_tool" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

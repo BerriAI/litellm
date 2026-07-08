@@ -88,17 +88,15 @@ describe("cookieUtils", () => {
     it("should add current path directory to paths array when different from root and /ui", () => {
       // Mock window.location.pathname using vi.stubGlobal
       const originalLocation = window.location;
-      vi.stubGlobal('location', { ...originalLocation, pathname: '/custom/path/page.html' });
+      vi.stubGlobal("location", { ...originalLocation, pathname: "/custom/path/page.html" });
 
       // Spy on document.cookie to verify the paths being used
-      const cookieSpy = vi.spyOn(document, 'cookie', 'set');
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
 
       clearTokenCookies();
 
       // Verify that cookies were cleared for /custom/path/ path
-      expect(cookieSpy).toHaveBeenCalledWith(
-        expect.stringContaining('path=/custom/path/')
-      );
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("path=/custom/path/"));
 
       vi.restoreAllMocks();
     });
@@ -106,19 +104,19 @@ describe("cookieUtils", () => {
     it("should not add current path directory when it's already in paths array", () => {
       // Mock window.location.pathname using vi.stubGlobal
       const originalLocation = window.location;
-      vi.stubGlobal('location', { ...originalLocation, pathname: '/' });
+      vi.stubGlobal("location", { ...originalLocation, pathname: "/" });
 
       // Spy on document.cookie to count calls
-      const cookieSpy = vi.spyOn(document, 'cookie', 'set');
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
 
       clearTokenCookies();
 
       // Count how many times each path was used
-      const rootPathCalls = cookieSpy.mock.calls.filter(call =>
-        call[0].includes('path=/;') || call[0].includes('path=/ ')
+      const rootPathCalls = cookieSpy.mock.calls.filter(
+        (call) => call[0].includes("path=/;") || call[0].includes("path=/ "),
       );
-      const uiPathCalls = cookieSpy.mock.calls.filter(call =>
-        call[0].includes('path=/ui;') || call[0].includes('path=/ui ')
+      const uiPathCalls = cookieSpy.mock.calls.filter(
+        (call) => call[0].includes("path=/ui;") || call[0].includes("path=/ui "),
       );
 
       // Should have calls for root and /ui paths, but not duplicate root
@@ -171,9 +169,7 @@ describe("cookieUtils", () => {
     it("should set a JS-accessible cookie at /ui path", () => {
       const cookieSpy = vi.spyOn(document, "cookie", "set");
       storeLoginToken("my-jwt-token");
-      expect(cookieSpy).toHaveBeenCalledWith(
-        expect.stringContaining("path=/ui")
-      );
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("path=/ui"));
       vi.restoreAllMocks();
     });
   });

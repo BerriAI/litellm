@@ -12,15 +12,11 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 def _sanitize_file_path(file_path: str) -> str:
     """Reject path traversal and URL-encode each path segment."""
     if "#" in file_path or "?" in file_path:
-        raise ValueError(
-            f"Invalid file path {file_path!r}: contains URL special characters"
-        )
+        raise ValueError(f"Invalid file path {file_path!r}: contains URL special characters")
     parts = file_path.split("/")
     for part in parts:
         if part == "..":
-            raise ValueError(
-                f"Invalid file path {file_path!r}: path traversal detected"
-            )
+            raise ValueError(f"Invalid file path {file_path!r}: path traversal detected")
     return "/".join(urllib.parse.quote(part, safe="") for part in parts)
 
 
@@ -115,17 +111,13 @@ class BitBucketClient:
                         f"Access denied to file '{file_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
                 elif e.response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your BitBucket access token and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to fetch file '{file_path}': {e}")
             else:
                 raise Exception(f"Error fetching file '{file_path}': {e}")
 
-    def list_files(
-        self, directory_path: str = "", file_extension: str = ".prompt"
-    ) -> List[str]:
+    def list_files(self, directory_path: str = "", file_extension: str = ".prompt") -> List[str]:
         """
         List files in a directory with a specific extension.
 
@@ -164,9 +156,7 @@ class BitBucketClient:
                         f"Access denied to directory '{directory_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
                 elif e.response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your BitBucket access token and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to list files in '{directory_path}': {e}")
             else:

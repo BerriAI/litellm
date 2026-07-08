@@ -54,7 +54,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
         subprocess.CalledProcessError: If the Prisma command fails.
         Exception: For any other errors during execution.
     """
-    verbose_logger.debug("Checking for Prisma schema diff...")  # noqa: T201
+    verbose_logger.debug("Checking for Prisma schema diff...")
     try:
         result = subprocess.run(
             [

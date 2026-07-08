@@ -1,19 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { projectKeys } from "./useProjects";
 
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const deleteProjects = async (
-  accessToken: string,
-  projectIds: string[],
-): Promise<void> => {
+const deleteProjects = async (accessToken: string, projectIds: string[]): Promise<void> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/project/delete`;
 

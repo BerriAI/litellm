@@ -2,7 +2,7 @@
 ## Tests /key endpoints.
 
 import pytest
-import asyncio, time, uuid
+import asyncio, uuid
 import aiohttp
 from openai import AsyncOpenAI
 import sys, os
@@ -272,7 +272,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
-        {"role": "user", "content": f"Hello! {time.time()}"},
+        {"role": "user", "content": "Hello!"},
     ]
     prompt_tokens = litellm.token_counter(model="gpt-35-turbo", messages=messages)
     data = {
@@ -619,6 +619,26 @@ async def test_key_info_spend_values_image_generation():
         )
         spend = key_info["info"]["spend"]
         assert spend > 0
+
+        # The record/replay proxy serves this identical second call from its
+        # cassette (free), but the proxy must still bill it. Spend logging is
+        # async/batched, so poll for the increase rather than reading once after a
+        # fixed sleep; a spend that never grows means the repeat was not billed
+        # (e.g. the proxy response cache is on), which this still catches.
+        await image_generation(session=session, key=key)
+        spend_after = spend
+        for _ in range(12):
+            await asyncio.sleep(5)
+            key_info = await retry_request(
+                get_key_info, session=session, get_key=key, call_key=key
+            )
+            spend_after = key_info["info"]["spend"]
+            if spend_after > spend:
+                break
+        assert spend_after > spend, (
+            "spend did not increase on an identical repeat image call; the repeat "
+            "was not billed (the proxy response cache may be on)"
+        )
 
 
 @pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")

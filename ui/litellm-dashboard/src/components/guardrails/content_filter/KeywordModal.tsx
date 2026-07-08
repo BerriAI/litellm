@@ -28,13 +28,7 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
   onCancel,
 }) => {
   return (
-    <Modal
-      title="Add blocked keyword"
-      open={visible}
-      onCancel={onCancel}
-      footer={null}
-      width={800}
-    >
+    <Modal title="Add blocked keyword" open={visible} onCancel={onCancel} footer={null} width={800}>
       <Space direction="vertical" style={{ width: "100%" }} size="large">
         <div>
           <Text strong>Keyword</Text>
@@ -51,11 +45,7 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
           <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
             Choose what action the guardrail should take when this keyword is detected
           </Text>
-          <Select
-            value={action}
-            onChange={onActionChange}
-            style={{ width: "100%" }}
-          >
+          <Select value={action} onChange={onActionChange} style={{ width: "100%" }}>
             <Option value="BLOCK">Block</Option>
             <Option value="MASK">Mask</Option>
           </Select>
@@ -74,9 +64,7 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
       </Space>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>
-          Cancel
-        </Button>
+        <Button onClick={onCancel}>Cancel</Button>
         <Button type="primary" onClick={onAdd}>
           Add
         </Button>
@@ -86,4 +74,3 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
 };
 
 export default KeywordModal;
-

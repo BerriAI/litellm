@@ -337,6 +337,24 @@ class TestAzureResponsesAPIConfig:
         assert url == expected_url
         assert data == {}
 
+    def test_azure_list_input_items_request_url_path_before_query(self):
+        from litellm.types.router import GenericLiteLLMParams
+
+        api_base = "https://test.openai.azure.com/openai/responses?api-version=2025-03-01-preview"
+
+        url, params = self.config.transform_list_input_items_request(
+            response_id="resp_test123",
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(api_version="2025-03-01-preview"),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://test.openai.azure.com/openai/responses/resp_test123/input_items?api-version=2025-03-01-preview"
+        )
+        assert params == {"limit": 20, "order": "desc"}
+
     def test_azure_cancel_response_api_response(self):
         """Test Azure cancel response API response transformation"""
         from unittest.mock import Mock

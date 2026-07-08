@@ -14,11 +14,14 @@ SEARCH_PROVIDERS = [
     "exa_ai",
     "brave",
     "firecrawl",
+    "fastcrw",
     "searxng",
     "linkup",
     "duckduckgo",
     "searchapi",
     "serper",
+    "apiserpent",
+    "tinyfish",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [

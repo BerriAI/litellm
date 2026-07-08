@@ -51,9 +51,6 @@ def test_wandb_logging_async():
         pass
 
 
-test_wandb_logging_async()
-
-
 def test_wandb_logging():
     try:
         response = completion(

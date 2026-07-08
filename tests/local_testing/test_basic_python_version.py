@@ -92,6 +92,56 @@ def test_package_dependencies():
         )
 
 
+def test_cli_extra_is_a_thin_client_install():
+    """The `cli` extra must install a working `lite` client without dragging in the
+    proxy server runtime. It therefore has to declare the CLI's real third-party
+    deps (rich, pyyaml, requests) and must never contain a server-only dependency
+    from the `proxy` extra; a leak there silently re-bloats the laptop install.
+    """
+    import pathlib
+
+    import litellm
+    from packaging.requirements import Requirement
+
+    try:
+        import tomllib as tomli
+    except ImportError:
+        try:
+            import tomli
+        except ImportError:
+            pytest.skip("tomli/tomllib not available - skipping dependency check")
+
+    pyproject_path = pathlib.Path(litellm.__file__).parent.parent / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        optional_deps = tomli.load(f)["project"]["optional-dependencies"]
+
+    assert "cli" in optional_deps, "Expected a `cli` extra for the thin lite install"
+
+    cli_names = {Requirement(req).name.lower() for req in optional_deps["cli"]}
+
+    missing = {"rich", "pyyaml", "requests"} - cli_names
+    assert not missing, f"`cli` extra is missing deps the lite CLI imports: {missing}"
+
+    server_only = {
+        "fastapi",
+        "uvicorn",
+        "gunicorn",
+        "granian",
+        "starlette",
+        "boto3",
+        "polars",
+        "soundfile",
+        "mcp",
+        "cryptography",
+        "apscheduler",
+        "rq",
+        "litellm-enterprise",
+        "litellm-proxy-extras",
+    }
+    leaked = cli_names & server_only
+    assert not leaked, f"`cli` extra leaks proxy-server deps onto laptops: {leaked}"
+
+
 import os
 import subprocess
 import time

@@ -25,9 +25,7 @@ from ...openai.transcriptions.whisper_transformation import (
 from ..common_utils import IBMWatsonXMixin
 
 
-class IBMWatsonXAudioTranscriptionConfig(
-    IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig
-):
+class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig):
     """
     IBM WatsonX Audio Transcription Config
 
@@ -65,9 +63,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         result.pop("Content-Type", None)
         return result
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         """
         Get the supported OpenAI params for WatsonX audio transcription.
         """
@@ -98,9 +94,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         """
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
-        project_id = optional_params.get("project_id") or optional_params.get(
-            "watsonx_project"
-        )
+        project_id = optional_params.get("project_id") or optional_params.get("watsonx_project")
         space_id = optional_params.get("space_id")
         # api_params = _get_api_params(params=optional_params, model=model)
 
@@ -157,10 +151,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         url = f"{url}/ml/v1/audio/transcriptions"
 
         # Add version parameter (only version in query string, not project_id)
-        api_version = (
-            optional_params.get("api_version", None)
-            or litellm.WATSONX_DEFAULT_API_VERSION
-        )
+        api_version = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
         url = f"{url}?version={api_version}"
 
         return url
@@ -178,9 +169,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         try:
             raw_response_json = raw_response.json()
         except Exception as e:
-            raise ValueError(
-                f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}"
-            )
+            raise ValueError(f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}")
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()

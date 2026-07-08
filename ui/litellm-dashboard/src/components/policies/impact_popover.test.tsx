@@ -10,7 +10,9 @@ import { PolicyAttachment } from "./types";
 vi.mock("../networking");
 
 vi.mock("@heroicons/react/outline", () => ({
-  EyeIcon: function EyeIcon() { return null; },
+  EyeIcon: function EyeIcon() {
+    return null;
+  },
 }));
 
 vi.mock("@tremor/react", async (importOriginal) => {
@@ -22,7 +24,11 @@ vi.mock("@tremor/react", async (importOriginal) => {
   return {
     ...actual,
     Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement("button", { type: "button", onClick, className }, IconComp?.displayName ?? IconComp?.name ?? "icon"),
+      React.createElement(
+        "button",
+        { type: "button", onClick, className },
+        IconComp?.displayName ?? IconComp?.name ?? "icon",
+      ),
     Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
       React.createElement("button", { ...props, ref }, children),
     ),
@@ -47,8 +53,8 @@ vi.mock("antd", async (importOriginal) => {
             "aria-label": "open-popover",
             onClick: () => onOpenChange?.(true),
           },
-          children
-        )
+          children,
+        ),
       ),
     Tooltip: ({ children }: any) => React.createElement(React.Fragment, null, children),
     Spin: () => React.createElement("span", null, "Loading..."),

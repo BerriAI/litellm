@@ -1,8 +1,11 @@
 """
-This hook is used to inject cache control directives into the messages of a chat completion.
+This hook is used to inject cache control directives into messages.
 
 Users can define
 - `cache_control_injection_points` in the completion params and litellm will inject the cache control directives into the messages at the specified injection points.
+
+Supported for both `v1/chat/completions` (via the prompt-management hook) and
+`v1/messages` (via `apply_to_anthropic_messages_request`).
 
 """
 
@@ -25,6 +28,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+# Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control
+# breakpoints: "A maximum of 4 blocks with cache_control may be provided."
+MAX_CACHE_CONTROL_BLOCKS = 4
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -61,15 +69,25 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         processed_messages = copy.deepcopy(messages)
 
         # Separate message-level and non-message-level injection points
-        remaining_points = []
+        message_points: List[CacheControlMessageInjectionPoint] = []
+        remaining_points: List[CacheControlInjectionPoint] = []
         for point in injection_points:
             if point.get("location") == "message":
-                point = cast(CacheControlMessageInjectionPoint, point)
-                processed_messages = self._process_message_injection(
-                    point=point, messages=processed_messages
-                )
+                message_points.append(cast(CacheControlMessageInjectionPoint, point))
             else:
                 remaining_points.append(point)
+
+        # Non-message points (currently Bedrock tool_config) are handled in the
+        # provider transform, where each tool_config point appends at most one
+        # cachePoint to the tools. That block also counts toward Anthropic's
+        # limit, so reserve a slot for it here to leave room.
+        reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
+
+        processed_messages = self._apply_message_injections(
+            points=message_points,
+            messages=processed_messages,
+            max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
+        )
 
         # Pass through non-message injection points for provider-specific handling
         if remaining_points:
@@ -78,14 +96,62 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return model, processed_messages, non_default_params
 
     @staticmethod
-    def _process_message_injection(
-        point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
+    def _apply_message_injections(
+        points: List[CacheControlMessageInjectionPoint],
+        messages: List[AllMessageValues],
+        max_blocks: int,
     ) -> List[AllMessageValues]:
-        """Process message-level cache control injection."""
-        control: ChatCompletionCachedContent = point.get(
-            "control", None
-        ) or ChatCompletionCachedContent(type="ephemeral")
+        """Apply message-level cache control injection points in order.
 
+        Anthropic allows at most ``MAX_CACHE_CONTROL_BLOCKS`` cache_control
+        breakpoints per request. Client-supplied breakpoints count toward that
+        limit, so we never inject onto a message that already carries
+        cache_control (preserving the client's TTL) and we stop injecting once
+        ``max_blocks`` is reached. Injection points are honored in config order,
+        so earlier points win when slots are scarce.
+        """
+        used_blocks = sum(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in messages)
+
+        limit_reached = False
+        for point in points:
+            if used_blocks >= max_blocks:
+                limit_reached = True
+                break
+
+            control: ChatCompletionCachedContent = point.get("control", None) or ChatCompletionCachedContent(
+                type="ephemeral"
+            )
+
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
+                if used_blocks >= max_blocks:
+                    limit_reached = True
+                    break
+
+                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index]):
+                    # Client already marked this message; don't overwrite it.
+                    continue
+
+                messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                    messages[target_index], control
+                )
+                used_blocks += 1
+
+            if limit_reached:
+                break
+
+        if limit_reached:
+            verbose_logger.warning(
+                f"AnthropicCacheControlHook: Reached the Anthropic limit of "
+                f"{MAX_CACHE_CONTROL_BLOCKS} cache_control blocks. Skipping further injection."
+            )
+
+        return messages
+
+    @staticmethod
+    def _resolve_target_indices(
+        point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
+    ) -> List[int]:
+        """Resolve which message indices an injection point targets."""
         _targetted_index: Optional[Union[int, str]] = point.get("index", None)
         targetted_index: Optional[int] = None
         if isinstance(_targetted_index, str):
@@ -96,36 +162,45 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         else:
             targetted_index = _targetted_index
 
-        targetted_role = point.get("role", None)
-
         # Case 1: Target by specific index
         if targetted_index is not None:
             original_index = targetted_index
-            # Handle negative indices (convert to positive)
             if targetted_index < 0:
                 targetted_index += len(messages)
 
             if 0 <= targetted_index < len(messages):
-                messages[targetted_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[targetted_index], control
-                    )
-                )
-            else:
-                verbose_logger.warning(
-                    f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
-                    f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
-                )
+                return [targetted_index]
+
+            verbose_logger.warning(
+                f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
+                f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
+            )
+            return []
+
         # Case 2: Target by role
-        elif targetted_role is not None:
-            for msg in messages:
-                if msg.get("role") == targetted_role:
-                    msg = (
-                        AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                            message=msg, control=control
-                        )
-                    )
-        return messages
+        targetted_role = point.get("role", None)
+        if targetted_role is not None:
+            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
+
+        return []
+
+    @staticmethod
+    def _count_cache_control_blocks(message: AllMessageValues) -> int:
+        """Count cache_control breakpoints on a message (message + content level)."""
+        count = 0
+        if message.get("cache_control") is not None:
+            count += 1
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("cache_control") is not None:
+                    count += 1
+        return count
+
+    @staticmethod
+    def _message_has_cache_control(message: AllMessageValues) -> bool:
+        """Return True if the message already carries any cache_control."""
+        return AnthropicCacheControlHook._count_cache_control_blocks(message) > 0
 
     @staticmethod
     def _safe_insert_cache_control_in_message(
@@ -152,6 +227,98 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             if len(message_content) > 0 and isinstance(message_content[-1], dict):
                 message_content[-1]["cache_control"] = control  # type: ignore
         return message
+
+    @staticmethod
+    def apply_to_anthropic_messages_request(
+        messages: List[Dict],
+        system: str | list | None,
+        injection_points: List[CacheControlInjectionPoint],
+    ) -> Tuple[List[Dict], str | list | None, List[CacheControlInjectionPoint]]:
+        """Apply cache control injection for the Anthropic-native v1/messages endpoint.
+
+        Returns (messages, system, remaining_non_message_points).
+        """
+        if not injection_points:
+            return messages, system, []
+
+        processed_messages: List[Dict] = copy.deepcopy(messages)
+        processed_system = copy.deepcopy(system) if system is not None else None
+
+        message_points: List[CacheControlMessageInjectionPoint] = []
+        system_points: List[CacheControlMessageInjectionPoint] = []
+        remaining_points: List[CacheControlInjectionPoint] = []
+
+        for point in injection_points:
+            if point.get("location") == "message":
+                msg_point = cast(CacheControlMessageInjectionPoint, point)
+                if msg_point.get("role") == "system":
+                    system_points.append(msg_point)
+                else:
+                    message_points.append(msg_point)
+            else:
+                remaining_points.append(point)
+
+        reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
+        max_blocks = MAX_CACHE_CONTROL_BLOCKS - reserved_blocks
+
+        used_blocks = sum(
+            AnthropicCacheControlHook._count_cache_control_blocks(cast(AllMessageValues, msg))
+            for msg in processed_messages
+        )
+        if isinstance(processed_system, list):
+            used_blocks += sum(
+                1 for b in processed_system if isinstance(b, dict) and b.get("cache_control") is not None
+            )
+
+        if system_points and processed_system is not None and used_blocks < max_blocks:
+            system_already_has_cc = isinstance(processed_system, list) and any(
+                isinstance(b, dict) and b.get("cache_control") is not None for b in processed_system
+            )
+            if not system_already_has_cc:
+                control = system_points[0].get("control") or ChatCompletionCachedContent(type="ephemeral")
+                if isinstance(processed_system, str):
+                    processed_system = [{"type": "text", "text": processed_system, "cache_control": control}]
+                    used_blocks += 1
+                elif len(processed_system) > 0 and isinstance(processed_system[-1], dict):
+                    processed_system[-1] = {**processed_system[-1], "cache_control": control}
+                    used_blocks += 1
+
+        for i, msg in enumerate(processed_messages):
+            content = msg.get("content")
+            if isinstance(content, str):
+                processed_messages[i] = {**msg, "content": [{"type": "text", "text": content}]}
+
+        processed_messages = AnthropicCacheControlHook._apply_message_injections(
+            points=message_points,
+            messages=cast(List[AllMessageValues], processed_messages),
+            max_blocks=max_blocks - used_blocks,
+        )
+
+        return processed_messages, processed_system, remaining_points
+
+    @staticmethod
+    def maybe_inject_cache_control(
+        messages: List[Dict],
+        system: str | list | None,
+        kwargs: Dict[str, Any],
+    ) -> Tuple[List[Dict], str | list | None]:
+        """Extract cache_control_injection_points from kwargs and apply if present.
+
+        Pops the key from kwargs; if remaining (non-message) points exist they
+        are written back so downstream transforms can handle them.
+        """
+        injection_points = kwargs.pop("cache_control_injection_points", None)
+        if not injection_points:
+            return messages, system
+
+        messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+        if remaining:
+            kwargs["cache_control_injection_points"] = remaining
+        return messages, system
 
     @property
     def integration_name(self) -> str:
@@ -249,9 +416,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             _init_custom_logger_compatible_class,
         )
 
-        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(
-            non_default_params
-        ):
+        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(non_default_params):
             return _init_custom_logger_compatible_class(
                 logging_integration="anthropic_cache_control_hook",
                 internal_usage_cache=None,

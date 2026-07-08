@@ -14,11 +14,7 @@ import {
   Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
-import {
-  getGeneralSettingsCall,
-  updateConfigFieldSetting,
-  deleteConfigFieldSetting,
-} from "./networking";
+import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
 import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
@@ -29,7 +25,6 @@ interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  modelData: any;
 }
 
 interface generalSettingsItem {
@@ -40,7 +35,7 @@ interface generalSettingsItem {
   stored_in_db: boolean | null;
 }
 
-const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
+const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
   useEffect(() => {
@@ -117,23 +112,13 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
         </TabList>
         <TabPanels className="px-8 py-6">
           <TabPanel>
-            <RouterSettings
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
           </TabPanel>
           <TabPanel>
             <RoutingGroups />
           </TabPanel>
           <TabPanel>
-            <Fallbacks
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
           </TabPanel>
           <TabPanel>
             <Card>
@@ -176,6 +161,14 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               checked={value.field_value === true || value.field_value === "true"}
                               onChange={(checked) => handleInputChange(value.field_name, checked)}
                             />
+                          ) : value.field_type == "Float" ? (
+                            <InputNumber
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={value.field_value}
+                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
+                            />
                           ) : null}
                         </TableCell>
                         <TableCell>
@@ -184,9 +177,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               In DB
                             </Badge>
                           ) : value.stored_in_db == false ? (
-                            <Badge className="text-gray bg-white outline">In Config</Badge>
+                            <Badge className="text-gray bg-white outline-solid">In Config</Badge>
                           ) : (
-                            <Badge className="text-gray bg-white outline">Not Set</Badge>
+                            <Badge className="text-gray bg-white outline-solid">Not Set</Badge>
                           )}
                         </TableCell>
                         <TableCell>

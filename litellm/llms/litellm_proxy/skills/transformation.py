@@ -87,9 +87,7 @@ class LiteLLMSkillsTransformationHandler:
                 if isinstance(first_file, tuple) and len(first_file) >= 2:
                     file_name = first_file[0]
                     file_content = first_file[1]
-                    file_type = (
-                        first_file[2] if len(first_file) > 2 else "application/zip"
-                    )
+                    file_type = first_file[2] if len(first_file) > 2 else "application/zip"
 
         if _is_async:
             return self._async_create_skill(

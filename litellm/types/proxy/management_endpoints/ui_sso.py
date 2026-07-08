@@ -1,6 +1,6 @@
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
 
 from litellm.proxy._types import KeyManagementRoutes, LitellmUserRoles
@@ -70,9 +70,7 @@ class RoleMappings(LiteLLMPydanticObjectBase):
     which role to assign the user based on the roles mapping.
     """
 
-    provider: str = Field(
-        description="SSO Provider name (e.g., 'google', 'microsoft', 'generic')"
-    )
+    provider: str = Field(description="SSO Provider name (e.g., 'google', 'microsoft', 'generic')")
     group_claim: str = Field(
         description="The field name in the SSO token that contains the groups array (e.g., 'groups', 'roles')"
     )
@@ -208,11 +206,4 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     team_member_permissions: Optional[List[KeyManagementRoutes]] = Field(
         default=None,
         description="Default permissions granted to members of newly created teams (e.g. /key/generate, /key/update, /key/delete). /key/info and /key/health are always included.",
-    )
-
-
-class InProductNudgeResponse(BaseModel):
-    is_claude_code_enabled: bool = Field(
-        default=False,
-        description="Whether the Claude Code nudge should be shown.",
     )

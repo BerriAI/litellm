@@ -2,7 +2,19 @@ import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
-import { Alert, Button, Checkbox, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Select as Select2,
+  Space,
+  Tooltip,
+  Typography,
+} from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -225,11 +237,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
         </Form.Item>
 
-        <Form.Item
-          label="Send invitation email"
-          name="send_invite_email"
-          valuePropName="checked"
-        >
+        <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
           <Checkbox />
         </Form.Item>
 
@@ -335,11 +343,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
-          <Form.Item
-            label="Send invitation email"
-            name="send_invite_email"
-            valuePropName="checked"
-          >
+          <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
             <Checkbox />
           </Form.Item>
           <Accordion>

@@ -189,6 +189,34 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_client_disconnect_metadata():
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "client_disconnected": True,
+            "error_information": {
+                "error_code": "499",
+                "error_message": "Client disconnected the request",
+                "error_class": "ClientDisconnected",
+            },
+        },
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "client_disconnected" not in updated.get("metadata", {})
+    assert "error_information" not in updated.get("metadata", {})
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_metadata_model_info():
     data = {
         "model": "gpt-4",

@@ -16,8 +16,7 @@ export const OUTPUT_POLICY_OPTIONS = [
 
 export const POLICY_OPTIONS = INPUT_POLICY_OPTIONS;
 
-export const policyStyle = (p: string) =>
-  INPUT_POLICY_OPTIONS.find((o) => o.value === p) ?? INPUT_POLICY_OPTIONS[0];
+export const policyStyle = (p: string) => INPUT_POLICY_OPTIONS.find((o) => o.value === p) ?? INPUT_POLICY_OPTIONS[0];
 
 export interface PolicySelectProps {
   value: string;

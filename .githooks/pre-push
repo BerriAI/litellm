@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# pre-push — enforce Conventional Branches
+#   https://conventional-branch.github.io/
+#
+# Branch format:  <type>/<description>
+#   <type> must be one of: feature, bugfix, hotfix, release, chore
+#
+# Protected branches (always allowed):
+#   - main
+#   - litellm_internal_staging
+#   - dependabot/*
+#   - gh-readonly-queue/*
+#
+# Tag pushes and branch deletions are skipped.
+# Bypass: git push --no-verify.
+
+set -eu
+
+ZERO_OID="0000000000000000000000000000000000000000"
+ZERO_OID_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
+ALLOWED_TYPES="feature|bugfix|hotfix|release|chore"
+BRANCH_PATTERN="^(${ALLOWED_TYPES})/.+"
+
+PROTECTED_NAMES="main litellm_internal_staging"
+PROTECTED_PREFIXES="dependabot/ gh-readonly-queue/"
+
+is_protected() {
+    branch="$1"
+    for name in $PROTECTED_NAMES; do
+        if [ "$branch" = "$name" ]; then
+            return 0
+        fi
+    done
+    for prefix in $PROTECTED_PREFIXES; do
+        case "$branch" in "$prefix"*) return 0 ;; esac
+    done
+    return 1
+}
+
+invalid=""
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+    # Branch deletion (no local commit being pushed).
+    if [ "$local_oid" = "$ZERO_OID" ] || [ "$local_oid" = "$ZERO_OID_SHA256" ]; then
+        continue
+    fi
+
+    # Only validate branch pushes; ignore tags and other ref namespaces.
+    case "$remote_ref" in
+        refs/heads/*) ;;
+        *) continue ;;
+    esac
+
+    branch="${remote_ref#refs/heads/}"
+
+    if is_protected "$branch"; then
+        continue
+    fi
+
+    if ! printf '%s' "$branch" | grep -Eq "$BRANCH_PATTERN"; then
+        invalid="$invalid $branch"
+    fi
+done
+
+if [ -n "$invalid" ]; then
+    cat >&2 <<EOF
+✗ Branch name does not follow Conventional Branches.
+
+  Invalid:$invalid
+
+  Expected: <type>/<description>
+
+  Allowed types: feature, bugfix, hotfix, release, chore
+  Examples:
+    feature/weighted-round-robin
+    bugfix/streaming-empty-chunks
+    chore/bump-deps
+    hotfix/auth-bypass
+
+  Protected (always allowed): main, litellm_internal_staging,
+  dependabot/*, gh-readonly-queue/*.
+
+See https://conventional-branch.github.io/
+
+Rename with: git branch -m <new-name>
+To bypass (use sparingly): git push --no-verify
+EOF
+    exit 1
+fi
+
+exit 0

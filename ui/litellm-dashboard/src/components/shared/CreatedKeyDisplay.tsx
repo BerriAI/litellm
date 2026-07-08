@@ -24,8 +24,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
     <div>
       <p className="mb-2">
         Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-        <b>you will not be able to view it again</b> through your LiteLLM account. If you
-        lose this secret key, you will need to generate a new one.
+        <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key, you will
+        need to generate a new one.
       </p>
 
       <p className="text-sm text-gray-600 mt-3 mb-1">Virtual Key:</p>
@@ -37,9 +37,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
           marginBottom: "10px",
         }}
       >
-        <pre style={{ wordWrap: "break-word", whiteSpace: "normal", margin: 0 }}>
-          {apiKey}
-        </pre>
+        <pre style={{ wordWrap: "break-word", whiteSpace: "normal", margin: 0 }}>{apiKey}</pre>
       </div>
 
       <CopyToClipboard text={apiKey} onCopy={handleCopy}>

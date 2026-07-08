@@ -55,4 +55,3 @@ describe("GuardrailTestResults", () => {
     expect(screen.getByText("This is a very long response text that should be collapsible")).toBeInTheDocument();
   });
 });
-

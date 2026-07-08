@@ -1,0 +1,18 @@
+[package]
+name = "litellm-python-bridge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+litellm-core.workspace = true
+litellm-ai-gateway = { workspace = true, default-features = false }
+pyo3 = { workspace = true, features = ["extension-module"] }
+pyo3-async-runtimes.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

@@ -29,6 +29,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
@@ -122,7 +124,7 @@ async def _fetch_and_authorize_vector_store(
     Raises HTTPException(404) on miss and HTTPException(403) on access
     denial.
     """
-    row = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+    row = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
         where={"vector_store_id": vector_store_id}
     )
     if row is None:
@@ -139,9 +141,7 @@ async def _fetch_and_authorize_vector_store(
     return typed
 
 
-def _resolve_embedding_config_from_router(
-    embedding_model: str, llm_router
-) -> Optional[Dict[str, Any]]:
+def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> Optional[Dict[str, Any]]:
     """
     Resolve embedding config from router's config-defined models.
 
@@ -171,9 +171,7 @@ def _resolve_embedding_config_from_router(
     for model_name in model_name_candidates:
         try:
             # Try to get deployment by model group name (model_name in config)
-            deployment = llm_router.get_deployment_by_model_group_name(
-                model_group_name=model_name
-            )
+            deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model_name)
 
             if deployment is not None and deployment.litellm_params is not None:
                 litellm_params = deployment.litellm_params
@@ -213,17 +211,13 @@ def _resolve_embedding_config_from_router(
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error resolving embedding config from router for model {model_name}: {str(e)}"
-            )
+            verbose_proxy_logger.debug(f"Error resolving embedding config from router for model {model_name}: {str(e)}")
             continue
 
     return None
 
 
-async def _resolve_embedding_config_from_db(
-    embedding_model: str, prisma_client
-) -> Optional[Dict[str, Any]]:
+async def _resolve_embedding_config_from_db(embedding_model: str, prisma_client) -> Optional[Dict[str, Any]]:
     """
     Resolve embedding config from database model configuration.
 
@@ -252,9 +246,7 @@ async def _resolve_embedding_config_from_db(
     # Try to find model in database
     for model_name in model_name_candidates:
         try:
-            db_model = await prisma_client.db.litellm_proxymodeltable.find_first(
-                where={"model_name": model_name}
-            )
+            db_model = await ModelRepository(prisma_client).table.find_first(where={"model_name": model_name})
 
             if db_model and db_model.litellm_params:
                 # Extract litellm_params (could be dict or JSON string)
@@ -269,9 +261,7 @@ async def _resolve_embedding_config_from_db(
                     for k, v in model_params.items():
                         if isinstance(v, str):
                             # Decrypt value - returns original value if decryption fails or no key is set
-                            decrypted_value = decrypt_value_helper(
-                                value=v, key=k, return_original_value=True
-                            )
+                            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
                             decrypted_params[k] = decrypted_value
                         else:
                             decrypted_params[k] = v
@@ -309,17 +299,13 @@ async def _resolve_embedding_config_from_db(
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error resolving embedding config for model {model_name}: {str(e)}"
-            )
+            verbose_proxy_logger.debug(f"Error resolving embedding config for model {model_name}: {str(e)}")
             continue
 
     return None
 
 
-async def _resolve_embedding_config(
-    embedding_model: str, prisma_client, llm_router=None
-) -> Optional[Dict[str, Any]]:
+async def _resolve_embedding_config(embedding_model: str, prisma_client, llm_router=None) -> Optional[Dict[str, Any]]:
     """
     Resolve embedding config from either router (config-defined) or database models.
 
@@ -356,13 +342,9 @@ async def _resolve_embedding_config(
 
     # First try to resolve from router (config-defined models)
     if llm_router is not None:
-        router_config = _resolve_embedding_config_from_router(
-            embedding_model=embedding_model, llm_router=llm_router
-        )
+        router_config = _resolve_embedding_config_from_router(embedding_model=embedding_model, llm_router=llm_router)
         if router_config:
-            verbose_proxy_logger.debug(
-                f"Resolved embedding config from router for model {embedding_model}"
-            )
+            verbose_proxy_logger.debug(f"Resolved embedding config from router for model {embedding_model}")
             cache.set_cache(embedding_model, router_config)
             return router_config
 
@@ -372,9 +354,7 @@ async def _resolve_embedding_config(
             embedding_model=embedding_model, prisma_client=prisma_client
         )
         if db_config:
-            verbose_proxy_logger.debug(
-                f"Resolved embedding config from database for model {embedding_model}"
-            )
+            verbose_proxy_logger.debug(f"Resolved embedding config from database for model {embedding_model}")
             cache.set_cache(embedding_model, db_config)
             return db_config
 
@@ -400,9 +380,7 @@ async def _check_vector_store_access(
     - key-level and team-level ``object_permission.vector_stores`` allowlists
     - team_id match between key and store
     """
-    return await can_user_access_vector_store(
-        vector_store=vector_store, user_api_key_dict=user_api_key_dict
-    )
+    return await can_user_access_vector_store(vector_store=vector_store, user_api_key_dict=user_api_key_dict)
 
 
 async def create_vector_store_in_db(
@@ -437,10 +415,8 @@ async def create_vector_store_in_db(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     # Check if vector store already exists
-    existing_vector_store = (
-        await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-            where={"vector_store_id": vector_store_id}
-        )
+    existing_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
+        where={"vector_store_id": vector_store_id}
     )
     if existing_vector_store is not None:
         raise HTTPException(
@@ -478,32 +454,22 @@ async def create_vector_store_in_db(
     # at request-handling time so the cleartext config exists only in
     # per-request memory and never reaches the database.
     if litellm_params:
-        litellm_params_dict = GenericLiteLLMParams(**litellm_params).model_dump(
-            exclude_none=True
-        )
+        litellm_params_dict = GenericLiteLLMParams(**litellm_params).model_dump(exclude_none=True)
         data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
     else:
         # Provide empty dict if no litellm_params provided
         data_to_create["litellm_params"] = safe_dumps({})
 
     # Create in database
-    _new_vector_store = await prisma_client.db.litellm_managedvectorstorestable.create(
-        data=data_to_create
-    )
+    _new_vector_store = await ManagedVectorStoresRepository(prisma_client).table.create(data=data_to_create)
 
-    new_vector_store: LiteLLM_ManagedVectorStore = LiteLLM_ManagedVectorStore(
-        **_new_vector_store.model_dump()
-    )
+    new_vector_store: LiteLLM_ManagedVectorStore = LiteLLM_ManagedVectorStore(**_new_vector_store.model_dump())
 
     # Add vector store to registry
     if litellm.vector_store_registry is not None:
-        litellm.vector_store_registry.add_vector_store_to_registry(
-            vector_store=new_vector_store
-        )
+        litellm.vector_store_registry.add_vector_store_to_registry(vector_store=new_vector_store)
 
-    verbose_proxy_logger.info(
-        f"Vector store {vector_store_id} created in database successfully"
-    )
+    verbose_proxy_logger.info(f"Vector store {vector_store_id} created in database successfully")
 
     return new_vector_store
 
@@ -568,9 +534,7 @@ async def new_vector_store(
         # cleartext value persisted by an earlier proxy version doesn't
         # come back in the response.
         response_vs = LiteLLM_ManagedVectorStore(**new_vector_store)
-        response_vs["litellm_params"] = _redact_sensitive_litellm_params(
-            new_vector_store.get("litellm_params")
-        )
+        response_vs["litellm_params"] = _redact_sensitive_litellm_params(new_vector_store.get("litellm_params"))
 
         return {
             "status": "success",
@@ -617,9 +581,7 @@ async def list_vector_stores(
 
     try:
         # Get vector stores from database first (source of truth)
-        vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
-            prisma_client=prisma_client
-        )
+        vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
 
         # Build map from database vector stores
         for vector_store in vector_stores_from_db:
@@ -630,9 +592,7 @@ async def list_vector_stores(
 
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
-            in_memory_vector_stores = copy.deepcopy(
-                litellm.vector_store_registry.vector_stores
-            )
+            in_memory_vector_stores = copy.deepcopy(litellm.vector_store_registry.vector_stores)
 
             vector_stores_to_delete_from_memory: List[str] = []
 
@@ -654,12 +614,8 @@ async def list_vector_stores(
             # Synchronize in-memory registry with database
             # 1. Remove deleted vector stores from memory
             for vs_id in vector_stores_to_delete_from_memory:
-                litellm.vector_store_registry.delete_vector_store_from_registry(
-                    vector_store_id=vs_id
-                )
-                verbose_proxy_logger.debug(
-                    f"Removed deleted vector store {vs_id} from in-memory registry"
-                )
+                litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
+                verbose_proxy_logger.debug(f"Removed deleted vector store {vs_id} from in-memory registry")
 
             # 2. Update in-memory registry with database versions (for updates)
             for vector_store in vector_stores_from_db:
@@ -674,9 +630,7 @@ async def list_vector_stores(
         for vs in vector_store_map.values():
             if await _check_vector_store_access(vs, user_api_key_dict):
                 redacted = LiteLLM_ManagedVectorStore(**vs)
-                redacted["litellm_params"] = _redact_sensitive_litellm_params(
-                    vs.get("litellm_params")
-                )
+                redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
                 accessible_vector_stores.append(redacted)
 
         total_count = len(accessible_vector_stores)
@@ -725,16 +679,12 @@ async def delete_vector_store(
         memory_vector_store_exists = False
         vector_store_to_check = None
 
-        existing_vector_store = (
-            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-                where={"vector_store_id": data.vector_store_id}
-            )
+        existing_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
+            where={"vector_store_id": data.vector_store_id}
         )
         if existing_vector_store is not None:
             db_vector_store_exists = True
-            vector_store_to_check = LiteLLM_ManagedVectorStore(
-                **existing_vector_store.model_dump()
-            )
+            vector_store_to_check = LiteLLM_ManagedVectorStore(**existing_vector_store.model_dump())
 
         # Check in-memory registry
         if litellm.vector_store_registry is not None:
@@ -754,9 +704,7 @@ async def delete_vector_store(
             )
 
         # Check access control
-        if vector_store_to_check and not await _check_vector_store_access(
-            vector_store_to_check, user_api_key_dict
-        ):
+        if vector_store_to_check and not await _check_vector_store_access(vector_store_to_check, user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: You do not have permission to delete this vector store",
@@ -764,15 +712,13 @@ async def delete_vector_store(
 
         # Delete from database if exists
         if db_vector_store_exists:
-            await prisma_client.db.litellm_managedvectorstorestable.delete(
+            await ManagedVectorStoresRepository(prisma_client).table.delete(
                 where={"vector_store_id": data.vector_store_id}
             )
 
         # Delete from in-memory registry if exists
         if memory_vector_store_exists and litellm.vector_store_registry is not None:
-            litellm.vector_store_registry.delete_vector_store_from_registry(
-                vector_store_id=data.vector_store_id
-            )
+            litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=data.vector_store_id)
 
         return {
             "status": "success",
@@ -810,9 +756,7 @@ async def get_vector_store_info(
             )
             if vector_store is not None:
                 # Check access control
-                if not await _check_vector_store_access(
-                    vector_store, user_api_key_dict
-                ):
+                if not await _check_vector_store_access(vector_store, user_api_key_dict):
                     raise HTTPException(
                         status_code=403,
                         detail="Access denied: You do not have permission to access this vector store",
@@ -830,17 +774,12 @@ async def get_vector_store_info(
                     vector_store_id=vector_store.get("vector_store_id") or "",
                     custom_llm_provider=vector_store.get("custom_llm_provider") or "",
                     vector_store_name=vector_store.get("vector_store_name") or None,
-                    vector_store_description=vector_store.get(
-                        "vector_store_description"
-                    )
-                    or None,
+                    vector_store_description=vector_store.get("vector_store_description") or None,
                     vector_store_metadata=parsed_metadata,
                     created_at=vector_store.get("created_at") or None,
                     updated_at=vector_store.get("updated_at") or None,
                     litellm_credential_name=vector_store.get("litellm_credential_name"),
-                    litellm_params=_redact_sensitive_litellm_params(
-                        vector_store.get("litellm_params")
-                    ),
+                    litellm_params=_redact_sensitive_litellm_params(vector_store.get("litellm_params")),
                     team_id=vector_store.get("team_id") or None,
                     user_id=vector_store.get("user_id") or None,
                 )
@@ -853,9 +792,7 @@ async def get_vector_store_info(
         )
         vector_store_dict = dict(vector_store_typed)
         if "litellm_params" in vector_store_dict:
-            vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(
-                vector_store_dict["litellm_params"]
-            )
+            vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(vector_store_dict["litellm_params"])
         return {"vector_store": vector_store_dict}
     except HTTPException:
         # Preserve 403/404 from the access-control / not-found checks above;
@@ -902,9 +839,7 @@ async def update_vector_store(
 
         # Handle metadata serialization
         if update_data.get("vector_store_metadata") is not None:
-            update_data["vector_store_metadata"] = safe_dumps(
-                update_data["vector_store_metadata"]
-            )
+            update_data["vector_store_metadata"] = safe_dumps(update_data["vector_store_metadata"])
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext
@@ -915,13 +850,11 @@ async def update_vector_store(
         # ``litellm_embedding_model`` reference.
         if "litellm_params" in update_data:
             _input_litellm_params: dict = update_data.get("litellm_params", {}) or {}
-            litellm_params_dict = GenericLiteLLMParams(
-                **_input_litellm_params
-            ).model_dump(exclude_none=True)
+            litellm_params_dict = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
             update_data["litellm_params"] = safe_dumps(litellm_params_dict)
 
         # Update in database
-        updated = await prisma_client.db.litellm_managedvectorstorestable.update(
+        updated = await ManagedVectorStoresRepository(prisma_client).table.update(
             where={"vector_store_id": vector_store_id},
             data=update_data,
         )
@@ -943,9 +876,7 @@ async def update_vector_store(
         # credentials) back to the caller — even when the caller only
         # changed unrelated fields like ``vector_store_description``.
         response_vs = LiteLLM_ManagedVectorStore(**updated_vs)
-        response_vs["litellm_params"] = _redact_sensitive_litellm_params(
-            updated_vs.get("litellm_params")
-        )
+        response_vs["litellm_params"] = _redact_sensitive_litellm_params(updated_vs.get("litellm_params"))
         return {
             "status": "success",
             "message": f"Vector store {vector_store_id} updated successfully",

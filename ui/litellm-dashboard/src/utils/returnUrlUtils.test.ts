@@ -16,9 +16,7 @@ describe("returnUrlUtils", () => {
   beforeEach(() => {
     // Clear cookies before each test
     document.cookie.split(";").forEach((c) => {
-      document.cookie = c
-        .replace(/^ +/, "")
-        .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+      document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
     });
 
     // Reset location mock
@@ -111,9 +109,7 @@ describe("returnUrlUtils", () => {
       });
 
       const loginUrl = buildLoginUrlWithReturn("/ui/login");
-      expect(loginUrl).toBe(
-        "/ui/login?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fcreate%3Dtrue%26team_id%3D123"
-      );
+      expect(loginUrl).toBe("/ui/login?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fcreate%3Dtrue%26team_id%3D123");
     });
 
     it("should not add return URL if already on login page", () => {

@@ -20,9 +20,7 @@ describe("MCPConnectionStatus", () => {
   });
 
   it("should render nothing when canFetchTools is false and no URL is set", () => {
-    const { container } = render(
-      <MCPConnectionStatus {...defaultProps} formValues={{}} />
-    );
+    const { container } = render(<MCPConnectionStatus {...defaultProps} formValues={{}} />);
     expect(container.firstChild).toBeNull();
   });
 
@@ -32,27 +30,30 @@ describe("MCPConnectionStatus", () => {
   });
 
   it("should show 'Connection successful' when tools are loaded", () => {
-    render(
-      <MCPConnectionStatus
-        {...defaultProps}
-        canFetchTools={true}
-        tools={[{ name: "tool1" }]}
-      />
-    );
+    render(<MCPConnectionStatus {...defaultProps} canFetchTools={true} tools={[{ name: "tool1" }]} />);
     expect(screen.getByText("Connection successful")).toBeInTheDocument();
     expect(screen.getByText("Connected")).toBeInTheDocument();
   });
 
   it("should show loading state when isLoadingTools is true", () => {
+    render(<MCPConnectionStatus {...defaultProps} canFetchTools={true} isLoadingTools={true} />);
+    expect(screen.getByText(/Testing connection to MCP server/i)).toBeInTheDocument();
+    expect(screen.getByText("Connecting...")).toBeInTheDocument();
+  });
+
+  it("should show info message without retry when tool preview returns 403", () => {
     render(
       <MCPConnectionStatus
         {...defaultProps}
         canFetchTools={true}
-        isLoadingTools={true}
-      />
+        toolsError="Tool preview is not available for submissions. Tools will be verified by an admin during review."
+        toolsErrorStatus={403}
+      />,
     );
-    expect(screen.getByText(/Testing connection to MCP server/i)).toBeInTheDocument();
-    expect(screen.getByText("Connecting...")).toBeInTheDocument();
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/Tools will be verified by an admin during review/i);
+    expect(screen.queryByText("Connection Failed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
   });
 
   it("should show error state with retry button when toolsError is set", async () => {
@@ -64,7 +65,7 @@ describe("MCPConnectionStatus", () => {
         canFetchTools={true}
         toolsError="Connection refused"
         fetchTools={fetchTools}
-      />
+      />,
     );
 
     expect(screen.getByText("Connection Failed")).toBeInTheDocument();
@@ -75,13 +76,7 @@ describe("MCPConnectionStatus", () => {
   });
 
   it("should show 'No tools found' when connection succeeds but no tools returned", () => {
-    render(
-      <MCPConnectionStatus
-        {...defaultProps}
-        canFetchTools={true}
-        tools={[]}
-      />
-    );
+    render(<MCPConnectionStatus {...defaultProps} canFetchTools={true} tools={[]} />);
     expect(screen.getByText(/No tools found for this MCP server/i)).toBeInTheDocument();
   });
 });

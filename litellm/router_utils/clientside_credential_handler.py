@@ -28,11 +28,7 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
     """
     from litellm.types.router import CredentialLiteLLMParams
 
-    typed_fields = [
-        f
-        for f in CredentialLiteLLMParams.model_fields
-        if f not in clientside_credential_keys
-    ]
+    typed_fields = [f for f in CredentialLiteLLMParams.model_fields if f not in clientside_credential_keys]
     kwargs_only_fields = [
         # Caller-supplied via **kwargs, not declared on CredentialLiteLLMParams.
         "organization",
@@ -56,13 +52,18 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
         "oci_tenancy",
         "oci_key",
         "oci_key_file",
+        # NVIDIA Riva fields — consumed by
+        # ``litellm/llms/nvidia_riva/audio_transcription/handler.py`` via
+        # optional_params and not declared on CredentialLiteLLMParams.
+        # Admin-pinned values must not flow through on a caller-redirected
+        # ``api_base`` for the same reason as the OCI entries above.
+        "nvcf_function_id",
+        "use_ssl",
     ]
     return typed_fields + kwargs_only_fields
 
 
-_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = (
-    _admin_config_fields_to_clear_on_base_override()
-)
+_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = _admin_config_fields_to_clear_on_base_override()
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

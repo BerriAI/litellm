@@ -22,9 +22,7 @@ class ChatMessage(BaseModel):
 
 
 class UsageAIChatRequest(BaseModel):
-    messages: List[ChatMessage] = Field(
-        ..., description="Chat messages (user/assistant history)"
-    )
+    messages: List[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
     model: Optional[str] = Field(default=None, description="Model to use for AI chat")
 
 

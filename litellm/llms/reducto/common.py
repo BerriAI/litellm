@@ -51,9 +51,7 @@ def extract_file_id_or_bytes(
         _raise_bad_request("Invalid Reducto data URI provided.", model=model)
 
     if ";base64" not in header:
-        _raise_bad_request(
-            "Reducto only supports base64-encoded data URIs.", model=model
-        )
+        _raise_bad_request("Reducto only supports base64-encoded data URIs.", model=model)
 
     mime = header.removeprefix("data:").split(";")[0] or "application/octet-stream"
     try:
@@ -68,16 +66,10 @@ def _extract_file_id_from_upload_response(response: Any) -> str:
     try:
         payload = response.json()
     except ValueError as exc:
-        raise ValueError(
-            "Reducto /upload returned a non-JSON 200 response: {}".format(response.text)
-        ) from exc
+        raise ValueError("Reducto /upload returned a non-JSON 200 response: {}".format(response.text)) from exc
     file_id = (payload or {}).get("file_id") if isinstance(payload, dict) else None
     if not isinstance(file_id, str) or not file_id:
-        raise ValueError(
-            "Reducto /upload returned 200 without a file_id; got payload={}".format(
-                payload
-            )
-        )
+        raise ValueError("Reducto /upload returned 200 without a file_id; got payload={}".format(payload))
     return file_id
 
 
@@ -135,18 +127,14 @@ def build_pages_from_reducto(result: Dict[str, Any]) -> List["OCRPage"]:
             blocks_by_page[normalized_page].append(block)
 
     if not blocks_by_page:
-        fallback_markdown = "\n\n".join(
-            chunk.get("content", "") for chunk in chunks if chunk.get("content")
-        )
+        fallback_markdown = "\n\n".join(chunk.get("content", "") for chunk in chunks if chunk.get("content"))
         if fallback_markdown == "":
             return []
         return [OCRPage(index=0, markdown=fallback_markdown)]
 
     pages: List["OCRPage"] = []
     for page_no, blocks in sorted(blocks_by_page.items()):
-        markdown = "\n\n".join(
-            block.get("content", "") for block in blocks if block.get("content")
-        )
+        markdown = "\n\n".join(block.get("content", "") for block in blocks if block.get("content"))
         page_index = max(page_no - 1, 0)
         page = OCRPage(
             index=page_index,

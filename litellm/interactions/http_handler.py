@@ -64,9 +64,7 @@ class _BaseHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         client: Optional[HTTPHandler],
     ) -> HTTPHandler:
-        return client or _get_httpx_client(
-            params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-        )
+        return client or _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
     def _async_client(
         self,
@@ -117,9 +115,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         Coroutine[
             Any,
             Any,
-            Union[
-                InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]
-            ],
+            Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]],
         ],
     ]:
         """
@@ -144,9 +140,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-            )
+            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -233,9 +227,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
         stream: Optional[bool] = None,
-    ) -> Union[
-        InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]
-    ]:
+    ) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
         """
         Create a new interaction (async version).
         """
@@ -382,9 +374,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-            )
+            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -503,9 +493,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-            )
+            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -626,9 +614,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-            )
+            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 

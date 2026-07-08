@@ -159,7 +159,7 @@ def video_generation(
 
 
 @client
-def video_generation(  # noqa: PLR0915
+def video_generation(
     prompt: str,
     model: Optional[str] = None,
     input_reference: Optional[FileTypes] = None,
@@ -206,33 +206,25 @@ def video_generation(  # noqa: PLR0915
         )
 
         # get provider config
-        video_generation_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_generation_provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_generation_provider_config is None:
-            raise ValueError(
-                f"video generation is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"video generation is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         # Get VideoGenerationOptionalRequestParams with only valid parameters
         video_generation_optional_params: VideoCreateOptionalRequestParams = (
-            VideoGenerationRequestUtils.get_requested_video_generation_optional_param(
-                local_vars
-            )
+            VideoGenerationRequestUtils.get_requested_video_generation_optional_param(local_vars)
         )
 
         # Get optional parameters for the video generation API
-        video_generation_request_params: Dict = (
-            VideoGenerationRequestUtils.get_optional_params_video_generation(
-                model=model,
-                video_generation_provider_config=video_generation_provider_config,
-                video_generation_optional_params=video_generation_optional_params,
-            )
+        video_generation_request_params: Dict = VideoGenerationRequestUtils.get_optional_params_video_generation(
+            model=model,
+            video_generation_provider_config=video_generation_provider_config,
+            video_generation_optional_params=video_generation_optional_params,
         )
 
         # Pre Call logging
@@ -337,17 +329,13 @@ def video_content(
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_provider_config is None:
-            raise ValueError(
-                f"video support download is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"video support download is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         # For video content download, we don't need complex optional parameter handling
@@ -569,7 +557,7 @@ def video_remix(
 
 
 @client
-def video_remix(  # noqa: PLR0915
+def video_remix(
     video_id: str,
     prompt: str,
     timeout=600,  # default to 10 minutes
@@ -613,11 +601,9 @@ def video_remix(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_remix_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_remix_provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_remix_provider_config is None:
@@ -712,9 +698,7 @@ async def avideo_list(
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model="", api_base=local_vars.get("api_base", None)
-            )
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model="", api_base=local_vars.get("api_base", None))
 
         func = partial(
             video_list,
@@ -790,7 +774,7 @@ def video_list(
 
 
 @client
-def video_list(  # noqa: PLR0915
+def video_list(
     after: Optional[str] = None,
     limit: Optional[int] = None,
     order: Optional[str] = None,
@@ -832,11 +816,9 @@ def video_list(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_list_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_list_provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_list_provider_config is None:
@@ -993,7 +975,7 @@ def video_status(
 
 
 @client
-def video_status(  # noqa: PLR0915
+def video_status(
     video_id: str,
     timeout=600,  # default to 10 minutes
     custom_llm_provider=None,
@@ -1058,11 +1040,9 @@ def video_status(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_status_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_status_provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_status_provider_config is None:
@@ -1201,17 +1181,13 @@ def video_create_character(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
-            raise ValueError(
-                f"video create character is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"video create character is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         request_params: Dict = {"name": name}
@@ -1330,17 +1306,13 @@ def video_get_character(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
-            raise ValueError(
-                f"video get character is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"video get character is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         request_params: Dict = {"character_id": character_id}
@@ -1462,11 +1434,9 @@ def video_edit(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
@@ -1597,17 +1567,13 @@ def video_extension(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
-            raise ValueError(
-                f"video extension is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"video extension is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         request_params: Dict = {

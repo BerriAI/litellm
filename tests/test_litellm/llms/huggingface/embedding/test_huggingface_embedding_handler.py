@@ -104,6 +104,23 @@ class TestHuggingFaceEmbedding:
         assert "source_sentence" not in str(request_data)
         assert "sentences" not in str(request_data)
 
+    def test_embedding_allows_special_token_looking_input(self):
+        input_text = ["hello <|fim_prefix|> world"]
+
+        response = litellm.embedding(
+            model=self.model,
+            input=input_text,
+            input_type="embed",
+        )
+
+        self.mock_http.assert_called_once()
+        post_call_args = self.mock_http.call_args
+        request_data = json.loads(post_call_args[1]["data"])
+
+        assert request_data["inputs"] == input_text
+        assert response.usage.prompt_tokens > 0
+        assert response.usage.total_tokens == response.usage.prompt_tokens
+
     def test_embedding_with_sentence_similarity_task(self):
         """Test embedding when task type is sentence-similarity (requires 2+ sentences)"""
 

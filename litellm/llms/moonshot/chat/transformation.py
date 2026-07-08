@@ -53,13 +53,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         if is_async:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=True
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=False
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
@@ -134,20 +130,22 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         ##########################################
         # temperature limitations
-        # 1. `temperature` on KIMI API is [0, 1] but OpenAI is [0, 2]
-        # 2. If temperature < 0.3 and n > 1, KIMI will raise an exception.
+        # 1. reasoning models (kimi-k2.5, kimi-k2.6, ...) reject every temperature
+        #    except 1, so the param is dropped and the model's default is used
+        # 2. `temperature` on KIMI API is [0, 1] but OpenAI is [0, 2]
+        # 3. If temperature < 0.3 and n > 1, KIMI will raise an exception.
         #       If we enter this condition, we set the temperature to 0.3 as suggested by Moonshot AI
         ##########################################
-        if "temperature" in optional_params:
+        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+            optional_params.pop("temperature", None)
+        elif "temperature" in optional_params:
             if optional_params["temperature"] > 1:
                 optional_params["temperature"] = 1
             if optional_params["temperature"] < 0.3 and optional_params.get("n", 1) > 1:
                 optional_params["temperature"] = 0.3
         return optional_params
 
-    def fill_reasoning_content(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def fill_reasoning_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         """
         Moonshot reasoning models require `reasoning_content` on every assistant
         message that contains tool_calls (multi-turn tool-calling flows).
@@ -234,11 +232,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
         """
-        messages.append(
+        optional_params.pop("tool_choice")
+        return [
+            *messages,
             {
                 "role": "user",
                 "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
-            }
-        )
-        optional_params.pop("tool_choice")
-        return messages
+            },
+        ]

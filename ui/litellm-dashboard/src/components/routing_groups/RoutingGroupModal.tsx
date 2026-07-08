@@ -150,16 +150,11 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
           name="routing_strategy"
           rules={[{ required: true, message: "Strategy is required" }]}
         >
-          <Select
-            options={availableStrategies.map((s) => ({ label: s, value: s }))}
-            placeholder="Select strategy"
-          />
+          <Select options={availableStrategies.map((s) => ({ label: s, value: s }))} placeholder="Select strategy" />
         </Form.Item>
 
         {selectedStrategy && strategyDescriptions[selectedStrategy] && (
-          <Paragraph className="text-xs text-gray-500 -mt-2 mb-4">
-            {strategyDescriptions[selectedStrategy]}
-          </Paragraph>
+          <Paragraph className="text-xs text-gray-500 -mt-2 mb-4">{strategyDescriptions[selectedStrategy]}</Paragraph>
         )}
 
         {STRATEGIES_WITH_ARGS.has(String(selectedStrategy)) && (
@@ -168,22 +163,17 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
             name="routing_strategy_args"
             extra={
               selectedStrategy === "latency-based-routing"
-                ? "Example: { \"ttl\": 3600, \"lowest_latency_buffer\": 0 }"
-                : "Example: { \"ttl\": 60 }"
+                ? 'Example: { "ttl": 3600, "lowest_latency_buffer": 0 }'
+                : 'Example: { "ttl": 60 }'
             }
           >
-            <Input.TextArea
-              rows={4}
-              placeholder='{ "ttl": 3600 }'
-              className="font-mono text-xs"
-            />
+            <Input.TextArea rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
           </Form.Item>
         )}
 
         <Space direction="vertical" className="w-full mt-2">
           <Text type="secondary" className="text-xs">
-            Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing
-            strategy.
+            Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing strategy.
           </Text>
         </Space>
       </Form>

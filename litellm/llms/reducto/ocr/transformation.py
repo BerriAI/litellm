@@ -69,16 +69,12 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
         source_url = document.get("document_url") or document.get("image_url")
         if source_url is None:
             raise ValueError(
-                "Reducto expected OCR preprocessing to produce document_url or image_url for model={}".format(
-                    model
-                )
+                "Reducto expected OCR preprocessing to produce document_url or image_url for model={}".format(model)
             )
         return source_url
 
     @staticmethod
-    def _resolve_credentials(
-        api_key: Optional[str], api_base: Optional[str]
-    ) -> Tuple[str, str]:
+    def _resolve_credentials(api_key: Optional[str], api_base: Optional[str]) -> Tuple[str, str]:
         from litellm.secret_managers.main import get_secret_str
 
         resolved_key = api_key or get_secret_str("REDUCTO_API_KEY")
@@ -213,9 +209,7 @@ class ReductoParseLegacyConfig(_BaseReductoOCRConfig):
             api_base=kwargs.get("api_base"),
         )
         return OCRRequestData(
-            data=self._build_legacy_body(
-                file_id=file_id, optional_params=optional_params
-            ),
+            data=self._build_legacy_body(file_id=file_id, optional_params=optional_params),
             files=None,
         )
 
@@ -234,8 +228,6 @@ class ReductoParseLegacyConfig(_BaseReductoOCRConfig):
             api_base=kwargs.get("api_base"),
         )
         return OCRRequestData(
-            data=self._build_legacy_body(
-                file_id=file_id, optional_params=optional_params
-            ),
+            data=self._build_legacy_body(file_id=file_id, optional_params=optional_params),
             files=None,
         )

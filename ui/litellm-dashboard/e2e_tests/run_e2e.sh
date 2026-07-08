@@ -93,8 +93,11 @@ export MOCK_LLM_URL="http://127.0.0.1:8090/v1"
 export DISABLE_SCHEMA_UPDATE="true"
 # Ensure the proxy serves UI at /ui (not behind a subpath)
 export SERVER_ROOT_PATH=""
-# Prevent logout from redirecting to an external URL
-export PROXY_LOGOUT_URL=""
+# Boot with an external logout URL so proxyLogoutUrl.spec.ts can assert the
+# redirect. This same value is exported to the Playwright process below (the
+# spec's skip guard reads it). Safe for the rest of the suite — nothing else
+# performs a logout.
+export PROXY_LOGOUT_URL="https://www.example.com"
 # Forward LITELLM_LICENSE if set in the outer env so premium-gated UI flows
 # (e.g. Team-BYOK Model switch) can be exercised. Tests that depend on a
 # premium proxy gate themselves on process.env.LITELLM_LICENSE.

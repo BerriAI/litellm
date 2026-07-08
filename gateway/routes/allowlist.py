@@ -109,6 +109,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Health & ops
     "/health",
     "/metrics",
+    "/watsonx",
 )
 
 GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
@@ -120,5 +121,11 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/test",
+    }
+)
+
+GATEWAY_MOUNT_PATHS: frozenset[str] = frozenset(
+    {
+        "/metrics",
     }
 )

@@ -14,11 +14,35 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
 )
+
+
+class StubClientNotConnectedError(Exception):
+    pass
+
+
+class DisconnectedPrisma:
+    """Mimics prisma-client-py after disconnect(): ``is_connected()`` is False
+    and the ``_engine`` property raises ``ClientNotConnectedError``."""
+
+    def is_connected(self) -> bool:
+        return False
+
+    @property
+    def _engine(self) -> None:
+        raise StubClientNotConnectedError(
+            "Client is not connected to the query engine, you must call `connect()` "
+            "before attempting to query data."
+        )
+
+
+@pytest.fixture
+def disconnected_prisma() -> DisconnectedPrisma:
+    """A stand-in for a Prisma client wedged in the disconnected state."""
+    return DisconnectedPrisma()
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +71,18 @@ def _isolate_proxy_module_globals():
                     delattr(proxy_server, name)
             else:
                 setattr(proxy_server, name, value)
+
+
+@pytest.fixture(autouse=True)
+def _reset_graceful_shutdown_state():
+    """Graceful shutdown state is process-scoped; keep it from leaking between tests."""
+    from litellm.proxy.shutdown.graceful_shutdown_manager import (
+        GracefulShutdownManager,
+    )
+
+    GracefulShutdownManager.reset()
+    yield
+    GracefulShutdownManager.reset()
 
 
 def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:

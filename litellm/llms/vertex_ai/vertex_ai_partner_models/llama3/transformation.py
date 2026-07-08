@@ -78,9 +78,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         drop_params: bool,
     ):
         if "max_completion_tokens" in non_default_params:
-            non_default_params["max_tokens"] = non_default_params.pop(
-                "max_completion_tokens"
-            )
+            non_default_params["max_tokens"] = non_default_params.pop("max_completion_tokens")
         return super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -128,9 +126,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise VertexAIError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
+                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -202,9 +198,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
             elif delta.role is None:
                 delta.role = "assistant"
             # If the first chunk has empty content, ensure it's still emitted
-            if (
-                delta.content == "" or delta.content is None
-            ) and delta.provider_specific_fields is None:
+            if (delta.content == "" or delta.content is None) and delta.provider_specific_fields is None:
                 delta.provider_specific_fields = {}
             self.sent_role = True
         return result

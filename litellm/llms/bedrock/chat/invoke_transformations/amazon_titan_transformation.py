@@ -105,9 +105,7 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
             if k == "temperature":
                 optional_params["temperature"] = v
             if k == "stop":
-                filtered_stop = self._map_and_modify_arg(
-                    {"stop": v}, provider="bedrock", model=model, stop=v
-                )
+                filtered_stop = self._map_and_modify_arg({"stop": v}, provider="bedrock", model=model, stop=v)
                 optional_params["stopSequences"] = filtered_stop["stop"]
             if k == "top_p":
                 optional_params["topP"] = v

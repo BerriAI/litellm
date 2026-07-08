@@ -21,9 +21,7 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
 
     prompt: str  # Required - text prompt for image generation
     negative_prompt: Optional[str]  # What to avoid in the image
-    aspect_ratio: Optional[
-        str
-    ]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
+    aspect_ratio: Optional[str]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
     seed: Optional[int]  # Random seed for reproducibility (0 to 4294967294)
     output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
     model: Optional[str]  # Model variant (e.g., "sd3.5-large", "sd3.5-medium")
@@ -144,9 +142,7 @@ class StabilityRemoveBackgroundRequest(TypedDict, total=False):
     """
 
     image: str  # Required - Base64-encoded image
-    output_format: Optional[
-        Literal["png", "webp"]
-    ]  # Output format (no jpeg - needs transparency)
+    output_format: Optional[Literal["png", "webp"]]  # Output format (no jpeg - needs transparency)
 
 
 class StabilityControlRequest(TypedDict, total=False):

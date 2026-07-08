@@ -80,12 +80,8 @@ class BaseLLM:
     ) -> Optional[Any]:  # set up the environment required to run the model
         return None
 
-    def completion(
-        self, *args, **kwargs
-    ) -> Any:  # logic for parsing in - calling - parsing out model completion calls
+    def completion(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model completion calls
         return None
 
-    def embedding(
-        self, *args, **kwargs
-    ) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
         return None

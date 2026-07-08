@@ -115,7 +115,7 @@ def test_completion_bedrock_guardrails(streaming):
                 ],
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "4w3d1di3snt5",
+                    "guardrailIdentifier": "ff6ujrregl1q",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -144,7 +144,7 @@ def test_completion_bedrock_guardrails(streaming):
                 stream=True,
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "4w3d1di3snt5",
+                    "guardrailIdentifier": "ff6ujrregl1q",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -475,7 +475,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             num_retries=3,
             **data,
         )  # type: ignore
@@ -498,7 +498,7 @@ def test_bedrock_claude_3(image_url):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
         # "meta.llama3-70b-instruct-v1:0",
         # "anthropic.claude-v2",
         # "mistral.mixtral-8x7b-instruct-v0:1",
@@ -537,7 +537,7 @@ def test_bedrock_stop_value(stop, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -602,7 +602,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +630,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -737,7 +737,7 @@ def test_bedrock_ptu():
         from openai.types.chat import ChatCompletion
 
         model_id = (
-            "arn:aws:bedrock:us-west-2:941277531214:provisioned-model/8fxff74qyhs3"
+            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
         )
         try:
             response = litellm.completion(
@@ -752,7 +752,7 @@ def test_bedrock_ptu():
         assert "url" in mock_client_post.call_args.kwargs
         assert (
             mock_client_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A941277531214%3Aprovisioned-model%2F8fxff74qyhs3/converse"
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
         )
         mock_client_post.assert_called_once()
 
@@ -2327,7 +2327,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
 def test_bedrock_empty_content_real_call():
     completion(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
         messages=[
             {
                 "role": "user",
@@ -2502,19 +2502,34 @@ async def test_bedrock_image_url_sync_client():
         mock_post.assert_called_once()
 
 
-def test_bedrock_error_handling_streaming():
+@pytest.mark.parametrize(
+    "exception_type, expected_status_code",
+    [
+        ("internalServerException", 500),
+        ("serviceUnavailableException", 503),
+        ("modelTimeoutException", 408),
+        ("modelStreamErrorException", 424),
+        ("validationException", 400),
+    ],
+)
+def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
+    """Bedrock event-stream error events arrive with botocore's hard-coded
+    status_code=400; the decoder must surface the modeled HTTP status instead
+    (e.g. internalServerException -> 500). For 5xx this is what makes the error
+    retryable downstream; for all types it replaces the misleading 400 with the
+    true code. Regression for #24608."""
     from litellm.llms.bedrock.chat.invoke_handler import (
         AWSEventStreamDecoder,
         BedrockError,
     )
-    from unittest.mock import patch, Mock
+    from unittest.mock import Mock
 
     event = Mock()
     event.to_response_dict = Mock(
         return_value={
             "status_code": 400,
             "headers": {
-                ":exception-type": "serviceUnavailableException",
+                ":exception-type": exception_type,
                 ":content-type": "application/json",
                 ":message-type": "exception",
             },
@@ -2525,11 +2540,10 @@ def test_bedrock_error_handling_streaming():
     decoder = AWSEventStreamDecoder(
         model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
     )
-    with pytest.raises(Exception) as e:
+    with pytest.raises(BedrockError) as e:
         decoder._parse_message_from_event(event)
-    assert isinstance(e.value, BedrockError)
     assert "Bedrock is unable to process your request." in e.value.message
-    assert e.value.status_code == 400
+    assert e.value.status_code == expected_status_code
 
 
 @pytest.mark.parametrize(
@@ -2712,6 +2726,10 @@ def test_bedrock_top_k_param(model, expected_params):
         data = json.loads(mock_post.call_args.kwargs["data"])
         if "mistral" in model:
             assert data["top_k"] == 2
+        elif expected_params == {}:
+            # Models that don't support top_k produce no additionalModelRequestFields;
+            # the empty block is now omitted entirely rather than sent as `{}`.
+            assert "additionalModelRequestFields" not in data
         else:
             assert data["additionalModelRequestFields"] == expected_params
 
@@ -3059,8 +3077,6 @@ async def test_bedrock_max_completion_tokens(model: str):
 
         assert request_body == {
             "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
-            "additionalModelRequestFields": {},
-            "system": [],
             "inferenceConfig": {"maxTokens": 10},
         }
 
@@ -3219,6 +3235,11 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
     import asyncio
+
+    if os.environ.get("LITELLM_RUN_LIVE_BEDROCK_PASSTHROUGH_TESTS") != "1":
+        pytest.skip("Live Bedrock passthrough E2E tests are opt-in")
+    if os.environ.get("CASSETTE_REDIS_URL"):
+        pytest.skip("Live Bedrock passthrough E2E tests cannot run under VCR replay")
 
     class MockCustomLogger(CustomLogger):
         pass

@@ -27,9 +27,7 @@ class CohereModelInfo(BaseLLMModelInfo):
         """
         return None
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by this provider.
         """
@@ -118,9 +116,7 @@ def validate_environment(
 
 
 class ModelResponseIterator:
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List = []
@@ -221,9 +217,7 @@ class ModelResponseIterator:
 class CohereV2ModelResponseIterator:
     """V2-specific response iterator for Cohere streaming"""
 
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List = []
@@ -241,9 +235,7 @@ class CohereV2ModelResponseIterator:
             return content
         return ""
 
-    def _parse_tool_call_delta(
-        self, chunk: dict
-    ) -> Optional[ChatCompletionToolCallChunk]:
+    def _parse_tool_call_delta(self, chunk: dict) -> Optional[ChatCompletionToolCallChunk]:
         """Parse tool-call-delta chunks to extract tool calls."""
         delta = chunk.get("delta", {})
         tool_calls = delta.get("tool_calls", [])
@@ -285,9 +277,7 @@ class CohereV2ModelResponseIterator:
             return {"citations": [citation_data]}
         return None
 
-    def _parse_message_end(
-        self, chunk: dict
-    ) -> Tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
+    def _parse_message_end(self, chunk: dict) -> Tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
         """Parse message-end events to extract finish info and usage."""
         data = chunk.get("data", {})
         delta = data.get("delta", {})
@@ -301,8 +291,7 @@ class CohereV2ModelResponseIterator:
             usage = ChatCompletionUsageBlock(
                 prompt_tokens=tokens_data.get("input_tokens", 0),
                 completion_tokens=tokens_data.get("output_tokens", 0),
-                total_tokens=tokens_data.get("input_tokens", 0)
-                + tokens_data.get("output_tokens", 0),
+                total_tokens=tokens_data.get("input_tokens", 0) + tokens_data.get("output_tokens", 0),
             )
 
         return is_finished, finish_reason, usage

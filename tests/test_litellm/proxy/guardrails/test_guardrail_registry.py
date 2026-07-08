@@ -180,3 +180,172 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     handler.sync_guardrail_from_db(g)
 
     assert handler.get_source("collide") == "db"
+
+
+def _db_litellm_params() -> dict:
+    """
+    Shape produced by GuardrailRegistry.get_all_guardrails_from_db: litellm_params
+    is a raw dict (not a LitellmParams), holding only the keys originally stored,
+    a non-schema extra key, and plain-string enum values.
+    """
+    return {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "default_on": True,
+        "version": 2,
+        "blocked_words": [{"keyword": "secret", "action": "BLOCK"}],
+    }
+
+
+def test_unchanged_db_params_do_not_register_as_changed():
+    """
+    A DB poll returns litellm_params as a raw dict while the in-memory copy is a
+    LitellmParams whose model_dump() fills every field default and coerces enums.
+    The two shapes must compare equal when the config is identical; otherwise
+    every poll cycle re-initializes the guardrail indefinitely.
+    """
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "11111111-1111-1111-1111-111111111111"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=dict(raw))
+    assert handler._has_guardrail_params_changed(gid, new) is False
+
+
+def test_changed_db_params_register_as_changed():
+    """Normalizing both sides must still surface a genuine config change."""
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "22222222-2222-2222-2222-222222222222"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    changed = {**raw, "blocked_words": [{"keyword": "different", "action": "BLOCK"}]}
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=changed)
+    assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def test_unnormalizable_db_params_register_as_changed_without_raising():
+    """
+    A DB row whose litellm_params fail LitellmParams validation must not crash the
+    poll loop. The comparison falls back to treating the guardrail as changed so it
+    re-initializes (and surfaces the bad row in logs) rather than propagating the
+    validation error up through the polling cycle.
+    """
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "55555555-5555-5555-5555-555555555555"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    malformed = {**raw, "default_on": "not-a-bool-xyz"}
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=malformed)
+    assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def _all_callback_lists():
+    import litellm
+
+    return [
+        litellm.callbacks,
+        litellm.success_callback,
+        litellm.failure_callback,
+        litellm._async_success_callback,
+        litellm._async_failure_callback,
+    ]
+
+
+def test_delete_in_memory_guardrail_removes_callback_from_all_lists():
+    """
+    Request handling promotes guardrail callbacks from litellm.callbacks into the
+    success/failure/async lists. delete_in_memory_guardrail must purge the callback
+    from every list, otherwise a re-initialized guardrail leaves its old instance
+    stranded in those lists and instances accumulate.
+    """
+    handler = InMemoryGuardrailHandler()
+    callback = CustomGuardrail(
+        guardrail_name="cf-delete",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    gid = "33333333-3333-3333-3333-333333333333"
+    handler.IN_MEMORY_GUARDRAILS[gid] = _make_guardrail(gid, "cf-delete")
+    handler._sources[gid] = "db"
+    handler.guardrail_id_to_custom_guardrail[gid] = callback
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        for cb_list in lists:
+            cb_list.append(callback)
+
+        handler.delete_in_memory_guardrail(gid)
+
+        for cb_list in lists:
+            assert callback not in cb_list
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_repeated_db_sync_does_not_accumulate_runner_instances():
+    """
+    End-to-end regression for the OOM: across repeated DB polls (with the config
+    genuinely changing each cycle to force re-initialization), exactly one live
+    guardrail instance must exist across all callback lists. On the unfixed code
+    the stale instance lingers in the success/failure lists and the distinct count
+    climbs above one.
+    """
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    gid = "44444444-4444-4444-4444-444444444444"
+    name = "cf-accum"
+
+    def db_guardrail(word: str) -> Guardrail:
+        params = {
+            **_db_litellm_params(),
+            "blocked_words": [{"keyword": word, "action": "BLOCK"}],
+        }
+        return Guardrail(guardrail_id=gid, guardrail_name=name, litellm_params=params)
+
+    def promote_into_request_lists() -> None:
+        manager = litellm.logging_callback_manager
+        for callback in list(litellm.callbacks):
+            manager.add_litellm_success_callback(callback)
+            manager.add_litellm_failure_callback(callback)
+            manager.add_litellm_async_success_callback(callback)
+            manager.add_litellm_async_failure_callback(callback)
+
+    def distinct_runner_instances() -> int:
+        seen = set()
+        for callback in litellm.logging_callback_manager._get_all_callbacks():
+            if (
+                isinstance(callback, CustomGuardrail)
+                and getattr(callback, "guardrail_name", None) == name
+            ):
+                seen.add(id(callback))
+        return len(seen)
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        for cycle in range(5):
+            handler.sync_guardrail_from_db(db_guardrail(f"word-{cycle}"))
+            promote_into_request_lists()
+
+        assert distinct_runner_instances() == 1
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot

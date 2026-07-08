@@ -98,9 +98,7 @@ class XecGuardGuardrail(CustomGuardrail):
                 "the guardrail config."
             )
 
-        self.api_base = (
-            api_base or os.environ.get("XECGUARD_API_BASE") or _DEFAULT_API_BASE
-        ).rstrip("/")
+        self.api_base = (api_base or os.environ.get("XECGUARD_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
 
         self.xecguard_model = xecguard_model or _DEFAULT_MODEL
         self.policy_names = policy_names
@@ -115,9 +113,7 @@ class XecGuardGuardrail(CustomGuardrail):
         else:
             self.block_on_error = block_on_error
 
-        self.grounding_strictness = (
-            grounding_strictness or _DEFAULT_GROUNDING_STRICTNESS
-        )
+        self.grounding_strictness = grounding_strictness or _DEFAULT_GROUNDING_STRICTNESS
 
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -179,16 +175,11 @@ class XecGuardGuardrail(CustomGuardrail):
                     messages=messages,
                     documents=documents,
                 )
-                if (
-                    grounding_result is not None
-                    and grounding_result.get("decision") == "UNSAFE"
-                ):
+                if grounding_result is not None and grounding_result.get("decision") == "UNSAFE":
                     raise HTTPException(
                         status_code=400,
                         detail={
-                            "error": self._format_grounding_block_message(
-                                grounding_result
-                            ),
+                            "error": self._format_grounding_block_message(grounding_result),
                             "guardrail_name": self.guardrail_name or "xecguard",
                             "xecguard_response": grounding_result,
                         },
@@ -212,11 +203,8 @@ class XecGuardGuardrail(CustomGuardrail):
             isinstance(kwargs, dict)
             and "litellm_params" in kwargs
             and "metadata" in kwargs["litellm_params"]
-            and "standard_logging_guardrail_information"
-            in kwargs["litellm_params"]["metadata"]
-            and kwargs["litellm_params"]["metadata"][
-                "standard_logging_guardrail_information"
-            ]
+            and "standard_logging_guardrail_information" in kwargs["litellm_params"]["metadata"]
+            and kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
         ):
             return kwargs, result
 
@@ -252,9 +240,7 @@ class XecGuardGuardrail(CustomGuardrail):
                 return kwargs, result
 
             guardrail_status: GuardrailStatus = (
-                "guardrail_intervened"
-                if scan_result.get("decision") == "UNSAFE"
-                else "success"
+                "guardrail_intervened" if scan_result.get("decision") == "UNSAFE" else "success"
             )
             end_time = datetime.now()
             kwargs["standard_logging_object"]["guardrail_information"] = {
@@ -295,11 +281,7 @@ class XecGuardGuardrail(CustomGuardrail):
                 asyncio.set_event_loop(loop)
             if loop.is_running():
                 return kwargs, result
-            loop.run_until_complete(
-                self.async_logging_hook(
-                    kwargs=kwargs, result=result, call_type=call_type
-                )
-            )
+            loop.run_until_complete(self.async_logging_hook(kwargs=kwargs, result=result, call_type=call_type))
         except Exception as exc:
             verbose_proxy_logger.debug(
                 "XecGuard sync logging_hook swallowed exception: %s",
@@ -321,9 +303,7 @@ class XecGuardGuardrail(CustomGuardrail):
             "model": self.xecguard_model,
             "scan_type": scan_type,
             "messages": messages,
-            "policy_names": (
-                self.policy_names if self.policy_names else _DEFAULT_POLICIES
-            ),
+            "policy_names": (self.policy_names if self.policy_names else _DEFAULT_POLICIES),
         }
         return await self._post(
             path=_SCAN_ENDPOINT,
@@ -381,9 +361,7 @@ class XecGuardGuardrail(CustomGuardrail):
                 raise HTTPException(
                     status_code=400,
                     detail={
-                        "error": (
-                            f"XecGuard API unreachable (block_on_error=True): {exc}"
-                        ),
+                        "error": (f"XecGuard API unreachable (block_on_error=True): {exc}"),
                         "guardrail_name": self.guardrail_name or "xecguard",
                     },
                 ) from exc
@@ -407,9 +385,7 @@ class XecGuardGuardrail(CustomGuardrail):
         the request data is incomplete.
         """
         raw_messages = request_data.get("messages") or []
-        messages: List[dict] = [
-            self._normalize_message(m) for m in raw_messages if isinstance(m, dict)
-        ]
+        messages: List[dict] = [self._normalize_message(m) for m in raw_messages if isinstance(m, dict)]
 
         if input_type == "request":
             if not messages:
@@ -422,9 +398,7 @@ class XecGuardGuardrail(CustomGuardrail):
             return messages
 
         # input_type == "response"
-        assistant_text = self._extract_assistant_text_from_response(
-            request_data.get("response")
-        )
+        assistant_text = self._extract_assistant_text_from_response(request_data.get("response"))
         if assistant_text is None:
             return []
         messages.append({"role": "assistant", "content": assistant_text})
@@ -512,9 +486,7 @@ class XecGuardGuardrail(CustomGuardrail):
             parts = [
                 item.get("text")
                 for item in content
-                if isinstance(item, dict)
-                and item.get("type") == "text"
-                and isinstance(item.get("text"), str)
+                if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
             ]
             joined = "\n".join(p for p in parts if p)
             return joined or None

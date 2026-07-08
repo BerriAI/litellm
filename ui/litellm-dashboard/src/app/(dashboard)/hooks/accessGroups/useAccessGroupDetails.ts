@@ -1,20 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { AccessGroupResponse, accessGroupKeys } from "./useAccessGroups";
 
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const fetchAccessGroupDetails = async (
-  accessToken: string,
-  accessGroupId: string,
-): Promise<AccessGroupResponse> => {
+const fetchAccessGroupDetails = async (accessToken: string, accessGroupId: string): Promise<AccessGroupResponse> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/v1/access_group/${encodeURIComponent(accessGroupId)}`;
 
@@ -45,17 +37,13 @@ export const useAccessGroupDetails = (accessGroupId?: string) => {
   return useQuery<AccessGroupResponse>({
     queryKey: accessGroupKeys.detail(accessGroupId!),
     queryFn: async () => fetchAccessGroupDetails(accessToken!, accessGroupId!),
-    enabled:
-      Boolean(accessToken && accessGroupId) &&
-      all_admin_roles.includes(userRole || ""),
+    enabled: Boolean(accessToken && accessGroupId) && all_admin_roles.includes(userRole || ""),
 
     // Seed from the list cache when available
     initialData: () => {
       if (!accessGroupId) return undefined;
 
-      const groups = queryClient.getQueryData<AccessGroupResponse[]>(
-        accessGroupKeys.list({}),
-      );
+      const groups = queryClient.getQueryData<AccessGroupResponse[]>(accessGroupKeys.list({}));
 
       return groups?.find((g) => g.access_group_id === accessGroupId);
     },

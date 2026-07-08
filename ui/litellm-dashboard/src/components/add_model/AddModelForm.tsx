@@ -110,14 +110,11 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         <Form
           form={form}
           onFinish={async (values) => {
-            console.log("🔥 Form onFinish triggered with values:", values);
             await handleOk().then(() => {
               setTeamAdminSelectedTeam(null);
             });
           }}
-          onFinishFailed={(errorInfo) => {
-            console.log("💥 Form onFinishFailed triggered:", errorInfo);
-          }}
+          onFinishFailed={(errorInfo) => {}}
           labelCol={{ span: 10 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -260,15 +257,14 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 >
                   {({ getFieldValue }) => {
                     const credentialName = getFieldValue("litellm_credential_name");
-                    console.log("🔑 Credential Name Changed:", credentialName);
                     // Only show provider specific fields if no credentials selected
                     if (!credentialName) {
                       return (
                         <>
                           <div className="flex items-center my-4">
-                            <div className="flex-grow border-t border-gray-200"></div>
+                            <div className="grow border-t border-gray-200"></div>
                             <span className="px-4 text-gray-500 text-sm">OR</span>
-                            <div className="flex-grow border-t border-gray-200"></div>
+                            <div className="grow border-t border-gray-200"></div>
                           </div>
                           <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
                         </>
@@ -278,9 +274,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   }}
                 </Form.Item>
                 <div className="flex items-center my-4">
-                  <div className="flex-grow border-t border-gray-200"></div>
+                  <div className="grow border-t border-gray-200"></div>
                   <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
-                  <div className="flex-grow border-t border-gray-200"></div>
+                  <div className="grow border-t border-gray-200"></div>
                 </div>
                 {/* Team-only Model Switch - Only show for proxy admins, not team admins */}
                 {(isAdmin || !isTeamAdmin) && (
@@ -370,7 +366,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 <Button data-testid="test-connect-btn" onClick={handleTestConnection} loading={isTestingConnection}>
                   Test Connect
                 </Button>
-                <Button data-testid="add-model-btn" htmlType="submit">Add Model</Button>
+                <Button data-testid="add-model-btn" htmlType="submit">
+                  Add Model
+                </Button>
               </div>
             </div>
           </>

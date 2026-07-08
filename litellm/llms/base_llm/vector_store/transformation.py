@@ -27,9 +27,7 @@ else:
 
 
 class BaseVectorStoreConfig:
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> List[VECTOR_STORE_OPENAI_PARAMS]:
         return []
 
     def map_openai_params(
@@ -41,9 +39,7 @@ class BaseVectorStoreConfig:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -104,15 +100,11 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         return {}
 
     @abstractmethod

@@ -55,9 +55,7 @@ open_ai_to_generic_oci_role_map: Dict[str, OCIRoles] = {
 # ---------------------------------------------------------------------------
 
 
-def adapt_messages_to_generic_oci_standard_content_message(
-    role: str, content: Union[str, list]
-) -> OCIMessage:
+def adapt_messages_to_generic_oci_standard_content_message(role: str, content: Union[str, list]) -> OCIMessage:
     """Convert a plain-text or multipart content message to OCI format."""
     new_content: List[OCIContentPartUnion] = []
     if isinstance(content, str):
@@ -70,9 +68,7 @@ def adapt_messages_to_generic_oci_standard_content_message(
 
     for content_item in content:
         if not isinstance(content_item, dict):
-            raise OCIError(
-                status_code=400, message="Each content item must be a dictionary"
-            )
+            raise OCIError(status_code=400, message="Each content item must be a dictionary")
 
         item_type = content_item.get("type")
         if not isinstance(item_type, str):
@@ -114,20 +110,14 @@ def adapt_messages_to_generic_oci_standard_content_message(
     )
 
 
-def adapt_messages_to_generic_oci_standard_tool_call(
-    role: str, tool_calls: list
-) -> OCIMessage:
+def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list) -> OCIMessage:
     """Convert an assistant tool-call message to OCI format."""
     tool_calls_formatted = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
-            raise OCIError(
-                status_code=400, message="Each tool call must be a dictionary"
-            )
+            raise OCIError(status_code=400, message="Each tool call must be a dictionary")
         if tool_call.get("type") != "function":
-            raise OCIError(
-                status_code=400, message="OCI only supports function tool calls"
-            )
+            raise OCIError(status_code=400, message="OCI only supports function tool calls")
 
         tool_call_id = tool_call.get("id")
         if not isinstance(tool_call_id, str):
@@ -135,15 +125,11 @@ def adapt_messages_to_generic_oci_standard_tool_call(
 
         tool_function = tool_call.get("function")
         if not isinstance(tool_function, dict):
-            raise OCIError(
-                status_code=400, message="Tool call `function` must be a dictionary"
-            )
+            raise OCIError(status_code=400, message="Tool call `function` must be a dictionary")
 
         function_name = tool_function.get("name")
         if not isinstance(function_name, str):
-            raise OCIError(
-                status_code=400, message="Tool call `function.name` must be a string"
-            )
+            raise OCIError(status_code=400, message="Tool call `function.name` must be a string")
 
         arguments = tool_call["function"].get("arguments", "{}")
         if not isinstance(arguments, str):
@@ -169,9 +155,7 @@ def adapt_messages_to_generic_oci_standard_tool_call(
     )
 
 
-def adapt_messages_to_generic_oci_standard_tool_response(
-    role: str, tool_call_id: str, content: str
-) -> OCIMessage:
+def adapt_messages_to_generic_oci_standard_tool_response(role: str, tool_call_id: str, content: str) -> OCIMessage:
     """Convert a tool-result message to OCI format."""
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
@@ -194,12 +178,8 @@ def adapt_messages_to_generic_oci_standard(
 
         if role == "assistant" and tool_calls is not None:
             if not isinstance(tool_calls, list):
-                raise OCIError(
-                    status_code=400, message="Message `tool_calls` must be a list"
-                )
-            new_messages.append(
-                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
-            )
+                raise OCIError(status_code=400, message="Message `tool_calls` must be a list")
+            new_messages.append(adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls))
 
         elif role in ["system", "user", "assistant"] and content is not None:
             if not isinstance(content, (str, list)):
@@ -207,9 +187,7 @@ def adapt_messages_to_generic_oci_standard(
                     status_code=400,
                     message="Message `content` must be a string or list of content parts",
                 )
-            new_messages.append(
-                adapt_messages_to_generic_oci_standard_content_message(role, content)
-            )
+            new_messages.append(adapt_messages_to_generic_oci_standard_content_message(role, content))
 
         elif role == "tool":
             if not isinstance(tool_call_id, str):
@@ -222,11 +200,7 @@ def adapt_messages_to_generic_oci_standard(
                     status_code=400,
                     message="Tool result message `content` must be a string",
                 )
-            new_messages.append(
-                adapt_messages_to_generic_oci_standard_tool_response(
-                    role, tool_call_id, content
-                )
-            )
+            new_messages.append(adapt_messages_to_generic_oci_standard_tool_response(role, tool_call_id, content))
 
     return new_messages
 
@@ -236,9 +210,7 @@ def adapt_messages_to_generic_oci_standard(
 # ---------------------------------------------------------------------------
 
 
-def adapt_tool_definition_to_oci_standard(
-    tools: List[Dict], vendor: OCIVendors
-) -> List[OCIToolDefinition]:
+def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors) -> List[OCIToolDefinition]:
     """Convert OpenAI-format tool definitions to OCI GENERIC format.
 
     Resolves ``$ref``/``$defs`` and ``anyOf`` that the OCI endpoint rejects.
@@ -250,14 +222,10 @@ def adapt_tool_definition_to_oci_standard(
 
         tool_function = tool.get("function")
         if not isinstance(tool_function, dict):
-            raise OCIError(
-                status_code=400, message="Tool `function` must be a dictionary"
-            )
+            raise OCIError(status_code=400, message="Tool `function` must be a dictionary")
 
         raw_params = tool_function.get("parameters", {})
-        resolved_params = sanitize_oci_schema(
-            resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params))
-        )
+        resolved_params = sanitize_oci_schema(resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params)))
 
         new_tools.append(
             OCIToolDefinition(
@@ -370,9 +338,7 @@ def handle_generic_response(
             if text is not None:
                 message.content = text
         if response_message.toolCalls:
-            message.tool_calls = adapt_tools_to_openai_standard(
-                response_message.toolCalls
-            )
+            message.tool_calls = adapt_tools_to_openai_standard(response_message.toolCalls)
 
     model_response.choices[0].finish_reason = _normalize_oci_finish_reason(  # type: ignore[union-attr,assignment]
         response_choice.finishReason
@@ -380,10 +346,7 @@ def handle_generic_response(
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None
-    if (
-        oci_usage.completionTokensDetails
-        and oci_usage.completionTokensDetails.reasoningTokens is not None
-    ):
+    if oci_usage.completionTokensDetails and oci_usage.completionTokensDetails.reasoningTokens is not None:
         reasoning_tokens = oci_usage.completionTokensDetails.reasoningTokens
     model_response.usage = Usage(  # type: ignore[attr-defined]
         prompt_tokens=oci_usage.promptTokens,
@@ -456,9 +419,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
             for i, tc in enumerate(typed_chunk.message.toolCalls)
         ]
 
-    finish_reason: Optional[str] = _normalize_oci_finish_reason(
-        typed_chunk.finishReason
-    )
+    finish_reason: Optional[str] = _normalize_oci_finish_reason(typed_chunk.finishReason)
 
     return ModelResponseStream(
         choices=[

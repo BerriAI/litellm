@@ -13,9 +13,7 @@ from ..common_utils import OpenAIError
 
 
 class OpenAIImageVariationConfig(BaseImageVariationConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageVariationOptionalParams]:
         return ["n", "size", "response_format", "user"]
 
     def map_openai_params(
@@ -72,9 +70,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
     ) -> ImageResponse:
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,

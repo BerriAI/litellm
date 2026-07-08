@@ -5,6 +5,7 @@ Tests the supported OCR parameters and their mapping behaviour.
 No real API calls are made — all tests are fully mocked/local.
 """
 
+import httpx
 import pytest
 
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
@@ -40,9 +41,7 @@ class TestGetSupportedOcrParams:
             "bbox_annotation_format",
             "document_annotation_format",
         ]:
-            assert (
-                param in supported
-            ), f"Previously supported param '{param}' is missing"
+            assert param in supported, f"Previously supported param '{param}' is missing"
 
 
 class TestMapOcrParams:
@@ -93,12 +92,11 @@ class TestNewSupportedParams:
             "table_format",
             "confidence_scores_granularity",
             "document_annotation_prompt",
+            "include_blocks",
             "id",
         ],
     )
-    def test_new_param_in_supported_list(
-        self, config: MistralOCRConfig, param_name: str
-    ) -> None:
+    def test_new_param_in_supported_list(self, config: MistralOCRConfig, param_name: str) -> None:
         supported = config.get_supported_ocr_params(model=MODEL)
         assert param_name in supported
 
@@ -114,12 +112,11 @@ class TestNewParamsMapOcr:
             ("confidence_scores_granularity", "word"),
             ("confidence_scores_granularity", "page"),
             ("document_annotation_prompt", "Extract all invoice line items"),
+            ("include_blocks", True),
             ("id", "req-123"),
         ],
     )
-    def test_new_param_passed_through(
-        self, config: MistralOCRConfig, param_name: str, param_value: str
-    ) -> None:
+    def test_new_param_passed_through(self, config: MistralOCRConfig, param_name: str, param_value: str) -> None:
         result = config.map_ocr_params(
             non_default_params={param_name: param_value},
             optional_params={},
@@ -144,12 +141,11 @@ class TestTransformOcrRequest:
             ("document_annotation_prompt", "Extract all invoice line items"),
             ("id", "req-123"),
             ("extract_header", True),
+            ("include_blocks", True),
             ("pages", [0, 1]),
         ],
     )
-    def test_param_included_in_request_body(
-        self, config: MistralOCRConfig, param_name: str, param_value
-    ) -> None:
+    def test_param_included_in_request_body(self, config: MistralOCRConfig, param_name: str, param_value) -> None:
         result = config.transform_ocr_request(
             model=MODEL,
             document=self.SAMPLE_DOCUMENT,
@@ -176,3 +172,65 @@ class TestTransformOcrRequest:
         )
         for key, value in optional_params.items():
             assert result.data[key] == value
+
+
+class TestTransformOcrResponseOcr4Fields:
+    """OCR 4 adds blocks, confidence_scores, tables, hyperlinks, header and footer
+    to each page. These must survive transform_ocr_response so callers actually
+    receive the new structured output rather than having it silently dropped."""
+
+    def _response(self, page: dict) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "pages": [page],
+                "model": "mistral-ocr-4-0",
+                "usage_info": {"pages_processed": 1},
+            },
+        )
+
+    def test_blocks_and_confidence_scores_preserved(self, config: MistralOCRConfig) -> None:
+        page = {
+            "index": 0,
+            "markdown": "# Invoice",
+            "blocks": [
+                {
+                    "type": "title",
+                    "top_left_x": 10,
+                    "top_left_y": 20,
+                    "bottom_right_x": 300,
+                    "bottom_right_y": 60,
+                    "content": "Invoice",
+                }
+            ],
+            "confidence_scores": {"page": 0.98},
+        }
+
+        result = config.transform_ocr_response(
+            model="mistral-ocr-4-0",
+            raw_response=self._response(page),
+            logging_obj=None,
+        )
+
+        assert result.pages[0].blocks == page["blocks"]
+        assert result.pages[0].confidence_scores == page["confidence_scores"]
+
+    def test_ocr4_fields_survive_model_dump(self, config: MistralOCRConfig) -> None:
+        page = {
+            "index": 0,
+            "markdown": "table page",
+            "tables": [{"rows": 2, "cols": 3}],
+            "hyperlinks": ["https://example.com"],
+            "header": "Acme Corp",
+            "footer": "Page 1",
+        }
+
+        result = config.transform_ocr_response(
+            model="mistral-ocr-4-0",
+            raw_response=self._response(page),
+            logging_obj=None,
+        )
+
+        dumped_page = result.model_dump()["pages"][0]
+        for field in ("tables", "hyperlinks", "header", "footer"):
+            assert dumped_page[field] == page[field]

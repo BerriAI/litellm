@@ -72,11 +72,11 @@ export function LogsTableToolbar({
       <div className="border-b px-6 py-4 w-full max-w-full box-border">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
           <div className="flex flex-wrap items-center gap-3 w-full max-w-full box-border">
-            <div className="relative w-64 min-w-0 flex-shrink-0">
+            <div className="relative w-64 min-w-0 shrink-0">
               <input
                 type="text"
                 placeholder="Search by Request ID"
-                className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 value={searchTerm}
                 onChange={(e) => onSearchChange(e.target.value)}
               />
@@ -95,7 +95,7 @@ export function LogsTableToolbar({
               </svg>
             </div>
 
-            <div className="flex items-center gap-2 min-w-0 flex-shrink">
+            <div className="flex items-center gap-2 min-w-0 shrink">
               <div className="relative z-50" ref={quickSelectRef}>
                 <button
                   onClick={() => setQuickSelectOpen(!quickSelectOpen)}
@@ -173,7 +173,7 @@ export function LogsTableToolbar({
                       onStartTimeChange(e.target.value);
                       onCurrentPageChange(1);
                     }}
-                    className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="px-3 py-2 border rounded-md text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
                 <span className="text-gray-500">to</span>
@@ -185,7 +185,7 @@ export function LogsTableToolbar({
                       onEndTimeChange(e.target.value);
                       onCurrentPageChange(1);
                     }}
-                    className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="px-3 py-2 border rounded-md text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
               </div>
@@ -193,19 +193,24 @@ export function LogsTableToolbar({
           </div>
 
           <div className="flex items-center space-x-4">
-            <span className="text-sm text-gray-700 whitespace-nowrap">
+            <span
+              className="text-sm text-gray-700 whitespace-nowrap"
+              title={
+                !isLoading && filteredLogs?.total_is_capped
+                  ? `Showing the first ${filteredLogs.total.toLocaleString()} results. Narrow the date range or add filters to see more.`
+                  : undefined
+              }
+            >
               Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
-              {isLoading
-                ? "..."
-                : filteredLogs
-                  ? Math.min(currentPage * pageSize, filteredLogs.total)
-                  : 0}{" "}
-              of {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
+              {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
+              {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0}
+              {!isLoading && filteredLogs?.total_is_capped ? "+" : ""} results
             </span>
             <div className="flex items-center space-x-2">
               <span className="text-sm text-gray-700 min-w-[90px]">
                 Page {isLoading ? "..." : currentPage} of{" "}
                 {isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
+                {!isLoading && filteredLogs?.total_is_capped ? "+" : ""}
               </span>
               <button
                 onClick={() => onCurrentPageChange((p: number) => Math.max(1, p - 1))}
@@ -230,10 +235,7 @@ export function LogsTableToolbar({
           <div className="flex items-center gap-2">
             <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
           </div>
-          <button
-            onClick={() => onIsLiveTailChange(false)}
-            className="text-sm text-green-600 hover:text-green-800"
-          >
+          <button onClick={() => onIsLiveTailChange(false)} className="text-sm text-green-600 hover:text-green-800">
             Stop
           </button>
         </div>

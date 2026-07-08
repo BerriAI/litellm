@@ -5,20 +5,12 @@ import { SimpleToolCallBlock } from "./SimpleToolCallBlock";
 
 describe("SimpleToolCallBlock", () => {
   it("should render the tool name", () => {
-    render(
-      <SimpleToolCallBlock
-        tool={{ id: "1", name: "get_weather", arguments: {} }}
-      />
-    );
+    render(<SimpleToolCallBlock tool={{ id: "1", name: "get_weather", arguments: {} }} />);
     expect(screen.getByText("get_weather")).toBeInTheDocument();
   });
 
   it('should display "function" badge', () => {
-    render(
-      <SimpleToolCallBlock
-        tool={{ id: "1", name: "get_weather", arguments: {} }}
-      />
-    );
+    render(<SimpleToolCallBlock tool={{ id: "1", name: "get_weather", arguments: {} }} />);
     expect(screen.getByText("function")).toBeInTheDocument();
   });
 
@@ -30,7 +22,7 @@ describe("SimpleToolCallBlock", () => {
           name: "get_weather",
           arguments: { city: "London", units: "metric" },
         }}
-      />
+      />,
     );
     expect(screen.getByText("city:")).toBeInTheDocument();
     expect(screen.getByText('"London"')).toBeInTheDocument();
@@ -39,11 +31,7 @@ describe("SimpleToolCallBlock", () => {
   });
 
   it("should not render arguments section when arguments are empty", () => {
-    const { container } = render(
-      <SimpleToolCallBlock
-        tool={{ id: "1", name: "get_weather", arguments: {} }}
-      />
-    );
+    const { container } = render(<SimpleToolCallBlock tool={{ id: "1", name: "get_weather", arguments: {} }} />);
     // The tool name and "function" badge should be there, but no key: value pairs
     expect(screen.getByText("get_weather")).toBeInTheDocument();
     expect(screen.queryByText(/:$/)).not.toBeInTheDocument();

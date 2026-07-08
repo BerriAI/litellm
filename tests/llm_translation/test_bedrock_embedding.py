@@ -35,6 +35,11 @@ img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIh
             titan_embedding_response,
         ),  # V2 text model
         (
+            "bedrock/amazon.titan-embed-g1-text-02",
+            "text",
+            titan_embedding_response,
+        ),  # G1 text model
+        (
             "bedrock/amazon.titan-embed-image-v1",
             "image",
             titan_embedding_response,
@@ -459,3 +464,13 @@ def test_bedrock_embedding_region_bug_reproduction():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
+
+
+def test_bedrock_titan_g1_text_02_model_info():
+    """Test that amazon.titan-embed-g1-text-02 has correct pricing metadata"""
+    model_info = litellm.get_model_info("amazon.titan-embed-g1-text-02")
+    assert model_info is not None, "Model info should not be None"
+    assert model_info["litellm_provider"] == "bedrock"
+    assert model_info["mode"] == "embedding"
+    assert model_info["input_cost_per_token"] == 1e-07
+    assert model_info["max_input_tokens"] == 8192

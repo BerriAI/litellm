@@ -39,9 +39,7 @@ class CustomLLMError(Exception):  # use this for all your exceptions
     ):
         self.status_code = status_code
         self.message = message
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class CustomLLM(BaseLLM):
@@ -154,12 +152,8 @@ class CustomLLM(BaseLLM):
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        api_key: Optional[
-            str
-        ],  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
-        api_base: Optional[
-            str
-        ],  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
+        api_key: Optional[str],  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
+        api_base: Optional[str],  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
         optional_params: dict,
         logging_obj: Any,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -228,9 +222,7 @@ class CustomLLM(BaseLLM):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
 
-def custom_chat_llm_router(
-    async_fn: bool, stream: Optional[bool], custom_llm: CustomLLM
-):
+def custom_chat_llm_router(async_fn: bool, stream: Optional[bool], custom_llm: CustomLLM):
     """
     Routes call to CustomLLM completion/acompletion/streaming/astreaming functions, based on call type
 

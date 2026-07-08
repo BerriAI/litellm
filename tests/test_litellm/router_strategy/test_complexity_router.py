@@ -22,6 +22,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_COMPLEXITY_CONFIG,
+    DEFAULT_TECHNICAL_KEYWORDS,
     ComplexityRouterConfig,
     ComplexityTier,
 )
@@ -466,6 +467,89 @@ class TestConfigOverrides:
         assert any(
             "long" in s.lower() if s else False for s in signals
         ), f"Expected 'long' signal, got {signals}"
+
+
+class TestCustomTechnicalKeywords:
+    """Test the custom_technical_keywords config option."""
+
+    def test_custom_keywords_appended_to_defaults(self, mock_router_instance):
+        """Custom keywords should be appended to the default technical keywords."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"custom_technical_keywords": ["udp", "kafka"]},
+        )
+        assert router.technical_keywords == DEFAULT_TECHNICAL_KEYWORDS + ["udp", "kafka"]
+
+    def test_custom_keywords_appended_to_technical_keywords_override(
+        self, mock_router_instance
+    ):
+        """Custom keywords should be appended to a technical_keywords override."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "technical_keywords": ["quantum", "photonics"],
+                "custom_technical_keywords": ["udp"],
+            },
+        )
+        assert router.technical_keywords == ["quantum", "photonics", "udp"]
+
+    def test_custom_keywords_deduplicated_case_insensitively(self, mock_router_instance):
+        """Duplicates against the base list and within the custom list should be dropped."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "custom_technical_keywords": ["TCP", "udp", "UDP", "kafka"]
+            },
+        )
+        lowered = [kw.lower() for kw in router.technical_keywords]
+        assert lowered == [kw.lower() for kw in DEFAULT_TECHNICAL_KEYWORDS] + [
+            "udp",
+            "kafka",
+        ]
+
+    def test_no_custom_keywords_leaves_defaults_unchanged(self, mock_router_instance):
+        """Absent or None custom_technical_keywords should leave the keyword list identical."""
+        router_absent = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"MEDIUM": "gpt-4o"}},
+        )
+        router_none = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"custom_technical_keywords": None},
+        )
+        assert router_absent.technical_keywords == DEFAULT_TECHNICAL_KEYWORDS
+        assert router_none.technical_keywords == DEFAULT_TECHNICAL_KEYWORDS
+
+    def test_prompt_with_only_custom_keywords_scores_technical(
+        self, mock_router_instance, basic_config
+    ):
+        """A prompt matching only custom keywords should score higher on technicalTerms."""
+        prompt = "Configure udp multicast between kafka brokers"
+        baseline_router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        custom_router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "custom_technical_keywords": ["UDP", "Kafka"],
+            },
+        )
+        _, baseline_score, baseline_signals = baseline_router.classify(prompt)
+        _, custom_score, custom_signals = custom_router.classify(prompt)
+        assert not any("technical" in s.lower() for s in baseline_signals)
+        assert any(
+            "technical" in s.lower() for s in custom_signals
+        ), f"Expected technical signal, got {custom_signals}"
+        assert custom_score > baseline_score
 
 
 class TestAsyncPreRoutingHookEdgeCases:

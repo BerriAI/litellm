@@ -29,9 +29,7 @@ class AzureAICohereConfig:
 
         return model
 
-    def _transform_request_image_embeddings(
-        self, input: List[str], optional_params: dict
-    ) -> ImageEmbeddingRequest:
+    def _transform_request_image_embeddings(self, input: List[str], optional_params: dict) -> ImageEmbeddingRequest:
         """
         Assume all str in list is base64 encoded string
         """
@@ -60,13 +58,9 @@ class AzureAICohereConfig:
                 image_embedding_idx.append(idx)
 
         ## REMOVE IMAGE EMBEDDINGS FROM input list
-        filtered_input = [
-            item for idx, item in enumerate(input) if idx not in image_embedding_idx
-        ]
+        filtered_input = [item for idx, item in enumerate(input) if idx not in image_embedding_idx]
 
-        v1_embeddings_request = EmbeddingCreateParams(
-            input=filtered_input, model=model, **optional_params
-        )
+        v1_embeddings_request = EmbeddingCreateParams(input=filtered_input, model=model, **optional_params)
         image_embeddings_request = self._transform_request_image_embeddings(
             input=image_embeddings, optional_params=optional_params
         )
@@ -74,14 +68,10 @@ class AzureAICohereConfig:
         return image_embeddings_request, v1_embeddings_request, image_embedding_idx
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
-        additional_headers: Optional[dict] = response._hidden_params.get(
-            "additional_headers"
-        )
+        additional_headers: Optional[dict] = response._hidden_params.get("additional_headers")
         if additional_headers:
             # CALCULATE USAGE
-            input_tokens: Optional[str] = additional_headers.get(
-                "llm_provider-num_tokens"
-            )
+            input_tokens: Optional[str] = additional_headers.get("llm_provider-num_tokens")
             if input_tokens:
                 if response.usage:
                     response.usage.prompt_tokens = int(input_tokens)
@@ -89,9 +79,7 @@ class AzureAICohereConfig:
                     response.usage = Usage(prompt_tokens=int(input_tokens))
 
             # SET MODEL
-            base_model: Optional[str] = additional_headers.get(
-                "llm_provider-azureml-model-group"
-            )
+            base_model: Optional[str] = additional_headers.get("llm_provider-azureml-model-group")
             if base_model:
                 response.model = self._map_azure_model_group(base_model)
 

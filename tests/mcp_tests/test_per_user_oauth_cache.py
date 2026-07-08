@@ -183,6 +183,31 @@ class TestValidateTokenResponse:
                 server_id="atlassian",
             )
 
+    def test_boolean_value_matches_lowercase_string_rule(self):
+        """Boolean ``True`` in token response must match the JSON-style rule ``"true"``.
+
+        Admin config is typically written as ``{"verified": "true"}`` (lower-case
+        from JSON / YAML), but the OAuth response returns ``{"verified": true}``
+        (Python ``True``). The normaliser must align them.
+        """
+        _validate_token_response = _import_validate()
+        token_response = {"access_token": "tok", "verified": True}
+        # Should not raise
+        _validate_token_response(
+            token_response=token_response,
+            validation_rules={"verified": "true"},
+            server_id="test",
+        )
+
+    def test_boolean_false_matches_lowercase_string_rule(self):
+        _validate_token_response = _import_validate()
+        token_response = {"access_token": "tok", "is_admin": False}
+        _validate_token_response(
+            token_response=token_response,
+            validation_rules={"is_admin": "false"},
+            server_id="test",
+        )
+
 
 # ── _compute_per_user_token_ttl ──────────────────────────────────────────────
 

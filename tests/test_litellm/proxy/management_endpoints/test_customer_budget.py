@@ -134,8 +134,10 @@ async def test_update_customer_creates_budget_with_proper_relations(
     )
 
     # Mock end user update
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
     mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=MagicMock()
+        return_value=mock_updated_user
     )
 
     # Create update request with budget creation fields (not just budget_id)
@@ -190,8 +192,10 @@ async def test_update_customer_creates_budget_with_required_fields(
     )
 
     # Mock end user update
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
     mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=MagicMock()
+        return_value=mock_updated_user
     )
 
     # Create update request with budget creation fields
@@ -253,8 +257,10 @@ async def test_update_customer_budget_creation_with_fallback_admin(
     )
 
     # Mock end user update
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
     mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=MagicMock()
+        return_value=mock_updated_user
     )
 
     # Create update request with budget creation fields
@@ -309,6 +315,7 @@ async def test_update_customer_with_budget_id_and_creation_fields(
 
     # Mock end user update
     mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
     mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
         return_value=mock_updated_user
     )

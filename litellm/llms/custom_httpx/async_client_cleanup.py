@@ -58,9 +58,7 @@ async def close_litellm_async_clients():
     # This is used by Gemini and other providers that use aiohttp
     if hasattr(litellm, "base_llm_aiohttp_handler"):
         base_handler = getattr(litellm, "base_llm_aiohttp_handler", None)
-        if isinstance(base_handler, BaseLLMAIOHTTPHandler) and hasattr(
-            base_handler, "close"
-        ):
+        if isinstance(base_handler, BaseLLMAIOHTTPHandler) and hasattr(base_handler, "close"):
             try:
                 await base_handler.close()
             except Exception:

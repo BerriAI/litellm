@@ -24,8 +24,8 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
           color: "#389e0d",
         }}
       >
-        After each LLM response, the <strong>Judge Model</strong> scores it 0–100 against your criteria.
-        If the weighted average falls below the threshold, the response is blocked (or logged).
+        After each LLM response, the <strong>Judge Model</strong> scores it 0–100 against your criteria. If the weighted
+        average falls below the threshold, the response is blocked (or logged).
       </div>
 
       <Form.Item
@@ -125,21 +125,10 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                       rules={[{ required: true, message: "Enter weight" }]}
                       style={{ flex: 1, marginBottom: 8 }}
                     >
-                      <InputNumber
-                        min={0}
-                        max={100}
-                        addonAfter="%"
-                        style={{ width: "100%" }}
-                        placeholder="e.g. 50"
-                      />
+                      <InputNumber min={0} max={100} addonAfter="%" style={{ width: "100%" }} placeholder="e.g. 50" />
                     </Form.Item>
                     <div style={{ marginBottom: 8 }}>
-                      <Button
-                        type="text"
-                        danger
-                        size="small"
-                        onClick={() => remove(name)}
-                      >
+                      <Button type="text" danger size="small" onClick={() => remove(name)}>
                         ×
                       </Button>
                     </div>
@@ -167,10 +156,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                 <Form.Item shouldUpdate noStyle>
                   {() => {
                     const allCriteria: any[] = form.getFieldValue("criteria") || [];
-                    const weightTotal = allCriteria.reduce(
-                      (sum: number, c: any) => sum + (Number(c?.weight) || 0),
-                      0,
-                    );
+                    const weightTotal = allCriteria.reduce((sum: number, c: any) => sum + (Number(c?.weight) || 0), 0);
                     const weightOk = weightTotal === 100;
                     return (
                       <div style={{ marginTop: 6, fontSize: 12, color: weightOk ? "#52c41a" : "#faad14" }}>

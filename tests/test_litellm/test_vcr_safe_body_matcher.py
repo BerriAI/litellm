@@ -14,6 +14,7 @@ from tests._vcr_conftest_common import (  # noqa: E402
     KEY_FINGERPRINT_HEADER,
     KEY_FINGERPRINT_MATCHER_NAME,
     SAFE_BODY_MATCHER_NAME,
+    TOLERANT_PATH_MATCHER_NAME,
     TOLERANT_QUERY_MATCHER_NAME,
     _before_record_request,
     _is_credential_exchange_request,
@@ -21,6 +22,7 @@ from tests._vcr_conftest_common import (  # noqa: E402
     _key_fingerprint_matcher,
     _normalize_volatile_tokens,
     _safe_body_matcher,
+    _tolerant_path_matcher,
     _tolerant_query_matcher,
     vcr_config_dict,
 )
@@ -198,6 +200,20 @@ def test_normalize_volatile_tokens_collapses_uuid_and_timestamps():
     assert _normalize_volatile_tokens(e) == _normalize_volatile_tokens(f)
 
 
+def test_normalize_volatile_tokens_collapses_bedrock_batch_job_names():
+    a = (
+        b'{"jobName":"litellm-batch-aaaaaaaa",'
+        b'"outputDataConfig":{"s3OutputDataConfig":'
+        b'{"s3Uri":"s3://bucket/litellm-batch-outputs/litellm-batch-aaaaaaaa/"}}}'
+    )
+    b = (
+        b'{"jobName":"litellm-batch-bbbbbbbb",'
+        b'"outputDataConfig":{"s3OutputDataConfig":'
+        b'{"s3Uri":"s3://bucket/litellm-batch-outputs/litellm-batch-bbbbbbbb/"}}}'
+    )
+    assert _normalize_volatile_tokens(a) == _normalize_volatile_tokens(b)
+
+
 def test_normalize_volatile_tokens_leaves_deterministic_bodies_unchanged():
     body = b'{"model":"claude-haiku-4-5-20251001","temperature":0.0,"n":2}'
     assert _normalize_volatile_tokens(body) == body
@@ -237,6 +253,83 @@ def test_match_on_uses_tolerant_query_not_builtin():
     cfg = vcr_config_dict()
     assert TOLERANT_QUERY_MATCHER_NAME in cfg["match_on"]
     assert "query" not in cfg["match_on"]
+
+
+def test_match_on_uses_tolerant_path_not_builtin():
+    cfg = vcr_config_dict()
+    assert TOLERANT_PATH_MATCHER_NAME in cfg["match_on"]
+    assert "path" not in cfg["match_on"]
+
+
+def test_tolerant_path_normalizes_bedrock_managed_s3_file_uuid():
+    from vcr.request import Request
+
+    a = Request(
+        method="PUT",
+        uri=(
+            "https://s3.us-west-2.amazonaws.com/litellm-proxy-test/"
+            "litellm-bedrock-files/us.anthropic.claude-haiku-4-5-20251001-v1-0-"
+            "123e4567-e89b-12d3-a456-426614174000.jsonl"
+        ),
+        body=b"",
+        headers={},
+    )
+    b = Request(
+        method="PUT",
+        uri=(
+            "https://s3.us-west-2.amazonaws.com/litellm-proxy-test/"
+            "litellm-bedrock-files/us.anthropic.claude-haiku-4-5-20251001-v1-0-"
+            "abcdefab-1234-5678-9abc-def012345678.jsonl"
+        ),
+        body=b"",
+        headers={},
+    )
+    _tolerant_path_matcher(a, b)
+
+
+def test_tolerant_path_normalizes_bedrock_batch_s3_file_uuid():
+    from vcr.request import Request
+
+    a = Request(
+        method="PUT",
+        uri=(
+            "https://s3.us-west-2.amazonaws.com/litellm-proxy-test/"
+            "litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-"
+            "a48e9ec2-5594-45e3-bdbb-44f5d71c06f3.jsonl"
+        ),
+        body=b"",
+        headers={},
+    )
+    b = Request(
+        method="PUT",
+        uri=(
+            "https://s3.us-west-2.amazonaws.com/litellm-proxy-test/"
+            "litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-"
+            "123e4567-e89b-12d3-a456-426614174000.jsonl"
+        ),
+        body=b"",
+        headers={},
+    )
+    _tolerant_path_matcher(a, b)
+
+
+def test_tolerant_path_still_rejects_different_regular_paths():
+    from vcr.request import Request
+
+    a = Request(
+        method="GET",
+        uri="https://api.openai.com/v1/files/file-a/content",
+        body=b"",
+        headers={},
+    )
+    b = Request(
+        method="GET",
+        uri="https://api.openai.com/v1/files/file-b/content",
+        body=b"",
+        headers={},
+    )
+    with pytest.raises(AssertionError):
+        _tolerant_path_matcher(a, b)
 
 
 def test_telemetry_request_detection():

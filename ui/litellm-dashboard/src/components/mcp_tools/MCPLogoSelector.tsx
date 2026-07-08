@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined, LinkOutlined } from "@ant-design/icons";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 const logos = "/ui/assets/logos/";
 
@@ -56,10 +57,12 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
       {value && (
         <div className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
           <img
-            src={value}
+            src={resolveLogoSrc(value)}
             alt="Selected logo"
-            className="w-10 h-10 object-contain rounded"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            className="w-10 h-10 object-contain rounded-sm"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
           />
           <div className="flex-1 min-w-0">
             <div className="text-xs text-gray-500 truncate">{value}</div>
@@ -86,14 +89,15 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
                 type="button"
                 onClick={() => handleSelect(logo.url)}
                 className={`flex items-center justify-center p-2 rounded-lg border transition-all cursor-pointer
-                  ${isSelected
-                    ? "border-blue-500 bg-blue-50 shadow-sm"
-                    : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
+                  ${
+                    isSelected
+                      ? "border-blue-500 bg-blue-50 shadow-xs"
+                      : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
                   }`}
                 style={{ width: 40, height: 40 }}
               >
                 <img
-                  src={logo.url}
+                  src={resolveLogoSrc(logo.url)}
                   alt={logo.name}
                   className="w-5 h-5 object-contain"
                   onError={() => handleImgError(logo.url)}

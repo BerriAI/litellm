@@ -34,9 +34,7 @@ class ToolDiscoveryQueue:
         if not tool_name:
             return
         if tool_name in self._seen_tool_names:
-            verbose_proxy_logger.debug(
-                "ToolDiscoveryQueue: skipping already-seen tool %s", tool_name
-            )
+            verbose_proxy_logger.debug("ToolDiscoveryQueue: skipping already-seen tool %s", tool_name)
             return
         self._seen_tool_names.add(tool_name)
         self._pending.append(item)

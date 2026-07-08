@@ -164,9 +164,7 @@ async def apply_policies(
     current_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
 
     for guardrail_name in sorted(guardrail_name_set):
-        callback = guardrail_registry.get_initialized_guardrail_callback(
-            guardrail_name=guardrail_name
-        )
+        callback = guardrail_registry.get_initialized_guardrail_callback(guardrail_name=guardrail_name)
         if callback is None:
             verbose_proxy_logger.debug(
                 "apply_policies: guardrail '%s' not found, skipping",
@@ -207,9 +205,7 @@ async def apply_policies(
     return {"inputs": current_inputs, "guardrail_errors": guardrail_errors}
 
 
-def _chat_body_from_inputs(
-    inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict
-) -> dict:
+def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict) -> dict:
     """Build a chat completion request body from guardrail inputs and agent_id."""
     messages: List[dict]
     structured = inputs.get("structured_messages")
@@ -259,19 +255,13 @@ def _request_with_json_body(body: dict) -> Request:
 class TestPoliciesAndGuardrailsRequest(BaseModel):
     """Request body for POST /utils/test_policies_and_guardrails."""
 
-    policy_names: Optional[List[str]] = Field(
-        default=None, description="Policy names to resolve guardrails from"
-    )
-    guardrail_names: Optional[List[str]] = Field(
-        default=None, description="Guardrail names to apply directly"
-    )
+    policy_names: Optional[List[str]] = Field(default=None, description="Policy names to resolve guardrails from")
+    guardrail_names: Optional[List[str]] = Field(default=None, description="Guardrail names to apply directly")
     inputs_list: List[GenericGuardrailAPIInputs] = Field(
         default=[],
         description="List of GenericGuardrailAPIInputs; each item processed separately (for batch compliance testing).",
     )
-    request_data: dict = Field(
-        default_factory=dict, description="Request context (model, user_id, etc.)"
-    )
+    request_data: dict = Field(default_factory=dict, description="Request context (model, user_id, etc.)")
     input_type: Literal["request", "response"] = Field(
         default="request", description="Whether inputs are request or response"
     )
@@ -356,9 +346,7 @@ async def test_policies_and_guardrails(
                     guardrail_name="response_rejection",
                 )
                 try:
-                    model_response = ModelResponse.model_validate(
-                        item["agent_response"]
-                    )
+                    model_response = ModelResponse.model_validate(item["agent_response"])
                     handler = OpenAIChatCompletionsHandler()
                     await handler.process_output_response(
                         response=model_response,
@@ -443,9 +431,7 @@ async def validate_policy(
     from litellm.proxy.policy_engine.policy_validator import PolicyValidator
     from litellm.proxy.proxy_server import prisma_client
 
-    verbose_proxy_logger.debug(
-        f"Validating policy configuration with {len(data.policies)} policies"
-    )
+    verbose_proxy_logger.debug(f"Validating policy configuration with {len(data.policies)} policies")
 
     validator = PolicyValidator(prisma_client=prisma_client)
 
@@ -534,9 +520,7 @@ async def get_policy_info(
             detail=f"Policy '{policy_name}' not found",
         )
 
-    resolved = PolicyResolver.resolve_policy_guardrails(
-        policy_name=policy_name, policies=registry.get_all_policies()
-    )
+    resolved = PolicyResolver.resolve_policy_guardrails(policy_name=policy_name, policies=registry.get_all_policies())
 
     return PolicyInfoResponse(
         policy_name=policy_name,
@@ -605,9 +589,7 @@ async def test_policy_matching(
     matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
 
     # Resolve guardrails
-    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(
-        context=context, policies=policies
-    )
+    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context, policies=policies)
 
     return PolicyTestResponse(
         context=context,
@@ -616,9 +598,7 @@ async def test_policy_matching(
     )
 
 
-POLICY_TEMPLATES_GITHUB_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
-)
+POLICY_TEMPLATES_GITHUB_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
 
 
 def _load_policy_templates_from_local_backup() -> list:
@@ -673,9 +653,7 @@ async def get_policy_templates(
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Failed to fetch policy templates from GitHub, using local backup: %s", e
-        )
+        verbose_proxy_logger.debug("Failed to fetch policy templates from GitHub, using local backup: %s", e)
 
     return _load_policy_templates_from_local_backup()
 
@@ -704,15 +682,11 @@ def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dic
     templates = _load_policy_templates_from_local_backup()
     template = next((t for t in templates if t.get("id") == data.template_id), None)
     if template is None:
-        raise HTTPException(
-            status_code=404, detail=f"Template '{data.template_id}' not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
 
     llm_enrichment = template.get("llm_enrichment")
     if llm_enrichment is None:
-        raise HTTPException(
-            status_code=400, detail="Template does not support LLM enrichment"
-        )
+        raise HTTPException(status_code=400, detail="Template does not support LLM enrichment")
 
     # Validate competitors list size if provided
     if data.competitors and len(data.competitors) > MAX_COMPETITOR_NAMES:
@@ -754,9 +728,7 @@ async def enrich_policy_template(
     if data.competitors:
         competitors = data.competitors
     else:
-        prompt = llm_enrichment["prompt"].replace(
-            "{{" + llm_enrichment["parameter"] + "}}", brand_name
-        )
+        prompt = llm_enrichment["prompt"].replace("{{" + llm_enrichment["parameter"] + "}}", brand_name)
         competitors = await _discover_competitors_via_llm(prompt, model=model)
 
     variations_map = await _generate_competitor_variations(competitors, model=model)
@@ -822,11 +794,7 @@ async def _stream_llm_competitor_names(
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             name = _clean_competitor_line(line)
-            if (
-                name
-                and name.lower() not in existing_lower
-                and count < MAX_COMPETITOR_NAMES
-            ):
+            if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
                 existing_lower.add(name.lower())
                 count += 1
                 yield name, False
@@ -851,13 +819,9 @@ async def _stream_competitor_events(
         for comp in competitors:
             yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
 
-        refinement_prompt = _build_refinement_prompt(
-            data.instruction, competitors, brand_name
-        )
+        refinement_prompt = _build_refinement_prompt(data.instruction, competitors, brand_name)
         try:
-            async for name, _ in _stream_llm_competitor_names(
-                refinement_prompt, model, competitors
-            ):
+            async for name, _ in _stream_llm_competitor_names(refinement_prompt, model, competitors):
                 if name:
                     competitors.append(name)
                     yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
@@ -871,9 +835,7 @@ async def _stream_competitor_events(
             yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
     else:
         # Initial discovery mode
-        prompt = llm_enrichment["prompt"].replace(
-            "{{" + llm_enrichment["parameter"] + "}}", brand_name
-        )
+        prompt = llm_enrichment["prompt"].replace("{{" + llm_enrichment["parameter"] + "}}", brand_name)
         try:
             async for name, _ in _stream_llm_competitor_names(prompt, model, []):
                 if name:
@@ -932,9 +894,7 @@ def _clean_competitor_line(line: str) -> Optional[str]:
     return name if name and len(name) > 1 else None
 
 
-async def _generate_competitor_variations(
-    competitors: list, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
-) -> dict:
+async def _generate_competitor_variations(competitors: list, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> dict:
     """Generate common misspellings, abbreviations, and alternate names for each competitor."""
     if not competitors:
         return {}
@@ -983,18 +943,14 @@ def _parse_variations_response(raw: str, competitors: list) -> dict[str, list[st
         if canonical is None:
             continue
         variations = [
-            v.strip()
-            for v in variations_str.split(",")
-            if v.strip() and v.strip().lower() != canonical.lower()
+            v.strip() for v in variations_str.split(",") if v.strip() and v.strip().lower() != canonical.lower()
         ]
         variations_map[canonical] = variations
 
     return variations_map
 
 
-async def _discover_competitors_via_llm(
-    prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
-) -> list:
+async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> list:
     """Call an onboarded LLM to discover competitor names."""
     try:
         from litellm.proxy.proxy_server import llm_router
@@ -1007,11 +963,7 @@ async def _discover_competitors_via_llm(
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
         raw = response.choices[0].message.content or ""  # type: ignore
-        competitors = [
-            name
-            for line in raw.strip().split("\n")
-            if (name := _clean_competitor_line(line)) is not None
-        ]
+        competitors = [name for line in raw.strip().split("\n") if (name := _clean_competitor_line(line)) is not None]
         return competitors[:MAX_COMPETITOR_NAMES]
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor discovery failed: %s", e)
@@ -1038,9 +990,7 @@ def _build_competitor_guardrail_definitions(
 
     output_blocked = _build_name_blocked_words(competitors, all_names)
     recommendation_blocked = _build_recommendation_blocked_words(competitors, all_names)
-    comparison_blocked = _build_comparison_blocked_words(
-        competitors, all_names, brand_name
-    )
+    comparison_blocked = _build_comparison_blocked_words(competitors, all_names, brand_name)
 
     blocked_words_map = {
         "competitor-output-blocker": output_blocked,
@@ -1064,25 +1014,17 @@ def _build_competitor_guardrail_definitions(
     return enriched
 
 
-def _build_name_blocked_words(
-    competitors: list[str], all_names: dict[str, list[str]]
-) -> list[dict]:
+def _build_name_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict]:
     """Build blocked word entries for direct competitor name mentions."""
     result = []
     for comp in competitors:
         for name in all_names[comp]:
-            desc = (
-                f"Competitor: {comp}"
-                if name == comp
-                else f"Competitor variation ({comp}): {name}"
-            )
+            desc = f"Competitor: {comp}" if name == comp else f"Competitor variation ({comp}): {name}"
             result.append({"keyword": name, "action": "BLOCK", "description": desc})
     return result
 
 
-def _build_recommendation_blocked_words(
-    competitors: list[str], all_names: dict[str, list[str]]
-) -> list[dict]:
+def _build_recommendation_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict]:
     """Build blocked word entries for competitor recommendations."""
     result = []
     for comp in competitors:
@@ -1176,9 +1118,7 @@ class GuardrailTestResultEntry(TypedDict):
 
 
 class TestPolicyTemplateRequest(BaseModel):
-    guardrail_definitions: List[dict] = Field(
-        description="All guardrailDefinitions from the policy template"
-    )
+    guardrail_definitions: List[dict] = Field(description="All guardrailDefinitions from the policy template")
     text: str = Field(description="Test input text to run guardrails against")
 
 
@@ -1263,9 +1203,7 @@ async def _test_guardrail_definitions(
                 request_data={},
                 input_type="request",
             )
-            output_text = (
-                output.get("texts", [text])[0] if output.get("texts") else text
-            )
+            output_text = output.get("texts", [text])[0] if output.get("texts") else text
 
             if output_text != text:
                 action = "masked"

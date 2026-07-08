@@ -611,6 +611,65 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
+def test_parallel_tool_calls_config_kept_for_sonnet_5():
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={"parallel_tool_calls": False},
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert data["additionalModelRequestFields"]["tool_choice"] == {
+            "disable_parallel_tool_use": True
+        }
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model = "anthropic.claude-fable-5"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"cache_creation_input_token_cost_above_1hr": 2e-05},
+    )
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model=model,
+        non_default_params={"parallel_tool_calls": False},
+        optional_params={},
+        drop_params=False,
+    )
+
+    data = config._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+
+
 def test_transform_response_with_computer_use_tool():
     """Test response transformation with computer use tool call."""
     import httpx
@@ -1467,11 +1526,10 @@ def test_transform_request_with_function_tool():
     )
 
     # Verify the structure
-    assert "additionalModelRequestFields" in request_data
-    additional_fields = request_data["additionalModelRequestFields"]
+    # Function tools are not computer use tools, so they don't get anthropic_beta —
+    # additionalModelRequestFields should be absent (not serialized as empty {})
+    assert "additionalModelRequestFields" not in request_data
 
-    # Function tools are not computer use tools, so they don't get anthropic_beta
-    # They are processed through the regular tool config
     assert "toolConfig" in request_data
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
@@ -1771,6 +1829,245 @@ async def test_tool_message_string_content_cache_control():
     # Second should be cachePoint
     assert "cachePoint" in tool_message_content[1]
     assert tool_message_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_tool_message_search_results_maps_to_bedrock_search_result_block():
+    """OpenAI tool message search_results should map to Bedrock searchResult blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What is Apptio?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+                    "type": "function",
+                    "function": {
+                        "name": "RAGRequest",
+                        "arguments": '{"query":"What is Apptio?"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+            "content": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM",
+            "search_results": [
+                {
+                    "source": "Great Source of Information About Apptio",
+                    "title": "12adbd74-46bd-4a88-88b2-0048755f6eb5",
+                    "content": [
+                        {
+                            "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                        }
+                    ],
+                    "citations": {"enabled": True},
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_a4rBqeZNRTKj2lTskvaO4H"
+    assert tool_result["status"] == "success"
+    assert len(tool_result["content"]) == 1
+    assert "searchResult" in tool_result["content"][0]
+    assert (
+        tool_result["content"][0]["searchResult"]["title"]
+        == "12adbd74-46bd-4a88-88b2-0048755f6eb5"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_message_empty_search_results_falls_back_to_content():
+    """Empty search_results must not skip normal tool content processing."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_empty_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_empty_search",
+            "content": "fallback tool text",
+            "search_results": [],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_empty_search"
+    assert "status" not in tool_result
+    assert len(tool_result["content"]) == 1
+    assert tool_result["content"][0]["text"] == "fallback tool text"
+
+
+def test_transform_response_omits_annotations_when_citations_not_stitched():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": "cited sentence only in citations"}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 5,
+                                        }
+                                    },
+                                    "source": "https://example.com",
+                                    "title": "Example",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "separate assistant answer"},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content == "separate assistant answer"
+    assert message.model_dump().get("annotations") is None
+
+
+def test_extract_search_results_text_counts_hidden_tool_payload():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_content_list_to_str,
+        extract_search_results_text,
+    )
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    hidden = "x" * 500
+    message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {
+                "source": "s",
+                "title": "t",
+                "content": [{"text": hidden}],
+            }
+        ],
+    }
+
+    extracted = extract_search_results_text(message["search_results"])
+    assert hidden in extracted
+    assert "st" in extracted
+    assert len(convert_content_list_to_str(message)) > len("small")
+
+    tokens_with_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[message],
+    )
+    tokens_without_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "tool", "content": "small"}],
+    )
+    assert tokens_with_search > tokens_without_search
+
+    huge_title = "y" * 500
+    title_only_message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {"source": "s", "title": huge_title, "content": []},
+        ],
+    }
+    assert len(extract_search_results_text(title_only_message["search_results"])) >= 500
+    tokens_title_bypass = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[title_only_message],
+    )
+    assert tokens_title_bypass > tokens_without_search
 
 
 @pytest.mark.asyncio
@@ -3892,6 +4189,42 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
+def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
+    """
+    The disable_parallel_tool_use gate must read supports_parallel_tool_use_config,
+    not the 1h-TTL pricing field: a model carrying only the former still gets the flag.
+    """
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-parallel-tool-use-only"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_parallel_tool_use_config": True})
+    assert is_claude_4_5_on_bedrock(model) is False
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert (
+        request_data["additionalModelRequestFields"]["tool_choice"][
+            "disable_parallel_tool_use"
+        ]
+        is True
+    )
+
+
 def test_parallel_tool_calls_older_model_drops_disable_flag():
     """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
     config = AmazonConverseConfig()
@@ -4316,6 +4649,154 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     assert all("cachePoint" not in tool for tool in tools)
 
 
+def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
+    """
+    Regression test: cache_control_injection_points with location=tool_config
+    must honor the requested `control.ttl`, mirroring the message/system
+    cache_control behavior, instead of always emitting a bare
+    {"type": "default"} cachePoint with no ttl.
+
+    Forces the bundled local cost map so `is_claude_4_5_on_bedrock` (which
+    reads `cache_creation_input_token_cost_above_1hr` from litellm.model_cost)
+    sees this branch's pricing data rather than the network-fetched `main`
+    copy, which lacks it until merge.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+        ]
+        optional_params = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+        result = config._transform_request(
+            model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        tools = result["toolConfig"]["tools"]
+        assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing():
+    """
+    Regression test: a regional pricing entry that omits
+    `cache_creation_input_token_cost_above_1hr` (e.g. `jp.anthropic.claude-opus-4-7`)
+    must not shadow the base model entry that carries it; the requested ttl
+    survives through the base-model fallback.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
+        assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
+        config = AmazonConverseConfig()
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+        ]
+        optional_params = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+        result = config._transform_request(
+            model="jp.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        tools = result["toolConfig"]["tools"]
+        assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
+    """
+    Models that don't support extended TTL caching (only Claude 4.5+ on
+    Bedrock does) must fall back to the default cachePoint with no ttl,
+    even if the caller requested one, matching message/system behavior.
+    """
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tools = result["toolConfig"]["tools"]
+    assert tools[-1] == {"cachePoint": {"type": "default"}}
+
+
 def test_translate_response_format_json_schema_still_injects_tool():
     """
     response_format with an explicit json_schema should still use the
@@ -4451,6 +4932,330 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_citations_content_maps_to_annotations():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    annotation = message.annotations[0]
+    assert annotation["type"] == "url_citation"
+    assert annotation["url_citation"]["start_index"] == 0
+    assert annotation["url_citation"]["end_index"] == 42
+    assert annotation["url_citation"]["title"] == "About Apptio"
+    assert annotation["url_citation"]["url"] == "https://www.apptio.com/about"
+
+
+def test_transform_response_citation_null_source_title_become_empty_strings():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": None,
+                                    "title": None,
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    annotation = message.annotations[0]
+    assert annotation["url_citation"]["url"] == ""
+    assert annotation["url_citation"]["title"] == ""
+
+
+def test_transform_response_citations_offset_tracks_text_only_blocks():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    leading_text = "First sentence without a citation. "
+    cited_text = "Apptio is a company that makes calls to Bedrock"
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": leading_text}],
+                        }
+                    },
+                    {
+                        "citationsContent": {
+                            "content": [{"text": cited_text}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": len(cited_text),
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    expected_start = len(leading_text)
+    assert message.content == leading_text + cited_text
+    assert (
+        message.content[expected_start : expected_start + len(cited_text)] == cited_text
+    )
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == expected_start
+    assert message.annotations[0]["url_citation"]["end_index"] == expected_start + len(
+        cited_text
+    )
+
+
+def test_transform_response_stitches_citations_for_whitespace_punctuation_text():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": " ."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == 0
+    assert message.annotations[0]["url_citation"]["end_index"] == 42
 
 
 def test_bedrock_tool_message_openai_file_pdf_becomes_document():
@@ -4705,3 +5510,164 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+def test_converse_drops_sampling_params_for_models_that_removed_them():
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p; with
+    drop_params set, converse must drop them instead of forwarding (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-fable-5",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "topP" not in result
+
+
+def test_converse_sampling_params_raise_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="global.anthropic.claude-opus-4-8-v1:0",
+            drop_params=False,
+        )
+
+
+def test_converse_sampling_params_forwarded_on_models_that_accept_them():
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-6",
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["topP"] == 0.9
+
+
+def test_converse_top_k_dropped_for_models_that_removed_it():
+    """``top_k`` reaches converse as a provider-specific kwarg destined for
+    ``additionalModelRequestFields``, bypassing ``map_openai_params``; the
+    transform must strip it for models that removed sampling params (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result.get("additionalModelRequestFields", {})
+
+
+def test_converse_top_k_raises_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 40
+
+
+def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
+    """``top_k=0`` must hit the same gating as any other value; previously the
+    truthiness check let it silently disappear on models that removed sampling
+    params, diverging from the Anthropic boundary that treats ``0`` as present."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 0},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 0},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grounding_source_and_query_rendered_as_text():
+    """grounding_source / query content blocks must render as plain text on the
+    generate path (the model needs to see the RAG context + question). The bedrock
+    converse dispatch silently drops unrecognised content types, so these would
+    otherwise vanish from the prompt."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "grounding_source", "text": "Tokyo is the capital of Japan."},
+                {"type": "query", "text": "What is the capital of Japan?"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+
+    assert result == async_result
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    user_content = result[0]["content"]
+    assert {"text": "Tokyo is the capital of Japan."} in user_content
+    assert {"text": "What is the capital of Japan?"} in user_content

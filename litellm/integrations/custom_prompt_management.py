@@ -18,9 +18,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         **kwargs,
     ):
         self.ignore_prompt_manager_model = ignore_prompt_manager_model
-        self.ignore_prompt_manager_optional_params = (
-            ignore_prompt_manager_optional_params
-        )
+        self.ignore_prompt_manager_optional_params = ignore_prompt_manager_optional_params
 
     def get_chat_completion_prompt(
         self,
@@ -65,9 +63,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
-        raise NotImplementedError(
-            "Custom prompt management does not support compile prompt helper"
-        )
+        raise NotImplementedError("Custom prompt management does not support compile prompt helper")
 
     async def async_compile_prompt_helper(
         self,
@@ -78,6 +74,4 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
-        raise NotImplementedError(
-            "Custom prompt management does not support async compile prompt helper"
-        )
+        raise NotImplementedError("Custom prompt management does not support async compile prompt helper")

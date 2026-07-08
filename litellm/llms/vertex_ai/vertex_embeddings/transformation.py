@@ -75,9 +75,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
     def get_supported_openai_params(self):
         return ["dimensions"]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, kwargs: dict
-    ):
+    def map_openai_params(self, non_default_params: dict, optional_params: dict, kwargs: dict):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -116,10 +114,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
         labels = pop_vertex_request_labels(optional_params, litellm_params)
 
         if model.isdigit():
-            vertex_request = (
-                self._transform_openai_request_to_fine_tuned_embedding_request(
-                    input, optional_params, model
-                )
+            vertex_request = self._transform_openai_request_to_fine_tuned_embedding_request(
+                input, optional_params, model
             )
             if labels:
                 vertex_request["labels"] = labels
@@ -141,9 +137,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
             input = [input]  # Convert single string to list for uniform processing
 
         for text in input:
-            embedding_input = self.create_embedding_input(
-                content=text, task_type=task_type, title=title
-            )
+            embedding_input = self.create_embedding_input(content=text, task_type=task_type, title=title)
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
@@ -188,14 +182,9 @@ class VertexAITextEmbeddingConfig(BaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = TextEmbeddingFineTunedParameters(
-            **optional_params
-        )
+        vertex_request["parameters"] = TextEmbeddingFineTunedParameters(**optional_params)
         # Remove 'shared_session' from parameters if present
-        if (
-            vertex_request["parameters"] is not None
-            and "shared_session" in vertex_request["parameters"]
-        ):
+        if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
             del vertex_request["parameters"]["shared_session"]  # type: ignore[typeddict-item]
 
         return vertex_request
@@ -233,17 +222,13 @@ class VertexAITextEmbeddingConfig(BaseModel):
         Transforms a vertex embedding response to an openai response.
         """
         if model.isdigit():
-            return self._transform_vertex_response_to_openai_for_fine_tuned_models(
-                response, model, model_response
-            )
+            return self._transform_vertex_response_to_openai_for_fine_tuned_models(response, model, model_response)
 
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
 
         if VertexBGEConfig.is_bge_model(model):
-            return VertexBGEConfig.transform_response(
-                response=response, model=model, model_response=model_response
-            )
+            return VertexBGEConfig.transform_response(response=response, model=model, model_response=model_response)
 
         _predictions = response["predictions"]
 
@@ -263,9 +248,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage = Usage(
-            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
-        )
+        usage = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
         setattr(model_response, "usage", usage)
         return model_response
 
@@ -286,17 +269,13 @@ class VertexAITextEmbeddingConfig(BaseModel):
                 {
                     "object": "embedding",
                     "index": idx,
-                    "embedding": embedding_values[
-                        0
-                    ],  # The embedding values are nested one level deeper
+                    "embedding": embedding_values[0],  # The embedding values are nested one level deeper
                 }
             )
 
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage = Usage(
-            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
-        )
+        usage = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
         setattr(model_response, "usage", usage)
         return model_response

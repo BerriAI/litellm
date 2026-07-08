@@ -128,7 +128,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                 <div key={index} className="space-y-2">
                   {/* User Query */}
                   <div className="text-right">
-                    <div className="inline-block max-w-[80%] rounded-lg shadow-sm p-3 bg-blue-50 border border-blue-200">
+                    <div className="inline-block max-w-[80%] rounded-lg shadow-xs p-3 bg-blue-50 border border-blue-200">
                       <div className="flex items-center gap-2 mb-1">
                         <strong className="text-sm">Query</strong>
                         <span className="text-xs text-gray-500">{formatTimestamp(entry.timestamp)}</span>
@@ -139,12 +139,12 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
 
                   {/* Vector Store Response */}
                   <div className="text-left">
-                    <div className="inline-block max-w-[80%] rounded-lg shadow-sm p-3 bg-white border border-gray-200">
+                    <div className="inline-block max-w-[80%] rounded-lg shadow-xs p-3 bg-white border border-gray-200">
                       <div className="flex items-center gap-2 mb-2">
                         <DatabaseOutlined className="text-green-500" />
                         <strong className="text-sm">Vector Store Results</strong>
                         {entry.response && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                          <span className="text-xs px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600">
                             {entry.response.data?.length || 0} results
                           </span>
                         )}
@@ -176,7 +176,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                       </span>
                                     )}
                                   </div>
-                                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-sm">
                                     Score: {result.score.toFixed(4)}
                                   </span>
                                 </div>
@@ -189,7 +189,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                       result.content.map((content, contentIndex) => (
                                         <div key={contentIndex} className="mb-3">
                                           <div className="text-xs text-gray-500 mb-1">Content ({content.type})</div>
-                                          <div className="text-sm bg-gray-50 p-3 rounded border text-gray-800 max-h-40 overflow-y-auto">
+                                          <div className="text-sm bg-gray-50 p-3 rounded-sm border text-gray-800 max-h-40 overflow-y-auto">
                                             {content.text}
                                           </div>
                                         </div>
@@ -201,19 +201,19 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                         <div className="text-xs text-gray-500 mb-2 font-medium">Metadata</div>
                                         <div className="space-y-2 text-xs">
                                           {result.file_id && (
-                                            <div className="bg-gray-50 p-2 rounded">
+                                            <div className="bg-gray-50 p-2 rounded-sm">
                                               <span className="font-medium">File ID:</span> {result.file_id}
                                             </div>
                                           )}
                                           {result.filename && (
-                                            <div className="bg-gray-50 p-2 rounded">
+                                            <div className="bg-gray-50 p-2 rounded-sm">
                                               <span className="font-medium">Filename:</span> {result.filename}
                                             </div>
                                           )}
                                           {result.attributes && Object.keys(result.attributes).length > 0 && (
-                                            <div className="bg-gray-50 p-2 rounded">
+                                            <div className="bg-gray-50 p-2 rounded-sm">
                                               <span className="font-medium block mb-1">Attributes:</span>
-                                              <pre className="text-xs bg-white p-2 rounded border overflow-x-auto">
+                                              <pre className="text-xs bg-white p-2 rounded-sm border overflow-x-auto">
                                                 {JSON.stringify(result.attributes, null, 2)}
                                               </pre>
                                             </div>

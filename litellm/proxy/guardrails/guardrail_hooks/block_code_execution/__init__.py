@@ -57,9 +57,7 @@ def initialize_guardrail(
             _get_param(litellm_params, guardrail, "confidence_threshold", 0.5),
         )
     )
-    detect_execution_intent = bool(
-        _get_param(litellm_params, guardrail, "detect_execution_intent", True)
-    )
+    detect_execution_intent = bool(_get_param(litellm_params, guardrail, "detect_execution_intent", True))
     mode = _get_param(litellm_params, guardrail, "mode")
     event_hook = cast(
         Optional[Union[Literal["pre_call", "post_call", "during_call"], List[str]]],

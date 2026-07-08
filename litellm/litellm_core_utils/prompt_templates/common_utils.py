@@ -3,6 +3,7 @@ Common utility functions used for translating messages across providers
 """
 
 import io
+import json
 import mimetypes
 import re
 from os import PathLike
@@ -43,13 +44,9 @@ from litellm.types.utils import (
 if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init__.py
     from litellm.types.llms.openai import ChatCompletionImageObject
 
-DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
-    content="Please continue.", role="user"
-)
+DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(content="Please continue.", role="user")
 
-DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
-    content="Please continue.", role="assistant"
-)
+DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -97,9 +94,7 @@ def handle_messages_with_content_list_to_str_conversion(
     return messages
 
 
-def strip_name_from_message(
-    message: AllMessageValues, allowed_name_roles: List[str] = ["user"]
-) -> AllMessageValues:
+def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[str] = ["user"]) -> AllMessageValues:
     """
     Removes 'name' from message
     """
@@ -132,6 +127,39 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
+def extract_search_results_text(search_results: object) -> str:
+    """
+    Extract model-visible text from OpenAI tool-message ``search_results``.
+
+    Used by token estimators and TPM limiters so large search result payloads
+    cannot bypass preflight checks via a small ``content`` field.
+
+    Counts every string field forwarded on Bedrock ``SearchResultBlock``:
+    ``source``, ``title``, ``content[].text``, and ``citations``.
+    """
+    if not isinstance(search_results, list):
+        return ""
+    texts = ""
+    for result in search_results:
+        if not isinstance(result, dict):
+            continue
+        for key in ("source", "title"):
+            value = result.get(key)
+            if isinstance(value, str):
+                texts += value
+        content = result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        texts += text
+        citations = result.get("citations")
+        if citations is not None:
+            texts += json.dumps(citations, separators=(",", ":"))
+    return texts
+
+
 def convert_content_list_to_str(
     message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
@@ -152,6 +180,7 @@ def convert_content_list_to_str(
         elif message_content is not None and isinstance(message_content, str):
             texts = message_content
 
+    texts += extract_search_results_text(message.get("search_results"))
     return texts
 
 
@@ -167,9 +196,7 @@ def get_str_from_messages(messages: List[AllMessageValues]) -> str:
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys = ["content", "role", "name"]
-    return any(
-        message.get(key, None) is not None for key in message if key not in ignore_keys
-    )
+    return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
 def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
@@ -197,13 +224,9 @@ def convert_openai_message_to_only_content_messages(
     user_roles = ["user", "tool", "function"]
     for message in messages:
         if message.get("role") in user_roles:
-            converted_messages.append(
-                {"role": "user", "content": convert_content_list_to_str(message)}
-            )
+            converted_messages.append({"role": "user", "content": convert_content_list_to_str(message)})
         elif message.get("role") == "assistant":
-            converted_messages.append(
-                {"role": "assistant", "content": convert_content_list_to_str(message)}
-            )
+            converted_messages.append({"role": "assistant", "content": convert_content_list_to_str(message)})
     return converted_messages
 
 
@@ -298,10 +321,7 @@ def _insert_user_continue_message(
     while i < len(result_messages):
         curr_message = result_messages[i]
         inserted_continue_message = False
-        if (
-            _counts_for_alternation(curr_message)
-            and curr_message["role"] == "assistant"
-        ):
+        if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
@@ -388,14 +408,10 @@ def get_completion_messages(
         return messages.copy()
 
     ## INSERT USER CONTINUE MESSAGE
-    messages = _insert_user_continue_message(
-        messages, user_continue_message, ensure_alternating_roles
-    )
+    messages = _insert_user_continue_message(messages, user_continue_message, ensure_alternating_roles)
 
     ## INSERT ASSISTANT CONTINUE MESSAGE
-    messages = _insert_assistant_continue_message(
-        messages, assistant_continue_message, ensure_alternating_roles
-    )
+    messages = _insert_assistant_continue_message(messages, assistant_continue_message, ensure_alternating_roles)
     return messages
 
 
@@ -414,9 +430,7 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
         return None
     try:
         transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
-        if transformed_file_id.startswith(
-            SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
-        ):
+        if transformed_file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
             match = re.match(
                 f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
                 transformed_file_id,
@@ -431,7 +445,7 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
 
 def update_messages_with_model_file_ids(
     messages: List[AllMessageValues],
-    model_id: str,
+    model_id: str | None,
     model_file_id_mapping: Dict[str, Dict[str, str]],
 ) -> List[AllMessageValues]:
     """
@@ -477,30 +491,19 @@ def update_messages_with_model_file_ids(
                             # remap here, so skip instead of crashing.
                             continue
                         file_id = file_object_file_field.get("file_id")
-                        format = file_object_file_field.get(
-                            "format", get_format_from_file_id(file_id)
-                        )
+                        format = file_object_file_field.get("format", get_format_from_file_id(file_id))
 
                         if file_id:
                             provider_file_id = (
                                 model_file_id_mapping.get(file_id, {}).get(model_id)
-                                if model_file_id_mapping
+                                if model_file_id_mapping and model_id is not None
                                 else None
                             )
-                            if (
-                                not provider_file_id
-                                and _is_base64_encoded_unified_file_id(file_id)
-                            ):
-                                unified_file_id = convert_b64_uid_to_unified_uid(
-                                    file_id
-                                )
+                            if not provider_file_id and _is_base64_encoded_unified_file_id(file_id):
+                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
-                                    provider_file_id = unified_file_id.split(
-                                        "llm_output_file_id,"
-                                    )[1].split(";")[0]
-                            file_object_file_field["file_id"] = (
-                                provider_file_id or file_id
-                            )
+                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+                            file_object_file_field["file_id"] = provider_file_id or file_id
                         if format:
                             file_object_file_field["format"] = format
     return messages
@@ -546,42 +549,26 @@ def update_responses_input_with_model_file_ids(
         if isinstance(content, list):
             updated_content = []
             for content_item in content:
-                if (
-                    isinstance(content_item, dict)
-                    and content_item.get("type") == "input_file"
-                ):
+                if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                     file_id = content_item.get("file_id")
                     if file_id:
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID
-                        if (
-                            model_file_id_mapping
-                            and model_id
-                            and file_id in model_file_id_mapping
-                        ):
+                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
                             # Use the model-specific file ID from mapping
-                            provider_file_id = (
-                                model_file_id_mapping.get(file_id, {}).get(model_id)
-                                or file_id
-                            )
+                            provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
                             updated_content_item = content_item.copy()
                             updated_content_item["file_id"] = provider_file_id
                             updated_content.append(updated_content_item)
                         else:
                             # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = _is_base64_encoded_unified_file_id(
-                                file_id
-                            )
+                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
                             if is_unified_file_id:
                                 # Fallback: decode unified file ID
-                                unified_file_id = convert_b64_uid_to_unified_uid(
-                                    file_id
-                                )
+                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
-                                    provider_file_id = unified_file_id.split(
-                                        "llm_output_file_id,"
-                                    )[1].split(";")[0]
+                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
 
                                 updated_content_item = content_item.copy()
                                 updated_content_item["file_id"] = provider_file_id
@@ -635,9 +622,7 @@ def _decode_vector_store_ids_in_tools(
                 continue
 
             parsed = parse_unified_id(vs_id)
-            provider_resource_id = (
-                parsed.get("provider_resource_id") if parsed else None
-            )
+            provider_resource_id = parsed.get("provider_resource_id") if parsed else None
 
             if not provider_resource_id:
                 verbose_logger.warning(
@@ -702,10 +687,7 @@ def update_responses_tools_with_model_file_ids(
                             # Check if we have a mapping for this file ID
                             if file_id in model_file_id_mapping:
                                 # Map to provider-specific file ID
-                                provider_file_id = (
-                                    model_file_id_mapping.get(file_id, {}).get(model_id)
-                                    or file_id
-                                )
+                                provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
                                 updated_file_ids.append(provider_file_id)
                             else:
                                 updated_file_ids.append(file_id)
@@ -720,6 +702,46 @@ def update_responses_tools_with_model_file_ids(
         updated_tools.append(updated_tool)
 
     return updated_tools
+
+
+def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Resolve (filename, content_type) without reading the file body.
+
+    Mirrors extract_file_data's metadata resolution but never calls .read(), so
+    it stays O(1) on large uploads. Use this when only metadata is needed (batch
+    detection, GCS object naming) and the body must remain a streamable Path/handle.
+    """
+    filename: Optional[str] = None
+    content_type: Optional[str] = None
+    file_content: Any = None
+
+    if isinstance(file_data, tuple):
+        if len(file_data) == 2:
+            filename, file_content = file_data
+        elif len(file_data) == 3:
+            filename, file_content, content_type = file_data
+        elif len(file_data) == 4:
+            filename, file_content, content_type, _ = file_data
+    elif isinstance(file_data, InMemoryFile):
+        filename = file_data.name
+        content_type = file_data.content_type
+    else:
+        file_content = file_data
+
+    if filename is None:
+        if isinstance(file_content, PathLike):
+            filename = Path(file_content).name
+        elif isinstance(file_content, io.IOBase):
+            name_attr = getattr(file_content, "name", None)
+            if isinstance(name_attr, str):
+                filename = Path(name_attr).name
+
+    if not content_type:
+        guessed = mimetypes.guess_type(filename)[0] if filename else None
+        content_type = guessed or "application/octet-stream"
+
+    return filename, content_type
 
 
 def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
@@ -815,7 +837,47 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def unpack_defs(schema: dict, defs: dict) -> None:
+def _estimate_json_bytes(obj: Any) -> int:
+    """Estimate the JSON-serialised byte size of ``obj`` without materialising
+    JSON. Walks iteratively (no recursion stack risk).
+
+    String length is read via ``len()`` (O(1) on Python ``str``) so a target
+    containing a 100MB description costs ~one walk step, not a 100MB
+    serialisation. Escape sequences are not counted exactly, so this is an
+    approximation -- but always within a small constant factor of the real
+    serialised size, which is what a schema-bomb budget needs.
+    """
+    total = 0
+    stack: list = [obj]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            total += 2  # `{}`
+            for k, v in x.items():
+                total += len(str(k)) + 4  # `"k":,`
+                stack.append(v)
+        elif isinstance(x, list):
+            total += 2  # `[]`
+            total += max(0, len(x) - 1)  # commas between items
+            stack.extend(x)
+        elif isinstance(x, str):
+            total += len(x) + 2
+        elif isinstance(x, bool):  # bool subclasses int -- check first
+            total += 4 if x else 5
+        elif x is None:
+            total += 4
+        elif isinstance(x, (int, float)):
+            total += 24  # generous upper bound for stringified numbers
+        else:
+            total += 24
+    return total
+
+
+def unpack_defs(
+    schema: dict,
+    defs: dict,
+    max_inlined_bytes: Optional[int] = None,
+) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
@@ -825,6 +887,15 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     It mutates *schema* in-place and does **not** return anything.  The helper
     keeps memory overhead low by resolving nodes as it encounters them rather
     than materialising a fully dereferenced copy first.
+
+    ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
+    that has been inlined and is checked *before* each ``copy.deepcopy``, so
+    an oversized expansion is rejected without first materialising it. A byte
+    bound is the universal measure of expansion -- it simultaneously caps
+    ref-count fan-out, node-count amplification, and scalar-byte amplification
+    (a target containing a large string, ``const``, or ``enum`` entry).
+    Defaults to ``None`` (unbounded) so existing callers are unaffected;
+    raises ``ValueError`` on overflow.
     """
 
     import copy
@@ -841,9 +912,10 @@ def unpack_defs(schema: dict, defs: dict) -> None:
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: deque[
-        tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
-    ] = deque([(schema, None, None, root_defs, set())])
+    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque(
+        [(schema, None, None, root_defs, set())]
+    )
+    inlined_bytes = 0
 
     while queue:
         node, parent, key, active_defs, ref_chain = queue.popleft()
@@ -863,6 +935,16 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
+
+                if max_inlined_bytes is not None:
+                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    if inlined_bytes > max_inlined_bytes:
+                        raise ValueError(
+                            f"unpack_defs: inlined schema exceeded the "
+                            f"{max_inlined_bytes:,}-byte budget. Refusing to "
+                            f"deep-copy further to prevent schema-bomb "
+                            f"resource exhaustion."
+                        )
 
                 # Merge defs from the target to capture nested definitions
                 child_defs = {
@@ -909,6 +991,59 @@ def unpack_defs(schema: dict, defs: dict) -> None:
             # Add all list items to queue
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
+
+
+def _has_legacy_defs(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    components = schema.get("components")
+    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+
+
+# Schema-bomb budget for ``unpack_legacy_defs``: cap the cumulative JSON-byte
+# size of every inlined target. A byte cap is the universal measure of
+# expansion -- it simultaneously bounds ref-count fan-out, node-count
+# amplification, and scalar-byte amplification (large ``description`` /
+# ``const`` / ``enum`` values). Real-world MCP / OpenAPI-derived tool schemas
+# inline well under 1MB; 10MB sits two orders of magnitude above that, well
+# below memory-pressure territory, and rejects request-supplied bombs before
+# the proxy materialises them.
+_LEGACY_DEFS_MAX_INLINED_BYTES = 10_000_000
+
+
+def unpack_legacy_defs(
+    schema: dict,
+    *,
+    copy: bool = False,
+    max_inlined_bytes: int = _LEGACY_DEFS_MAX_INLINED_BYTES,
+) -> dict:
+    """Inline ``$ref``s backed by draft-04 ``definitions`` / OpenAPI
+    ``components.schemas``. ``$defs`` is left untouched.
+
+    Anthropic and Fireworks tool-schema resolvers only recognise ``$defs``;
+    legacy / OpenAPI def blocks are otherwise silently dropped and leave
+    dangling pointers. See https://github.com/BerriAI/litellm/issues/26692.
+
+    Mutates ``schema`` in place and returns it. Pass ``copy=True`` to deep-copy
+    first (only when there is actually work to do). ``max_inlined_bytes``
+    bounds the cumulative JSON-byte size of inlined targets so request-supplied
+    schemas cannot expand into a schema-bomb before reaching the upstream
+    provider -- raises ``ValueError`` on overflow.
+    """
+    if not _has_legacy_defs(schema):
+        return schema
+    if copy:
+        import copy as _copy
+
+        schema = _copy.deepcopy(schema)
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    defs = schema.pop("components", {}).get("schemas") or {}
+    defs.update(schema.pop("definitions", None) or {})
+    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    return schema
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
@@ -1066,10 +1201,7 @@ def infer_content_type_from_url_and_content(
                 return type_to_mime[detected_type]
 
     # If all fallbacks failed, raise error
-    raise ValueError(
-        f"Unable to determine content type from URL: {url}. "
-        f"Response content-type: {current_content_type}"
-    )
+    raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
 
 
 def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
@@ -1125,9 +1257,7 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
         is_function_call,
     )
 
-    if hasattr(logging_obj, "optional_params") and isinstance(
-        logging_obj.optional_params, dict
-    ):
+    if hasattr(logging_obj, "optional_params") and isinstance(logging_obj.optional_params, dict):
         if is_function_call(logging_obj.optional_params):
             return True
 
@@ -1233,9 +1363,7 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
     return result if result else None
 
 
-def set_last_user_message(
-    messages: List[AllMessageValues], content: str
-) -> List[AllMessageValues]:
+def set_last_user_message(messages: List[AllMessageValues], content: str) -> List[AllMessageValues]:
     """
     Set the last user message
 
@@ -1250,11 +1378,7 @@ def set_last_user_message(
             # Stop when we hit a non-user message
             break
     if idx_to_remove:
-        messages = [
-            message
-            for idx, message in enumerate(reversed(messages))
-            if idx not in idx_to_remove
-        ]
+        messages = [message for idx, message in enumerate(reversed(messages)) if idx not in idx_to_remove]
         messages.reverse()
     messages.append({"role": "user", "content": content})
     return messages
@@ -1288,9 +1412,7 @@ def add_system_prompt_to_messages(
         if isinstance(existing_content, str):
             merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
         elif isinstance(existing_content, list):
-            merged_content = [{"type": "text", "text": system_prompt.strip()}] + list(
-                existing_content
-            )
+            merged_content = [{"type": "text", "text": system_prompt.strip()}] + list(existing_content)
         else:
             merged_content = [{"type": "text", "text": system_prompt.strip()}]
         first["content"] = merged_content
@@ -1521,8 +1643,7 @@ def parse_tool_call_arguments(
         repaired = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
-                "Repaired truncated tool call arguments for tool '%s' (%s). "
-                "Original (%d chars): %.200s%s",
+                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %.200s%s",
                 tool_name or "<unknown>",
                 context or "unknown context",
                 len(arguments),
@@ -1538,10 +1659,7 @@ def parse_tool_call_arguments(
         if context:
             error_parts.append(f"({context})")
 
-        error_message = (
-            " ".join(error_parts)
-            + f". Error: {str(original_error)}. Arguments: {arguments}"
-        )
+        error_message = " ".join(error_parts) + f". Error: {str(original_error)}. Arguments: {arguments}"
 
         raise ValueError(error_message) from original_error
 

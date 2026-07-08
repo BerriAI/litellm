@@ -1,0 +1,3 @@
+{"recordId": "embed-1", "modelInput": {"inputText": "Hello world"}}
+{"recordId": "embed-2", "modelInput": {"inputText": "Another document to embed", "dimensions": 512}}
+{"recordId": "embed-3", "modelInput": {"inputText": "Single element list", "embeddingTypes": ["binary"]}}

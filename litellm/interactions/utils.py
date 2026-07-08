@@ -72,17 +72,13 @@ class InteractionsAPIRequestUtils:
         special_params = params.pop("kwargs", {})
         additional_drop_params = params.pop("additional_drop_params", None)
 
-        non_default_params = (
-            PreProcessNonDefaultParams.base_pre_process_non_default_params(
-                passed_params=params,
-                special_params=special_params,
-                custom_llm_provider=custom_llm_provider,
-                additional_drop_params=additional_drop_params,
-                default_param_values={
-                    k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS
-                },
-                additional_endpoint_specific_params=["input", "model", "agent"],
-            )
+        non_default_params = PreProcessNonDefaultParams.base_pre_process_non_default_params(
+            passed_params=params,
+            special_params=special_params,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_params,
+            default_param_values={k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS},
+            additional_endpoint_specific_params=["input", "model", "agent"],
         )
 
         return cast(InteractionsAPIOptionalRequestParams, non_default_params)

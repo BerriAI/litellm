@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime as dt
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Union
@@ -201,6 +202,8 @@ class HangingRequestData(BaseModel):
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+    created_at: float = Field(default_factory=time.time)
+    alerted: bool = False
 
 
 class AlertTypeConfig(LiteLLMPydanticObjectBase):

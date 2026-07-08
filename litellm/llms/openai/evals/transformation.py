@@ -38,9 +38,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """Add OpenAI-specific headers"""
         import litellm
         from litellm.secret_managers.main import get_secret_str
@@ -50,12 +48,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params:
             api_key = litellm_params.api_key
 
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for Evals API")
@@ -158,9 +151,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform get eval request for OpenAI"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="evals", eval_id=eval_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         verbose_logger.debug("Get eval request - URL: %s", url)
 
@@ -186,16 +177,12 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict, Dict]:
         """Transform update eval request for OpenAI"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="evals", eval_id=eval_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         # Build request body
         request_body = {k: v for k, v in update_request.items() if v is not None}
 
-        verbose_logger.debug(
-            "Update eval request - URL: %s, body: %s", url, request_body
-        )
+        verbose_logger.debug("Update eval request - URL: %s, body: %s", url, request_body)
 
         return url, headers, request_body
 
@@ -218,9 +205,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform delete eval request for OpenAI"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="evals", eval_id=eval_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         verbose_logger.debug("Delete eval request - URL: %s", url)
 
@@ -284,9 +269,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         # Build request body
         request_body = {k: v for k, v in create_request.items() if v is not None}
 
-        verbose_logger.debug(
-            "Create run request - URL: %s, body: %s", url, request_body
-        )
+        verbose_logger.debug("Create run request - URL: %s, body: %s", url, request_body)
 
         return url, request_body
 

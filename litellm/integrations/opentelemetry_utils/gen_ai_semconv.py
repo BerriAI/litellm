@@ -55,9 +55,7 @@ class OTELSemconvCategory(Enum):
 
 
 # Reverse lookup: opt-in token string -> OTELSemconvCategory.
-_SEMCONV_CATEGORY_BY_VALUE = {
-    category.value: category for category in OTELSemconvCategory
-}
+_SEMCONV_CATEGORY_BY_VALUE = {category.value: category for category in OTELSemconvCategory}
 
 
 # LiteLLM optional_params key -> OTEL gen_ai semconv span attribute.
@@ -123,13 +121,9 @@ class OTELGenAISemconvMixin:
 
         def _capture_in_event(self) -> bool: ...
 
-        def _transform_messages_to_otel_semantic_conventions(
-            self, messages: Union[List[dict], str]
-        ) -> List[dict]: ...
+        def _transform_messages_to_otel_semantic_conventions(self, messages: Union[List[dict], str]) -> List[dict]: ...
 
-        def _transform_choices_to_otel_semantic_conventions(
-            self, choices: List[dict]
-        ) -> List[dict]: ...
+        def _transform_choices_to_otel_semantic_conventions(self, choices: List[dict]) -> List[dict]: ...
 
         def _to_ns(self, dt: datetime) -> int: ...
 
@@ -141,10 +135,7 @@ class OTELGenAISemconvMixin:
 
         Every semconv behavior is gated on this; ``False`` => legacy output.
         """
-        return (
-            OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL
-            in self.config.semconv_stability_opt_in
-        )
+        return OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL in self.config.semconv_stability_opt_in
 
     @staticmethod
     def _gen_ai_operation_name(kwargs: dict) -> str:
@@ -162,9 +153,7 @@ class OTELGenAISemconvMixin:
             case _:
                 return "chat"
 
-    def _set_semconv_request_attributes(
-        self, span: Span, optional_params: dict
-    ) -> None:
+    def _set_semconv_request_attributes(self, span: Span, optional_params: dict) -> None:
         """Add ``gen_ai.request.*`` span attributes from ``optional_params``.
 
         Covers the sampling params plus the conditionally-required
@@ -180,9 +169,7 @@ class OTELGenAISemconvMixin:
             # Spec types this as string[]. safe_set_attribute coerces to a
             # primitive, so set the array directly via the span API.
             stop_list = stop if isinstance(stop, list) else [stop]
-            span.set_attribute(
-                "gen_ai.request.stop_sequences", [str(s) for s in stop_list]
-            )
+            span.set_attribute("gen_ai.request.stop_sequences", [str(s) for s in stop_list])
 
         # Conditionally required: set only when the request is streaming.
         if optional_params.get("stream"):
@@ -193,30 +180,22 @@ class OTELGenAISemconvMixin:
         # suppressing nonsensical values (0, negative, non-int).
         n = optional_params.get("n")
         if isinstance(n, int) and n > 1:
-            self.safe_set_attribute(
-                span=span, key="gen_ai.request.choice.count", value=n
-            )
+            self.safe_set_attribute(span=span, key="gen_ai.request.choice.count", value=n)
 
-    def _set_semconv_cache_token_attributes(
-        self, span: Span, standard_logging_payload
-    ) -> None:
+    def _set_semconv_cache_token_attributes(self, span: Span, standard_logging_payload) -> None:
         """Add ``gen_ai.usage.cache_*.input_tokens`` from the usage object.
 
         No-op when the payload or the usage values are missing/zero.
         """
         if not standard_logging_payload:
             return
-        usage = (standard_logging_payload.get("metadata") or {}).get(
-            "usage_object"
-        ) or {}
+        usage = (standard_logging_payload.get("metadata") or {}).get("usage_object") or {}
         for source_key, semconv_key in _SEMCONV_CACHE_TOKEN_ATTRIBUTES.items():
             value = usage.get(source_key)
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(
-        self, kwargs: dict, response_obj: dict, provider: str
-    ) -> Dict[str, Any]:
+    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> Dict[str, Any]:
         """Build the attribute payload for the inference-details event.
 
         Always includes provider/operation; input/output messages are added
@@ -230,12 +209,8 @@ class OTELGenAISemconvMixin:
         if not self._capture_in_event():
             return attrs
 
-        input_messages = self._transform_messages_to_otel_semantic_conventions(
-            kwargs.get("messages") or []
-        )
-        output_messages = self._transform_choices_to_otel_semantic_conventions(
-            response_obj.get("choices", [])
-        )
+        input_messages = self._transform_messages_to_otel_semantic_conventions(kwargs.get("messages") or [])
+        output_messages = self._transform_choices_to_otel_semantic_conventions(response_obj.get("choices", []))
         if input_messages:
             attrs["gen_ai.input.messages"] = safe_dumps(input_messages)
         if output_messages:
@@ -264,8 +239,6 @@ class OTELGenAISemconvMixin:
             severity_number=SeverityNumber.INFO,
             severity_text="INFO",
             body=None,
-            attributes=self._build_inference_details_attrs(
-                kwargs, response_obj, provider
-            ),
+            attributes=self._build_inference_details_attrs(kwargs, response_obj, provider),
         )
         otel_logger.emit(log_record)

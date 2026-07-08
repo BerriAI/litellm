@@ -139,9 +139,7 @@ class A2AGuardrailHandler(BaseTranslation):
             response_dict = response
             is_pydantic = False
         else:
-            verbose_proxy_logger.warning(
-                "A2A: Unknown response type %s, skipping guardrail", type(response)
-            )
+            verbose_proxy_logger.warning("A2A: Unknown response type %s, skipping guardrail", type(response))
             return response
 
         result = response_dict.get("result", {})
@@ -177,9 +175,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
         # Add user API key metadata with prefixed keys
         if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
@@ -238,9 +234,7 @@ class A2AGuardrailHandler(BaseTranslation):
         if not valid_parsed:
             return responses_so_far
 
-        combined_text, chunk_indices_with_text = self._collect_text_from_parsed_chunks(
-            valid_parsed
-        )
+        combined_text, chunk_indices_with_text = self._collect_text_from_parsed_chunks(valid_parsed)
         if not combined_text:
             return responses_so_far
 
@@ -251,9 +245,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 request_data["responses_so_far"] = responses_so_far
 
         if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
@@ -270,9 +262,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrailed_text = guardrailed_texts[0]
 
         # Find first chunk (by original index) that has text; put full guardrailed text there and clear rest
-        first_chunk_with_text: Optional[int] = (
-            chunk_indices_with_text[0] if chunk_indices_with_text else None
-        )
+        first_chunk_with_text: Optional[int] = chunk_indices_with_text[0] if chunk_indices_with_text else None
 
         for orig_i, obj in valid_parsed:
             result = obj.get("result", {})
@@ -399,11 +389,7 @@ class A2AGuardrailHandler(BaseTranslation):
         status = result.get("status", {})
         if isinstance(status, dict):
             status_message = status.get("message")
-            if (
-                status_message
-                and isinstance(status_message, dict)
-                and "parts" in status_message
-            ):
+            if status_message and isinstance(status_message, dict) and "parts" in status_message:
                 self._extract_texts_from_parts(
                     parts=status_message["parts"],
                     path=("status", "message", "parts"),

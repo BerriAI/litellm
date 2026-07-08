@@ -52,9 +52,7 @@ class AzureBlobCache(BaseCache):
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value = json.dumps(value)
         try:
-            await self.async_container_client.upload_blob(
-                key, serialized_value, overwrite=True
-            )
+            await self.async_container_client.upload_blob(key, serialized_value, overwrite=True)
         except Exception as e:
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")

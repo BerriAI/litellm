@@ -62,14 +62,10 @@ class SemanticMCPToolFilter:
             all_tools = []
             for server_id, server in registry.items():
                 try:
-                    tools = await global_mcp_server_manager.get_tools_for_server(
-                        server_id
-                    )
+                    tools = await global_mcp_server_manager.get_tools_for_server(server_id)
                     all_tools.extend(tools)
                 except Exception as e:
-                    verbose_logger.warning(
-                        f"Failed to fetch tools from server {server_id}: {e}"
-                    )
+                    verbose_logger.warning(f"Failed to fetch tools from server {server_id}: {e}")
                     continue
 
             if not all_tools:
@@ -77,9 +73,7 @@ class SemanticMCPToolFilter:
                 self.tool_router = None
                 return
 
-            verbose_logger.info(
-                f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers"
-            )
+            verbose_logger.info(f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers")
             self._build_router(all_tools)
 
         except Exception as e:
@@ -180,9 +174,7 @@ class SemanticMCPToolFilter:
 
         # Router should be built on startup - if not, something went wrong
         if self.tool_router is None:
-            verbose_logger.warning(
-                "Router not initialized - was build_router_from_mcp_registry() called on startup?"
-            )
+            verbose_logger.warning("Router not initialized - was build_router_from_mcp_registry() called on startup?")
             return available_tools
 
         # Run semantic filtering
@@ -252,9 +244,7 @@ class SemanticMCPToolFilter:
         separator = client_name[-len(canonical) - 1]
         return separator in ("_", "-")
 
-    def _get_tools_by_names(
-        self, tool_names: List[str], available_tools: List[Any]
-    ) -> List[Any]:
+    def _get_tools_by_names(self, tool_names: List[str], available_tools: List[Any]) -> List[Any]:
         """
         Get tools from available_tools by their names, preserving the
         semantic router's ordering.

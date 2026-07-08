@@ -39,6 +39,7 @@ export const AUTH_TYPE = {
   TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
+  OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   AWS_SIGV4: "aws_sigv4",
 };
 
@@ -46,6 +47,46 @@ export const OAUTH_FLOW = {
   INTERACTIVE: "interactive",
   M2M: "m2m",
 };
+
+// Backend value of `oauth2_flow` that marks a machine-to-machine server. Distinct
+// from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
+export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
+
+export const MCP_OAUTH2_FLOW_INTERACTIVE = "authorization_code";
+
+export type McpOAuthMode = "m2m" | "passthrough" | "authorization_code" | "token_exchange";
+
+// Classify an OAuth MCP server into the mode that decides how the tool list is
+// authenticated. token_exchange (RFC 8693 / OBO) is its own auth_type
+// (`oauth2_token_exchange`), so it is keyed off auth_type directly; the other
+// three all share auth_type `oauth2` and are told apart by secondary fields:
+// M2M (backend service token via the client_credentials grant), PKCE passthrough
+// (browser-held session token), or authorization_code (per-user token obtained
+// via the interactive authorization_code/PKCE grant and stored by the backend).
+// `token_url` is intentionally not consulted for the oauth2 modes: every OAuth2
+// grant that exchanges for a token carries one (interactive PKCE and
+// client_credentials alike), so it cannot distinguish the modes; `oauth2_flow`
+// is the authoritative M2M signal.
+export function getMcpOAuthMode(s: {
+  auth_type?: string | null;
+  oauth2_flow?: string | null;
+  delegate_auth_to_upstream?: boolean | null;
+}): McpOAuthMode | null {
+  if (s.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE) return "token_exchange";
+  if (s.auth_type !== AUTH_TYPE.OAUTH2) return null;
+  if (s.oauth2_flow === MCP_OAUTH2_FLOW_M2M) return "m2m";
+  return s.delegate_auth_to_upstream ? "passthrough" : "authorization_code";
+}
+
+// Map a server's stored `oauth2_flow` (the API value: client_credentials /
+// authorization_code / null) to the edit form's OAuth Flow Type select value.
+// A null/unset flow returns undefined so the select shows its placeholder rather
+// than a guessed default — an unstamped legacy row must be assigned explicitly.
+export function oauth2FlowToFormValue(oauth2Flow?: string | null): string | undefined {
+  if (oauth2Flow === MCP_OAUTH2_FLOW_M2M) return OAUTH_FLOW.M2M;
+  if (oauth2Flow) return OAUTH_FLOW.INTERACTIVE;
+  return undefined;
+}
 
 export const TRANSPORT = {
   SSE: "sse",
@@ -105,6 +146,7 @@ export interface MCPInfo {
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
+  tool_allowlist_enforced?: boolean;
 }
 
 // Define the structure for a single MCP tool
@@ -163,11 +205,14 @@ export interface MCPToolsViewerProps {
   serverId: string;
   accessToken: string | null;
   auth_type?: string | null;
+  /** Backend OAuth2 grant; `client_credentials` marks an M2M server. */
+  oauth2_flow?: string | null;
+  /** When true (interactive OAuth2), the server uses PKCE passthrough. */
+  delegate_auth_to_upstream?: boolean | null;
   /**
-   * When set, indicates the server uses the OAuth2 M2M (client_credentials)
-   * flow — the backend handles token acquisition internally, so the UI must
-   * not gate tool listing behind an interactive PKCE authorization. Mirrors
-   * the heuristic used in `mcp_server_edit.tsx` (`token_url` set => M2M).
+   * Connection field present on every OAuth2 flow (interactive and M2M alike),
+   * so it does not indicate the mode. Retained for callers/other uses; not read
+   * for mode detection — see getMcpOAuthMode.
    */
   tokenUrl?: string | null;
   userRole: string | null;
@@ -189,9 +234,14 @@ export interface MCPServer {
   spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
+  oauth2_flow?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;
+  token_exchange_endpoint?: string | null;
+  audience?: string | null;
+  subject_token_type?: string | null;
+  token_exchange_profile?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
@@ -210,6 +260,7 @@ export interface MCPServer {
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
+  oauth_passthrough?: boolean;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;
@@ -235,6 +286,41 @@ export interface MCPServer {
   /** Per-user OAuth token storage settings (interactive OAuth only) */
   token_validation?: Record<string, any> | null;
   token_storage_ttl_seconds?: number | null;
+
+  /**
+   * Admin-configured env vars interpolated into static_headers via ${NAME}.
+   * Stored as a list so the UI can preserve admin-entered ordering.
+   */
+  env_vars?: MCPEnvVar[] | null;
+}
+
+/** One environment variable entry on an MCP server. */
+export type MCPEnvVarScope = "global" | "user";
+
+export interface MCPEnvVar {
+  name: string;
+  /** For scope="global": the value used in interpolation.
+   *  For scope="user": optional placeholder/description shown to users. */
+  value: string;
+  scope: MCPEnvVarScope;
+  description?: string | null;
+}
+
+/** One required per-user env var slot returned by the user-env-vars endpoint. */
+export interface MCPUserEnvVarSpec {
+  name: string;
+  description?: string | null;
+  is_set: boolean;
+}
+
+/** Per-server per-user env var status returned by the API. */
+export interface MCPUserEnvVarsStatus {
+  server_id: string;
+  server_name?: string | null;
+  alias?: string | null;
+  required: MCPUserEnvVarSpec[];
+  missing_count: number;
+  setup_url?: string | null;
 }
 
 export interface MCPServerProps {

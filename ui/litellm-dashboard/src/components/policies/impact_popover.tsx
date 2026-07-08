@@ -35,7 +35,9 @@ const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: strin
   };
 
   const content = loading ? (
-    <div className="p-2 text-center"><Spin size="small" /> Loading...</div>
+    <div className="p-2 text-center">
+      <Spin size="small" /> Loading...
+    </div>
   ) : impact ? (
     <div className="text-xs" style={{ maxWidth: 280 }}>
       {impact.affected_keys_count === -1 ? (
@@ -50,7 +52,9 @@ const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: strin
             <div className="mb-1">
               <span className="text-gray-500">Keys: </span>
               {impact.sample_keys.map((k: string) => (
-                <Tag key={k} style={{ fontSize: 10, margin: 1 }}>{k}</Tag>
+                <Tag key={k} style={{ fontSize: 10, margin: 1 }}>
+                  {k}
+                </Tag>
               ))}
             </div>
           )}
@@ -58,7 +62,9 @@ const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: strin
             <div>
               <span className="text-gray-500">Teams: </span>
               {impact.sample_teams.map((t: string) => (
-                <Tag key={t} style={{ fontSize: 10, margin: 1 }}>{t}</Tag>
+                <Tag key={t} style={{ fontSize: 10, margin: 1 }}>
+                  {t}
+                </Tag>
               ))}
             </div>
           )}
@@ -73,7 +79,14 @@ const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: strin
   );
 
   return (
-    <Popover content={content} title="Blast Radius" trigger="click" onOpenChange={(open) => { if (open) loadImpact(); }}>
+    <Popover
+      content={content}
+      title="Blast Radius"
+      trigger="click"
+      onOpenChange={(open) => {
+        if (open) loadImpact();
+      }}
+    >
       <Tooltip title="View blast radius">
         <Icon icon={EyeIcon} size="sm" className="cursor-pointer hover:text-blue-500" />
       </Tooltip>

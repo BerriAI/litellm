@@ -121,7 +121,7 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
               </Button>
             </div>
           }
-          className="shadow-sm"
+          className="shadow-xs"
         >
           <Descriptions
             bordered

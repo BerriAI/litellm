@@ -218,7 +218,9 @@ async def test_pass_through_endpoint_rpm_limit(
 
     for mock_api_key in mock_api_keys:
         cache_value = UserAPIKeyAuth(
-            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+            token=hash_token(mock_api_key),
+            rpm_limit=rpm_limit,
+            metadata={"allowed_passthrough_routes": ["/v1/rerank"]},
         )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
@@ -320,7 +322,9 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
 
     for mock_api_key in mock_api_keys:
         cache_value = UserAPIKeyAuth(
-            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+            token=hash_token(mock_api_key),
+            rpm_limit=rpm_limit,
+            metadata={"allowed_passthrough_routes": ["/v1/rerank"]},
         )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
@@ -398,7 +402,9 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
 
         mock_api_key = "sk-my-test-key"
         cache_value = UserAPIKeyAuth(
-            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+            token=hash_token(mock_api_key),
+            rpm_limit=rpm_limit,
+            metadata={"allowed_passthrough_routes": ["/api/public/ingestion"]},
         )
 
         _cohere_api_key = os.environ.get("COHERE_API_KEY")

@@ -170,10 +170,7 @@ class DatabricksBase:
                 partner_name = custom_user_agent
 
             # Validate partner name: alphanumeric, underscore, hyphen only
-            if (
-                partner_name
-                and partner_name.replace("_", "").replace("-", "").isalnum()
-            ):
+            if partner_name and partner_name.replace("_", "").replace("-", "").isalnum():
                 return f"{partner_name}_litellm/{version}"
 
         # Default: just litellm
@@ -289,9 +286,7 @@ class DatabricksBase:
             api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
 
             if api_key is None:
-                databricks_auth_headers: dict[str, str] = (
-                    databricks_client.config.authenticate()
-                )
+                databricks_auth_headers: dict[str, str] = databricks_client.config.authenticate()
                 headers = {**databricks_auth_headers, **headers}
 
             return api_base, headers
@@ -391,9 +386,7 @@ class DatabricksBase:
         headers["User-Agent"] = self._build_user_agent(custom_user_agent)
 
         # Debug logging with redaction (never log actual tokens)
-        verbose_logger.debug(
-            f"Databricks request headers: {self.redact_headers_for_logging(headers)}"
-        )
+        verbose_logger.debug(f"Databricks request headers: {self.redact_headers_for_logging(headers)}")
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = "{}/chat/completions".format(api_base)

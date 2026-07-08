@@ -19,8 +19,8 @@ import httpx
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_13sf6-4046UzHSwy",  # non-streaming invocation
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",  # streaming invocation
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD",  # non-streaming invocation
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",  # streaming invocation
     ],
 )
 def test_bedrock_agentcore_basic(model):
@@ -44,7 +44,7 @@ def test_bedrock_agentcore_basic(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_13sf6-4046UzHSwy",  # streaming invocation
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD",  # streaming invocation
     ],
 )
 async def test_bedrock_agentcore_with_streaming(model):
@@ -54,7 +54,7 @@ async def test_bedrock_agentcore_with_streaming(model):
     print("running streming test for model=", model)
     # litellm._turn_on_debug()
     response = await litellm.acompletion(
-        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
         messages=[
             {
                 "role": "user",
@@ -82,7 +82,7 @@ def test_bedrock_agentcore_with_custom_params():
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
                 messages=[
                     {
                         "role": "user",
@@ -105,7 +105,7 @@ def test_bedrock_agentcore_with_custom_params():
         url = call_kwargs["url"]
         print(f"URL: {url}")
         assert (
-            "/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A941277531214%3Aruntime%2Fhosted_agent_r9jvp-Rq79QFC2fp/invocations"
+            "/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A888602223428%3Aruntime%2Fhosted_agent_r9jvp-3ySZuRHjLC/invocations"
             in url
         )
         assert "qualifier=DEFAULT" in url
@@ -150,7 +150,7 @@ def test_bedrock_agentcore_with_runtime_user_id():
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
                 messages=[
                     {
                         "role": "user",
@@ -189,7 +189,7 @@ def test_bedrock_agentcore_with_session_and_user():
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
                 messages=[
                     {
                         "role": "user",
@@ -234,7 +234,7 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
                 messages=[
                     {
                         "role": "user",
@@ -282,7 +282,7 @@ def test_bedrock_agentcore_with_all_parameters():
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
                 messages=[
                     {
                         "role": "user",
@@ -350,7 +350,7 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
                 messages=[
                     {
                         "role": "user",
@@ -625,7 +625,7 @@ def test_agentcore_synchronous_non_streaming_response():
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         # Make a synchronous (non-streaming) completion call
         response = litellm.completion(
-            model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp",
+            model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
             messages=[
                 {
                     "role": "user",

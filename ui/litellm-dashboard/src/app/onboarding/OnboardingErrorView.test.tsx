@@ -11,9 +11,7 @@ describe("OnboardingErrorView", () => {
 
   it("should show the expiry description", () => {
     render(<OnboardingErrorView />);
-    expect(
-      screen.getByText("The invitation link may be invalid or expired.")
-    ).toBeInTheDocument();
+    expect(screen.getByText("The invitation link may be invalid or expired.")).toBeInTheDocument();
   });
 
   it("should render a Back to Login link pointing to /ui/login", () => {

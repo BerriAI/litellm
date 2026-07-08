@@ -94,11 +94,7 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
           rowKey="model"
           size="small"
           pagination={false}
-          scroll={
-            topModels.length > VISIBLE_ROWS
-              ? { y: VISIBLE_ROWS * ANTD_SMALL_TABLE_ROW_HEIGHT }
-              : undefined
-          }
+          scroll={topModels.length > VISIBLE_ROWS ? { y: VISIBLE_ROWS * ANTD_SMALL_TABLE_ROW_HEIGHT } : undefined}
         />
       )}
     </Card>

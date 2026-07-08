@@ -28,9 +28,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/flux-pro/v1.1-ultra"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Flux Pro v1.1-ultra.
         """
@@ -256,8 +254,6 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             if "timings" in response_data:
                 model_response._hidden_params["timings"] = response_data["timings"]
             if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data[
-                    "has_nsfw_concepts"
-                ]
+                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
 
         return model_response

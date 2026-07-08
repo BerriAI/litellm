@@ -23,9 +23,7 @@ from ..common_utils import TopazException, TopazModelInfo
 
 
 class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageVariationOptionalParams]:
         return ["response_format", "size"]
 
     def get_complete_url(
@@ -144,9 +142,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
 
         response_ms = logging_obj.get_response_ms()
 
-        return self._common_transform_response_image_variation(
-            image_content, response_ms
-        )
+        return self._common_transform_response_image_variation(image_content, response_ms)
 
     def transform_response_image_variation(
         self,
@@ -163,17 +159,11 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
     ) -> ImageResponse:
         image_content = raw_response.content
 
-        response_ms = (
-            raw_response.elapsed.total_seconds() * 1000
-        )  # Convert to milliseconds
+        response_ms = raw_response.elapsed.total_seconds() * 1000  # Convert to milliseconds
 
-        return self._common_transform_response_image_variation(
-            image_content, response_ms
-        )
+        return self._common_transform_response_image_variation(image_content, response_ms)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
         return TopazException(
             status_code=status_code,
             message=error_message,

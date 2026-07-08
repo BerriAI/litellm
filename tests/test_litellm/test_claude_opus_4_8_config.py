@@ -182,3 +182,24 @@ def test_opus_4_8_provider_resolves_via_model_info(local_model_cost_map):
     assert info["litellm_provider"] == "anthropic"
     assert info["max_input_tokens"] == 1000000
     assert info["max_output_tokens"] == 128000
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_opus_4_8_all_variants_carry_adaptive_thinking_flag(cost_map):
+    """Every Opus 4.8 entry must advertise ``supports_adaptive_thinking``.
+
+    Adaptive-thinking detection is cost-map driven, so a single variant missing
+    the flag silently sends the legacy ``thinking.type='enabled'`` shape and the
+    provider 400s (issue #29188, which the Bedrock/Vertex/Azure variants hit
+    because only the bare ``claude-opus-4-8`` entry carried the flag). This guards
+    against a future variant being added without it."""
+    variants = [k for k in cost_map if "claude-opus-4-8" in k]
+    assert variants, "no claude-opus-4-8 entries found in cost map"
+    missing = [
+        k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True
+    ]
+    assert not missing, f"missing supports_adaptive_thinking: {missing}"

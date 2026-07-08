@@ -62,7 +62,7 @@ async def test_over_first_window_raises():
 
     call_count = 0
 
-    async def fake_get_spend(counter_key, fallback_spend):
+    async def fake_get_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         nonlocal call_count
         val = spend_by_window[call_count]
         call_count += 1
@@ -94,7 +94,7 @@ async def test_over_second_window_raises():
 
     call_count = 0
 
-    async def fake_get_spend(counter_key, fallback_spend):
+    async def fake_get_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         nonlocal call_count
         val = spend_by_window[call_count]
         call_count += 1

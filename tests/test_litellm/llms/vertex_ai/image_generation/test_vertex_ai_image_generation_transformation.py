@@ -33,27 +33,21 @@ class TestVertexAIGeminiImageGenerationConfig:
         """Test mapping n parameter to candidate_count"""
         non_default_params = {"n": 3}
         optional_params = {}
-        result = self.config.map_openai_params(
-            non_default_params, optional_params, "gemini-2.5-flash-image", False
-        )
+        result = self.config.map_openai_params(non_default_params, optional_params, "gemini-2.5-flash-image", False)
         assert result.get("candidate_count") == 3
 
     def test_map_openai_params_size(self):
         """Test mapping size parameter to aspectRatio"""
         non_default_params = {"size": "1024x1024"}
         optional_params = {}
-        result = self.config.map_openai_params(
-            non_default_params, optional_params, "gemini-2.5-flash-image", False
-        )
+        result = self.config.map_openai_params(non_default_params, optional_params, "gemini-2.5-flash-image", False)
         assert result.get("aspectRatio") == "1:1"
 
     def test_map_openai_params_size_16_9(self):
         """Test mapping 16:9 size"""
         non_default_params = {"size": "1792x1024"}
         optional_params = {}
-        result = self.config.map_openai_params(
-            non_default_params, optional_params, "gemini-2.5-flash-image", False
-        )
+        result = self.config.map_openai_params(non_default_params, optional_params, "gemini-2.5-flash-image", False)
         assert result.get("aspectRatio") == "16:9"
 
     def test_map_size_to_aspect_ratio(self):
@@ -67,41 +61,105 @@ class TestVertexAIGeminiImageGenerationConfig:
 
     def test_get_supported_openai_params_includes_native_gemini_params(self):
         """Test that native Gemini imageConfig params are supported"""
-        supported = self.config.get_supported_openai_params(
-            "gemini-3-pro-image-preview"
-        )
+        supported = self.config.get_supported_openai_params("gemini-3-pro-image-preview")
         assert "aspectRatio" in supported
         assert "aspect_ratio" in supported
         assert "imageSize" in supported
         assert "image_size" in supported
+        assert "imageConfig" in supported
 
     def test_map_openai_params_aspect_ratio_camel_case(self):
         """Test mapping native aspectRatio parameter"""
-        result = self.config.map_openai_params(
-            {"aspectRatio": "9:16"}, {}, "gemini-3-pro-image-preview", False
-        )
+        result = self.config.map_openai_params({"aspectRatio": "9:16"}, {}, "gemini-3-pro-image-preview", False)
         assert result["aspectRatio"] == "9:16"
 
     def test_map_openai_params_aspect_ratio_snake_case(self):
         """Test mapping native aspect_ratio parameter"""
-        result = self.config.map_openai_params(
-            {"aspect_ratio": "16:9"}, {}, "gemini-3-pro-image-preview", False
-        )
+        result = self.config.map_openai_params({"aspect_ratio": "16:9"}, {}, "gemini-3-pro-image-preview", False)
         assert result["aspectRatio"] == "16:9"
 
     def test_map_openai_params_image_size_camel_case(self):
         """Test mapping native imageSize parameter"""
-        result = self.config.map_openai_params(
-            {"imageSize": "4K"}, {}, "gemini-3-pro-image-preview", False
-        )
+        result = self.config.map_openai_params({"imageSize": "4K"}, {}, "gemini-3-pro-image-preview", False)
         assert result["imageSize"] == "4K"
 
     def test_map_openai_params_image_size_snake_case(self):
         """Test mapping native image_size parameter"""
-        result = self.config.map_openai_params(
-            {"image_size": "2K"}, {}, "gemini-3-pro-image-preview", False
-        )
+        result = self.config.map_openai_params({"image_size": "2K"}, {}, "gemini-3-pro-image-preview", False)
         assert result["imageSize"] == "2K"
+
+    def test_map_openai_params_image_config_dict_stored_whole(self):
+        """imageConfig dict is stored as-is so all fields survive"""
+        result = self.config.map_openai_params(
+            {"imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"}},
+            {},
+            "gemini-3.1-flash-image",
+            False,
+        )
+        assert result["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "2K"}
+
+    def test_map_openai_params_image_config_all_fields(self):
+        """All ImageConfig fields (personGeneration, imageOutputOptions) pass through"""
+        payload = {
+            "imageConfig": {
+                "aspectRatio": "9:16",
+                "imageSize": "4K",
+                "personGeneration": "DONT_ALLOW",
+                "imageOutputOptions": {
+                    "mimeType": "image/jpeg",
+                    "compressionQuality": 80,
+                },
+            }
+        }
+        result = self.config.map_openai_params(payload, {}, "gemini-3.1-flash-image", False)
+        assert result["imageConfig"] == payload["imageConfig"]
+
+    def test_map_openai_params_image_config_non_dict_warns_and_drops(self):
+        """Non-dict imageConfig is dropped with a warning, not silently discarded"""
+        with patch("litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation.verbose_logger") as mock_log:
+            result = self.config.map_openai_params(
+                {"imageConfig": "bad-string-value"}, {}, "gemini-3.1-flash-image", False
+            )
+        assert "imageConfig" not in result
+        mock_log.warning.assert_called_once()
+
+    def test_transform_image_generation_request_from_image_config(self):
+        """Full imageConfig dict is forwarded verbatim into generationConfig"""
+        full_config = {
+            "aspectRatio": "16:9",
+            "imageSize": "2K",
+            "personGeneration": "DONT_ALLOW",
+            "imageOutputOptions": {"mimeType": "image/jpeg", "compressionQuality": 85},
+        }
+        mapped = self.config.map_openai_params(
+            {"imageConfig": full_config},
+            {},
+            "gemini-3.1-flash-image",
+            False,
+        )
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image",
+            prompt="A nano banana on a desk",
+            optional_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert request["generationConfig"]["imageConfig"] == full_config
+
+    def test_transform_image_generation_flat_params_override_image_config(self):
+        """Explicit flat params win over the same key inside imageConfig"""
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image",
+            prompt="A nano banana",
+            optional_params={
+                "imageConfig": {"aspectRatio": "1:1", "personGeneration": "DONT_ALLOW"},
+                "aspectRatio": "16:9",  # should win
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert request["generationConfig"]["imageConfig"]["aspectRatio"] == "16:9"
+        assert request["generationConfig"]["imageConfig"]["personGeneration"] == "DONT_ALLOW"
 
     def test_transform_image_generation_request_basic(self):
         """Test basic request transformation"""
@@ -138,6 +196,40 @@ class TestVertexAIGeminiImageGenerationConfig:
             headers={},
         )
         assert request["generationConfig"]["imageConfig"]["imageSize"] == "4K"
+
+    def test_map_openai_params_web_search_options(self):
+        """Test web_search_options maps to googleSearch tool"""
+        result = self.config.map_openai_params({"web_search_options": {}}, {}, "gemini-3.1-flash-image-preview", False)
+        assert result["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_with_web_search_tools(self):
+        """Test request transformation includes googleSearch tools"""
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of the latest iPhone",
+            optional_params={"tools": [{"googleSearch": {}}]},
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_forwards_tool_config(self):
+        """Test request transformation forwards toolConfig side-effects from tool mapping"""
+        mapped = self.config.map_openai_params(
+            {"tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]},
+            {},
+            "gemini-3.1-flash-image-preview",
+            False,
+        )
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of a coffee shop nearby",
+            optional_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleMaps": {}}]
+        assert request["toolConfig"] == {"retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}}
 
     def test_transform_image_generation_request_with_candidate_count(self):
         """Test request transformation with candidate_count"""
@@ -306,10 +398,50 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
-        assert (
-            result.data[0].provider_specific_fields["thought_signature"]
-            == "test_signature_abc123"
+        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
+
+    def test_transform_image_generation_response_tracks_web_search_requests(self):
+        """Grounding queries are carried onto usage so search spend can be billed"""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                }
+                            }
+                        ]
+                    },
+                    "groundingMetadata": {"webSearchQueries": ["eiffel tower", "paris skyline"]},
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 93,
+                "candidatesTokenCount": 17,
+                "totalTokenCount": 110,
+            },
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        result = self.config.transform_image_generation_response(
+            model="gemini-2.5-flash-image",
+            raw_response=mock_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
         )
+
+        assert result.usage.web_search_requests == 2
 
 
 class TestVertexAIImagenImageGenerationConfig:
@@ -327,18 +459,14 @@ class TestVertexAIImagenImageGenerationConfig:
         """Test mapping n parameter to sampleCount"""
         non_default_params = {"n": 3}
         optional_params = {}
-        result = self.config.map_openai_params(
-            non_default_params, optional_params, "imagegeneration@006", False
-        )
+        result = self.config.map_openai_params(non_default_params, optional_params, "imagegeneration@006", False)
         assert result.get("sampleCount") == 3
 
     def test_map_openai_params_size(self):
         """Test mapping size parameter to aspectRatio"""
         non_default_params = {"size": "1024x1024"}
         optional_params = {}
-        result = self.config.map_openai_params(
-            non_default_params, optional_params, "imagegeneration@006", False
-        )
+        result = self.config.map_openai_params(non_default_params, optional_params, "imagegeneration@006", False)
         assert result.get("aspectRatio") == "1:1"
 
     def test_map_size_to_aspect_ratio(self):
@@ -379,9 +507,7 @@ class TestVertexAIImagenImageGenerationConfig:
             model="imagegeneration@006",
             prompt="A cat",
             optional_params={},
-            litellm_params={
-                "metadata": {"requester_metadata": {"team": "platform", "env": "prod"}}
-            },
+            litellm_params={"metadata": {"requester_metadata": {"team": "platform", "env": "prod"}}},
             headers={},
         )
         assert request["labels"] == {"team": "platform", "env": "prod"}
@@ -391,9 +517,7 @@ class TestVertexAIImagenImageGenerationConfig:
         """Test response transformation"""
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "predictions": [{"bytesBase64Encoded": "base64_encoded_image_data"}]
-        }
+        mock_response.json.return_value = {"predictions": [{"bytesBase64Encoded": "base64_encoded_image_data"}]}
         mock_response.headers = {}
 
         from litellm.types.utils import ImageResponse
@@ -456,9 +580,7 @@ class TestGetVertexAIImageGenerationConfig:
         config = get_vertex_ai_image_generation_config("gemini-3-pro-image-preview")
         assert isinstance(config, VertexAIGeminiImageGenerationConfig)
 
-        config = get_vertex_ai_image_generation_config(
-            "vertex_ai/gemini-2.5-flash-image"
-        )
+        config = get_vertex_ai_image_generation_config("vertex_ai/gemini-2.5-flash-image")
         assert isinstance(config, VertexAIGeminiImageGenerationConfig)
 
     def test_get_imagen_model_config(self):
@@ -489,12 +611,8 @@ class TestVertexAIImageGenerationIntegration:
         """Test that Gemini config can validate environment"""
         config = VertexAIGeminiImageGenerationConfig()
         with (
-            patch.object(
-                config, "_resolve_vertex_project", return_value="test-project"
-            ),
-            patch.object(
-                config, "_resolve_vertex_location", return_value="us-central1"
-            ),
+            patch.object(config, "_resolve_vertex_project", return_value="test-project"),
+            patch.object(config, "_resolve_vertex_location", return_value="us-central1"),
             patch.object(config, "_ensure_access_token", return_value=("token", None)),
         ):
             headers = config.validate_environment(
@@ -514,12 +632,8 @@ class TestVertexAIImageGenerationIntegration:
         """Test that Imagen config can validate environment"""
         config = VertexAIImagenImageGenerationConfig()
         with (
-            patch.object(
-                config, "_resolve_vertex_project", return_value="test-project"
-            ),
-            patch.object(
-                config, "_resolve_vertex_location", return_value="us-central1"
-            ),
+            patch.object(config, "_resolve_vertex_project", return_value="test-project"),
+            patch.object(config, "_resolve_vertex_location", return_value="us-central1"),
             patch.object(config, "_ensure_access_token", return_value=("token", None)),
         ):
             headers = config.validate_environment(

@@ -43,11 +43,15 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     async def fake_post_call_success_hook(*, data, user_api_key_dict, response):
         return response
 
+    async def fake_post_call_response_headers_hook(**kwargs):
+        return {"x-callback-test": "value"}
+
     fake_proxy_logger = SimpleNamespace(
         pre_call_hook=fake_pre_call_hook,
         update_request_status=fake_update_request_status,
         post_call_failure_hook=fake_post_call_failure_hook,
         post_call_success_hook=fake_post_call_success_hook,
+        post_call_response_headers_hook=fake_post_call_response_headers_hook,
     )
 
     captured_route_request_data: Dict[str, Any] = {}
@@ -110,3 +114,4 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert pre_call_input["messages"][0]["content"] == "original prompt"
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
+    assert response.headers.get("x-callback-test") == "value"

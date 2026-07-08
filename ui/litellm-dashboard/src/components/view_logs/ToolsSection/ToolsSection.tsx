@@ -23,7 +23,7 @@ export function ToolsSection({ log }: ToolsSectionProps) {
   // Calculate summary stats
   const totalTools = tools.length;
   const calledTools = tools.filter((t) => t.called).length;
-  
+
   // Get preview of first 2 tool names
   const toolNamePreview = tools
     .slice(0, 2)
@@ -32,7 +32,7 @@ export function ToolsSection({ log }: ToolsSectionProps) {
   const hasMoreTools = tools.length > 2;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         expandIconPosition="start"
         items={[

@@ -97,9 +97,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
             )
 
             if container_provider_config is None:
-                raise ValueError(
-                    f"Container provider config not found for: {resolved_custom_llm_provider}"
-                )
+                raise ValueError(f"Container provider config not found for: {resolved_custom_llm_provider}")
 
             # Build optional params for logging
             optional_params = {k: kwargs.get(k) for k in path_params if k in kwargs}
@@ -239,9 +237,5 @@ retrieve_container_file = _generated_endpoints.get("retrieve_container_file")
 aretrieve_container_file = _generated_endpoints.get("aretrieve_container_file")
 delete_container_file = _generated_endpoints.get("delete_container_file")
 adelete_container_file = _generated_endpoints.get("adelete_container_file")
-retrieve_container_file_content = _generated_endpoints.get(
-    "retrieve_container_file_content"
-)
-aretrieve_container_file_content = _generated_endpoints.get(
-    "aretrieve_container_file_content"
-)
+retrieve_container_file_content = _generated_endpoints.get("retrieve_container_file_content")
+aretrieve_container_file_content = _generated_endpoints.get("aretrieve_container_file_content")

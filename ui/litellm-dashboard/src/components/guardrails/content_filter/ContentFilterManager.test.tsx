@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ContentFilterManager, {
-  formatContentFilterDataForAPI,
-} from "./ContentFilterManager";
+import ContentFilterManager, { formatContentFilterDataForAPI } from "./ContentFilterManager";
 import React from "react";
 
 const CONTENT_FILTER_GUARDRAIL_DATA = {
@@ -65,18 +63,12 @@ vi.mock("./ContentFilterConfiguration", () => ({
         Add keyword
       </button>
       {selectedPatterns[0] && (
-        <button
-          type="button"
-          onClick={() => onPatternRemove(selectedPatterns[0].id)}
-        >
+        <button type="button" onClick={() => onPatternRemove(selectedPatterns[0].id)}>
           Remove pattern
         </button>
       )}
       {blockedWords[0] && (
-        <button
-          type="button"
-          onClick={() => onBlockedWordRemove(blockedWords[0].id)}
-        >
+        <button type="button" onClick={() => onBlockedWordRemove(blockedWords[0].id)}>
           Remove keyword
         </button>
       )}
@@ -85,13 +77,7 @@ vi.mock("./ContentFilterConfiguration", () => ({
 }));
 
 vi.mock("./ContentFilterDisplay", () => ({
-  default: ({
-    patterns,
-    blockedWords,
-  }: {
-    patterns: { name: string }[];
-    blockedWords: { keyword: string }[];
-  }) => (
+  default: ({ patterns, blockedWords }: { patterns: { name: string }[]; blockedWords: { keyword: string }[] }) => (
     <div data-testid="content-filter-display">
       <span>Patterns: {patterns.map((p) => p.name).join(", ")}</span>
       <span>Keywords: {blockedWords.map((w) => w.keyword).join(", ")}</span>
@@ -103,16 +89,8 @@ vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
   return {
     ...actual,
-    Divider: ({ children }: { children: React.ReactNode }) => (
-      <div data-testid="divider">{children}</div>
-    ),
-    Alert: ({
-      message,
-      type,
-    }: {
-      message: React.ReactNode;
-      type: string;
-    }) => (
+    Divider: ({ children }: { children: React.ReactNode }) => <div data-testid="divider">{children}</div>,
+    Alert: ({ message, type }: { message: React.ReactNode; type: string }) => (
       <div data-testid="unsaved-alert" data-type={type}>
         {message}
       </div>
@@ -132,16 +110,14 @@ describe("ContentFilterManager", () => {
         guardrailSettings={GUARDRAIL_SETTINGS}
         isEditing={true}
         accessToken="test-token"
-      />
+      />,
     );
 
     await waitFor(() => {
       expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId("divider")).toHaveTextContent(
-      "Content Filter Configuration"
-    );
+    expect(screen.getByTestId("divider")).toHaveTextContent("Content Filter Configuration");
   });
 
   it("should return null when guardrail is not litellm_content_filter", () => {
@@ -155,7 +131,7 @@ describe("ContentFilterManager", () => {
         guardrailSettings={GUARDRAIL_SETTINGS}
         isEditing={true}
         accessToken="test-token"
-      />
+      />,
     );
 
     expect(screen.queryByTestId("content-filter-config")).not.toBeInTheDocument();
@@ -170,7 +146,7 @@ describe("ContentFilterManager", () => {
         guardrailSettings={GUARDRAIL_SETTINGS}
         isEditing={false}
         accessToken="test-token"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -194,7 +170,7 @@ describe("ContentFilterManager", () => {
         accessToken="test-token"
         onDataChange={mockOnDataChange}
         onUnsavedChanges={mockOnUnsavedChanges}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -219,7 +195,7 @@ describe("ContentFilterManager", () => {
         isEditing={true}
         accessToken="test-token"
         onUnsavedChanges={mockOnUnsavedChanges}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -244,7 +220,7 @@ describe("ContentFilterManager", () => {
         isEditing={true}
         accessToken="test-token"
         onUnsavedChanges={mockOnUnsavedChanges}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -269,7 +245,7 @@ describe("ContentFilterManager", () => {
         isEditing={true}
         accessToken="test-token"
         onUnsavedChanges={mockOnUnsavedChanges}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -292,7 +268,7 @@ describe("ContentFilterManager", () => {
         guardrailSettings={GUARDRAIL_SETTINGS}
         isEditing={true}
         accessToken="test-token"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -307,9 +283,7 @@ describe("ContentFilterManager", () => {
       expect(screen.getByTestId("unsaved-alert")).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId("unsaved-alert")).toHaveTextContent(
-      /unsaved changes.*Save Changes/i
-    );
+    expect(screen.getByTestId("unsaved-alert")).toHaveTextContent(/unsaved changes.*Save Changes/i);
   });
 
   it("should call onDataChange when patterns or keywords change", async () => {
@@ -323,7 +297,7 @@ describe("ContentFilterManager", () => {
         isEditing={true}
         accessToken="test-token"
         onDataChange={mockOnDataChange}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -339,9 +313,7 @@ describe("ContentFilterManager", () => {
 
     const lastCall = mockOnDataChange.mock.calls[mockOnDataChange.mock.calls.length - 1];
     const blockedWords = lastCall[1];
-    expect(blockedWords).toContainEqual(
-      expect.objectContaining({ keyword: "secret", action: "MASK" })
-    );
+    expect(blockedWords).toContainEqual(expect.objectContaining({ keyword: "secret", action: "MASK" }));
   });
 
   it("should not call onUnsavedChanges when isEditing is false", async () => {
@@ -354,7 +326,7 @@ describe("ContentFilterManager", () => {
         isEditing={false}
         accessToken="test-token"
         onUnsavedChanges={mockOnUnsavedChanges}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -380,7 +352,7 @@ describe("ContentFilterManager", () => {
         isEditing={true}
         accessToken="test-token"
         onDataChange={mockOnDataChange}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -395,7 +367,7 @@ describe("ContentFilterManager", () => {
         guardrailSettings={null}
         isEditing={true}
         accessToken="test-token"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -450,9 +422,7 @@ describe("formatContentFilterDataForAPI", () => {
         action: "MASK",
       },
     ]);
-    expect(result.blocked_words).toEqual([
-      { keyword: "secret", action: "MASK", description: "-sensitive" },
-    ]);
+    expect(result.blocked_words).toEqual([{ keyword: "secret", action: "MASK", description: "-sensitive" }]);
     expect(result.categories).toBeUndefined();
   });
 

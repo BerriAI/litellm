@@ -29,9 +29,7 @@ class S3Logger:
         import boto3
 
         try:
-            verbose_logger.debug(
-                f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
-            )
+            verbose_logger.debug(f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}")
 
             s3_use_team_prefix = False
 
@@ -47,21 +45,13 @@ class S3Logger:
                 s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl", True)
                 s3_verify = litellm.s3_callback_params.get("s3_verify")
                 s3_endpoint_url = litellm.s3_callback_params.get("s3_endpoint_url")
-                s3_aws_access_key_id = litellm.s3_callback_params.get(
-                    "s3_aws_access_key_id"
-                )
-                s3_aws_secret_access_key = litellm.s3_callback_params.get(
-                    "s3_aws_secret_access_key"
-                )
-                s3_aws_session_token = litellm.s3_callback_params.get(
-                    "s3_aws_session_token"
-                )
+                s3_aws_access_key_id = litellm.s3_callback_params.get("s3_aws_access_key_id")
+                s3_aws_secret_access_key = litellm.s3_callback_params.get("s3_aws_secret_access_key")
+                s3_aws_session_token = litellm.s3_callback_params.get("s3_aws_session_token")
                 s3_config = litellm.s3_callback_params.get("s3_config")
                 s3_path = litellm.s3_callback_params.get("s3_path")
                 # done reading litellm.s3_callback_params
-                s3_use_team_prefix = bool(
-                    litellm.s3_callback_params.get("s3_use_team_prefix", False)
-                )
+                s3_use_team_prefix = bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
             self.s3_use_team_prefix = s3_use_team_prefix
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
@@ -84,23 +74,17 @@ class S3Logger:
             print_verbose(f"Got exception on init s3 client {str(e)}")
             raise e
 
-    async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
-    ):
+    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
-            verbose_logger.debug(
-                f"s3 Logging - Enters logging function for model {kwargs}"
-            )
+            verbose_logger.debug(f"s3 Logging - Enters logging function for model {kwargs}")
 
             # construct payload to send to s3
             # follows the same params as langfuse.py
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
+            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -131,11 +115,7 @@ class S3Logger:
             team_alias = payload["metadata"].get("user_api_key_team_alias")
 
             team_alias_prefix = ""
-            if (
-                litellm.enable_preview_features
-                and self.s3_use_team_prefix
-                and team_alias is not None
-            ):
+            if litellm.enable_preview_features and self.s3_use_team_prefix and team_alias is not None:
                 team_alias_prefix = f"{team_alias}/"
 
             s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
@@ -147,11 +127,7 @@ class S3Logger:
             )
 
             s3_object_download_filename = (
-                "time-"
-                + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f")
-                + "_"
-                + payload["id"]
-                + ".json"
+                "time-" + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f") + "_" + payload["id"] + ".json"
             )
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -186,11 +162,7 @@ def get_s3_object_key(
     s3_file_name: str,
 ) -> str:
     s3_object_key = (
-        (s3_path.rstrip("/") + "/" if s3_path else "")
-        + prefix
-        + start_time.strftime("%Y-%m-%d")
-        + "/"
-        + s3_file_name
+        (s3_path.rstrip("/") + "/" if s3_path else "") + prefix + start_time.strftime("%Y-%m-%d") + "/" + s3_file_name
     )  # we need the s3 key to include the time, so we log cache hits too
     s3_object_key += ".json"
     return s3_object_key

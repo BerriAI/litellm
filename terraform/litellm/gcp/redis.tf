@@ -9,6 +9,8 @@ resource "google_redis_instance" "this" {
 
   redis_version = "REDIS_7_0"
 
+  labels = local.labels
+
   # In-transit encryption between Cloud Run and Memorystore. The instance
   # exposes its self-signed CA via `server_ca_certs` (read in cloudrun.tf
   # and passed to the proxy as REDIS_CA_PEM_B64); the proxy decodes it to

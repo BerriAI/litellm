@@ -1,8 +1,11 @@
 import json
 from abc import abstractmethod
-from typing import List, Optional, Union, cast
+from typing import TYPE_CHECKING, List, Optional, Union, cast
 
 import litellm
+
+if TYPE_CHECKING:
+    import httpx
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -50,24 +53,35 @@ def convert_model_response_to_streaming(
             model=model_response.model,
             choices=streaming_choices,
         )
+        # Carry usage onto the streaming chunk so fake-streamed responses
+        # (e.g. Vertex AI Gemma :predict) still report token counts.
+        usage = getattr(model_response, "usage", None)
+        if usage is not None:
+            setattr(processed_chunk, "usage", usage)
         return processed_chunk
     except Exception as e:
-        raise ValueError(
-            f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}"
-        )
+        raise ValueError(f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}")
 
 
 class BaseModelResponseIterator:
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
+        self.http_response: Optional["httpx.Response"] = None
 
-    def chunk_parser(
-        self, chunk: dict
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    async def aclose(self) -> None:
+        """Close the upstream HTTP response so the provider connection is
+        released (and a backend like vLLM aborts generation) when the stream
+        is abandoned before its natural end.
+
+        ``streaming_response`` is usually a bare ``aiter_lines()`` generator
+        that holds no reference to the response, so the handler that owns the
+        response attaches it here after construction."""
+        if self.http_response is not None:
+            await self.http_response.aclose()
+
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -84,9 +98,7 @@ class BaseModelResponseIterator:
     @staticmethod
     def _string_to_dict_parser(str_line: str) -> Optional[dict]:
         stripped_json_chunk: Optional[dict] = None
-        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
-            str_line
-        )
+        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line)
         try:
             if stripped_chunk is not None:
                 stripped_json_chunk = json.loads(stripped_chunk)
@@ -96,13 +108,9 @@ class BaseModelResponseIterator:
             stripped_json_chunk = None
         return stripped_json_chunk
 
-    def _handle_string_chunk(
-        self, str_line: str
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def _handle_string_chunk(self, str_line: str) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
-        stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(
-            str_line=str_line
-        )
+        stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",
@@ -152,9 +160,7 @@ class BaseModelResponseIterator:
             except StopIteration:
                 raise StopIteration
             except ValueError as e:
-                raise RuntimeError(
-                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
-                )
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -192,15 +198,11 @@ class BaseModelResponseIterator:
             except StopAsyncIteration:
                 raise StopAsyncIteration
             except ValueError as e:
-                raise RuntimeError(
-                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
-                )
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
-    def __init__(
-        self, model_response: ModelResponse, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, model_response: ModelResponse, json_mode: Optional[bool] = False):
         self.model_response = model_response
         self.json_mode = json_mode
         self.is_done = False

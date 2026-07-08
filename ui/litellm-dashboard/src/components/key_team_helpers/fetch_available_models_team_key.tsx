@@ -49,8 +49,6 @@ export const getModelDisplayName = (model: string) => {
 export const unfurlWildcardModelsInList = (teamModels: string[], allModels: string[]): string[] => {
   const wildcardDisplayNames: string[] = [];
   const expandedModels: string[] = [];
-  console.log("teamModels", teamModels);
-  console.log("allModels", allModels);
 
   teamModels.forEach((teamModel) => {
     if (teamModel.endsWith("/*")) {

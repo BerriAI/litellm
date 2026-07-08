@@ -163,9 +163,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             user_api_key_dict: User API key authentication details
             additional_db_fields: Additional fields to store in database
         """
-        verbose_logger.info(
-            f"Storing LiteLLM Managed {self.resource_type} with id={unified_resource_id} in cache"
-        )
+        verbose_logger.info(f"Storing LiteLLM Managed {self.resource_type} with id={unified_resource_id} in cache")
 
         # Prepare cache data
         cache_data = {
@@ -256,9 +254,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         # Check database
         table = getattr(self.prisma_client.db, self.table_name)
-        db_object = await table.find_first(
-            where={"unified_resource_id": unified_resource_id}
-        )
+        db_object = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if db_object:
             return db_object.model_dump()
@@ -282,14 +278,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         """
         # Get old value from database
         table = getattr(self.prisma_client.db, self.table_name)
-        initial_value = await table.find_first(
-            where={"unified_resource_id": unified_resource_id}
-        )
+        initial_value = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if initial_value is None:
-            raise Exception(
-                f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} not found"
-            )
+            raise Exception(f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} not found")
 
         # Delete from cache
         await self.internal_usage_cache.async_set_cache(
@@ -324,9 +316,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             True if user has access, False otherwise
         """
         # Use cached method instead of direct DB query
-        resource = await self.get_unified_resource_id(
-            unified_resource_id, litellm_parent_otel_span
-        )
+        resource = await self.get_unified_resource_id(unified_resource_id, litellm_parent_otel_span)
 
         if resource:
             return can_access_resource(
@@ -368,9 +358,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         for resource_id in resource_ids:
             # Get unified resource from cache/db
-            unified_resource_object = await self.get_unified_resource_id(
-                resource_id, litellm_parent_otel_span
-            )
+            unified_resource_object = await self.get_unified_resource_id(resource_id, litellm_parent_otel_span)
 
             if unified_resource_object:
                 model_mappings = unified_resource_object.get("model_mappings", {})
@@ -442,9 +430,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         )
 
         # Convert to URL-safe base64 and strip padding
-        base64_unified_id = (
-            base64.urlsafe_b64encode(unified_id_format.encode()).decode().rstrip("=")
-        )
+        base64_unified_id = base64.urlsafe_b64encode(unified_id_format.encode()).decode().rstrip("=")
 
         return base64_unified_id
 
@@ -468,9 +454,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             hidden_params = getattr(resource_object, "_hidden_params", {}) or {}
             model_resource_id_mapping = hidden_params.get("model_resource_id_mapping")
 
-            if model_resource_id_mapping and isinstance(
-                model_resource_id_mapping, dict
-            ):
+            if model_resource_id_mapping and isinstance(model_resource_id_mapping, dict):
                 model_mappings.update(model_resource_id_mapping)
 
         return model_mappings
@@ -602,11 +586,8 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
             except Exception as e:
                 verbose_logger.warning(
-                    f"Failed to parse {self.resource_type} object "
-                    f"{resource.unified_resource_id}: {e}"
+                    f"Failed to parse {self.resource_type} object {resource.unified_resource_id}: {e}"
                 )
                 continue
 
-        return build_list_page(
-            resource_objects, has_more=len(resource_objects) == (limit or 20)
-        )
+        return build_list_page(resource_objects, has_more=len(resource_objects) == (limit or 20))

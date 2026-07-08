@@ -20,21 +20,13 @@ def get_response_headers(_response_headers: Optional[dict] = None) -> dict:
 
     openai_headers = {}
     if "x-ratelimit-limit-requests" in _response_headers:
-        openai_headers["x-ratelimit-limit-requests"] = _response_headers[
-            "x-ratelimit-limit-requests"
-        ]
+        openai_headers["x-ratelimit-limit-requests"] = _response_headers["x-ratelimit-limit-requests"]
     if "x-ratelimit-remaining-requests" in _response_headers:
-        openai_headers["x-ratelimit-remaining-requests"] = _response_headers[
-            "x-ratelimit-remaining-requests"
-        ]
+        openai_headers["x-ratelimit-remaining-requests"] = _response_headers["x-ratelimit-remaining-requests"]
     if "x-ratelimit-limit-tokens" in _response_headers:
-        openai_headers["x-ratelimit-limit-tokens"] = _response_headers[
-            "x-ratelimit-limit-tokens"
-        ]
+        openai_headers["x-ratelimit-limit-tokens"] = _response_headers["x-ratelimit-limit-tokens"]
     if "x-ratelimit-remaining-tokens" in _response_headers:
-        openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
-            "x-ratelimit-remaining-tokens"
-        ]
+        openai_headers["x-ratelimit-remaining-tokens"] = _response_headers["x-ratelimit-remaining-tokens"]
     llm_provider_headers = _get_llm_provider_headers(_response_headers)
     return {**llm_provider_headers, **openai_headers}
 

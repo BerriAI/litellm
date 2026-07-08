@@ -6,6 +6,7 @@ import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons"
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
 import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
@@ -18,7 +19,8 @@ const RoutingGroups: React.FC = () => {
   const { data, isLoading, refetch, isFetching } = useRoutingGroups();
   const { data: routerFields } = useRouterFields();
   const { data: modelHub } = useModelHub();
-  const proxySettings = useProxySettings();
+  const { accessToken } = useAuthorized();
+  const proxySettings = useProxySettings(accessToken);
   const saveMutation = useSaveRoutingGroups();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -81,9 +83,7 @@ const RoutingGroups: React.FC = () => {
       );
       setDrawerOpen(false);
     } catch (err) {
-      NotificationsManager.error(
-        err instanceof Error ? err.message : "Failed to save routing group",
-      );
+      NotificationsManager.error(err instanceof Error ? err.message : "Failed to save routing group");
     }
   };
 
@@ -95,9 +95,7 @@ const RoutingGroups: React.FC = () => {
       NotificationsManager.success(`Deleted routing group "${deletingGroup.group_name}"`);
       setDeletingGroup(null);
     } catch (err) {
-      NotificationsManager.error(
-        err instanceof Error ? err.message : "Failed to delete routing group",
-      );
+      NotificationsManager.error(err instanceof Error ? err.message : "Failed to delete routing group");
     }
   };
 
@@ -114,11 +112,7 @@ const RoutingGroups: React.FC = () => {
             className="max-w-sm"
           />
           <Flex align="center" gap={12}>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={() => refetch()}
-              loading={isFetching && !isLoading}
-            >
+            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isFetching && !isLoading}>
               Refresh
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
@@ -135,11 +129,7 @@ const RoutingGroups: React.FC = () => {
           loading={isLoading}
           onEdit={openEdit}
           onDelete={(g) => setDeletingGroup(g)}
-          proxyBaseUrl={
-            proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() ||
-            proxySettings.PROXY_BASE_URL ||
-            ""
-          }
+          proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
         />
       </Card>
 
@@ -166,8 +156,8 @@ const RoutingGroups: React.FC = () => {
         onCancel={() => setDeletingGroup(null)}
       >
         <Text>
-          Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s
-          top-level routing strategy. This cannot be undone.
+          Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s top-level routing
+          strategy. This cannot be undone.
         </Text>
       </Modal>
     </Space>

@@ -26,11 +26,7 @@ describe("fetchTeamFilterOptions", () => {
 
   it("should return sorted key aliases from fetched keys", async () => {
     mockKeyListCall.mockResolvedValue({
-      keys: [
-        { key_alias: "zeta-key" },
-        { key_alias: "alpha-key" },
-        { key_alias: "mid-key" },
-      ],
+      keys: [{ key_alias: "zeta-key" }, { key_alias: "alpha-key" }, { key_alias: "mid-key" }],
       total_pages: 1,
     });
 
@@ -42,17 +38,11 @@ describe("fetchTeamFilterOptions", () => {
   it("should deduplicate organization IDs across pages", async () => {
     mockKeyListCall
       .mockResolvedValueOnce({
-        keys: [
-          { organization_id: "org-b" },
-          { organization_id: "org-a" },
-        ],
+        keys: [{ organization_id: "org-b" }, { organization_id: "org-a" }],
         total_pages: 2,
       })
       .mockResolvedValueOnce({
-        keys: [
-          { organization_id: "org-a" },
-          { organization_id: "org-c" },
-        ],
+        keys: [{ organization_id: "org-a" }, { organization_id: "org-c" }],
         total_pages: 2,
       });
 

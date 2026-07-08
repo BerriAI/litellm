@@ -11,7 +11,6 @@ from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.thread_pool_executor import executor
 
 if TYPE_CHECKING:
     from a2a.types import SendStreamingMessageRequest, SendStreamingMessageResponse
@@ -71,11 +70,7 @@ class A2AStreamingIterator:
     def _collect_text_from_chunk(self, chunk: Any) -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            chunk_dict = (
-                chunk.model_dump(mode="json", exclude_none=True)
-                if hasattr(chunk, "model_dump")
-                else {}
-            )
+            chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
             text = A2ARequestUtils.extract_text_from_response(chunk_dict)
             if text:
                 self.collected_text_parts.append(text)
@@ -85,11 +80,7 @@ class A2AStreamingIterator:
     def _is_completed_chunk(self, chunk: Any) -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            chunk_dict = (
-                chunk.model_dump(mode="json", exclude_none=True)
-                if hasattr(chunk, "model_dump")
-                else {}
-            )
+            chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
             result = chunk_dict.get("result", {})
             if isinstance(result, dict):
                 status = result.get("status", {})
@@ -110,9 +101,7 @@ class A2AStreamingIterator:
             prompt_tokens = A2ARequestUtils.count_tokens(input_text)
 
             # Use the last (most complete) text from chunks
-            output_text = (
-                self.collected_text_parts[-1] if self.collected_text_parts else ""
-            )
+            output_text = self.collected_text_parts[-1] if self.collected_text_parts else ""
             completion_tokens = A2ARequestUtils.count_tokens(output_text)
 
             total_tokens = prompt_tokens + completion_tokens
@@ -138,20 +127,13 @@ class A2AStreamingIterator:
 
             # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
-                self.logging_obj.async_success_handler(
-                    result=result,
+                self.logging_obj.dispatch_success_handlers(
+                    result,
                     start_time=self.start_time,
                     end_time=end_time,
                     cache_hit=None,
+                    prefer_async_handlers=True,
                 )
-            )
-
-            executor.submit(
-                self.logging_obj.success_handler,
-                result=result,
-                cache_hit=None,
-                start_time=self.start_time,
-                end_time=end_time,
             )
 
             verbose_logger.info(
@@ -168,9 +150,7 @@ class A2AStreamingIterator:
         result: Dict[str, Any] = {
             "id": getattr(self.request, "id", "unknown"),
             "jsonrpc": "2.0",
-            "usage": (
-                usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
-            ),
+            "usage": (usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)),
         }
 
         # Add final chunk result if available

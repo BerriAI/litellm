@@ -37,9 +37,7 @@ class PetalsConfig(BaseConfig):
     """
 
     max_length: Optional[int] = None
-    max_new_tokens: Optional[int] = (
-        litellm.max_tokens
-    )  # petals requires max tokens to be set
+    max_new_tokens: Optional[int] = litellm.max_tokens  # petals requires max tokens to be set
     do_sample: Optional[bool] = None
     temperature: Optional[float] = None
     top_k: Optional[int] = None
@@ -49,9 +47,7 @@ class PetalsConfig(BaseConfig):
     def __init__(
         self,
         max_length: Optional[int] = None,
-        max_new_tokens: Optional[
-            int
-        ] = litellm.max_tokens,  # petals requires max tokens to be set
+        max_new_tokens: Optional[int] = litellm.max_tokens,  # petals requires max tokens to be set
         do_sample: Optional[bool] = None,
         temperature: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -67,12 +63,8 @@ class PetalsConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return PetalsError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return PetalsError(status_code=status_code, message=error_message, headers=headers)
 
     def get_supported_openai_params(self, model: str) -> List:
         return ["max_tokens", "temperature", "top_p", "stream"]

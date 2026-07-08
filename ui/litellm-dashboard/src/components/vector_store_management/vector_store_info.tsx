@@ -6,6 +6,7 @@ import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
 import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import VectorStoreTester from "./VectorStoreTester";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -66,7 +67,6 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     if (!accessToken) return;
     try {
       const response = await credentialListCall(accessToken);
-      console.log("List credentials response:", response);
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
@@ -177,7 +177,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                               <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
                                 <div className="flex items-center space-x-2">
                                   <img
-                                    src={providerLogoMap[providerDisplayName]}
+                                    src={resolveLogoSrc(providerLogoMap[providerDisplayName])}
                                     alt={`${providerEnum} logo`}
                                     className="w-5 h-5"
                                     onError={(e) => {
@@ -230,9 +230,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                     </Form.Item>
 
                     <div className="flex items-center my-4">
-                      <div className="flex-grow border-t border-gray-200"></div>
+                      <div className="grow border-t border-gray-200"></div>
                       <span className="px-4 text-gray-500 text-sm">OR</span>
-                      <div className="flex-grow border-t border-gray-200"></div>
+                      <div className="grow border-t border-gray-200"></div>
                     </div>
 
                     <Form.Item
@@ -299,7 +299,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 
                             // Get the display name from Providers enum and logo from map
                             const displayName = Providers[enumKey as keyof typeof Providers];
-                            const logo = providerLogoMap[displayName];
+                            const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
 
                             return { displayName, logo };
                           })();
@@ -332,7 +332,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                     </div>
                     <div>
                       <Text className="font-medium">Metadata</Text>
-                      <div className="bg-gray-50 p-3 rounded mt-2 font-mono text-xs overflow-auto max-h-48">
+                      <div className="bg-gray-50 p-3 rounded-sm mt-2 font-mono text-xs overflow-auto max-h-48">
                         <pre>{metadataString}</pre>
                       </div>
                     </div>

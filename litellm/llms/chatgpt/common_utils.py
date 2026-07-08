@@ -161,11 +161,7 @@ def _terminal_user_agent() -> str:
         token = f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
         return _sanitize_user_agent_token(token) or "WezTerm"
 
-    if (
-        os.getenv("ITERM_SESSION_ID")
-        or os.getenv("ITERM_PROFILE")
-        or os.getenv("ITERM_PROFILE_NAME")
-    ):
+    if os.getenv("ITERM_SESSION_ID") or os.getenv("ITERM_PROFILE") or os.getenv("ITERM_PROFILE_NAME"):
         return "iTerm.app"
 
     if os.getenv("TERM_SESSION_ID"):
@@ -225,9 +221,7 @@ def get_chatgpt_user_agent(originator: str) -> str:
     terminal_ua = _terminal_user_agent()
     suffix = os.getenv("CHATGPT_USER_AGENT_SUFFIX", "").strip()
     suffix = f" ({suffix})" if suffix else ""
-    candidate = (
-        f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
-    )
+    candidate = f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
     return _safe_header_value(candidate) or DEFAULT_USER_AGENT
 
 

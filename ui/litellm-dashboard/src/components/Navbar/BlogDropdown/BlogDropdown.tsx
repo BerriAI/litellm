@@ -78,7 +78,7 @@ export const BlogDropdown: React.FC = () => {
   // Blog opens a post list; Docs is a single outbound link — navbar adds a layout-only chevron there for alignment.
   return (
     <Dropdown menu={{ items }} trigger={["hover"]} placement="bottomRight">
-      <Button type="text" className={`${NAV_PRODUCT_LINK_CLASS} !border-0 !bg-transparent`}>
+      <Button type="text" className={`${NAV_PRODUCT_LINK_CLASS} border-0! bg-transparent!`}>
         Blog
         <DownOutlined className="text-[10px] text-gray-500" aria-hidden />
       </Button>

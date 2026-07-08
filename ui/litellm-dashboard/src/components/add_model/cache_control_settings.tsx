@@ -136,7 +136,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                 <Form.Item>
                   <button
                     type="button"
-                    className="flex items-center justify-center w-full border border-dashed border-gray-300 py-2 px-4 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-all rounded"
+                    className="flex items-center justify-center w-full border border-dashed border-gray-300 py-2 px-4 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-all rounded-sm"
                     onClick={() => add()}
                   >
                     <PlusOutlined className="mr-2" />

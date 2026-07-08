@@ -54,10 +54,17 @@ class BaseRealtimeHTTPConfig(ABC):
     # ------------------------------------------------------------------ #
 
     @abstractmethod
-    def get_complete_url(
+    def get_complete_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
+        """Return the full URL for POST /realtime/client_secrets."""
+
+    def get_transcription_session_url(
         self, api_base: Optional[str], model: str, api_version: Optional[str] = None
     ) -> str:
-        """Return the full URL for POST /realtime/client_secrets."""
+        """Return the full URL for POST /realtime/transcription_sessions."""
+        base = (api_base or "").rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        return f"{base}/v1/realtime/transcription_sessions"
 
     @abstractmethod
     def validate_environment(
@@ -77,9 +84,7 @@ class BaseRealtimeHTTPConfig(ABC):
     # realtime_calls endpoint                                              #
     # ------------------------------------------------------------------ #
 
-    def get_realtime_calls_url(
-        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
-    ) -> str:
+    def get_realtime_calls_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
         base = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/calls"
@@ -99,9 +104,7 @@ class BaseRealtimeHTTPConfig(ABC):
     # Error handling                                                      #
     # ------------------------------------------------------------------ #
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ):
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]):
         """
         Map HTTP errors to LiteLLM exception types.
 

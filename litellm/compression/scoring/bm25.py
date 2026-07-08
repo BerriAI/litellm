@@ -91,11 +91,7 @@ def bm25_score_messages(
             return exact
         if len(query_term) < 4:
             return 0
-        return sum(
-            count
-            for token, count in tf_counts.items()
-            if token != query_term and token.startswith(query_term)
-        )
+        return sum(count for token, count in tf_counts.items() if token != query_term and token.startswith(query_term))
 
     # Score each document
     scores: List[float] = []

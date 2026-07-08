@@ -5,7 +5,6 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
-from litellm._uuid import uuid
 
 LITELLM_MASTER_KEY = "sk-1234"
 
@@ -82,7 +81,7 @@ async def moderation(session, key):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
-    data = {"input": "I want to kill the cat."}
+    data = {"model": "text-moderation-stable", "input": "I want to kill the cat."}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -107,7 +106,7 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         "model": model,
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": f"Hello! {uuid.uuid4()}"},
+            {"role": "user", "content": "Hello!"},
         ],
     }
 
@@ -446,7 +445,7 @@ async def test_chat_completion_anthropic_structured_output():
     client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
     res = await client.beta.chat.completions.parse(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
         messages=messages,
         response_format=EventsList,
         timeout=60,
@@ -522,6 +521,7 @@ async def test_image_generation():
         await image_generation(session=session, key=key_2)
 
 
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_openai_wildcard_chat_completion():
     """

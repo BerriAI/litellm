@@ -1,6 +1,7 @@
 import sys
 import os
 import io, asyncio
+from collections import defaultdict
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -18,6 +19,60 @@ from litellm._logging import verbose_logger
 import logging
 
 
+class _FakeS3Paginator:
+    def __init__(self, objects):
+        self.objects = objects
+
+    def paginate(self, Bucket):
+        keys = sorted(self.objects[Bucket])
+        if not keys:
+            return [{}]
+        return [{"Contents": [{"Key": key} for key in keys]}]
+
+
+class _FakeS3Client:
+    def __init__(self):
+        self.objects = defaultdict(dict)
+
+    def clear(self):
+        self.objects.clear()
+
+    def put_object(self, Bucket, Key, Body, **_kwargs):
+        self.objects[Bucket][Key] = Body
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+    def delete_object(self, Bucket, Key):
+        self.objects[Bucket].pop(Key, None)
+        return {"ResponseMetadata": {"HTTPStatusCode": 204}}
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return _FakeS3Paginator(self.objects)
+
+    def list_objects(self, Bucket):
+        keys = sorted(self.objects[Bucket])
+        return {"Contents": [{"Key": key, "LastModified": 0} for key in keys]}
+
+
+_FAKE_S3_CLIENT = _FakeS3Client()
+
+
+@pytest.fixture(autouse=True)
+def fake_s3_client(monkeypatch):
+    _FAKE_S3_CLIENT.clear()
+
+    def fake_boto3_client(service_name, *args, **kwargs):
+        assert service_name == "s3"
+        return _FAKE_S3_CLIENT
+
+    monkeypatch.setattr(boto3, "client", fake_boto3_client)
+    litellm.success_callback = []
+    litellm.callbacks = []
+    yield _FAKE_S3_CLIENT
+    litellm.success_callback = []
+    litellm.callbacks = []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)]
@@ -27,7 +82,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
     verbose_logger.setLevel(level=logging.DEBUG)
     litellm.success_callback = ["s3"]
     litellm.s3_callback_params = {
-        "s3_bucket_name": "load-testing-oct-941277531214",
+        "s3_bucket_name": "load-testing-oct",
         "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
         "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
         "s3_region_name": "us-west-2",
@@ -64,14 +119,14 @@ async def test_basic_s3_logging(sync_mode, streaming):
         await asyncio.sleep(2)
     print(f"response: {response}")
 
-    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct-941277531214")
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
 
     # assert that atlest one key has response.id in it
     assert any(response_id in key for key in all_s3_keys)
     s3 = boto3.client("s3")
     # delete all objects
     for key in all_s3_keys:
-        s3.delete_object(Bucket="load-testing-oct-941277531214", Key=key)
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
 
 
 @pytest.mark.asyncio
@@ -82,7 +137,7 @@ async def test_basic_s3_v2_logging(streaming):
     from litellm.integrations.s3_v2 import S3Logger
 
     litellm.s3_callback_params = {
-        "s3_bucket_name": "load-testing-oct-941277531214",
+        "s3_bucket_name": "load-testing-oct",
         "s3_aws_secret_access_key": "test-secret",
         "s3_aws_access_key_id": "test-key",
         "s3_region_name": "us-west-2",
@@ -172,6 +227,7 @@ async def test_basic_s3_v2_logging_failure():
             model="gpt-5-mini",
             api_key="invalid-api-key",
             messages=[{"role": "user", "content": "This is a test"}],
+            mock_response=Exception("forced failure for S3 logging test"),
         )
     except Exception as e:
         print(f"Expected error: {e}")
@@ -407,7 +463,7 @@ from litellm.integrations.s3_v2 import S3Logger
 class TestS3Logger(S3Logger):
     def __init__(self, *args, **kwargs):
         self.recorded_requests = {}
-        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+        self.logged_standard_logging_payload = None
         super().__init__(*args, **kwargs)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):

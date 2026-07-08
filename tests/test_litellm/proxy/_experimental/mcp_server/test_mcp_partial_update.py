@@ -1,0 +1,544 @@
+"""
+Tests for partial-update semantics of PUT /v1/mcp/server.
+
+A partial update must only write the fields the caller explicitly provided.
+Omitting a field must NOT reset it to its Pydantic schema default (e.g.
+``transport=sse``, ``mcp_access_groups=[]``, ``allow_all_keys=False``), which
+would silently overwrite the existing DB row.
+"""
+
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from litellm.proxy._experimental.mcp_server.db import (
+    create_mcp_server,
+    update_mcp_server,
+)
+from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+
+def _mock_prisma():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable = AsyncMock()
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+    mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=MagicMock())
+    return mock_prisma
+
+
+async def _run_update(data: UpdateMCPServerRequest, fields_set=None) -> dict:
+    mock_prisma = _mock_prisma()
+    await update_mcp_server(mock_prisma, data, "test-user", fields_set=fields_set)
+    return mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_partial_update_omits_unset_defaultful_fields():
+    """
+    A PUT touching only allowed_tools must not write transport,
+    mcp_access_groups, allow_all_keys, available_on_public_internet,
+    delegate_auth_to_upstream, is_byok, args, env or byok_description.
+    """
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        allowed_tools=["foo"],
+    )
+
+    data_dict = await _run_update(data)
+
+    # The intended change is present.
+    assert data_dict["allowed_tools"] == ["foo"]
+
+    # Fields the caller did not provide must not be in the write payload, so the
+    # existing DB value is preserved.
+    for trapped_field in (
+        "transport",
+        "mcp_access_groups",
+        "allow_all_keys",
+        "available_on_public_internet",
+        "delegate_auth_to_upstream",
+        "is_byok",
+        "args",
+        "env",
+        "byok_description",
+    ):
+        assert trapped_field not in data_dict, (
+            f"{trapped_field} should not be written on a partial update that "
+            f"omitted it (would reset the row to a schema default)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_partial_update_null_tool_name_maps_clear_to_empty_json():
+    """Explicit null on Json map fields must clear overrides (UI legacy)."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        tool_name_to_display_name=None,
+        tool_name_to_description=None,
+    )
+
+    data_dict = await _run_update(data)
+
+    assert data_dict["tool_name_to_display_name"] == "{}"
+    assert data_dict["tool_name_to_description"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_partial_update_null_allowed_tools_clears_whitelist():
+    """Explicit null must clear the whitelist (UI legacy); Prisma requires []."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        allowed_tools=None,
+    )
+
+    data_dict = await _run_update(data)
+
+    assert data_dict["allowed_tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_partial_update_preserves_http_transport():
+    """The reported prod incident: a PUT without transport must not flip http->sse."""
+    data = UpdateMCPServerRequest(
+        server_id="atlassian_url",
+        allowed_tools=[],
+    )
+
+    data_dict = await _run_update(data)
+
+    assert "transport" not in data_dict
+    assert data_dict["allowed_tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_partial_update_writes_explicitly_provided_fields():
+    """Explicitly provided fields are written, including falsy/default-equal values."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        url="https://example.com/mcp",
+        transport="http",
+        allow_all_keys=False,
+        mcp_access_groups=["mcp-dev-sandbox"],
+        available_on_public_internet=True,
+    )
+
+    data_dict = await _run_update(data)
+
+    assert data_dict["transport"] == "http"
+    # Explicitly provided False must still be written.
+    assert data_dict["allow_all_keys"] is False
+    assert data_dict["mcp_access_groups"] == ["mcp-dev-sandbox"]
+    assert data_dict["available_on_public_internet"] is True
+
+
+@pytest.mark.asyncio
+async def test_partial_update_can_explicitly_reset_allow_all_keys():
+    """Caller can still reset a field to its default by sending it explicitly."""
+    enabled = await _run_update(UpdateMCPServerRequest(server_id="s", allow_all_keys=True))
+    assert enabled["allow_all_keys"] is True
+
+    disabled = await _run_update(UpdateMCPServerRequest(server_id="s", allow_all_keys=False))
+    assert disabled["allow_all_keys"] is False
+
+
+@pytest.mark.asyncio
+async def test_partial_update_does_not_clear_alias_when_unset():
+    """alias is force-normalized on the payload; an unset/None alias must not be written."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        allowed_tools=["foo"],
+    )
+    fields_set = set(data.fields_set())
+    # Simulate validate_and_normalize_mcp_server_payload assigning alias=None.
+    data.alias = None
+
+    data_dict = await _run_update(data, fields_set=fields_set)
+
+    assert "alias" not in data_dict
+
+
+@pytest.mark.asyncio
+async def test_partial_update_can_explicitly_clear_alias():
+    """Caller can clear an existing alias by explicitly sending alias=None."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        alias=None,
+    )
+    fields_set = set(data.fields_set())
+    # Simulate validate_and_normalize_mcp_server_payload preserving alias=None.
+    data.alias = None
+
+    data_dict = await _run_update(data, fields_set=fields_set)
+
+    assert "alias" in data_dict
+    assert data_dict["alias"] is None
+
+
+async def _run_update_with_existing(data: UpdateMCPServerRequest, existing_auth_type: str) -> dict:
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = existing_auth_type
+    existing.credentials = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    await update_mcp_server(mock_prisma, data, "test-user")
+    return mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_clears_stale_flow_scoped_fields():
+    """
+    Switching oauth2 -> oauth2_token_exchange must clear the previous flow's
+    endpoint config: a stale token_url would otherwise be picked up as the
+    token-exchange endpoint and suppress RFC 9728/8414 discovery.
+    """
+    data = UpdateMCPServerRequest(server_id="my-test-server", auth_type="oauth2_token_exchange")
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
+
+    for stale_field in (
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    ):
+        assert data_dict[stale_field] is None, f"{stale_field} must be cleared on auth_type switch"
+    assert data_dict["credentials"] is None
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_keeps_explicitly_provided_flow_fields():
+    """Fields explicitly provided alongside the auth_type switch must survive it."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        auth_type="oauth2_token_exchange",
+        token_exchange_endpoint="https://idp.example.com/oauth2/token",
+    )
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
+
+    assert data_dict["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
+    assert data_dict["token_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_back_to_oauth2_clears_token_exchange_fields():
+    """The reverse switch must not leave token-exchange settings behind to
+    silently reactivate if the server is later switched back."""
+    data = UpdateMCPServerRequest(server_id="my-test-server", auth_type="oauth2")
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2_token_exchange")
+
+    assert data_dict["token_exchange_endpoint"] is None
+    assert data_dict["audience"] is None
+    assert data_dict["subject_token_type"] is None
+    assert data_dict["token_exchange_profile"] is None
+
+
+@pytest.mark.asyncio
+async def test_unchanged_auth_type_does_not_clear_flow_fields():
+    """An update that keeps the auth_type must not touch flow-scoped fields, so a
+    legacy OBO server using token_url as its exchange endpoint keeps working."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        auth_type="oauth2_token_exchange",
+        allowed_tools=["foo"],
+    )
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2_token_exchange")
+
+    for flow_field in (
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    ):
+        assert flow_field not in data_dict
+
+
+@pytest.mark.asyncio
+async def test_create_still_writes_defaults():
+    """
+    Regression guard: create (POST) must keep writing defaults so DB columns
+    without a default get populated. exclude_unset is update-only.
+    """
+    mock_prisma = _mock_prisma()
+    data = NewMCPServerRequest(
+        server_id="new-server",
+        url="https://example.com/mcp",
+        transport="http",
+    )
+
+    await create_mcp_server(mock_prisma, data, "test-user")
+
+    data_dict = mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+    assert data_dict["transport"] == "http"
+    # is_byok is force-written on create.
+    assert data_dict["is_byok"] is False
+    # alias key is always present on create (even if None).
+    assert "alias" in data_dict
+    # audit fields set by create_mcp_server.
+    assert data_dict["created_by"] == "test-user"
+    assert data_dict["updated_by"] == "test-user"
+
+
+# ── token-exchange blob → column normalization ────────────────────────────────
+#
+# token_exchange_endpoint / audience / subject_token_type have dedicated columns;
+# their MCPCredentials copies are a legacy shape. Writes must lift blob values
+# into the columns and strip them from the stored blob so the read-time
+# ``column or blob`` fallback can never resurrect a stale blob value after the
+# column is cleared.
+
+
+@pytest.fixture(autouse=True)
+def _salt_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+
+
+def _existing_row(auth_type: str, credentials: dict | None = None):
+    existing = MagicMock()
+    existing.auth_type = auth_type
+    existing.credentials = json.dumps(credentials) if credentials is not None else None
+    existing.token_exchange_endpoint = None
+    existing.audience = None
+    existing.subject_token_type = None
+    existing.token_exchange_profile = None
+    return existing
+
+
+@pytest.mark.asyncio
+async def test_create_lifts_blob_token_exchange_settings_into_columns():
+    """The legacy REST shape (TE settings inside ``credentials``) must land in
+    the dedicated columns, and the stored blob must not keep a copy."""
+    mock_prisma = _mock_prisma()
+    data = NewMCPServerRequest(
+        server_id="te-server",
+        url="https://example.com/mcp",
+        transport="http",
+        auth_type="oauth2_token_exchange",
+        credentials={
+            "client_id": "cid",
+            "client_secret": "sec",
+            "token_exchange_endpoint": "https://idp.example.com/oauth2/token",
+            "audience": "api://upstream",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_exchange_profile": "entra_obo",
+        },
+    )
+
+    await create_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
+    assert data_dict["audience"] == "api://upstream"
+    assert data_dict["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
+    assert data_dict["token_exchange_profile"] == "entra_obo"
+    stored_blob = json.loads(data_dict["credentials"])
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type", "token_exchange_profile"):
+        assert te_field not in stored_blob
+    assert "client_id" in stored_blob
+
+
+@pytest.mark.asyncio
+async def test_create_explicit_column_wins_over_blob_copy():
+    mock_prisma = _mock_prisma()
+    data = NewMCPServerRequest(
+        server_id="te-server",
+        url="https://example.com/mcp",
+        transport="http",
+        auth_type="oauth2_token_exchange",
+        token_exchange_endpoint="https://top-level.example.com/token",
+        credentials={"client_id": "cid", "token_exchange_endpoint": "https://blob.example.com/token"},
+    )
+
+    await create_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://top-level.example.com/token"
+    assert "token_exchange_endpoint" not in json.loads(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_credentials_merge_migrates_legacy_blob_te_settings():
+    """A same-auth credentials update on a legacy row (TE settings in the blob,
+    columns null) must move the settings to the columns and drop them from the
+    merged blob."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={
+            "client_id": "enc-old-cid",
+            "token_exchange_endpoint": "https://legacy-idp.example.com/token",
+            "audience": "api://legacy",
+            "token_exchange_profile": "entra_obo",
+        },
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="te-server",
+        auth_type="oauth2_token_exchange",
+        credentials={"client_id": "new-cid"},
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://legacy-idp.example.com/token"
+    assert data_dict["audience"] == "api://legacy"
+    assert data_dict["token_exchange_profile"] == "entra_obo"
+    merged_blob = json.loads(data_dict["credentials"])
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type", "token_exchange_profile"):
+        assert te_field not in merged_blob
+
+
+@pytest.mark.asyncio
+async def test_cleared_column_is_not_resurrected_by_legacy_blob_value():
+    """The Greptile scenario: explicitly clearing the column (to re-enable
+    RFC 9728/8414 discovery) while the legacy blob still holds an endpoint must
+    NOT resurrect the blob value — the explicit null wins and the blob copy is
+    stripped."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://dead-idp.example.com/token"},
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="te-server",
+        auth_type="oauth2_token_exchange",
+        token_exchange_endpoint=None,
+        credentials={"client_id": "new-cid"},
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] is None
+    assert "token_exchange_endpoint" not in json.loads(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_merge_strips_blob_te_copy_when_column_already_set():
+    """When the row already has a column value, the blob copy is shadowed at
+    read time anyway — the merge must strip it rather than carry it forward."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://blob-copy.example.com/token"},
+    )
+    existing.token_exchange_endpoint = "https://column.example.com/token"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="te-server",
+        auth_type="oauth2_token_exchange",
+        credentials={"client_id": "new-cid"},
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    # Column untouched by this update (not in payload), blob copy gone.
+    assert "token_exchange_endpoint" not in data_dict
+    assert "token_exchange_endpoint" not in json.loads(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_clears_flow_fields_with_external_fields_set():
+    """The management endpoint passes ``fields_set`` explicitly (PUT
+    /v1/mcp/server). The auth-switch clearing must fire on that path too — it is
+    gated on ``data.auth_type``/the existing row, not on how fields_set arrives."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row("oauth2")
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", auth_type="oauth2_token_exchange")
+    await update_mcp_server(mock_prisma, data, "test-user", fields_set=set(data.fields_set()))
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    for stale_field in (
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    ):
+        assert data_dict[stale_field] is None, f"{stale_field} must be cleared via the fields_set path"
+
+
+@pytest.mark.asyncio
+async def test_explicit_clear_without_credentials_purges_legacy_blob_copy():
+    """Clearing a column in an update that does not touch credentials must strip
+    the legacy blob copy too — otherwise the next credentials update's
+    migrate-on-write would repopulate the column the admin just cleared."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://dead-idp.example.com/token"},
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", token_exchange_endpoint=None)
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] is None
+    stored_blob = json.loads(data_dict["credentials"])
+    assert "token_exchange_endpoint" not in stored_blob
+    # Unrelated blob keys (encrypted secrets) survive untouched.
+    assert stored_blob["client_id"] == "enc-old-cid"
+
+
+@pytest.mark.asyncio
+async def test_explicit_te_write_without_credentials_migrates_other_legacy_fields():
+    """A no-credentials update that writes one token-exchange column migrates the
+    whole row: untouched null columns are lifted from the blob, and every blob
+    copy is stripped."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row(
+        "oauth2_token_exchange",
+        credentials={
+            "client_id": "enc-old-cid",
+            "token_exchange_endpoint": "https://legacy-idp.example.com/token",
+            "audience": "api://legacy",
+        },
+    )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", audience="api://new")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["audience"] == "api://new"
+    assert data_dict["token_exchange_endpoint"] == "https://legacy-idp.example.com/token"
+    stored_blob = json.loads(data_dict["credentials"])
+    for te_field in ("token_exchange_endpoint", "audience", "subject_token_type"):
+        assert te_field not in stored_blob
+
+
+@pytest.mark.asyncio
+async def test_te_update_without_blob_te_keys_leaves_credentials_untouched():
+    """A no-credentials column write on a row whose blob has no legacy copies
+    must not rewrite the credentials blob at all."""
+    mock_prisma = _mock_prisma()
+    existing = _existing_row("oauth2_token_exchange", credentials={"client_id": "enc-old-cid"})
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="te-server", token_exchange_endpoint="https://new.example.com/token")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_exchange_endpoint"] == "https://new.example.com/token"
+    assert "credentials" not in data_dict

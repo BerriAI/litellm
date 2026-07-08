@@ -60,9 +60,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> Optional[str]:
         return model
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         api_base = VLLMModelInfo.get_api_base(api_base)
         api_key = VLLMModelInfo.get_api_key(api_key)
         endpoint = "/v1/models"
@@ -85,6 +83,4 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return VLLMError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return VLLMError(status_code=status_code, message=error_message, headers=headers)

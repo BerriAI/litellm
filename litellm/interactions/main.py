@@ -134,9 +134,7 @@ async def acreate(
         kwargs["acreate_interaction"] = True
 
         if custom_llm_provider is None and model:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=kwargs.get("api_base", None)
-            )
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
         elif custom_llm_provider is None:
             custom_llm_provider = "gemini"
 
@@ -290,18 +288,11 @@ def create(
 
         # Get optional params using utility (similar to responses API pattern)
         local_vars.update(kwargs)
-        optional_params = (
-            InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(
-                local_vars
-            )
-        )
+        optional_params = InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(local_vars)
 
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
-        if (
-            custom_llm_provider == "litellm_responses"
-            or interactions_api_config is None
-        ):
+        if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
             # Bridge to litellm.responses() for non-native providers
             from litellm.interactions.litellm_responses_transformation.handler import (
                 LiteLLMResponsesInteractionsHandler,
@@ -425,9 +416,7 @@ def get(
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -529,9 +518,7 @@ def delete(
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -633,9 +620,7 @@ def cancel(
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,

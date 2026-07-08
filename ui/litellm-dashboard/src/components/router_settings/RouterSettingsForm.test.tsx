@@ -12,19 +12,13 @@ vi.mock("antd", async (importOriginal) => {
     ...actual,
     Select: Object.assign(
       ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
+        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
           {children}
         </select>
       ),
       {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
+        Option: ({ value, children }: any) => <option value={value}>{children}</option>,
+      },
     ),
   };
 });
@@ -99,9 +93,7 @@ describe("RouterSettingsForm", () => {
 
     await user.selectOptions(screen.getByTestId("strategy-select"), "latency-based-routing");
 
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ selectedStrategy: "latency-based-routing" })
-    );
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ selectedStrategy: "latency-based-routing" }));
   });
 
   it("should call onChange with the updated enableTagFiltering when the toggle changes", async () => {
@@ -111,9 +103,7 @@ describe("RouterSettingsForm", () => {
 
     await user.click(screen.getByRole("switch"));
 
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ enableTagFiltering: true })
-    );
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ enableTagFiltering: true }));
   });
 
   it("should show the Reliability & Retries section", () => {

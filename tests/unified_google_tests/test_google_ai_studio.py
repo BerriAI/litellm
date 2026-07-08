@@ -1,3 +1,4 @@
+from base_google_genai_proxy_sdk_test import BaseGoogleGenAIProxySDKTest
 from base_google_test import BaseGoogleGenAITest
 import sys
 import os
@@ -11,7 +12,7 @@ import unittest.mock
 import json
 
 
-class TestGoogleGenAIStudio(BaseGoogleGenAITest):
+class TestGoogleGenAIStudio(BaseGoogleGenAITest, BaseGoogleGenAIProxySDKTest):
     """Test Google GenAI Studio"""
 
     @property
@@ -19,6 +20,10 @@ class TestGoogleGenAIStudio(BaseGoogleGenAITest):
         return {
             "model": "gemini/gemini-2.5-flash-lite",
         }
+
+    @property
+    def proxy_model_name(self) -> str:
+        return "gemini-2.5-flash-lite"
 
 
 @pytest.mark.asyncio
@@ -69,12 +74,6 @@ async def test_mock_stream_generate_content_with_tools():
         },
     }
 
-    # Convert to bytes as expected by the streaming iterator
-    raw_chunks = [
-        f"data: {json.dumps(mock_response_chunk)}\n\n".encode(),
-        b"data: [DONE]\n\n",
-    ]
-
     # Mock the HTTP handler
     with unittest.mock.patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -85,12 +84,15 @@ async def test_mock_stream_generate_content_with_tools():
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
 
-        # Mock the aiter_bytes method to return our chunks as bytes
-        async def mock_aiter_bytes():
-            for chunk in raw_chunks:
-                yield chunk
+        # Mock aiter_lines: yield one line at a time (no trailing newlines),
+        # with a blank line between events, matching httpx aiter_lines behaviour.
+        async def mock_aiter_lines():
+            yield f"data: {json.dumps(mock_response_chunk)}"
+            yield ""
+            yield "data: [DONE]"
+            yield ""
 
-        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aiter_lines = mock_aiter_lines
         mock_post.return_value = mock_response
 
         print(
@@ -323,9 +325,6 @@ async def test_validate_post_request_parameters():
         }
     ]
 
-    # Mock response for the HTTP request
-    raw_chunks = [b"data: [DONE]\n\n"]
-
     # Mock the HTTP handler to capture the request
     with unittest.mock.patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -336,12 +335,13 @@ async def test_validate_post_request_parameters():
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
 
-        # Mock the aiter_bytes method
-        async def mock_aiter_bytes():
-            for chunk in raw_chunks:
-                yield chunk
+        # Mock aiter_lines: yield one line at a time (no trailing newlines),
+        # with a blank line between events, matching httpx aiter_lines behaviour.
+        async def mock_aiter_lines():
+            yield "data: [DONE]"
+            yield ""
 
-        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aiter_lines = mock_aiter_lines
         mock_post.return_value = mock_response
 
         print("\n--- Testing POST request parameters validation ---")
