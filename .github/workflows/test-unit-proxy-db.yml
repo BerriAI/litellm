@@ -7,7 +7,6 @@ on:
       - litellm_internal_staging
     paths-ignore:
       - "ui/**"
-      - "docs/**"
       - "**.md"
       - "**.mdx"
 

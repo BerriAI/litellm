@@ -9,7 +9,6 @@ on:
       - "litellm_**"
     paths-ignore:
       - "ui/**"
-      - "docs/**"
       - "**.md"
       - "**.mdx"
   workflow_dispatch:
