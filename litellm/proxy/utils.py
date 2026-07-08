@@ -49,7 +49,7 @@ from litellm.proxy._types import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import MCP_CALL_TYPES, CallTypes, CallTypesLiteral
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -1059,7 +1059,7 @@ class ProxyLogging:
         from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
-        if event_type is GuardrailEventHooks.pre_call and call_type == CallTypes.call_mcp_tool.value:
+        if event_type is GuardrailEventHooks.pre_call and call_type in MCP_CALL_TYPES:
             event_type = GuardrailEventHooks.pre_mcp_call
 
         # Check if the guardrail should run for this request
@@ -1423,7 +1423,7 @@ class ProxyLogging:
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
-                        if call_type == "call_mcp_tool" and user_api_key_dict is None:
+                        if call_type in MCP_CALL_TYPES and user_api_key_dict is None:
                             continue
 
                         response = await _callback.async_pre_call_hook(
@@ -1759,13 +1759,13 @@ class ProxyLogging:
                     from litellm.types.guardrails import GuardrailEventHooks
 
                     event_type = GuardrailEventHooks.during_call
-                    if call_type == CallTypes.call_mcp_tool.value:
+                    if call_type in MCP_CALL_TYPES:
                         event_type = GuardrailEventHooks.during_mcp_call
 
                     if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
                         continue
                 # Convert user_api_key_dict to proper format for async_moderation_hook
-                if call_type == CallTypes.call_mcp_tool.value:
+                if call_type in MCP_CALL_TYPES:
                     user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(user_api_key_dict)
                 else:
                     user_api_key_auth_dict = user_api_key_dict

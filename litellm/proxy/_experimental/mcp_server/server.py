@@ -75,7 +75,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.mcp import MCPAuth, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
-from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
+from litellm.types.utils import CallTypes, CallTypesLiteral, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
 # Short-lived in-memory cache for BYOK credentials.
@@ -1597,6 +1597,37 @@ if MCP_AVAILABLE:
 
         return server_auth_header, extra_headers
 
+    async def _apply_pre_mcp_operation_guardrails(
+        name: str,
+        arguments: Dict[str, Any],
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        call_type: CallTypesLiteral,
+        extra_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        if proxy_logging_obj is None:
+            return extra_headers
+
+        hook_result = await global_mcp_server_manager.pre_mcp_operation_check(
+            name=name,
+            arguments=arguments,
+            server_name=server.alias or server.server_name or server.name,
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            call_type=call_type,
+            extra_headers=extra_headers,
+            raw_headers=raw_headers,
+        )
+        hook_extra_headers = hook_result.get("extra_headers")
+        if not hook_extra_headers:
+            return extra_headers
+        merged_headers = dict(extra_headers or {})
+        merged_headers.update(hook_extra_headers)
+        return merged_headers
+
     def _merge_gateway_initialize_instructions(
         allowed_mcp_servers: List[MCPServer],
     ) -> Optional[str]:
@@ -1972,6 +2003,15 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
             )
+            extra_headers = await _apply_pre_mcp_operation_guardrails(
+                name="list_prompts",
+                arguments={},
+                server=server,
+                user_api_key_auth=user_api_key_auth,
+                call_type=CallTypes.list_mcp_prompts.value,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
+            )
 
             try:
                 prompts = await global_mcp_server_manager.get_prompts_from_server(
@@ -2024,6 +2064,15 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
             )
+            extra_headers = await _apply_pre_mcp_operation_guardrails(
+                name="list_resources",
+                arguments={},
+                server=server,
+                user_api_key_auth=user_api_key_auth,
+                call_type=CallTypes.list_mcp_resources.value,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
+            )
 
             try:
                 resources = await global_mcp_server_manager.get_resources_from_server(
@@ -2073,6 +2122,15 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+            )
+            extra_headers = await _apply_pre_mcp_operation_guardrails(
+                name="list_resource_templates",
+                arguments={},
+                server=server,
+                user_api_key_auth=user_api_key_auth,
+                call_type=CallTypes.list_mcp_resource_templates.value,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
             )
 
             try:
@@ -2878,6 +2936,15 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
         )
+        extra_headers = await _apply_pre_mcp_operation_guardrails(
+            name="get_prompt",
+            arguments={**(arguments or {}), "name": original_prompt_name},
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            call_type=CallTypes.get_mcp_prompt.value,
+            extra_headers=extra_headers,
+            raw_headers=raw_headers,
+        )
 
         return await global_mcp_server_manager.get_prompt_from_server(
             server=server,
@@ -2927,6 +2994,15 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
+        )
+        extra_headers = await _apply_pre_mcp_operation_guardrails(
+            name="read_resource",
+            arguments={"url": str(url)},
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            call_type=CallTypes.read_mcp_resource.value,
+            extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
         return await global_mcp_server_manager.read_resource_from_server(

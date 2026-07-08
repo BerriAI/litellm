@@ -443,6 +443,7 @@ async def test_get_prompts_from_mcp_servers_success():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
     ):
+        mock_manager.pre_mcp_operation_check = AsyncMock(return_value={})
         mock_manager.get_prompts_from_server = AsyncMock(
             side_effect=[
                 [Prompt(name="hello", description="hi")],
@@ -459,6 +460,7 @@ async def test_get_prompts_from_mcp_servers_success():
 
     mock_allowed.assert_awaited_once()
     assert mock_headers.call_count == 2
+    assert mock_manager.pre_mcp_operation_check.await_count == 2
     assert mock_manager.get_prompts_from_server.await_count == 2
     assert {prompt.name for prompt in prompts} == {"hello", "howdy"}
 
@@ -503,6 +505,7 @@ async def test_get_resources_from_mcp_servers_success():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
     ):
+        mock_manager.pre_mcp_operation_check = AsyncMock(return_value={})
         mock_manager.get_resources_from_server = AsyncMock(
             side_effect=[
                 [
@@ -529,6 +532,7 @@ async def test_get_resources_from_mcp_servers_success():
 
     mock_allowed.assert_awaited_once()
     assert mock_headers.call_count == 2
+    assert mock_manager.pre_mcp_operation_check.await_count == 2
     assert mock_manager.get_resources_from_server.await_count == 2
     assert {resource.name for resource in resources} == {
         "resource_a",
@@ -568,6 +572,7 @@ async def test_get_resource_templates_from_mcp_servers_success():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
     ):
+        mock_manager.pre_mcp_operation_check = AsyncMock(return_value={})
         mock_manager.get_resource_templates_from_server = AsyncMock(
             return_value=[
                 ResourceTemplate(
@@ -587,6 +592,7 @@ async def test_get_resource_templates_from_mcp_servers_success():
 
     mock_allowed.assert_awaited_once()
     mock_headers.assert_called_once()
+    mock_manager.pre_mcp_operation_check.assert_awaited_once()
     mock_manager.get_resource_templates_from_server.assert_awaited_once()
     assert [template.name for template in templates] == ["template"]
 
@@ -618,11 +624,12 @@ async def test_mcp_get_prompt_success():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
     ):
+        mock_manager.pre_mcp_operation_check = AsyncMock(return_value={})
         mock_manager.get_prompt_from_server = AsyncMock(return_value=prompt_result)
 
         result = await mcp_get_prompt(
             name="server_a-hello",  # prefixed name since server prefixes are always added
-            arguments={"foo": "bar"},
+            arguments={"foo": "bar", "name": "spoofed"},
             user_api_key_auth=user_api_key_auth,
         )
 
@@ -635,10 +642,13 @@ async def test_mcp_get_prompt_success():
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
     )
+    mock_manager.pre_mcp_operation_check.assert_awaited_once()
+    pre_call_kwargs = mock_manager.pre_mcp_operation_check.await_args.kwargs
+    assert pre_call_kwargs["arguments"] == {"name": "hello", "foo": "bar"}
     mock_manager.get_prompt_from_server.assert_awaited_once_with(
         server=server,
         prompt_name="hello",
-        arguments={"foo": "bar"},
+        arguments={"foo": "bar", "name": "spoofed"},
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
@@ -681,6 +691,7 @@ async def test_mcp_read_resource_success():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
     ):
+        mock_manager.pre_mcp_operation_check = AsyncMock(return_value={})
         mock_manager.read_resource_from_server = AsyncMock(return_value=read_result)
 
         result = await mcp_read_resource(
@@ -697,12 +708,78 @@ async def test_mcp_read_resource_success():
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
     )
+    mock_manager.pre_mcp_operation_check.assert_awaited_once()
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,
         url="https://example.com/resource",
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+    )
+    assert result is read_result
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_passes_pre_mcp_hook_headers():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+
+    server = MagicMock()
+    server.name = "server"
+    server.alias = "server"
+    server.server_name = "server"
+
+    read_result = ReadResourceResult(
+        contents=[
+            TextResourceContents(
+                uri="https://example.com/resource",
+                text="hello world",
+                mimeType="text/plain",
+            )
+        ]
+    )
+
+    proxy_logging = MagicMock()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, {"X-Test": "1"}),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+    ):
+        mock_manager.pre_mcp_operation_check = AsyncMock(
+            return_value={"extra_headers": {"Authorization": "Bearer signed", "X-Test": "2"}}
+        )
+        mock_manager.read_resource_from_server = AsyncMock(return_value=read_result)
+
+        result = await mcp_read_resource(
+            url="https://example.com/resource",
+            user_api_key_auth=user_api_key_auth,
+            raw_headers={"Authorization": "Bearer inbound"},
+        )
+
+    mock_manager.pre_mcp_operation_check.assert_awaited_once()
+    pre_call_kwargs = mock_manager.pre_mcp_operation_check.await_args.kwargs
+    assert pre_call_kwargs["call_type"] == "read_mcp_resource"
+    assert pre_call_kwargs["extra_headers"] == {"X-Test": "1"}
+    mock_manager.read_resource_from_server.assert_awaited_once_with(
+        server=server,
+        url="https://example.com/resource",
+        mcp_auth_header=None,
+        extra_headers={"X-Test": "2", "Authorization": "Bearer signed"},
+        raw_headers={"Authorization": "Bearer inbound"},
     )
     assert result is read_result
 

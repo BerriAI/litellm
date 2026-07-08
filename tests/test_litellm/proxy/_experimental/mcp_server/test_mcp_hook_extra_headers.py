@@ -22,6 +22,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.utils import CallTypes
 
 
 class TestConvertMcpHookResponseToKwargs:
@@ -248,6 +249,52 @@ class TestPreCallToolCheckReturnsHeaders:
                     )
 
         assert result["arguments"] == modified_args
+        assert result["extra_headers"] == hook_headers
+
+
+class TestPreMcpOperationCheckReturnsHeaders:
+    def _make_server(self, name="test_server"):
+        return MCPServer(
+            server_id="test-id",
+            name=name,
+            server_name=name,
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_extra_headers_from_resource_hook(self):
+        manager = MCPServerManager()
+        hook_headers = {"Authorization": "Bearer signed-jwt", "X-Trace-Id": "abc123"}
+
+        proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
+        proxy_logging.pre_call_hook = AsyncMock(return_value={"extra_headers": hook_headers})
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
+            return_value={"arguments": {"url": "https://example.com/resource"}, "extra_headers": hook_headers}
+        )
+
+        result = await manager.pre_mcp_operation_check(
+            name="read_resource",
+            arguments={"url": "https://example.com/resource"},
+            server_name="test_server",
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="user"),
+            proxy_logging_obj=proxy_logging,
+            call_type=CallTypes.read_mcp_resource.value,
+            extra_headers={"X-Test": "1"},
+            raw_headers={"Authorization": "Bearer inbound-token"},
+        )
+
+        pre_call_kwargs = proxy_logging.pre_call_hook.await_args.kwargs
+        assert pre_call_kwargs["call_type"] == CallTypes.read_mcp_resource.value
+        assert pre_call_kwargs["data"]["mcp_tool_name"] == ""
+        assert pre_call_kwargs["data"]["mcp_operation_name"] == "read_resource"
+        assert pre_call_kwargs["data"]["incoming_bearer_token"] == "inbound-token"
+        assert pre_call_kwargs["data"]["extra_headers"] == {"X-Test": "1"}
+        create_request_kwargs = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert "extra_headers" not in create_request_kwargs
         assert result["extra_headers"] == hook_headers
 
 

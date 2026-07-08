@@ -124,7 +124,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
     from mcp.shared.tool_name_validation import (
@@ -3560,6 +3560,70 @@ class MCPServerManager:
         ) as e:
             # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+            raise e
+
+        return hook_result
+
+    async def pre_mcp_operation_check(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        server_name: str,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        proxy_logging_obj: ProxyLogging,
+        call_type: CallTypesLiteral,
+        extra_headers: Optional[dict[str, str]] = None,
+        raw_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        if user_api_key_auth is None:
+            return {}
+
+        normalized_raw = {k.lower(): v for k, v in (raw_headers or {}).items()}
+        incoming_bearer_token: Optional[str] = None
+        auth_hdr = normalized_raw.get("authorization", "")
+        if auth_hdr.lower().startswith("bearer "):
+            incoming_bearer_token = auth_hdr[len("bearer ") :]
+
+        pre_hook_kwargs = {
+            "name": name,
+            "arguments": arguments,
+            "server_name": server_name,
+            "mcp_rate_limit_server_name": server_name,
+            "user_api_key_auth": user_api_key_auth,
+            "user_api_key_user_id": (getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None),
+            "user_api_key_team_id": (getattr(user_api_key_auth, "team_id", None) if user_api_key_auth else None),
+            "user_api_key_end_user_id": (
+                getattr(user_api_key_auth, "end_user_id", None) if user_api_key_auth else None
+            ),
+            "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
+            "incoming_bearer_token": incoming_bearer_token,
+        }
+
+        mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
+        synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
+        synthetic_llm_data["extra_headers"] = extra_headers or {}
+        synthetic_llm_data["mcp_tool_name"] = ""
+        synthetic_llm_data["mcp_operation_name"] = name
+        synthetic_llm_data["incoming_bearer_token"] = incoming_bearer_token
+
+        hook_result: dict[str, Any] = {}
+        try:
+            modified_data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_auth,
+                data=synthetic_llm_data,
+                call_type=call_type,
+            )
+            if modified_data:
+                modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
+                if modified_kwargs.get("extra_headers"):
+                    hook_result["extra_headers"] = modified_kwargs["extra_headers"]
+
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            verbose_logger.error(f"Guardrail blocked MCP operation pre call: {str(e)}")
             raise e
 
         return hook_result
