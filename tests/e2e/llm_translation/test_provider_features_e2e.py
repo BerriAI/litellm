@@ -76,13 +76,18 @@ def post_chat(client: PassthroughClient, key: str, body: BaseModel) -> ChatRespo
 
 
 class TestServiceTier:
-    @pytest.mark.covers("llm.chat_completions.openai.service_tier.works", exercised_on=[])
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[]
+    )
     def test_openai_service_tier_is_echoed(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-service-tier-{unique_marker()}"
         model_id = client.gateway.create_model(
-            model, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY")
+            model,
+            LiteLLMParamsBody(
+                model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY"
+            ),
         )
         resources.defer(lambda: client.gateway.delete_model(model_id))
         key = resources.key()
@@ -106,7 +111,8 @@ class TestServiceTier:
 
 class TestPromptCaching:
     @pytest.mark.covers(
-        "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.cache_hit", exercised_on=[]
+        "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works",
+        exercised_on=[],
     )
     def test_bedrock_cache_control_produces_cache_read(
         self, client: PassthroughClient, resources: ResourceManager
@@ -129,7 +135,9 @@ class TestPromptCaching:
                 RichMessage(
                     role="user",
                     content=[
-                        CacheTextBlock(text=cacheable_prefix(), cache_control=CacheControl()),
+                        CacheTextBlock(
+                            text=cacheable_prefix(), cache_control=CacheControl()
+                        ),
                         CacheTextBlock(text="Answer in one word: acknowledged?"),
                     ],
                 )
