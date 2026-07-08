@@ -6854,3 +6854,25 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
     resolved = captured_servers["allowed"]
     assert resolved and resolved[0].oauth2_flow == "client_credentials"
     assert resolved[0].has_client_credentials is True
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        # userinfo + secret query param must both be stripped from the logged resource
+        ("https://user:s3cr3t@mcp.example.com/mcp?token=abcd1234&x=1", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com/mcp#frag", "https://mcp.example.com/mcp"),
+        ("https://host:8443/a/b?q=1", "https://host:8443/a/b"),
+        ("https://mcp.notion.com/mcp", "https://mcp.notion.com/mcp"),
+        (None, None),
+        ("", None),
+        ("not a url", None),
+    ],
+)
+def test_redact_mcp_resource_url_strips_credentials(url, expected):
+    """The MCP tool-call log records the upstream resource, so the URL must be redacted to
+    scheme+host+path: userinfo, query string, and fragment (which can carry embedded tokens or
+    secret parameters) must never reach spend-log metadata or logging callbacks."""
+    from litellm.proxy._experimental.mcp_server.server import _redact_mcp_resource_url
+
+    assert _redact_mcp_resource_url(url) == expected
