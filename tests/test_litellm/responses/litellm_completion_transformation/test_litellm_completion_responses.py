@@ -2663,15 +2663,22 @@ class TestCacheControlPreservation:
             def dict(self):
                 return {"type": self.type, "text": self.text, "cache_control": self.cache_control}
 
-        content = [MockContentBlock(), MockPydanticV2Block(), MockPydanticV1Block()]
+        class MockBlockWithNoneCacheControl:
+            def __init__(self):
+                self.type = "text"
+                self.text = "hello none"
+                self.cache_control = None
+
+        content = [MockContentBlock(), MockPydanticV2Block(), MockPydanticV1Block(), MockBlockWithNoneCacheControl()]
         result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
         assert isinstance(result, list)
-        assert len(result) == 3
+        assert len(result) == 4
         assert result[0]["cache_control"] == {"type": "ephemeral"}
         assert result[1]["cache_control"] == {"type": "ephemeral"}
         assert result[2]["cache_control"] == {"type": "ephemeral"}
         assert result[1]["text"] == "hello v2"
         assert result[2]["text"] == "hello v1"
+        assert "cache_control" not in result[3]
 
     def test_is_cached_message_for_object_message_and_content_item(self):
         """Test is_cached_message on custom objects / models."""
