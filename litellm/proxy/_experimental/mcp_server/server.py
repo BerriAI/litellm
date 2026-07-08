@@ -1449,25 +1449,25 @@ if MCP_AVAILABLE:
         header for this server. This is the multi-server binding: it names one
         upstream, so it is unambiguously the caller's upstream token regardless of
         auth mode (never the LiteLLM admission credential).
+
+        Resolves through the same ``lookup_mcp_server_auth_in_headers`` egress uses, so
+        the connect gate and egress agree on which per-server header names match: a
+        dashboard client sends ``x-mcp-{sanitize_mcp_alias_for_header(alias)}-authorization``,
+        and matching only the raw alias here would 401 a token egress would forward.
         """
         if not mcp_server_auth_headers:
             return False
-        for key in (server.alias, server.server_name, server.name):
-            if not key:
-                continue
-            server_headers = None
-            for k, v in mcp_server_auth_headers.items():
-                if k.lower() == key.lower():
-                    server_headers = v
-                    break
-            if server_headers is None:
-                continue
-            if isinstance(server_headers, str) and server_headers.strip():
-                return True
-            if isinstance(server_headers, dict):
-                for hk in server_headers.keys():
-                    if hk.lower() == "authorization":
-                        return True
+        from litellm.proxy._experimental.mcp_server.utils import (
+            lookup_mcp_server_auth_in_headers,
+        )
+
+        server_headers = lookup_mcp_server_auth_in_headers(
+            mcp_server_auth_headers, alias=server.alias, server_name=server.server_name
+        )
+        if isinstance(server_headers, str):
+            return bool(server_headers.strip())
+        if isinstance(server_headers, dict):
+            return any(isinstance(hk, str) and hk.lower() == "authorization" for hk in server_headers)
         return False
 
     def _client_has_passthrough_authorization(
