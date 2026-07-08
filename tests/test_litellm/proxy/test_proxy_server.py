@@ -2630,8 +2630,16 @@ async def test_load_config_default_internal_user_params_without_max_budget(tmp_p
     """
     from litellm.proxy.proxy_server import ProxyConfig
 
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text(
+    absent_config_file = tmp_path / "absent_config.yaml"
+    absent_config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  default_internal_user_params:\n"
+        "    user_role: internal_user\n"
+    )
+
+    null_config_file = tmp_path / "null_config.yaml"
+    null_config_file.write_text(
         "model_list: []\n"
         "litellm_settings:\n"
         "  default_internal_user_params:\n"
@@ -2641,7 +2649,10 @@ async def test_load_config_default_internal_user_params_without_max_budget(tmp_p
 
     original_params = litellm.default_internal_user_params
     try:
-        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(absent_config_file))
+        assert litellm.default_internal_user_params == {"user_role": "internal_user"}
+
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(null_config_file))
         assert litellm.default_internal_user_params == {
             "user_role": "internal_user",
             "max_budget": None,
