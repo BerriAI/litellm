@@ -16,6 +16,7 @@ from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
 from litellm.exceptions import RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy._types import CommonProxyErrors
 
 
 @pytest.mark.parametrize(
@@ -476,3 +477,76 @@ async def test_check_key_in_limits_writes_new_val_when_no_current():
     assert values_to_update_in_cache == [
         ("test-key::minute::request_count", {"current_requests": 1, "current_tpm": 0, "current_rpm": 1})
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_ignores_max_limit_exception():
+    """When exception is max_parallel_request_limit_reached, the entire
+    decrement block is skipped (the 'pass' branch)."""
+    _api_key = hash_token("sk-fail-max-limit")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    await handler.internal_usage_cache.async_set_cache(
+        key=f"{_api_key}::{precise_minute}::request_count",
+        value={"current_requests": 3, "current_tpm": 0, "current_rpm": 3},
+        litellm_parent_otel_span=None,
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": _api_key,
+                "user_api_key_auth": UserAPIKeyAuth(api_key=_api_key, rpm_limit=100),
+            }
+        },
+        "exception": Exception(CommonProxyErrors.max_parallel_request_limit_reached.value),
+    }
+    await handler.async_log_failure_event(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    current = await handler.internal_usage_cache.async_get_cache(
+        key=f"{_api_key}::{precise_minute}::request_count",
+        litellm_parent_otel_span=None,
+    )
+    assert current["current_requests"] == 3, (
+        "current_requests should be unchanged when max_parallel_request_limit_reached exception is caught"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_decrements_global_max_parallel_requests():
+    """global_max_parallel_requests is decremented by 1 on failure."""
+    _api_key = hash_token("sk-fail-global")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    await handler.internal_usage_cache.async_increment_cache(
+        key="global_max_parallel_requests",
+        value=100,
+        local_only=True,
+        litellm_parent_otel_span=None,
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": _api_key,
+                "user_api_key_auth": UserAPIKeyAuth(api_key=_api_key, rpm_limit=100),
+                "global_max_parallel_requests": 100,
+            }
+        },
+        "exception": ValueError("test error"),
+    }
+    await handler.async_log_failure_event(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    val = await handler.internal_usage_cache.async_get_cache(
+        key="global_max_parallel_requests",
+        litellm_parent_otel_span=None,
+    )
+    assert val == 99, f"global_max_parallel_requests should be 99 after failure decrement, got {val}"
