@@ -55,17 +55,21 @@ _STRICT_TOOL = [
         "bedrock/global.anthropic.claude-sonnet-5",
         "bedrock/us.anthropic.claude-sonnet-5",
         "bedrock/eu.anthropic.claude-sonnet-5",
+        "bedrock/au.anthropic.claude-sonnet-5",
+        "bedrock/jp.anthropic.claude-sonnet-5",
         # Fable 5 likewise rejects toolSpec.strict on Bedrock Converse (verified
         # live: strict -> "tools.0.custom.strict: Extra inputs are not permitted",
         # stripped -> 200).
         "anthropic.claude-fable-5",
+        "bedrock/global.anthropic.claude-fable-5",
         "bedrock/us.anthropic.claude-fable-5",
+        "bedrock/eu.anthropic.claude-fable-5",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8 and Sonnet 4 reject toolSpec.strict and additionalProperties."""
+    """Opus 4.7/4.8, Sonnet 4, Sonnet 5, and Fable 5 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (
@@ -145,6 +149,7 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
     assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-sonnet-5") is False
     assert bedrock_converse_supports_strict_tools("anthropic.claude-sonnet-5") is False
     assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-fable-5") is False
+    assert bedrock_converse_supports_strict_tools("anthropic.claude-fable-5") is False
 
 
 @pytest.mark.parametrize(
