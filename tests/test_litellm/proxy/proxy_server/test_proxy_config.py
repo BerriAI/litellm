@@ -952,6 +952,11 @@ def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
 
 
 def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypatch):
+    """Every ``os.environ/`` value on an admin-scoped DB row resolves at
+    load time, regardless of the field name. Replaces the earlier
+    behavior where only fields in ``_DB_LITELLM_PARAM_ENV_REF_KEYS``
+    resolved: the whitelist has been removed so the resolver applies to
+    every string field."""
     monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
@@ -979,19 +984,21 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
 
     assert added == 1
     assert deployment.litellm_params.api_key == "resolved-secret"
-    assert deployment.litellm_params.api_base == "os.environ/LITELLM_MASTER_KEY"
+    assert deployment.litellm_params.api_base == "master-secret"
 
 
-def test_ProxyConfig__add_deployment_keeps_team_env_refs_literal(monkeypatch):
-    def fail_on_call(secret_name, *args, **kwargs):
-        raise AssertionError("team DB models should not resolve env refs")
-
+def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
+    """Team-scoped DB rows now resolve ``os.environ/`` refs the same way
+    admin rows do. The prior team-scoped short-circuit and the
+    field-by-field whitelist have both been removed; the write-side team
+    auth check in ``ModelManagementAuthChecks.can_user_make_model_call``
+    remains the single trust boundary. A literal (non-``os.environ/``)
+    value still passes through unchanged."""
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value: value,
     )
-    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
@@ -1003,7 +1010,7 @@ def test_ProxyConfig__add_deployment_keeps_team_env_refs_literal(monkeypatch):
         litellm_params={
             "model": "openai/gpt-4o-mini",
             "api_key": "os.environ/LITELLM_MASTER_KEY",
-            "api_base": "https://attacker.example",
+            "api_base": "https://team.example",
         },
         blocked=False,
     )
@@ -1012,8 +1019,8 @@ def test_ProxyConfig__add_deployment_keeps_team_env_refs_literal(monkeypatch):
     deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
 
     assert added == 1
-    assert deployment.litellm_params.api_key == "os.environ/LITELLM_MASTER_KEY"
-    assert deployment.litellm_params.api_base == "https://attacker.example"
+    assert deployment.litellm_params.api_key == "master-secret"
+    assert deployment.litellm_params.api_base == "https://team.example"
 
 
 def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
@@ -1027,6 +1034,100 @@ def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypat
     pc = ProxyConfig()
 
     assert pc._resolve_db_litellm_param(key="tpm", value=100) == 100
+
+
+def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_params(
+    monkeypatch,
+):
+    """Regression: DB-stored Bedrock/SageMaker auth params like
+    ``aws_role_name: os.environ/BEDROCK_ASSUME_ROLE_ARN`` must resolve at
+    DB-load time. PR #30867 removed request-time expansion in
+    ``BaseAWSLLM.get_credentials``; without DB-load resolution the literal
+    string reaches STS and fails with ``ValidationError: ... is invalid``."""
+    aws_env = {
+        "aws_session_token": ("BEDROCK_SESSION_TOKEN", "resolved-session-token"),
+        "aws_region_name": ("BEDROCK_REGION", "us-east-1"),
+        "aws_session_name": ("BEDROCK_SESSION_NAME", "resolved-session"),
+        "aws_profile_name": ("BEDROCK_PROFILE", "resolved-profile"),
+        "aws_role_name": (
+            "BEDROCK_ASSUME_ROLE_ARN",
+            "arn:aws:iam::123456789012:role/resolved",
+        ),
+        "aws_web_identity_token": ("BEDROCK_WEB_IDENTITY_TOKEN", "resolved-token"),
+        "aws_sts_endpoint": (
+            "BEDROCK_STS_ENDPOINT",
+            "https://sts.us-east-1.amazonaws.com",
+        ),
+        "aws_external_id": ("BEDROCK_EXTERNAL_ID", "resolved-external-id"),
+        "aws_bedrock_runtime_endpoint": (
+            "BEDROCK_RUNTIME_ENDPOINT",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+        ),
+        "aws_bedrock_project_id": ("BEDROCK_PROJECT_ID", "resolved-project-id"),
+        "aws_batch_role_arn": (
+            "BEDROCK_BATCH_ROLE_ARN",
+            "arn:aws:iam::123456789012:role/batch",
+        ),
+        "aws_workspace_id": ("BEDROCK_WORKSPACE_ID", "resolved-workspace-id"),
+    }
+    for _, (env_name, env_value) in aws_env.items():
+        monkeypatch.setenv(env_name, env_value)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
+    for key, (env_name, _) in aws_env.items():
+        litellm_params[key] = f"os.environ/{env_name}"
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="bedrock-model",
+        model_info={"id": "model-1"},
+        litellm_params=litellm_params,
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    for key, (_, expected) in aws_env.items():
+        assert getattr(deployment.litellm_params, key) == expected, key
+
+
+def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkeypatch):
+    """A made-up field name that was never on the removed whitelist still
+    resolves ``os.environ/`` refs. Pins the "no whitelist" invariant:
+    the resolver applies to every string field, not a curated list."""
+    monkeypatch.setenv("SOME_CUSTOM_ENV", "resolved-custom-value")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="custom-field-model",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "some_future_field": "os.environ/SOME_CUSTOM_ENV",
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.some_future_field == "resolved-custom-value"
 
 
 # ---------------------------------------------------------------------------
@@ -1064,6 +1165,9 @@ def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
 def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decrypt(
     monkeypatch,
 ):
+    """Path B (feeding /v2/model/info fallback and /model/info fallback)
+    resolves every ``os.environ/`` field on admin-scoped rows, mirroring
+    path A. Both paths now share the same universal-resolution shape."""
     monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
@@ -1090,15 +1194,16 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
     out = pc.decrypt_model_list_from_db(new_models=[m])
 
     assert out[0]["litellm_params"]["api_key"] == "resolved-secret"
-    assert out[0]["litellm_params"]["api_base"] == "os.environ/LITELLM_MASTER_KEY"
+    assert out[0]["litellm_params"]["api_base"] == "master-secret"
 
 
-def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_after_db_decrypt(
+def test_ProxyConfig_decrypt_model_list_from_db_resolves_team_env_refs_after_db_decrypt(
     monkeypatch,
 ):
-    def fail_on_call(secret_name, *args, **kwargs):
-        raise AssertionError("team DB models should not resolve env refs")
-
+    """Team-scoped rows on path B resolve ``os.environ/`` refs just like
+    admin rows do. Pairs with
+    ``test_ProxyConfig__add_deployment_resolves_team_env_refs`` on path
+    A — both paths now agree on the trust model."""
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
@@ -1106,7 +1211,6 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_afte
             "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value
         ),
     )
-    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
     pc = ProxyConfig()
     m = SimpleNamespace(
         model_id="model-1",
@@ -1114,7 +1218,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_afte
         model_info={"id": "model-1", "team_id": "team-1"},
         litellm_params={
             "api_key": "encrypted-env-ref",
-            "api_base": "https://attacker.example",
+            "api_base": "https://team.example",
             "model": "openai/gpt-4o-mini",
         },
         blocked=False,
@@ -1122,8 +1226,8 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_afte
 
     out = pc.decrypt_model_list_from_db(new_models=[m])
 
-    assert out[0]["litellm_params"]["api_key"] == "os.environ/LITELLM_MASTER_KEY"
-    assert out[0]["litellm_params"]["api_base"] == "https://attacker.example"
+    assert out[0]["litellm_params"]["api_key"] == "master-secret"
+    assert out[0]["litellm_params"]["api_base"] == "https://team.example"
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
