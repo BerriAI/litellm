@@ -18,6 +18,7 @@ import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import TruePassthroughWarning from "./TruePassthroughWarning";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
@@ -874,18 +875,25 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {/* Authentication - for HTTP, SSE, and OpenAPI */}
             {!isStdioTransport && (
-              <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
-                <Select>
-                  <Select.Option value="none">None</Select.Option>
-                  <Select.Option value="api_key">API Key</Select.Option>
-                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                  <Select.Option value="token">Token</Select.Option>
-                  <Select.Option value="basic">Basic Auth</Select.Option>
-                  <Select.Option value="oauth2">OAuth</Select.Option>
-                  <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
-                  <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
-                </Select>
-              </Form.Item>
+              <>
+                <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
+                  <Select>
+                    <Select.Option value="none">None</Select.Option>
+                    <Select.Option value="api_key">API Key</Select.Option>
+                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                    <Select.Option value="token">Token</Select.Option>
+                    <Select.Option value="basic">Basic Auth</Select.Option>
+                    <Select.Option value="oauth2">OAuth</Select.Option>
+                    <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
+                    <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                    <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
+                    <Select.Option value="oauth_delegate">
+                      OAuth Delegate (client-supplied upstream token)
+                    </Select.Option>
+                  </Select>
+                </Form.Item>
+                <TruePassthroughWarning authType={authType} />
+              </>
             )}
 
             {isStdioTransport && (

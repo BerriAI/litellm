@@ -41,6 +41,8 @@ export const AUTH_TYPE = {
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   AWS_SIGV4: "aws_sigv4",
+  TRUE_PASSTHROUGH: "true_passthrough",
+  OAUTH_DELEGATE: "oauth_delegate",
 };
 
 export const OAUTH_FLOW = {
