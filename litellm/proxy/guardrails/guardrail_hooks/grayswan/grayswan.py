@@ -213,9 +213,7 @@ class GraySwanGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body))
 
         # Prepare and send payload
-        payload = self._prepare_payload(
-            messages, dynamic_body, request_data, logging_obj
-        )
+        payload = self._prepare_payload(messages, dynamic_body, request_data, logging_obj)
         if payload is None:
             return inputs
 
@@ -514,16 +512,9 @@ class GraySwanGuardrail(CustomGuardrail):
             headers = request_data.get("headers")
         if not headers:
             headers = (request_data.get("metadata") or {}).get("headers")
-        if (
-            not headers
-            and logging_obj
-            and getattr(logging_obj, "model_call_details", None)
-        ):
+        if not headers and logging_obj and getattr(logging_obj, "model_call_details", None):
             headers = (
-                (logging_obj.model_call_details or {})
-                .get("litellm_params", {})
-                .get("metadata", {})
-                .get("headers")
+                (logging_obj.model_call_details or {}).get("litellm_params", {}).get("metadata", {}).get("headers")
             )
         if not isinstance(headers, dict):
             return None
@@ -568,9 +559,7 @@ class GraySwanGuardrail(CustomGuardrail):
             if inbound_headers:
                 existing_headers = cleaned_litellm_metadata.get("headers")
                 cleaned_litellm_metadata["headers"] = (
-                    {**existing_headers, **inbound_headers}
-                    if isinstance(existing_headers, dict)
-                    else inbound_headers
+                    {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
                 )
             # cleaned_litellm_metadata.pop("user_api_key_auth", None)
             sanitized = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
