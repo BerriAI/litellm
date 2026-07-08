@@ -983,8 +983,9 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
+            config_upstream_oauth_auth_types = (MCPAuth.oauth2, MCPAuth.true_passthrough, MCPAuth.oauth_delegate)
             if server_url and (
-                auth_type == MCPAuth.oauth2
+                auth_type in config_upstream_oauth_auth_types
                 or self._obo_needs_endpoint_discovery(
                     auth_type,
                     server_config.get("token_exchange_endpoint"),
@@ -993,7 +994,7 @@ class MCPServerManager:
             ):
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
-                    allow_origin_fallback=auth_type == MCPAuth.oauth2,
+                    allow_origin_fallback=auth_type in config_upstream_oauth_auth_types,
                 )
             else:
                 mcp_oauth_metadata = None
