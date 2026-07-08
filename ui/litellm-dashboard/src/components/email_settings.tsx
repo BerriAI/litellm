@@ -101,7 +101,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                         <p style={{ fontSize: "small", fontStyle: "italic" }}>
                           {key === "SMTP_HOST" && (
                             <div style={{ color: "gray" }}>
-                              Enter the SMTP host address, e.g. `smtp.resend.com`
+                              Enter the hello host address, e.g. `smtp.resend.com`
                               <span style={{ color: "red" }}> Required * </span>
                             </div>
                           )}
