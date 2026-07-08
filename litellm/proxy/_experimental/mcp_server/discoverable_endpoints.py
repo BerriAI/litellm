@@ -465,8 +465,15 @@ async def _store_per_user_token_server_side(
 
 
 def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
-    """Reject a non-oauth2 server from the gateway's OAuth authorize/token/register flow."""
-    if mcp_server.auth_type == MCPAuth.oauth2:
+    """Reject a server without upstream OAuth from the gateway's authorize/token/register flow.
+
+    The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are allowed
+    through: the caller owns the upstream token, and this relayed flow is how a browser obtains
+    one against the upstream IdP (the admin UI's browser-only Authorize uses it). The minted
+    token is upstream-audienced and held by the caller; the gateway persists nothing for these
+    modes (DCR persistence is opt-in and never enabled on this path).
+    """
+    if mcp_server.auth_type in (MCPAuth.oauth2, MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
         return
     raise HTTPException(
         status_code=400,
@@ -515,8 +522,7 @@ async def authorize_with_server(
     response_type: Optional[str] = None,
     scope: Optional[str] = None,
 ):
-    if mcp_server.auth_type != "oauth2":
-        raise HTTPException(status_code=400, detail="MCP server is not OAuth2")
+    _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
         raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
 
