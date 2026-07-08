@@ -367,8 +367,10 @@ const XCTAgentMarketplace: React.FC<XCTAgentMarketplaceProps> = ({
             <div>
               <Text strong>Category: </Text>
               <Tag color="blue">
-                {selectedAgent?.category.charAt(0).toUpperCase() +
-                  selectedAgent?.category.slice(1).replace(/-/g, " ")}
+                {selectedAgent?.category
+                  ? selectedAgent.category.charAt(0).toUpperCase() +
+                    selectedAgent.category.slice(1).replace(/-/g, " ")
+                  : ""}
               </Tag>
             </div>
             <div>

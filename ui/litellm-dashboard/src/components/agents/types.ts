@@ -4,6 +4,12 @@ export interface AgentAttachedKey {
   key_name?: string | null;
 }
 
+export interface AgentKeyInfo {
+  has_key: boolean;
+  key_alias?: string;
+  token_prefix?: string;
+}
+
 export interface AgentObjectPermission {
   mcp_servers?: string[];
   mcp_access_groups?: string[];
