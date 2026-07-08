@@ -2635,6 +2635,170 @@ async def test_virtual_key_budget_check_fallback_no_counter():
         assert exc_info.value.current_cost == 15.0
 
 
+# =====================================================================
+# Throttle-on-budget-exceeded tests (LIT-3894): an over-budget key that
+# opted in is throttled to a global % of its TPM/RPM instead of blocked.
+# =====================================================================
+
+
+def _over_budget_token(**overrides) -> UserAPIKeyAuth:
+    base = dict(
+        token="throttle-token",
+        spend=20.0,
+        max_budget=10.0,
+        user_id="test-user",
+    )
+    base.update(overrides)
+    return UserAPIKeyAuth(**base)
+
+
+def _patched_spend(value: float):
+    async def mock_get_current_spend(
+        counter_key, fallback_spend, max_budget=None, **kwargs
+    ):
+        return value
+
+    return patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend)
+
+
+def _budget_logging_obj():
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    return proxy_logging_obj
+
+
+@pytest.mark.parametrize(
+    "limit, pct, expected",
+    [
+        (1000, 0.1, 100),
+        (100, 0.1, 10),
+        (1, 0.1, 1),  # floor would be 0; trickle of 1 keeps the key alive
+        (None, 0.1, None),
+        (50, 0.5, 25),
+        (1000, None, 1000),  # no percentage -> limit unchanged
+    ],
+)
+def test_throttled_limit(limit, pct, expected):
+    from litellm.proxy.auth.budget_throttle import throttled_limit
+
+    assert throttled_limit(limit, pct) == expected
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_throttles_instead_of_blocking(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    with _patched_spend(20.0):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=_budget_logging_obj(),
+        )
+
+    # persistent limits are untouched (so the throttle never compounds); the
+    # request-scoped percentage is what the rate limiter scales by
+    assert valid_token.budget_throttle_pct == 0.1
+    assert valid_token.tpm_limit == 1000
+    assert valid_token.rpm_limit == 100
+    # the request-scoped decision must not leak into serialized responses
+    assert "budget_throttle_pct" not in valid_token.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_budget_throttle_decision_cleared_before_caching():
+    """The request-scoped throttle decision must not persist into the key cache,
+    otherwise it would re-apply (and compound) on every subsequent request."""
+    from litellm.proxy.auth.auth_checks import _copy_user_api_key_auth_for_cache
+
+    valid_token = _over_budget_token(
+        tpm_limit=1000, rpm_limit=100, metadata={"throttle_on_budget_exceeded": True}
+    )
+    valid_token.budget_throttle_pct = 0.1
+
+    cached = _copy_user_api_key_auth_for_cache(user_api_key_obj=valid_token)
+
+    assert cached.budget_throttle_pct is None
+    assert cached.tpm_limit == 1000
+    assert cached.rpm_limit == 100
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_throttle_no_configured_limits(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(metadata={"throttle_on_budget_exceeded": True})
+    assert valid_token.tpm_limit is None
+    assert valid_token.rpm_limit is None
+
+    with _patched_spend(20.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=_budget_logging_obj(),
+            )
+
+    assert valid_token.budget_throttle_pct is None
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_not_opted_in_still_blocks(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(tpm_limit=1000, rpm_limit=100)
+
+    with _patched_spend(20.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=_budget_logging_obj(),
+            )
+
+    assert valid_token.budget_throttle_pct is None
+
+
+@pytest.mark.parametrize("pct", [None, 0, 1.5, -0.1, True])
+@pytest.mark.asyncio
+async def test_budget_exceeded_invalid_percentage_blocks(monkeypatch, pct):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", pct)
+    valid_token = _over_budget_token(
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    with _patched_spend(20.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=_budget_logging_obj(),
+            )
+
+    assert valid_token.budget_throttle_pct is None
+
+
+@pytest.mark.asyncio
+async def test_under_budget_does_not_throttle(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(
+        max_budget=100.0,
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    with _patched_spend(5.0):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=_budget_logging_obj(),
+        )
+
+    assert valid_token.budget_throttle_pct is None
+
+
 @pytest.mark.asyncio
 async def test_team_budget_check_reads_from_spend_counter():
     """Team budget check should use get_current_spend when counter exists."""

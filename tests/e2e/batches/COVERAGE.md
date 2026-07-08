@@ -9,20 +9,21 @@ cancels, and lists a batch; everything created is deleted on teardown.
 
 Only supported cells are tested. The capability table in `capabilities.py` holds one
 row per supported (provider, scenario) pair, so there are no skipped cells in the
-parametrized run.
+parametrized run. The batches suite never skips: missing provider creds or upstream
+failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 
 | Provider  | create | retrieve | cancel | list | file backing |
 |-----------|--------|----------|--------|------|--------------|
 | OpenAI    | yes | yes | yes | yes | OpenAI Files |
 | Azure     | yes | yes | yes | yes | Azure Files |
-| Vertex AI | yes | yes | yes | yes | GCS bucket |
-| Bedrock   | yes | yes | no (limited upstream) | no | S3 bucket |
-| Anthropic | no  | yes (env-gated) | no | no | Anthropic Files |
+| Vertex AI | yes | yes | yes | yes | GCS bucket (`GCS_BUCKET_NAME` via files_settings) |
+| Bedrock   | yes | yes | no (limited upstream) | no | S3 bucket (`AWS_BATCH_S3_BUCKET` + `AWS_BATCH_ROLE_ARN` on model) |
 
 Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
-(`can_cancel=False`, `can_list=False`). Anthropic cannot create/cancel/list through
-litellm, so it has a standalone retrieve test that skips unless `ANTHROPIC_BATCH_ID`
-points at a real Anthropic batch.
+(`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix.
+Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
+`model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
+model-less passthrough path.
 
 ## Routing scenarios (per `litellm/proxy/batches_endpoints/endpoints.py`)
 
@@ -67,9 +68,10 @@ File delete asserts `object=="file"` and `deleted==True`.
 
 | File | Covers |
 |------|--------|
-| `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list/delete over the shared Gateway; denial helpers |
-| `capabilities.py` | the provider x scenario matrix + id-shape classifiers + per-provider raw-id assertion |
-| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, anthropic retrieve |
+| `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list/delete over the shared Gateway; runtime batch model registration via /model/new; denial helpers |
+| `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
+| `conftest.py` | session-scoped batch deployment registration and teardown |
+| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial |
 
 ## Out of scope (intentionally)
 

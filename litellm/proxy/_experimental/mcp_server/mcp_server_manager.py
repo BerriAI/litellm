@@ -115,7 +115,7 @@ from litellm.proxy.common_utils.user_api_key_cache import get_management_object_
 from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPStdioConfig
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
@@ -251,6 +251,76 @@ def _without_authorization(
         return None
     filtered = {k: v for k, v in headers.items() if k.lower() != "authorization"}
     return filtered or None
+
+
+def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
+    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
+    if mcp_server.auth_type == MCPAuth.api_key:
+        return f"ApiKey {mcp_auth_header}"
+    if mcp_server.auth_type == MCPAuth.basic:
+        return f"Basic {mcp_auth_header}"
+    return f"Bearer {mcp_auth_header}"
+
+
+def _openapi_forwarded_extra_headers(
+    mcp_server: MCPServer,
+    raw_headers: Optional[dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Optional[dict[str, str]]:
+    if not mcp_server.extra_headers or not raw_headers:
+        return None
+    normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
+    skip_caller_authorization = _should_strip_caller_authorization(
+        mcp_server=mcp_server,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+    )
+    forwarded: dict[str, str] = {}
+    for header_name in mcp_server.extra_headers:
+        if not isinstance(header_name, str):
+            continue
+        if skip_caller_authorization and header_name.lower() == "authorization":
+            continue
+        value = normalized_raw.get(header_name.lower())
+        if value is not None:
+            forwarded[header_name] = value
+    return forwarded or None
+
+
+async def _resolve_byok_mcp_auth_header(
+    mcp_server: MCPServer,
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+    mcp_auth_header: Optional[str],
+) -> Optional[str]:
+    """Resolve BYOK credential for tool calls that bypass ``execute_mcp_tool``."""
+    if not mcp_server.is_byok:
+        return mcp_auth_header
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        _check_byok_credential,
+        _get_byok_credential,
+    )
+
+    if not mcp_auth_header:
+        byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
+        if byok_cred is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": (
+                        "No stored credential found for this BYOK server. "
+                        "Complete the OAuth authorization flow to provide your API key."
+                    ),
+                },
+                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+            )
+        return byok_cred
+
+    await _check_byok_credential(mcp_server, user_api_key_auth)
+    return mcp_auth_header
 
 
 def _extract_upstream_auth_failure(
@@ -512,6 +582,21 @@ class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
     @staticmethod
+    def _explicit_oauth2_flow(
+        oauth2_flow: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """DB rows persist their flow (write-time stamps plus the startup backfill) and
+        config servers must declare it (validated at load), so both builds read the
+        value verbatim: unknown or null resolves to None, which
+        ``needs_user_oauth_token`` already treats as interactive. Field-shape inference
+        survives only in the request-time security helpers (``effective_oauth2_flow`` /
+        ``resolve_oauth2_flow_for_request``).
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
+        return None
+
+    @staticmethod
     def _resolve_oauth2_flow(
         *,
         auth_type: Optional[MCPAuthType],
@@ -521,11 +606,18 @@ class MCPServerManager:
         client_id: Optional[str],
         client_secret: Optional[str],
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
-        """Infer oauth2_flow for legacy records that omit the field.
+        """Infer oauth2_flow from field shape when the value is omitted.
 
-        DB rows created before oauth2_flow support may have OAuth2 client
-        credentials + token_url but a null oauth2_flow. Treat these as M2M,
-        unless authorization_url is present (interactive OAuth).
+        SECURITY-SENSITIVE: this is the shape-inference engine both request-time security
+        helpers delegate to, so it is what decides M2M-vs-interactive for an unstamped row.
+        Always access it through ``effective_oauth2_flow`` (boolean/enum decisions) or
+        ``resolve_oauth2_flow_for_request`` (the egress object backstop), which are the single
+        choke points for request-time resolution; do not call it directly from security sites
+        and do not weaken its M2M-shape branch without accounting for those callers. DB rows
+        are stamped at write time and by the startup backfill, config servers must declare
+        oauth2_flow (validated at load), and both builds read the value verbatim via
+        ``_explicit_oauth2_flow``. Delete this whole request-time layer only once the backstop
+        warning stays silent in production.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
             return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
@@ -539,6 +631,51 @@ class MCPServerManager:
         if token_url and client_id and client_secret:
             return "client_credentials"
         return None
+
+    @staticmethod
+    def effective_oauth2_flow(server: "MCPServer") -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """The oauth2_flow a security decision must use for ``server`` this request.
+
+        Column-first, shape-fallback: a stamped row returns its explicit value; an
+        unstamped (null) row whose fields carry the M2M shape resolves to
+        ``client_credentials`` so it is treated as M2M and fails closed. Every
+        security-sensitive reader (anonymous-delegate allowlist and gate, egress flow
+        resolution) goes through this one helper rather than reading the bare
+        ``has_client_credentials`` column, which is unreliable for null rows.
+        """
+        return MCPServerManager._resolve_oauth2_flow(
+            auth_type=server.auth_type,
+            oauth2_flow=server.oauth2_flow,
+            token_url=server.token_url,
+            authorization_url=server.authorization_url,
+            client_id=server.client_id,
+            client_secret=server.client_secret,
+        )
+
+    @staticmethod
+    def resolve_oauth2_flow_for_request(server: "MCPServer") -> "MCPServer":
+        """Return ``server`` with its effective oauth2_flow applied, for egress paths.
+
+        A stamped row is returned unchanged (its effective flow equals the stored value).
+        An unstamped M2M-shape row is returned as a per-request copy carrying
+        ``oauth2_flow=client_credentials`` so downstream ``has_client_credentials`` /
+        ``needs_user_oauth_token`` compute correctly and the stored client credentials are
+        used instead of forwarding the caller's Authorization. Use this at every point that
+        resolves an allowed server id into an ``MCPServer`` for a tool call or listing.
+        """
+        effective = MCPServerManager.effective_oauth2_flow(server)
+        if effective is None or effective == server.oauth2_flow:
+            return server
+        verbose_logger.warning(
+            "MCP server %s has no persisted oauth2_flow but matches the %s shape; using the "
+            "inferred flow for this request. The startup backfill leaves this ambiguous M2M "
+            "shape unstamped on purpose, so it will NOT self-heal: set oauth2_flow explicitly "
+            "in the dashboard or via PUT /v1/mcp/server (client_credentials for M2M, or "
+            "authorization_code after an interactive sign-in).",
+            server.server_id,
+            effective,
+        )
+        return server.model_copy(update={"oauth2_flow": effective})
 
     @staticmethod
     def _obo_needs_endpoint_discovery(
@@ -756,7 +893,12 @@ class MCPServerManager:
             else:
                 mcp_oauth_metadata = None
 
-            resolved_scopes = server_config.get("scopes") or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
+            # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
+            # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
+            # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
+            resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
+                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+            )
             resolved_authorization_url = server_config.get("authorization_url") or (
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
@@ -766,6 +908,20 @@ class MCPServerManager:
             resolved_registration_url = server_config.get("registration_url") or (
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )
+
+            config_oauth2_flow = server_config.get("oauth2_flow", None)
+            if auth_type == MCPAuth.oauth2 and config_oauth2_flow not in (
+                "client_credentials",
+                "authorization_code",
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': auth_type oauth2 "
+                    f"requires an explicit oauth2_flow (got {config_oauth2_flow!r}). Set "
+                    "oauth2_flow: client_credentials for machine-to-machine servers (the proxy mints "
+                    "a shared token at token_url using client_id/client_secret, no user interaction) "
+                    "or oauth2_flow: authorization_code for interactive servers (per-user tokens via "
+                    "browser sign-in, including delegate_auth_to_upstream)."
+                )
 
             new_server = MCPServer(
                 server_id=server_id,
@@ -780,14 +936,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=self._resolve_oauth2_flow(
-                    auth_type=auth_type,
-                    oauth2_flow=server_config.get("oauth2_flow", None),
-                    token_url=resolved_token_url,
-                    authorization_url=resolved_authorization_url,
-                    client_id=server_config.get("client_id", None),
-                    client_secret=server_config.get("client_secret", None),
-                ),
+                oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -823,8 +972,9 @@ class MCPServerManager:
                 audience=server_config.get("audience", None),
                 subject_token_type=server_config.get(
                     "subject_token_type",
-                    "urn:ietf:params:oauth:token-type:access_token",
+                    DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
+                token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
@@ -1133,7 +1283,8 @@ class MCPServerManager:
             (auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url)
             or self._obo_needs_endpoint_discovery(
                 auth_type,
-                credentials_dict.get("token_exchange_endpoint") if credentials_dict else None,
+                mcp_server.token_exchange_endpoint
+                or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
                 mcp_server.token_url,
             )
         )
@@ -1164,15 +1315,7 @@ class MCPServerManager:
             env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=self._resolve_oauth2_flow(
-                auth_type=auth_type,
-                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
-                token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
-                authorization_url=mcp_server.authorization_url
-                or getattr(mcp_oauth_metadata, "authorization_url", None),
-                client_id=client_id_value or getattr(mcp_server, "client_id", None),
-                client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            ),
+            oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
             token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
@@ -1207,11 +1350,17 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
-            # Token Exchange (OBO) fields — read from credentials JSON blob
-            token_exchange_endpoint=(credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
-            audience=(credentials_dict.get("audience") if credentials_dict else None),
-            subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
-            or "urn:ietf:params:oauth:token-type:access_token",
+            # Token exchange (OBO) fields: dedicated columns, with the credentials blob as a
+            # back-compat fallback for servers persisted before the columns existed.
+            token_exchange_endpoint=mcp_server.token_exchange_endpoint
+            or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
+            audience=mcp_server.audience or (credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=mcp_server.subject_token_type
+            or (credentials_dict.get("subject_token_type") if credentials_dict else None)
+            or DEFAULT_SUBJECT_TOKEN_TYPE,
+            token_exchange_profile=mcp_server.token_exchange_profile
+            or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
+            or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
@@ -1478,8 +1627,11 @@ class MCPServerManager:
                     and getattr(server, "delegate_auth_to_upstream", False) is True
                     # M2M servers must not be exposed anonymously: an
                     # unauthenticated caller would get LiteLLM to proxy tool
-                    # calls using its stored client_credentials.
-                    and not server.has_client_credentials
+                    # calls using its stored client_credentials. Resolve the flow
+                    # rather than reading has_client_credentials so an unstamped
+                    # M2M-shape row (null column, verbatim-read as non-M2M) still
+                    # fails closed here, matching the anonymous-delegate auth gate.
+                    and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
                 ]
                 combined_servers.update(delegate_server_ids)
 
@@ -2000,8 +2152,13 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
-                    # 401. No gateway-side browser flow.
-                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                    # 401. No gateway-side browser flow. An IdP step-up rejection (Entra Conditional
+                    # Access) threads its claims blob into the challenge for the client to satisfy.
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        claims=err.unauthorized.claims,
+                    )
                 raise_public(err)
 
     async def preflight_token_exchange(
@@ -2031,7 +2188,11 @@ class MCPServerManager:
                 return
             case Error(err):
                 if err.tag == "unauthorized":
-                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        claims=err.unauthorized.claims,
+                    )
                 raise_public(err)
 
     async def _create_mcp_client(
@@ -3650,17 +3811,21 @@ class MCPServerManager:
             # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
             # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
             # single call below.
-            tool_call_coro = self._obo_call_tool_with_retry(
-                client=client,
-                call_tool_params=call_tool_params,
-                host_progress_callback=host_progress_callback,
-                mcp_server=mcp_server,
-                server_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
-            )
+            async def _obo_call_tool_limited():
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await self._obo_call_tool_with_retry(
+                        client=client,
+                        call_tool_params=call_tool_params,
+                        host_progress_callback=host_progress_callback,
+                        mcp_server=mcp_server,
+                        server_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        stdio_env=stdio_env,
+                        subject_token=subject_token,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+            tool_call_coro = _obo_call_tool_limited()
         else:
 
             async def _call_tool_via_client(client, params):
@@ -3844,6 +4009,15 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
+        # Resolved before any hook runs so a missing BYOK credential (401) never
+        # leaves during-hook side effects (audit logging, rate-limit bookkeeping)
+        # recorded against a call that ultimately fails.
+        mcp_auth_header = await _resolve_byok_mcp_auth_header(
+            mcp_server,
+            user_api_key_auth,
+            mcp_auth_header,
+        )
+
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
@@ -3890,9 +4064,25 @@ class MCPServerManager:
                     server_name,
                 )
 
+            auth_header_value = (
+                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            )
+            forwarded_headers = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+
             async def _call_openapi_via_handler():
-                async with self._limit_outbound_concurrency(mcp_server):
-                    return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                    _request_auth_header,
+                    _request_extra_headers,
+                )
+
+                auth_token = _request_auth_header.set(auth_header_value)
+                extra_token = _request_extra_headers.set(forwarded_headers)
+                try:
+                    async with self._limit_outbound_concurrency(mcp_server):
+                        return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                finally:
+                    _request_auth_header.reset(auth_token)
+                    _request_extra_headers.reset(extra_token)
 
             tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
@@ -4448,6 +4638,11 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
@@ -4536,6 +4731,8 @@ class MCPServerManager:
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
+            tool_name_to_display_name=server.tool_name_to_display_name,
+            tool_name_to_description=server.tool_name_to_description,
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
@@ -4549,6 +4746,11 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,

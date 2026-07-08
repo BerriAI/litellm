@@ -39,6 +39,7 @@ from ..common_utils import AnthropicError, AnthropicModelInfo
 
 ANTHROPIC_FILES_API_BASE = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER = "files-api-2025-04-14"
+ANTHROPIC_MESSAGE_BATCH_ID_PREFIX = "msgbatch_"
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -258,6 +259,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_id = file_content_request.get("file_id")
         api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        if file_id.startswith(ANTHROPIC_MESSAGE_BATCH_ID_PREFIX):
+            return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_file_id}/results", {}
         return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}/content", {}
 
     def transform_file_content_response(

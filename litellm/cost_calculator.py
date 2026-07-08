@@ -222,7 +222,7 @@ def _cost_per_token_custom_pricing_helper(
         output_cost = completion_tokens * output_cost_per_token
         return input_cost, output_cost
     elif custom_cost_per_second is not None:
-        output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
+        output_cost = custom_cost_per_second * (response_time_ms or 0.0) / 1000
         return 0, output_cost
 
     return None
@@ -662,29 +662,27 @@ def cost_per_token(
                 data_residency=data_residency,
             )
 
-        if model_info.get("input_cost_per_second", None) is not None and response_time_ms is not None:
+        input_cost_per_second = model_info.get("input_cost_per_second")
+        if input_cost_per_second is not None and response_time_ms is not None:
             verbose_logger.debug(
                 "For model=%s - input_cost_per_second: %s; response time: %s",
                 model,
-                model_info.get("input_cost_per_second", None),
+                input_cost_per_second,
                 response_time_ms,
             )
             ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = (
-                model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
-            )
+            prompt_tokens_cost_usd_dollar = input_cost_per_second * response_time_ms / 1000
 
-        if model_info.get("output_cost_per_second", None) is not None and response_time_ms is not None:
+        output_cost_per_second = model_info.get("output_cost_per_second")
+        if output_cost_per_second is not None and response_time_ms is not None:
             verbose_logger.debug(
                 "For model=%s - output_cost_per_second: %s; response time: %s",
                 model,
-                model_info.get("output_cost_per_second", None),
+                output_cost_per_second,
                 response_time_ms,
             )
             ## COST PER SECOND ##
-            completion_tokens_cost_usd_dollar = (
-                model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
-            )
+            completion_tokens_cost_usd_dollar = output_cost_per_second * response_time_ms / 1000
 
         verbose_logger.debug(
             "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
@@ -2157,17 +2155,23 @@ def batch_cost_calculator(
     if input_cost_per_token_batches:
         total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
+        details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = details["cache_hit_tokens"]
+        cache_creation_tokens = details["cache_creation_tokens"]
+
         # Subtract cached tokens from prompt_tokens before calculating cost
         # Fixes issue where cached tokens are being charged again
+        base_input_tokens = get_billable_input_tokens(usage) - cache_creation_tokens
         total_prompt_cost = (
-            get_billable_input_tokens(usage) * (input_cost_per_token) / 2
+            base_input_tokens * (input_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
 
         # Add cache read cost if applicable
-        details = _parse_prompt_tokens_details(usage)
-        cache_read_tokens = details["cache_hit_tokens"]
         cache_read_cost_key = _get_service_tier_cost_key("cache_read_input_token_cost", None)
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
+
+        cache_creation_cost = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
+        total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     if output_cost_per_token_batches:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
     elif output_cost_per_token:

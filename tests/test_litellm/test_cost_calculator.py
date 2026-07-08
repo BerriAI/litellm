@@ -347,6 +347,30 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_vertex_chirp_3_transcription_cost_from_duration():
+    """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
+    and cost_per_second prefers output_cost_per_second whenever it is not None, so
+    every transcription priced to $0.00 instead of using input_cost_per_second."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 18.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/chirp_3",
+        custom_llm_provider="vertex_ai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 18.0 * 0.00026667
+    assert cost > 0
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
@@ -3262,3 +3286,92 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown():
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_cost_per_token_per_second_pricing(monkeypatch):
+    """
+    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "together_ai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(0.02 * 1.5)
+    assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def _batch_cache_usage() -> Usage:
+    return Usage(
+        prompt_tokens=11000,
+        completion_tokens=200,
+        total_tokens=11200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=8000,
+            cache_creation_tokens=2000,
+            text_tokens=1000,
+        ),
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+
+def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
+    """
+    LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
+    Cache creation tokens must be priced at cache_creation_input_token_cost / 2,
+    not folded into the base input rate, and must not also be billed as base
+    input tokens.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "cache_creation_input_token_cost": 3.75e-6,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
+def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
