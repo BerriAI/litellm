@@ -3066,7 +3066,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
     print("openrouter kimi-k2.5 model info", model_info)
 
 
-def test_model_info_for_openai_kimi_and_glm_aliases(local_model_cost_map):
+def test_model_info_for_openai_kimi_and_glm_cost_entries(local_model_cost_map):
     kimi = litellm.get_model_info(model="openai/kimi-k2.7-code", custom_llm_provider="openai")
     assert kimi is not None
     assert kimi["litellm_provider"] == "openai"
