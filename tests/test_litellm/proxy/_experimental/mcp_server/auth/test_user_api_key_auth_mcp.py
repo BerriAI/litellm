@@ -4,6 +4,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
@@ -749,6 +750,40 @@ class TestMCPRequestHandler:
             assert mcp_servers_result == expected_result["mcp_servers"]
             # For these tests, mcp_server_auth_headers should be empty
             assert mcp_server_auth_headers == {}
+
+    def test_duplicate_authorization_header_is_rejected(self):
+        """A request carrying more than one Authorization header is malformed for bearer auth and,
+        for the client-forwarded token modes, would make which upstream token is forwarded ambiguous.
+        The ingress header converter must reject it with a 400 rather than silently keeping one."""
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/tp_server",
+            "headers": [
+                (b"authorization", b"Bearer upstream-token-a"),
+                (b"authorization", b"Bearer upstream-token-b"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            MCPRequestHandler._safe_get_headers_from_scope(scope)
+        assert exc_info.value.status_code == 400
+        assert "Authorization" in str(exc_info.value.detail)
+
+    def test_single_authorization_header_is_forwarded_verbatim(self):
+        """The rejection must not disturb the normal single-Authorization case: the value passes
+        through unchanged (guards against the duplicate check over-matching)."""
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/tp_server",
+            "headers": [
+                (b"authorization", b"Bearer upstream-token"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        assert headers.get("authorization") == "Bearer upstream-token"
 
 
 @pytest.mark.asyncio
