@@ -457,6 +457,12 @@ async def _store_per_user_token_server_side(
         ttl=ttl,
     )
 
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+
+    await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server.server_id)
+
 
 def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
     """Reject a non-oauth2 server from the gateway's OAuth authorize/token/register flow."""

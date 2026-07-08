@@ -690,8 +690,9 @@ class MCPServerManager:
         return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
+        self._per_user_oauth_store = LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id)
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
+            oauth_token_store=self._per_user_oauth_store,
             token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
@@ -3918,6 +3919,23 @@ class MCPServerManager:
         if spec is None:
             return False
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
+
+    async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
+        """Drop the resolver's cached per-user OAuth token after the stored credential changes
+        (re-auth or revoke). Without this the egress keeps serving the prior token from
+        ``CachedOAuthTokenStore`` until its TTL, so a revoked token keeps flowing upstream and a
+        re-authorization appears not to take. Failures are logged, never raised: the credential
+        mutation itself already succeeded.
+        """
+        try:
+            await self._per_user_oauth_store.invalidate(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001
+            verbose_logger.warning(
+                "invalidate_user_oauth_token_cache: failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,

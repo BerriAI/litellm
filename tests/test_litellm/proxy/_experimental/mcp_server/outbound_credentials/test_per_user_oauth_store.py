@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    CachedOAuthTokenStore,
     OAuthToken,
     OAuthTokenStore,
 )
@@ -158,3 +159,64 @@ async def test_lazy_store_waits_for_in_flight_local_fetch_before_redis_rebuild()
     assert second is not None and second.access_token == "redis"
     assert local_store.calls == [("u", "s")]
     assert redis_store.calls == [("u", "s")]
+
+
+class _MutableSourceStore:
+    """DB stand-in whose stored credential can change underneath the cache (re-auth / revoke)."""
+
+    def __init__(self, token: OAuthToken | None) -> None:
+        self.token = token
+
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return self.token
+
+
+@pytest.mark.asyncio
+async def test_invalidate_drops_cached_token_after_credential_change() -> None:
+    """Revoke/re-auth regression: the cache serves the old token until TTL, so after the stored
+    credential changes the egress keeps using the revoked token (upstream 401s) unless the entry
+    is invalidated. ``invalidate`` must make the next fetch read the new stored credential."""
+    source = _MutableSourceStore(OAuthToken(access_token="old"))
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[CachedOAuthTokenStore, bool]:
+        return CachedOAuthTokenStore(source, default_ttl_seconds=300.0), False
+
+    store = LazyPerUserOAuthTokenStore(
+        lambda _server_id: None,
+        store_builder=build_store,
+        redis_available=lambda: False,
+    )
+
+    first = await store.fetch("u", "s")
+    source.token = OAuthToken(access_token="new")
+    stale = await store.fetch("u", "s")
+
+    await store.invalidate("u", "s")
+    fresh = await store.fetch("u", "s")
+
+    assert first is not None and first.access_token == "old"
+    assert stale is not None and stale.access_token == "old"
+    assert fresh is not None and fresh.access_token == "new"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_drops_cached_token_after_revoke() -> None:
+    """After a revoke the stored credential is gone; a cached positive token must not outlive it."""
+    source = _MutableSourceStore(OAuthToken(access_token="revoked-later"))
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[CachedOAuthTokenStore, bool]:
+        return CachedOAuthTokenStore(source, default_ttl_seconds=300.0), False
+
+    store = LazyPerUserOAuthTokenStore(
+        lambda _server_id: None,
+        store_builder=build_store,
+        redis_available=lambda: False,
+    )
+
+    cached = await store.fetch("u", "s")
+    source.token = None
+    await store.invalidate("u", "s")
+    after_revoke = await store.fetch("u", "s")
+
+    assert cached is not None
+    assert after_revoke is None

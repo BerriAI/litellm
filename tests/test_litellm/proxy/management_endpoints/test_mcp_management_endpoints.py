@@ -4781,6 +4781,7 @@ class TestPerUserCredentialConfigServerResolution:
         )
         manager._build_mcp_server_table = MagicMock(return_value=record)
         manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
+        manager.invalidate_user_oauth_token_cache = AsyncMock(return_value=None)
         return manager
 
     @pytest.mark.asyncio
