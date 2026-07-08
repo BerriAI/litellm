@@ -779,8 +779,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
             error_messages: list[str] = []
             filtered_tool_calls = []
-            for tool_call in message.get("tool_calls") or []:
-                tool_call_id = self._get_mapping_value(tool_call, "id")
+            for tool_index, tool_call in enumerate(message.get("tool_calls") or []):
+                tool_call_id = self._get_mapping_value(tool_call, "id") or (
+                    f"raw_openai_tool_call_{choice_index}_{tool_index}"
+                )
                 error_message = error_messages_by_id.get(tool_call_id)
                 if error_message is not None:
                     error_messages.append(error_message)
@@ -811,8 +813,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         filtered_content = []
         error_messages = []
-        for block in content:
-            tool_call_id = self._get_mapping_value(block, "id")
+        for block_index, block in enumerate(content):
+            tool_call_id = self._get_mapping_value(block, "id") or f"raw_anthropic_tool_use_{block_index}"
             error_message = error_messages_by_id.get(tool_call_id)
             if self._get_mapping_value(block, "type") == "tool_use" and error_message is not None:
                 error_messages.append(error_message)

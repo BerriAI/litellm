@@ -503,6 +503,41 @@ class TestToolPermissionGuardrail:
         ]
 
     @pytest.mark.asyncio
+    async def test_async_post_call_rewrites_raw_anthropic_tool_use_without_id(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+        )
+        response = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Read",
+                    "input": {"file": "/etc/passwd"},
+                },
+                {"type": "text", "text": "after"},
+            ],
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        assert result is response
+        assert response["content"] == [
+            {"type": "text", "text": "after"},
+            {
+                "type": "text",
+                "text": "Permission denied: Tool 'Read' denied by rule 'deny_read' (Rule: deny_read)",
+            },
+        ]
+
+    @pytest.mark.asyncio
     async def test_async_post_call_rewrites_raw_openai_tool_call(self):
         guardrail = ToolPermissionGuardrail(
             guardrail_name="tool-firewall",
@@ -542,6 +577,47 @@ class TestToolPermissionGuardrail:
         assert message["tool_calls"] is None
         assert "I should remove it." in message["content"]
         assert "Permission denied: Tool 'delete_file' denied by rule 'deny_delete'" in message["content"]
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_rewrites_raw_openai_tool_call_without_id(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tool-firewall",
+            rules=[{"id": "deny_delete", "tool_name": r"^delete_file$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "delete_file",
+                                    "arguments": {"path": "/tmp/report.txt"},
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"guardrails": {"tool-firewall": True}}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        message = response["choices"][0]["message"]
+        assert result is response
+        assert message["tool_calls"] is None
+        assert (
+            message["content"]
+            == "Permission denied: Tool 'delete_file' denied by rule 'deny_delete' (Rule: deny_delete)"
+        )
 
     @pytest.mark.asyncio
     async def test_async_post_call_rewrites_raw_gemini_function_call(self):
