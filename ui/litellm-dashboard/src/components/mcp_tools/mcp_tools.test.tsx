@@ -91,6 +91,37 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
   });
 
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "shows the Authorize gate for a %s server without a browser token and does not list tools",
+    async (authType) => {
+      renderViewer({ auth_type: authType, oauth2_flow: null, delegate_auth_to_upstream: false });
+
+      expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
+      expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
+      expect(vi.mocked(getMCPOAuthUserCredentialStatus)).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "forwards the session token via the x-mcp header for a %s server that has one",
+    async (authType) => {
+      vi.mocked(isTokenValid).mockReturnValue(true);
+      vi.mocked(getToken).mockReturnValue({ access_token: "upstream-tok" } as ReturnType<typeof getToken>);
+
+      renderViewer({ auth_type: authType, oauth2_flow: null, delegate_auth_to_upstream: false });
+
+      await waitFor(() =>
+        expect(vi.mocked(listMCPTools)).toHaveBeenCalledWith(
+          "litellm-key",
+          "srv-1",
+          expect.objectContaining({ "x-mcp-slack-authorization": "Bearer upstream-tok" }),
+        ),
+      );
+      expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
+    },
+  );
+
   it("lists tools for an OBO server when the user has a DB credential, with no x-mcp header", async () => {
     renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
 

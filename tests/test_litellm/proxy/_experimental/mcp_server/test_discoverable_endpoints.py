@@ -120,6 +120,61 @@ async def test_authorize_endpoint_includes_response_type():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type_value", ["true_passthrough", "oauth_delegate"])
+async def test_authorize_endpoint_allows_client_forwarded_modes(auth_type_value):
+    """The browser-only Authorize relays the gateway authorize flow for the client-forwarded
+    token modes; the oauth2-only gate must let them through and redirect to the upstream IdP."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    server = MCPServer(
+        server_id="test_cf_server",
+        name="test_cf",
+        server_name="test_cf",
+        alias="test_cf",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth(auth_type_value),
+        # Discovery stamps these onto the in-memory registry entry at build time.
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
+        mock_encrypt.return_value = "mocked_encrypted_state"
+
+        response = await authorize(
+            request=mock_request,
+            client_id="dcr_client_id",
+            mcp_server_name="test_cf",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="test_state",
+        )
+
+    assert response.status_code == 307
+    assert "https://provider.com/oauth/authorize" in response.headers["location"]
+    assert "client_id=dcr_client_id" in response.headers["location"]
+
+
+@pytest.mark.asyncio
 async def test_authorize_endpoint_preserves_existing_query_params():
     """Test that authorize endpoint merges OAuth params with existing query params in authorization_url"""
     try:
