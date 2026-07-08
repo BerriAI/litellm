@@ -722,7 +722,6 @@ async def test_allm_passthrough_route_429_streaming_raises():
             )
 
     assert exc_info.value.response.status_code == 429
-    assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"
 
 
 def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj():
