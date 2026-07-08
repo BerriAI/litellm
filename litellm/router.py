@@ -78,6 +78,9 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -4358,6 +4361,52 @@ class Router:
             kwargs["endpoint"] = kwargs["endpoint"].replace(model, replacement_model_name)
         return kwargs
 
+    def _model_group_has_max_input_tokens(self, model: str) -> bool:
+        """
+        Return True if any deployment in the model group has max_input_tokens set.
+
+        Used to decide whether it's worth paying the cost of converting Responses
+        API `input` into `messages` just so `_pre_call_checks` can run context
+        window checks - if no deployment declares max_input_tokens, there's
+        nothing to check.
+        """
+        deployments = self.get_model_list(model_name=model) or []
+        for deployment in deployments:
+            model_info = deployment.get("model_info")
+            if isinstance(model_info, dict) and model_info.get("max_input_tokens") is not None:
+                return True
+        return False
+
+    def _get_messages_for_pre_call_check(self, model: str, kwargs: Dict[str, Any]) -> Optional[List[Any]]:
+        """
+        Resolve the messages to use for `_pre_call_checks` context window checks.
+
+        Chat Completions style calls already pass `messages` directly. Responses
+        API calls pass `input` instead, which `_pre_call_checks` doesn't understand
+        natively - so this converts `input` to `messages` for that call path.
+
+        The conversion is skipped (returns None) unless the model group actually
+        has a deployment with `max_input_tokens` configured, since that's the only
+        check in `_pre_call_checks` that needs `messages`.
+        """
+        messages = kwargs.get("messages")
+        if messages is not None:
+            return messages
+
+        is_responses_api_call = kwargs.pop("_responses_api_pre_call_check", False)
+        if (
+            not is_responses_api_call
+            or not self.enable_pre_call_checks
+            or kwargs.get("input") is None
+            or not self._model_group_has_max_input_tokens(model)
+        ):
+            return None
+
+        return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=kwargs["input"],
+            responses_api_request=kwargs,
+        )
+
     async def _ageneric_api_call_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
         """
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
@@ -4368,10 +4417,11 @@ class Router:
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
+                messages = self._get_messages_for_pre_call_check(model, kwargs)
                 deployment = await self.async_get_available_deployment(
                     model=model,
                     request_kwargs=kwargs,
-                    messages=kwargs.get("messages", None),
+                    messages=messages,
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
             except Exception as e:
@@ -4516,9 +4566,10 @@ class Router:
                 kwargs=kwargs,
                 metadata_variable_name=metadata_variable_name,
             )
+            messages = self._get_messages_for_pre_call_check(model, kwargs)
             deployment = self.get_available_deployment(
                 model=model,
-                messages=kwargs.get("messages", None),
+                messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
@@ -5533,6 +5584,8 @@ class Router:
                 client: Optional[Any] = None,
                 **kwargs,
             ):
+                if call_type == "responses":
+                    kwargs["_responses_api_pre_call_check"] = True
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
             return sync_wrapper
@@ -5636,6 +5689,7 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "aresponses":
+                kwargs["_responses_api_pre_call_check"] = True
                 return await self._aresponses_with_streaming_fallbacks(
                     original_function=original_function,
                     **kwargs,
@@ -9859,13 +9913,26 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
+        # get_router_model_info() and RPM cache reads are only useful when at least one
+        # deployment in the model group actually declares the relevant config. Precompute
+        # these once so we can skip the expensive per-deployment lookups entirely for
+        # model groups that don't use them.
+        _any_deployment_has_max_input_tokens = any(
+            (d.get("model_info") or {}).get("max_input_tokens") is not None for d in _returned_deployments
+        )
+        _any_deployment_has_rpm = self.routing_strategy != "usage-based-routing-v2" and any(
+            (d.get("litellm_params") or {}).get("rpm") is not None for d in _returned_deployments
+        )
+
         ## get model group RPM ##
-        dt = get_utc_datetime()
-        current_minute = dt.strftime("%H-%M")
-        rpm_key = f"{model}:rpm:{current_minute}"
-        model_group_cache = (
-            self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {}
-        )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
+        model_group_cache: Optional[dict] = None
+        if _any_deployment_has_rpm:
+            dt = get_utc_datetime()
+            current_minute = dt.strftime("%H-%M")
+            rpm_key = f"{model}:rpm:{current_minute}"
+            model_group_cache = (
+                self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {}
+            )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
         for idx, deployment in enumerate(_returned_deployments):
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
@@ -9873,45 +9940,46 @@ class Router:
 
             # see if we have the info for this model
             _deployment_model = None  # per-deployment model name (avoids overwriting the outer `model` group name)
-            try:
-                base_model = _model_info.get("base_model", None)
-                if base_model is None:
-                    base_model = _litellm_params.get("base_model", None)
-                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
-                _deployment_model = base_model or _litellm_params.get("model", None)
+            if _any_deployment_has_max_input_tokens:
+                try:
+                    base_model = _model_info.get("base_model", None)
+                    if base_model is None:
+                        base_model = _litellm_params.get("base_model", None)
+                    model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
+                    _deployment_model = base_model or _litellm_params.get("model", None)
 
-                max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int):
-                    if input_tokens is None:
-                        try:
-                            input_tokens = litellm.token_counter(messages=messages)
-                        except Exception as e:
-                            verbose_router_logger.error(
-                                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
-                                    str(e)
+                    max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
+                    if isinstance(max_input_tokens, int):
+                        if input_tokens is None:
+                            try:
+                                input_tokens = litellm.token_counter(messages=messages)
+                            except Exception as e:
+                                verbose_router_logger.error(
+                                    "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
+                                        str(e)
+                                    )
                                 )
+                                return _returned_deployments
+                        if input_tokens > max_input_tokens:
+                            invalid_model_indices.add(idx)
+                            _context_window_error = True
+                            _potential_error_str += "Model={}, Max Input Tokens={}, Got={}".format(
+                                _deployment_model,
+                                max_input_tokens,
+                                input_tokens,
                             )
-                            return _returned_deployments
-                    if input_tokens > max_input_tokens:
-                        invalid_model_indices.add(idx)
-                        _context_window_error = True
-                        _potential_error_str += "Model={}, Max Input Tokens={}, Got={}".format(
-                            _deployment_model,
-                            max_input_tokens,
-                            input_tokens,
-                        )
-                        continue
-            except Exception as e:
-                verbose_router_logger.exception("An error occurs - {}".format(str(e)))
+                            continue
+                except Exception as e:
+                    verbose_router_logger.exception("An error occurs - {}".format(str(e)))
 
-            model_id = _model_info.get("id", "")
             ## RPM CHECK ##
-            ### get local router cache ###
-            current_request_cache_local = (
-                self.cache.get_cache(key=model_id, local_only=True, parent_otel_span=parent_otel_span) or 0
-            )
-            ### get usage based cache ###
-            if isinstance(model_group_cache, dict) and self.routing_strategy != "usage-based-routing-v2":
+            if _any_deployment_has_rpm and isinstance(model_group_cache, dict):
+                model_id = _model_info.get("id", "")
+                ### get local router cache ###
+                current_request_cache_local = (
+                    self.cache.get_cache(key=model_id, local_only=True, parent_otel_span=parent_otel_span) or 0
+                )
+                ### get usage based cache ###
                 model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
                 current_request = max(current_request_cache_local, model_group_cache[model_id])
@@ -9936,7 +10004,11 @@ class Router:
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params is False:
-                # get supported params — use per-deployment model to avoid overwriting the outer model group name
+                # get supported params — use per-deployment model to avoid overwriting the outer model group name.
+                # _deployment_model is only populated above when the max_input_tokens check ran; fall back to the
+                # deployment's own litellm_params model here so we don't end up using the model *group* name below.
+                if _deployment_model is None:
+                    _deployment_model = _litellm_params.get("model", None)
                 _dep_model_for_params = _deployment_model or model
                 (
                     _dep_model_for_params,
