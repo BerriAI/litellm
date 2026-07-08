@@ -715,8 +715,10 @@ class MCPServerManager:
         # Per-server outbound tool-call concurrency limiters, lazily created from
         # each server's max_concurrent_requests. Keyed by server_id so the cap
         # survives the registry atomic-swap on config reload; a missing key means
-        # the server has no configured limit.
-        self._server_call_semaphores: dict[str, asyncio.Semaphore] = {}
+        # the server has no configured limit. The limit is cached alongside the
+        # semaphore so an edited limit rebuilds it instead of keeping the old cap
+        # until restart.
+        self._server_call_semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
         self.tool_name_to_mcp_server_name_mapping: dict[str, str] = {}
         """
         {
@@ -3594,10 +3596,11 @@ class MCPServerManager:
         limit = mcp_server.max_concurrent_requests
         if limit is None or limit <= 0:
             return None
-        semaphore = self._server_call_semaphores.get(mcp_server.server_id)
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(limit)
-            self._server_call_semaphores[mcp_server.server_id] = semaphore
+        cached = self._server_call_semaphores.get(mcp_server.server_id)
+        if cached is not None and cached[0] == limit:
+            return cached[1]
+        semaphore = asyncio.Semaphore(limit)
+        self._server_call_semaphores[mcp_server.server_id] = (limit, semaphore)
         return semaphore
 
     @asynccontextmanager

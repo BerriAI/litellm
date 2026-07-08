@@ -1305,3 +1305,83 @@ describe("MCPServerEdit OAuth flow prefill display", () => {
     });
   });
 });
+
+describe("MCPServerEdit (max concurrent requests)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const limitedServer = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    max_concurrent_requests: 5,
+  };
+
+  it("prefills the existing limit and sends an updated value in the payload", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...limitedServer,
+      max_concurrent_requests: 2,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={limitedServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const limitInput = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
+    expect(limitInput.value).toBe("5");
+
+    fireEvent.change(limitInput, { target: { value: "2" } });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBe(2);
+  });
+
+  it("sends null when the limit is cleared so the backend unsets it", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...limitedServer,
+      max_concurrent_requests: null,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={limitedServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const limitInput = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
+    expect(limitInput.value).toBe("5");
+
+    fireEvent.change(limitInput, { target: { value: "" } });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBeNull();
+  });
+});

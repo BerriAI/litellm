@@ -261,6 +261,7 @@ export interface MCPServer {
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
+  max_concurrent_requests?: number | null;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;
