@@ -368,6 +368,54 @@ def _take_forwarded_authorization(
     return value, _without_authorization(headers)
 
 
+def _passthrough_token_from_mcp_auth_header(
+    mcp_auth_header: Optional[Union[str, dict[str, str]]],
+) -> Optional[str]:
+    """The caller's per-server upstream credential for a passthrough-mode server, or None.
+
+    Sourced from ``x-mcp-{alias}-authorization`` (string or per-header dict form) or the deprecated
+    global ``x-mcp-auth`` fallback. Per-server headers are the multi-server shape: they bind one
+    token to one server, so an aggregate scope with several passthrough-mode servers never replays
+    a single credential across upstreams. The value is forwarded verbatim, so it must be the full
+    header value (e.g. ``Bearer <upstream-token>``)."""
+    if isinstance(mcp_auth_header, str):
+        return mcp_auth_header or None
+    if isinstance(mcp_auth_header, dict):
+        return next((v for k, v in mcp_auth_header.items() if k.lower() == "authorization"), None)
+    return None
+
+
+def _consumes_caller_authorization(server: MCPServer) -> bool:
+    """True when this server's egress forwards the caller's request-wide ``Authorization`` upstream:
+    the client-forwarded token modes, legacy OAuth pass-through, and legacy upstream-delegated
+    interactive oauth2. An unstamped oauth2 row (flow column not yet backfilled) reads as a consumer,
+    which errs toward suppression — the fail-safe direction."""
+    if server.is_true_passthrough or server.is_oauth_delegate or server.is_oauth_passthrough:
+        return True
+    return (
+        server.auth_type == MCPAuth.oauth2
+        and getattr(server, "delegate_auth_to_upstream", False) is True
+        and not server.has_client_credentials
+    )
+
+
+def _caller_authorization_fans_out(
+    server: MCPServer,
+    scope_servers: Optional[list[MCPServer]],
+) -> bool:
+    """True when forwarding the caller's request-wide ``Authorization`` to ``server`` inside a
+    listing fan-out would replay one credential against multiple upstreams: another server in the
+    scope also consumes it (RFC 9700 cross-resource replay). ``scope_servers`` is None for
+    explicitly-addressed operations (tool call, get_prompt, read_resource, single-server routes),
+    where the client named the one target and the gateway is not choosing recipients."""
+    if scope_servers is None:
+        return False
+    return any(
+        other is not None and other.server_id != server.server_id and _consumes_caller_authorization(other)
+        for other in scope_servers
+    )
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
@@ -2357,6 +2405,9 @@ class MCPServerManager:
                 inbound_token = subject_token
                 if isinstance(spec.config, PassthroughConfig):
                     inbound_token, extra_headers = _take_forwarded_authorization(extra_headers)
+                    per_server_token = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
+                    if per_server_token is not None:
+                        inbound_token = per_server_token
                 resolved_auth, extra_headers = await self._resolve_v2_auth(
                     server=server,
                     spec=spec,

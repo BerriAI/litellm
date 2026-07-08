@@ -331,6 +331,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
+        _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
         _should_strip_caller_authorization,
         _without_authorization,
@@ -1529,8 +1530,16 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]],
         raw_headers: Optional[Dict[str, str]],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        scope_servers: Optional[list[MCPServer]] = None,
     ) -> Tuple[Optional[Union[Dict[str, str], str]], Optional[Dict[str, str]]]:
-        """Build auth and extra headers for a server."""
+        """Build auth and extra headers for a server.
+
+        ``scope_servers`` is the full server list a fan-out handler iterates. Passing it lets the
+        client-forwarded token modes withhold the caller's request-wide ``Authorization`` when
+        another server in the scope would also receive it (``_caller_authorization_fans_out``);
+        explicitly-addressed operations leave it None. Per-server ``x-mcp-{alias}-authorization``
+        headers are unaffected — they bind one token to one server and are the multi-server shape.
+        """
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers:
             from litellm.proxy._experimental.mcp_server.utils import (
@@ -1563,12 +1572,13 @@ if MCP_AVAILABLE:
                 ):
                     extra_headers = _without_authorization(extra_headers)
         elif server.is_true_passthrough or server.is_oauth_delegate:
-            extra_headers = _client_forwarded_authorization_headers(
-                mcp_server=server,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                user_api_key_auth=user_api_key_auth,
-            )
+            if not _caller_authorization_fans_out(server, scope_servers):
+                extra_headers = _client_forwarded_authorization_headers(
+                    mcp_server=server,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -1793,6 +1803,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
+                    scope_servers=allowed_mcp_servers,
                 )
 
                 # Prefer server-stored per-user OAuth when configured, so a stale
@@ -1979,6 +1990,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+                scope_servers=allowed_mcp_servers,
             )
 
             try:
@@ -2031,6 +2043,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+                scope_servers=allowed_mcp_servers,
             )
 
             try:
@@ -2081,6 +2094,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+                scope_servers=allowed_mcp_servers,
             )
 
             try:
