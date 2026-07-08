@@ -32,7 +32,9 @@ from litellm.constants import (
     MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
     MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
 )
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client  # pyright: ignore[reportUnknownVariableType]
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -113,7 +115,7 @@ class ExchangedTokenCache:
                 return Ok(cached)
             match await compute():
                 case Ok(token):
-                    self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]
+                    self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
                         cache_key,
                         token.access_token,
                         ttl=_cache_ttl_seconds(token.expires_in),
@@ -123,7 +125,7 @@ class ExchangedTokenCache:
                     return Error(err)
 
     def _get(self, cache_key: str) -> str | None:
-        value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # InMemoryCache is untyped; narrowed by isinstance below
         return value if isinstance(value, str) else None
 
     def _lock(self, cache_key: str) -> asyncio.Lock:
@@ -146,12 +148,12 @@ async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
     # litellm's httpx handler and httpx.Response are only partially typed; the token endpoint
     # returns a JSON object that `_TokenEndpointResponse` validates, so the untyped boundary is
     # contained here. A non-2xx raises `httpx.HTTPStatusError` for `fetch` to map to a CredError.
-    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]
-    response = await client.post(endpoint, data=data)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
+    response = await client.post(endpoint, data=data)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # litellm http handler is untyped
     if response is None:
         return None
     response.raise_for_status()
-    return response.json()  # pyright: ignore[reportAny]
+    return response.json()  # pyright: ignore[reportAny]  # untyped JSON; validated by _TokenEndpointResponse in fetch
 
 
 def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) -> dict[str, str]:
