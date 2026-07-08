@@ -383,7 +383,13 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         """
 
         if tpm_values is None or rpm_values is None:
-            return None
+            verbose_router_logger.warning(
+                "usage-based-routing-v2: tpm/rpm cache read failed for model_group=%s - "
+                "falling back to routing without usage data for this request",
+                model_group,
+            )
+            tpm_values = [None] * len(tpm_keys) if tpm_values is None else tpm_values
+            rpm_values = [None] * len(rpm_keys) if rpm_values is None else rpm_values
 
         tpm_dict = {}  # {model_id: 1, ..}
         for idx, key in enumerate(tpm_keys):
