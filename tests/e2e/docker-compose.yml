@@ -58,6 +58,8 @@ services:
     environment:
       LITELLM_MASTER_KEY: sk-1234
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      UI_USERNAME: admin
+      UI_PASSWORD: sk-1234
     ports:
       - "4000:4000"
     configs:
