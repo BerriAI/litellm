@@ -6,13 +6,23 @@ Tests for AnthropicResponsesStreamWrapper
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
 )
+
+
+async def _iter_events(events: list):
+    for event in events:
+        yield event
+
+
+async def _collect_types(events: list) -> list:
+    wrapper = AnthropicResponsesStreamWrapper(responses_stream=_iter_events(events), model="m")
+    return [chunk["type"] async for chunk in wrapper]
 
 
 def _process_all(events: list) -> list:
@@ -77,3 +87,29 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestMessageStartEmittedExactlyOnce:
+    """Anthropic's streaming contract allows exactly one message_start per stream;
+    the eager fallback in __anext__ and response.created must not both emit it."""
+
+    @pytest.mark.asyncio
+    async def test_response_created_does_not_duplicate_eager_message_start(self):
+        types = await _collect_types(
+            [
+                {"type": "response.created"},
+                {"type": "response.completed", "response": {"status": "completed"}},
+            ]
+        )
+        assert types.count("message_start") == 1
+        assert types == ["message_start", "message_delta", "message_stop"]
+
+    @pytest.mark.asyncio
+    async def test_message_start_emitted_when_no_response_created(self):
+        types = await _collect_types(
+            [
+                {"type": "response.completed", "response": {"status": "completed"}},
+            ]
+        )
+        assert types.count("message_start") == 1
+        assert types[0] == "message_start"
