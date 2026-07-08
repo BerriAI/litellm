@@ -2117,12 +2117,7 @@
       "count": 1
     }
   },
-  "src/hooks/useTestMCPConnection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/hooks/useToolsOAuthFlow.tsx": {
+  "src/hooks/useMcpOAuthPkceFlow.ts": {
     "react-hooks/refs": {
       "count": 1
     },
@@ -2130,7 +2125,7 @@
       "count": 1
     }
   },
-  "src/hooks/useUserMcpOAuthFlow.tsx": {
+  "src/hooks/useTestMCPConnection.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
