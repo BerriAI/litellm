@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE,
     DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
     DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD,
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
@@ -445,6 +446,7 @@ class SemanticToolFilterHook(CustomLogger):
             embedding_model = config.get("embedding_model", DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL)
             top_k = config.get("top_k", DEFAULT_MCP_SEMANTIC_FILTER_TOP_K)
             similarity_threshold = config.get("similarity_threshold", DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD)
+            embedding_batch_size = config.get("embedding_batch_size", DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE)
 
             semantic_filter = SemanticMCPToolFilter(
                 embedding_model=embedding_model,
@@ -452,6 +454,7 @@ class SemanticToolFilterHook(CustomLogger):
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
                 enabled=True,
+                embedding_batch_size=embedding_batch_size,
             )
 
             # Build router from MCP registry on startup
@@ -462,7 +465,8 @@ class SemanticToolFilterHook(CustomLogger):
             verbose_proxy_logger.info(
                 f"✅ MCP Semantic Tool Filter enabled: "
                 f"embedding_model={embedding_model}, top_k={top_k}, "
-                f"similarity_threshold={similarity_threshold}"
+                f"similarity_threshold={similarity_threshold}, "
+                f"embedding_batch_size={embedding_batch_size}"
             )
 
             return hook
