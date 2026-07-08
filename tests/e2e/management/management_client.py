@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import NoBody, ProbeResult, StreamingResponse, unwrap
 from models import (
+    BudgetData,
+    BudgetDeleteBody,
+    BudgetInfoBody,
+    BudgetInfoResponse,
+    BudgetNewBody,
     ChatBody,
     ChatMessage,
     KeyDeleteBody,
@@ -43,6 +48,8 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+PROXY_ADMIN_REQUIRED_MARKER = "Only proxy admin can be used"
+TEAM_ADMIN_REQUIRED_MARKER = "not proxy admin OR team admin"
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +208,35 @@ class ManagementClient:
             )
         )
 
+    def create_budget(self, body: BudgetNewBody) -> str:
+        return unwrap(
+            self.gateway.transport.post(
+                "/budget/new",
+                headers=self.gateway.transport.master,
+                json=body,
+                response_type=BudgetData,
+            )
+        ).budget_id
+
+    def delete_budget(self, budget_id: str) -> None:
+        _ = self.gateway.transport.post(
+            "/budget/delete",
+            headers=self.gateway.transport.master,
+            json=BudgetDeleteBody(id=budget_id),
+            response_type=NoBody,
+        )
+
+    def budget_row(self, budget_id: str) -> BudgetData | None:
+        rows = unwrap(
+            self.gateway.transport.post(
+                "/budget/info",
+                headers=self.gateway.transport.master,
+                json=BudgetInfoBody(budgets=[budget_id]),
+                response_type=BudgetInfoResponse,
+            )
+        ).root
+        return next((row for row in rows if row.budget_id == budget_id), None)
+
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:
         return self.gateway.transport.send(
             "/chat/completions",
@@ -216,6 +252,15 @@ class ManagementClient:
 
     def user_new_status(self, key: str, body: UserNewBody) -> StreamingResponse:
         return self.gateway.transport.send("/user/new", headers=self.gateway.transport.bearer(key), json=body)
+
+    def budget_new_status(self, key: str, body: BudgetNewBody) -> StreamingResponse:
+        return self.gateway.transport.send("/budget/new", headers=self.gateway.transport.bearer(key), json=body)
+
+    def team_member_add_status(self, key: str, body: TeamMemberAddBody) -> StreamingResponse:
+        return self.gateway.transport.send("/team/member_add", headers=self.gateway.transport.bearer(key), json=body)
+
+    def team_member_delete_status(self, key: str, body: TeamMemberDeleteBody) -> StreamingResponse:
+        return self.gateway.transport.send("/team/member_delete", headers=self.gateway.transport.bearer(key), json=body)
 
 
 def build_client() -> ManagementClient:

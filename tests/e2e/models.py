@@ -535,3 +535,34 @@ class OrgInfoResponse(BaseModel):
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+# ---------- budget management ----------
+
+
+class BudgetNewBody(BaseModel):
+    budget_id: str
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+
+
+class BudgetInfoBody(BaseModel):
+    budgets: list[str]
+
+
+class BudgetData(BaseModel):
+    budget_id: str
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+    budget_reset_at: str | None = None
+
+
+class BudgetInfoResponse(RootModel[list[BudgetData]]):
+    """POST /budget/info answers with a bare array of budget rows (one per queried
+    id), not an object wrapping them. Read the rows off .root."""
+
+
+class BudgetDeleteBody(BaseModel):
+    id: str
