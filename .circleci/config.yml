@@ -1058,6 +1058,7 @@ jobs:
                 -v -x \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
+                --timeout=120 --timeout_method=thread \
                 -n 8"
           no_output_timeout: 15m
 
