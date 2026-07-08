@@ -537,6 +537,10 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
         # Drop env vars entirely rather than only blanking global values: the
         # names alone (DB_PASSWORD, GITHUB_API_KEY, ...) leak what secrets the
         # admin configured. Non-admins get the per-user vars they must fill in
@@ -578,6 +582,10 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
 
         sanitized.health_check_error = None
         sanitized.last_health_check = None
@@ -1905,6 +1913,11 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
         # milliseconds or if the storage logic ever adds a grace period).
@@ -1945,6 +1958,11 @@ if MCP_AVAILABLE:
                 await delete_user_credential(prisma_client, user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=False,

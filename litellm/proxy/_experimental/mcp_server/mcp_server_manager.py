@@ -70,6 +70,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     to_server_spec,
     to_subject,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    InvalidatableOAuthTokenStore,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
@@ -115,7 +118,7 @@ from litellm.proxy.common_utils.user_api_key_cache import get_management_object_
 from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPStdioConfig
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
@@ -689,9 +692,16 @@ class MCPServerManager:
         """
         return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
 
-    def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
+    def __init__(
+        self,
+        cred_provider: Optional[UpstreamCredentialProvider] = None,
+        per_user_oauth_token_store: Optional[InvalidatableOAuthTokenStore] = None,
+    ):
+        self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
+            self.get_mcp_server_by_id
+        )
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
+            oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
@@ -715,8 +725,10 @@ class MCPServerManager:
         # Per-server outbound tool-call concurrency limiters, lazily created from
         # each server's max_concurrent_requests. Keyed by server_id so the cap
         # survives the registry atomic-swap on config reload; a missing key means
-        # the server has no configured limit.
-        self._server_call_semaphores: dict[str, asyncio.Semaphore] = {}
+        # the server has no configured limit. The limit is cached alongside the
+        # semaphore so an edited limit rebuilds it instead of keeping the old cap
+        # until restart.
+        self._server_call_semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
         self.tool_name_to_mcp_server_name_mapping: dict[str, str] = {}
         """
         {
@@ -972,7 +984,7 @@ class MCPServerManager:
                 audience=server_config.get("audience", None),
                 subject_token_type=server_config.get(
                     "subject_token_type",
-                    "urn:ietf:params:oauth:token-type:access_token",
+                    DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
@@ -1283,7 +1295,8 @@ class MCPServerManager:
             (auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url)
             or self._obo_needs_endpoint_discovery(
                 auth_type,
-                credentials_dict.get("token_exchange_endpoint") if credentials_dict else None,
+                mcp_server.token_exchange_endpoint
+                or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
                 mcp_server.token_url,
             )
         )
@@ -1349,12 +1362,16 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
-            # Token Exchange (OBO) fields — read from credentials JSON blob
-            token_exchange_endpoint=(credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
-            audience=(credentials_dict.get("audience") if credentials_dict else None),
-            subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
-            or "urn:ietf:params:oauth:token-type:access_token",
-            token_exchange_profile=(credentials_dict.get("token_exchange_profile") if credentials_dict else None)
+            # Token exchange (OBO) fields: dedicated columns, with the credentials blob as a
+            # back-compat fallback for servers persisted before the columns existed.
+            token_exchange_endpoint=mcp_server.token_exchange_endpoint
+            or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
+            audience=mcp_server.audience or (credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=mcp_server.subject_token_type
+            or (credentials_dict.get("subject_token_type") if credentials_dict else None)
+            or DEFAULT_SUBJECT_TOKEN_TYPE,
+            token_exchange_profile=mcp_server.token_exchange_profile
+            or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
@@ -3589,10 +3606,11 @@ class MCPServerManager:
         limit = mcp_server.max_concurrent_requests
         if limit is None or limit <= 0:
             return None
-        semaphore = self._server_call_semaphores.get(mcp_server.server_id)
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(limit)
-            self._server_call_semaphores[mcp_server.server_id] = semaphore
+        cached = self._server_call_semaphores.get(mcp_server.server_id)
+        if cached is not None and cached[0] == limit:
+            return cached[1]
+        semaphore = asyncio.Semaphore(limit)
+        self._server_call_semaphores[mcp_server.server_id] = (limit, semaphore)
         return semaphore
 
     @asynccontextmanager
@@ -3806,17 +3824,21 @@ class MCPServerManager:
             # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
             # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
             # single call below.
-            tool_call_coro = self._obo_call_tool_with_retry(
-                client=client,
-                call_tool_params=call_tool_params,
-                host_progress_callback=host_progress_callback,
-                mcp_server=mcp_server,
-                server_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
-            )
+            async def _obo_call_tool_limited():
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await self._obo_call_tool_with_retry(
+                        client=client,
+                        call_tool_params=call_tool_params,
+                        host_progress_callback=host_progress_callback,
+                        mcp_server=mcp_server,
+                        server_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        stdio_env=stdio_env,
+                        subject_token=subject_token,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+            tool_call_coro = _obo_call_tool_limited()
         else:
 
             async def _call_tool_via_client(client, params):
@@ -3909,6 +3931,19 @@ class MCPServerManager:
         if spec is None:
             return False
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
+
+    async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
+        """Drop the v2 chain's cached token for ``(user_id, server_id)`` after the credential row
+        changes (re-auth, revoke), so the next resolve reads the new row instead of serving the
+        replaced token until its cache TTL. Best-effort: a cache-drop failure is logged, never
+        raised, because the DB write already succeeded and the TTL remains the backstop.
+        """
+        try:
+            await self._per_user_oauth_token_store.invalidate(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,
@@ -4630,6 +4665,10 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
@@ -4734,6 +4773,10 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,

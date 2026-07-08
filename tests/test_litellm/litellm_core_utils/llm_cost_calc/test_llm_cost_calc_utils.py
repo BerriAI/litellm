@@ -1538,22 +1538,23 @@ def _local_model_cost_map():
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = prev_env
 
 
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-realtime-2.1", "gpt-realtime-2.1-mini"])
 @pytest.mark.parametrize("data_residency", ["eu", "us"])
-def test_data_residency_applies_uplift(data_residency, _local_model_cost_map):
-    """gpt-5.4 should apply the regional processing uplift multiplier when
-    data_residency is set. gpt-5.4+ (released 2026-03-05) carry the 10% uplift;
-    gpt-5 and older models do not."""
+def test_data_residency_applies_uplift(data_residency, model, _local_model_cost_map):
+    """Models released on/after 2026-03-05 (gpt-5.4/5.5 and gpt-realtime-2.1
+    series) apply the 10% regional processing uplift multiplier when
+    data_residency is set; gpt-5 and older models do not."""
     from litellm.types.utils import Usage
 
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
     base = generic_cost_per_token(
-        model="gpt-5.4",
+        model=model,
         usage=usage,
         custom_llm_provider="openai",
     )
     regional = generic_cost_per_token(
-        model="gpt-5.4",
+        model=model,
         usage=usage,
         custom_llm_provider="openai",
         data_residency=data_residency,

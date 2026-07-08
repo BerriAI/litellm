@@ -2091,7 +2091,8 @@ class TestForwardHeaders:
         ):
             # Setup mock httpx client
             mock_client = MagicMock()
-            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client.build_request = MagicMock(return_value=MagicMock())
+            mock_client.send = AsyncMock(return_value=mock_httpx_response)
             mock_client_obj = MagicMock()
             mock_client_obj.client = mock_client
             mock_get_client.return_value = mock_client_obj
@@ -2115,10 +2116,10 @@ class TestForwardHeaders:
             )
 
             # Verify the httpx client was called
-            assert mock_client.request.called
+            assert mock_client.send.called
 
             # Get the headers that were sent to the target
-            call_args = mock_client.request.call_args
+            call_args = mock_client.build_request.call_args
             sent_headers = call_args[1]["headers"]
 
             # Verify user headers were forwarded (except content-length and host)
@@ -2192,7 +2193,8 @@ class TestForwardHeaders:
         ):
             # Setup mock httpx client
             mock_client = MagicMock()
-            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client.build_request = MagicMock(return_value=MagicMock())
+            mock_client.send = AsyncMock(return_value=mock_httpx_response)
             mock_client_obj = MagicMock()
             mock_client_obj.client = mock_client
             mock_get_client.return_value = mock_client_obj
@@ -2216,10 +2218,10 @@ class TestForwardHeaders:
             )
 
             # Verify the httpx client was called
-            assert mock_client.request.called
+            assert mock_client.send.called
 
             # Get the headers that were sent to the target
-            call_args = mock_client.request.call_args
+            call_args = mock_client.build_request.call_args
             sent_headers = call_args[1]["headers"]
 
             # Verify only custom headers were sent

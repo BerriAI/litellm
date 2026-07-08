@@ -4055,3 +4055,104 @@ async def test_oauth_authorization_server_404_for_unknown_server_name():
             mcp_server_name="does_not_exist",
         )
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_store_per_user_token_server_side_invalidates_v2_token_cache():
+    """A token stored by the OAuth callback (code exchange or refresh) drops the v2 per-user
+    token cache entry, so egress stops serving the replaced token immediately instead of
+    until its TTL."""
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _store_per_user_token_server_side,
+    )
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-cb-1",
+        name="cb_server",
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+    )
+    invalidate_mock = AsyncMock(return_value=None)
+    cache_set_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache.set",
+            new=cache_set_mock,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        await _store_per_user_token_server_side(
+            server=server,
+            user_id="user-cb-1",
+            token_response={"access_token": "fresh-tok", "expires_in": 3600},
+        )
+
+    invalidate_mock.assert_awaited_once_with("user-cb-1", "srv-cb-1")
+    cache_set_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_store_per_user_token_server_side_skips_invalidate_when_db_write_fails():
+    """A failed DB write neither warms the v1 cache nor drops the v2 cache entry; the
+    previously stored token is still the truth."""
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _store_per_user_token_server_side,
+    )
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-cb-2",
+        name="cb_server_2",
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+    )
+    invalidate_mock = AsyncMock(return_value=None)
+    cache_set_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache.set",
+            new=cache_set_mock,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        await _store_per_user_token_server_side(
+            server=server,
+            user_id="user-cb-2",
+            token_response={"access_token": "fresh-tok", "expires_in": 3600},
+        )
+
+    invalidate_mock.assert_not_awaited()
+    cache_set_mock.assert_not_awaited()

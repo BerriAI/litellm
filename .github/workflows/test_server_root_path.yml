@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 30
 
     strategy:
+      fail-fast: false
       matrix:
         root_path: ["/api/v1", "/llmproxy"]
 
@@ -108,8 +109,26 @@ jobs:
       - name: Install UI deps and Chromium
         working-directory: ui/litellm-dashboard
         run: |
-          npm ci
-          npx playwright install --with-deps chromium
+          retry() {
+            local attempt=1
+            local max_attempts=4
+            until "$@"; do
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "Command failed after $attempt attempts: $*"
+                return 1
+              fi
+              echo "Attempt $attempt failed: $*. Retrying in $((attempt * 15))s..."
+              sleep $((attempt * 15))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          npm config set fetch-retries 5
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-retry-maxtimeout 120000
+
+          retry npm ci
+          retry npx playwright install --with-deps chromium
 
       - name: Run SERVER_ROOT_PATH redirect e2e
         working-directory: ui/litellm-dashboard
