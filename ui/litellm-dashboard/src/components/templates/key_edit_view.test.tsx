@@ -1067,5 +1067,49 @@ describe("KeyEditView", () => {
       });
       expect(onSubmitMock.mock.calls[0][0].models).toEqual(["all-proxy-models"]);
     });
+
+    it("should disable the individual model options once all-proxy-models is selected", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const findOption = (label: string) =>
+        Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+          (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+        ) as HTMLElement | undefined;
+
+      const gpt4Before = await waitFor(() => {
+        const match = findOption("gpt-4");
+        expect(match).toBeTruthy();
+        return match!;
+      });
+      expect(gpt4Before.classList.contains("ant-select-item-option-disabled")).toBe(false);
+
+      fireEvent.click(
+        await waitFor(() => {
+          const match = findOption("All Proxy Models");
+          expect(match).toBeTruthy();
+          return match!;
+        }),
+      );
+
+      await waitFor(() => {
+        expect(findOption("gpt-4")?.classList.contains("ant-select-item-option-disabled")).toBe(true);
+      });
+    });
   });
 });

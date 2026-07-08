@@ -129,6 +129,8 @@ vi.mock("antd", () => {
 
   Form.useForm = () => [formMock];
 
+  Form.useWatch = (name: string) => formStateRef.current[name];
+
   const Select = ({
     children,
     onChange,

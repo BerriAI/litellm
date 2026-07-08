@@ -30,7 +30,11 @@ import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
-import { excludeProxyWideSentinel, getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import {
+  excludeProxyWideSentinel,
+  getModelDisplayName,
+  hasAllModelsSentinel,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
@@ -203,6 +207,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedModels: string[] = Form.useWatch("models", form) ?? [];
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -966,7 +971,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     </Option>
                   )}
                   {modelsToPick.map((model: string) => (
-                    <Option key={model} value={model}>
+                    <Option key={model} value={model} disabled={hasAllModelsSentinel(selectedModels)}>
                       {getModelDisplayName(model)}
                     </Option>
                   ))}
