@@ -28,9 +28,6 @@ from litellm.types.utils import (
     Function,
     HiddenParams,
     ImageResponse,
-)
-from litellm.types.utils import Logprobs as TextCompletionLogprobs
-from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -44,6 +41,7 @@ from litellm.types.utils import (
     TranscriptionUsageTokensObject,
     Usage,
 )
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 
