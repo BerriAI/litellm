@@ -49,7 +49,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     @staticmethod
     def _entity_has_any_limit(
         full_user_api_key_dict: Optional[UserAPIKeyAuth],
-        limit_fields: List[str],
+        limit_fields: list[str],
     ) -> bool:
         """
         True if we should write cache for this entity: either we can't
