@@ -2533,7 +2533,9 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
 
     mcp_server_resource: Optional[str]
     """
-    The upstream MCP server URL (the RFC 8707 resource) the tool call was forwarded to.
+    The upstream MCP server resource identifier (scheme + host + path) the tool call was
+    forwarded to. Redacted for logging: userinfo, query string, and fragment are stripped so an
+    upstream URL carrying an embedded token or secret query parameter never reaches log metadata.
     Records which upstream received a relayed request; never a credential.
     """
 
