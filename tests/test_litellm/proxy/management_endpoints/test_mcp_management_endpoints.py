@@ -3841,6 +3841,50 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
 
 
 @pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_gone():
+    """A concurrent delete can remove the row between the read and the delete; the cache may
+    still hold the revoked token, so the invalidate must fire even on RecordNotFoundError."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-inv-3"
+    user_id = "user-inv-3"
+    invalidate_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=AsyncMock(side_effect=mgmt_endpoints.RecordNotFoundError({}, message="already gone")),
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        result = await delete_mcp_oauth_user_credential(
+            server_id=server_id,
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    invalidate_mock.assert_awaited_once_with(user_id, server_id)
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
 async def test_list_mcp_user_credentials_batch_server_fetch():
     """list_mcp_user_credentials uses a single batch DB call, not N+1 queries."""
     from litellm.proxy._types import MCPUserCredentialListItem
