@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import warnings
 
 import fakeredis
 import pytest
@@ -10,8 +11,13 @@ from websockets.exceptions import ConnectionClosedOK
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+from tests._vcr_redis_persister import (  # noqa: E402
+    VCRCassetteCacheWarning,
+    cassette_cache_health,
+)
 from tests._ws_vcr import (  # noqa: E402
     CASSETTE_TTL_SECONDS,
+    RedisLike,
     ReplayConnection,
     WsCassette,
     WsFrame,
@@ -20,6 +26,7 @@ from tests._ws_vcr import (  # noqa: E402
     WsVcrContractDrift,
     WsVcrReplayError,
     WsVcrReplayTimeout,
+    build_ws_cassette_client,
     load_ws_cassette,
     save_ws_cassette,
     scrub_secrets,
@@ -249,3 +256,20 @@ def test_ws_redis_key_uses_distinct_prefix():
     key = ws_redis_key_for("tests/llm_translation/realtime/test_x.py::TestY::test_z")
     assert key.startswith("litellm:vcr:wscassette:")
     assert "::" not in key
+
+
+def test_build_ws_cassette_client_warns_and_counts_failure_instead_of_silently_disabling():
+    def _broken_builder() -> RedisLike:
+        raise ValueError("invalid CASSETTE_REDIS_URL")
+
+    failures_before = cassette_cache_health()["load_failures"]
+    with pytest.warns(VCRCassetteCacheWarning, match="fall back to live websocket traffic"):
+        assert build_ws_cassette_client(builder=_broken_builder) is None
+    assert cassette_cache_health()["load_failures"] == failures_before + 1
+
+
+def test_build_ws_cassette_client_returns_built_client_without_warning():
+    fake = fakeredis.FakeStrictRedis()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", VCRCassetteCacheWarning)
+        assert build_ws_cassette_client(builder=lambda: fake) is fake

@@ -37,10 +37,7 @@ _ws_cassette_client: Optional[object] = None
 def _get_ws_cassette_client() -> Optional[object]:
     global _ws_cassette_client
     if _ws_cassette_client is None:
-        try:
-            _ws_cassette_client = build_ws_cassette_client()
-        except Exception:
-            return None
+        _ws_cassette_client = build_ws_cassette_client()
     return _ws_cassette_client
 
 

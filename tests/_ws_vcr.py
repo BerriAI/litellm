@@ -530,5 +530,17 @@ def save_ws_cassette(
     return True
 
 
-def build_ws_cassette_client() -> RedisLike:
-    return _build_default_client()
+def build_ws_cassette_client(
+    builder: Callable[[], RedisLike] = _build_default_client,
+) -> Optional[RedisLike]:
+    try:
+        return builder()
+    except Exception as exc:
+        _record_cache_failure("load", exc)
+        message = (
+            f"WS-VCR redis client unavailable; realtime tests fall back to live "
+            f"websocket traffic: {type(exc).__name__}: {exc}"
+        )
+        _log.warning(message)
+        warnings.warn(message, VCRCassetteCacheWarning, stacklevel=2)
+        return None
