@@ -93,10 +93,10 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
                 try:
                     self._response.raise_for_status()
                     self._iterator = _as_async_generator(self._response.aiter_bytes())
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
                         await self._response.aclose()
-                    except Exception:  # noqa: BLE001
+                    except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                         pass
                     raise
             return self
@@ -121,7 +121,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
 
             # Remove the task from the set when it finishes to avoid memory leaks
             task.add_done_callback(self._background_tasks.discard)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception(
                 "Failed to schedule passthrough spend-tracking flush; %d buffered chunks dropped: %s",
                 len(self._raw_bytes),
@@ -138,11 +138,11 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
             chunk = await anext(self._iterator)
             self._raw_bytes.append(chunk)
             return chunk
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
             try:
                 await self._response.aclose()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                 pass
             raise
 
@@ -162,7 +162,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
             if self._initialized:
                 await self._iterator.aclose()
                 await self._response.aclose()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             pass
 
 
@@ -195,7 +195,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
                 raw_bytes=self._raw_bytes,
                 provider_config=self._provider_config,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception(
                 "Failed to schedule passthrough spend-tracking flush; %d buffered chunks dropped: %s",
                 len(self._raw_bytes),
@@ -210,11 +210,11 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
             chunk = next(self._iterator)
             self._raw_bytes.append(chunk)
             return chunk
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
             try:
                 self._response.close()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                 pass
             raise
 
@@ -228,7 +228,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         self._start_flush()
         try:
             self._response.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             pass
 
 

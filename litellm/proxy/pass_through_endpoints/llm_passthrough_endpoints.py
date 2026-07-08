@@ -2403,7 +2403,7 @@ async def gigachat_proxy_route(
         )
 
         return result
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
@@ -2532,7 +2532,7 @@ async def handle_gigachat_passthrough_router_model(
             return result
 
         return result
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
         # Use common exception handling
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
