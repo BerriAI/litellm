@@ -198,14 +198,26 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def translate_tool_choice_to_responses_api(
         tool_choice: AnthropicMessagesToolChoice,
-    ) -> Dict[str, Any]:
-        """Convert Anthropic tool_choice to Responses API tool_choice."""
+    ) -> Union[str, Dict[str, Any]]:
+        """Convert Anthropic tool_choice to Responses API tool_choice.
+
+        The Responses API accepts string literals ("auto", "none", "required")
+        or fully-typed objects (e.g. {"type": "function", "name": ...}).
+        Returning {"type": "auto"} or {"type": "required"} as objects is
+        rejected by the Responses API (and vLLM's Pydantic schema) — the
+        string form is required. See OpenAI Responses API docs:
+        https://platform.openai.com/docs/api-reference/responses
+        """
         tc_type = tool_choice.get("type")
+        if tc_type == "auto":
+            return "auto"
+        if tc_type == "none":
+            return "none"
         if tc_type == "any":
-            return {"type": "required"}
-        elif tc_type == "tool":
+            return "required"
+        if tc_type == "tool":
             return {"type": "function", "name": tool_choice.get("name", "")}
-        return {"type": "auto"}
+        return "auto"
 
     @staticmethod
     def translate_context_management_to_responses_api(
