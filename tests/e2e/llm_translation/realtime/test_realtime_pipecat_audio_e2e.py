@@ -31,7 +31,7 @@ from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
     _ws_base_url,
-    skip_if_unconfigured,
+    realtime_model,
 )
 
 pytestmark = pytest.mark.e2e
@@ -189,13 +189,13 @@ async def _run_pipeline(
 @pytest.mark.parametrize("provider", PROVIDER_PARAMS)
 def test_pipecat_server_vad(
     scoped_key: str,
-    configured_models: frozenset[str],
+    realtime_models: dict[str, str],
     provider: RealtimeProvider,
 ) -> None:
     """Session is configured with server-VAD; bot must respond to a text prompt."""
-    skip_if_unconfigured(provider, configured_models)
+    model = realtime_model(provider, realtime_models)
 
-    tool_called, got_text, _ = asyncio.run(_run_pipeline(scoped_key, provider.model))
+    tool_called, got_text, _ = asyncio.run(_run_pipeline(scoped_key, model))
 
     assert tool_called, "get_weather tool was not invoked"
     assert got_text, "no assistant text frames produced"
@@ -204,16 +204,16 @@ def test_pipecat_server_vad(
 @pytest.mark.parametrize("provider", PROVIDER_PARAMS)
 def test_pipecat_audio_output(
     scoped_key: str,
-    configured_models: frozenset[str],
+    realtime_models: dict[str, str],
     provider: RealtimeProvider,
 ) -> None:
     """Bot must produce at least one non-empty TTS audio frame."""
-    skip_if_unconfigured(provider, configured_models)
+    model = realtime_model(provider, realtime_models)
 
     _, got_text, audio_bytes = asyncio.run(
         _run_pipeline(
             scoped_key,
-            provider.model,
+            model,
             prompt="Say hello in one short sentence.",
             timeout=30.0,
         )
@@ -328,7 +328,7 @@ async def _run_audio_input_pipeline(
 @pytest.mark.parametrize("provider", PROVIDER_PARAMS)
 def test_pipecat_server_vad_audio_input(
     scoped_key: str,
-    configured_models: frozenset[str],
+    realtime_models: dict[str, str],
     provider: RealtimeProvider,
 ) -> None:
     """Stream a real PCM16 WAV fixture; server VAD must detect speech end and respond.
@@ -337,12 +337,11 @@ def test_pipecat_server_vad_audio_input(
     → server-VAD turn detection → response.create (auto) → assistant reply.
     No LLMRunFrame is sent — the response must be triggered entirely by VAD.
     """
-    if not WEATHER_WAV.exists():
-        pytest.skip(f"audio fixture not found: {WEATHER_WAV}")
-    skip_if_unconfigured(provider, configured_models)
+    assert WEATHER_WAV.exists(), f"audio fixture not found: {WEATHER_WAV}"
+    model = realtime_model(provider, realtime_models)
 
     got_text, audio_bytes = asyncio.run(
-        _run_audio_input_pipeline(scoped_key, provider.model)
+        _run_audio_input_pipeline(scoped_key, model)
     )
 
     assert got_text, "server VAD did not trigger a response (no assistant text)"
