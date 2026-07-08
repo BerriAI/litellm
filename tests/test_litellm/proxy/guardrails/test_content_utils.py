@@ -427,6 +427,37 @@ def test_build_inspection_messages_coerces_non_standard_caller_role_to_user():
     ]
 
 
+def test_build_inspection_messages_coerces_chat_completions_tool_role_to_user():
+    """LIT-4294: a valid chat-completions ``role: "tool"`` message carries a
+    ``tool_call_id``, but the inspection flatten drops every field except
+    ``role`` and ``content``. A bare ``tool`` message without ``tool_call_id``
+    is schema-invalid; AIM's ``/fw/v1/analyze`` rejects it with 422. The role
+    must collapse to ``user`` so a legitimate tool-replay conversation reaches
+    the guardrail cleanly on chat completions the same way it does on
+    Responses."""
+    data = {
+        "messages": [
+            {"role": "user", "content": "what's the weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "user", "content": "what's the weather"},
+        {"role": "user", "content": "sunny"},
+    ]
+
+
 def test_build_inspection_messages_empty_data():
     assert build_inspection_messages({}) == []
     assert build_inspection_messages({"messages": []}) == []
