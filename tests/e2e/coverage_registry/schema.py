@@ -157,6 +157,16 @@ MODULE_ORDER: tuple[str, ...] = (
     "Other",
 )
 
+LOKI_MODULE_LABELS: dict[str, str] = {
+    "Core LLMs": "core_llms",
+    "Non-Core LLMs": "non_core_llms",
+    "MCPs": "mcp",
+    "Management/UI": "management_ui",
+    "Reliability & Performance": "reliability_performance",
+    "Logging & Guardrails": "logging_guardrails",
+    "Other": "other",
+}
+
 
 def dashboard_module(cell: Cell) -> str:
     """Return the Grafana/reporting module for a registry cell."""
@@ -165,3 +175,8 @@ def dashboard_module(cell: Cell) -> str:
             return "Core LLMs"
         return "Non-Core LLMs"
     return PREFIX_ROLLUP[cell.module]
+
+
+def loki_module_label(module: str) -> str:
+    """Return the log-safe Loki label for a dashboard module."""
+    return LOKI_MODULE_LABELS[module]
