@@ -17,6 +17,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (rate limits, fallbacks, cooldowns)
+- `parity/` - deployment parity: the proxy's effective configuration (readiness, cache, cost-map provenance, required model groups, active callbacks) pinned to checked-in expectations, plus strict response-shape checks for the dashboard's top read routes
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
 
 ## Lay the pattern down in a class
