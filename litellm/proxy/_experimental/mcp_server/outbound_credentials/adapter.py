@@ -32,7 +32,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -133,7 +133,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpe
         resource=resource,
         config=TokenExchangeConfig(
             profile=profile,
-            subject_token_type=server.subject_token_type or "urn:ietf:params:oauth:token-type:access_token",
+            subject_token_type=server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
             token_exchange_endpoint=endpoint,
             audience=server.audience,
             client_id=server.client_id,

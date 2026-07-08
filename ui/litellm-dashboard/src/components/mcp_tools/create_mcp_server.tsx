@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input, InputNumber, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
@@ -16,6 +16,7 @@ import {
   MCP_OAUTH2_FLOW_INTERACTIVE,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
+import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -25,7 +26,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars, TOOL_DISPLAY_NAME_PATTERN } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -48,7 +49,12 @@ interface CreateMCPServerProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [
+  ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
+  AUTH_TYPE.OAUTH2,
+  AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+  AUTH_TYPE.AWS_SIGV4,
+];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
 const reduceStaticHeaders = (list: unknown): Record<string, string> => {
@@ -112,6 +118,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
@@ -326,6 +333,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   }, [isModalVisible, prefillData, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
+    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
+      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+    );
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
+      );
+      return;
+    }
     setIsLoading(true);
     try {
       const {
@@ -476,7 +492,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : null,
             delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
           });
-          if (oauthMode === "obo") {
+          if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
             await storeMCPOAuthUserCredential(accessToken, response.server_id, {
               access_token: oauthTokenResponse.access_token,
@@ -610,9 +626,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Clear form, tools, and OAuth state when the modal closes so a previous server's
   // authorization, credentials, or tool list never bleed into the next "Add New MCP
   // Server" session, including when a parent dismisses the modal without routing
-  // through handleCancel or handleCreate.
+  // through handleCancel or handleCreate. Only a real open -> closed transition may
+  // trigger this: on the post-OAuth-redirect remount the modal starts closed while
+  // resumeOAuthFlow's token exchange is in flight, and resetting then discards the
+  // fetched token.
+  const wasModalVisibleRef = React.useRef(isModalVisible);
   React.useEffect(() => {
-    if (!isModalVisible) {
+    const wasVisible = wasModalVisibleRef.current;
+    wasModalVisibleRef.current = isModalVisible;
+    if (!isModalVisible && wasVisible) {
       form.resetFields();
       setFormValues({});
       setOauthAccessToken(null);
@@ -907,6 +929,26 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </>
             )}
 
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Max Concurrent Requests (optional)
+                  <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="max_concurrent_requests"
+            >
+              <InputNumber
+                min={1}
+                precision={0}
+                placeholder="e.g. 10"
+                style={{ width: "100%" }}
+                className="rounded-lg"
+              />
+            </Form.Item>
+
             {/* Authentication - show for HTTP, SSE, and OpenAPI */}
             {transportType !== "stdio" && transportType !== "" && (
               <Collapse
@@ -926,6 +968,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="token">Token</Select.Option>
                             <Select.Option value="basic">Basic Auth</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
+                            <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                           </Select>
                         </Form.Item>
@@ -971,6 +1014,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             }}
                           />
                         )}
+
+                        {isTokenExchangeAuthType && <TokenExchangeFormFields />}
                       </>
                     ),
                   },

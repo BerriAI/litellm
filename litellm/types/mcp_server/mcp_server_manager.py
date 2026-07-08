@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 from litellm.types.mcp import (
+    DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
@@ -68,7 +69,7 @@ class MCPServer(BaseModel):
     # Token Exchange (OBO) fields
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
-    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
     # ID-JAG fields (draft-ietf-oauth-identity-assertion-authz-grant).
     # Leg 1 reuses token_exchange_endpoint (IdP org-AS), audience (resource-AS
     # identifier), scopes, subject_token_type, client_id/client_secret. Leg 2

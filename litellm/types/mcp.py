@@ -41,6 +41,12 @@ class MCPAuth(str, enum.Enum):
     oauth2_id_jag = "oauth2_id_jag"
 
 
+# RFC 8693 default subject_token_type. A NULL column / omitted config key means
+# "use this default"; it is applied at every egress build site via this single
+# constant rather than a DB-level DEFAULT (Prisma writes explicit values on
+# insert, so a column default would rarely apply anyway).
+DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
 MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
@@ -124,18 +130,31 @@ class MCPCredentials(TypedDict, total=False):
 
     audience: Optional[str]
     """
-    Target audience for OAuth 2.0 Token Exchange (RFC 8693)
+    Target audience for OAuth 2.0 Token Exchange (RFC 8693).
+
+    Legacy input shape: this setting has a dedicated ``audience`` column, which is
+    authoritative. A value sent here is accepted for back-compat (the pre-column
+    REST shape, released since 2026-05), lifted into the column on write, and
+    stripped from the stored blob. Prefer the top-level request field.
     """
 
     token_exchange_endpoint: Optional[str]
     """
-    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693)
+    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693).
+
+    Legacy input shape: lifted into the dedicated ``token_exchange_endpoint``
+    column on write and stripped from the stored blob; the column is
+    authoritative. Prefer the top-level request field.
     """
 
     subject_token_type: Optional[str]
     """
     Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
-    Default: urn:ietf:params:oauth:token-type:access_token
+    Default: DEFAULT_SUBJECT_TOKEN_TYPE (urn:ietf:params:oauth:token-type:access_token).
+
+    Legacy input shape: lifted into the dedicated ``subject_token_type`` column on
+    write and stripped from the stored blob; the column is authoritative. Prefer
+    the top-level request field.
     """
 
     id_jag_resource_token_endpoint: Optional[str]
@@ -174,6 +193,10 @@ class MCPCredentials(TypedDict, total=False):
     Token exchange wire dialect: "rfc8693" (default, the standard token-exchange grant) or
     "entra_obo" (Microsoft Entra On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use
     extension). Not a secret; stored unencrypted.
+
+    Legacy input shape: lifted into the dedicated ``token_exchange_profile`` column on
+    write and stripped from the stored blob; the column is authoritative. Prefer the
+    top-level request field.
     """
 
 
