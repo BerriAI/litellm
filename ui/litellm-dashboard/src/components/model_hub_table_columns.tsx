@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface ModelHubData {
   model_group: string;
@@ -75,7 +76,9 @@ export const modelHubColumns = (
             </div>
             {/* Show provider on mobile when provider column is hidden */}
             <div className="md:hidden">
-              <Text className="text-xs text-gray-600">{model.providers.join(", ")}</Text>
+              <Text className="text-xs text-gray-600">
+                {model.providers.map((provider) => getProviderLogoAndName(provider).displayName).join(", ")}
+              </Text>
             </div>
           </div>
         );
@@ -97,7 +100,7 @@ export const modelHubColumns = (
           <div className="flex flex-wrap gap-1">
             {model.providers.slice(0, 2).map((provider) => (
               <Tag key={provider} color="blue" className="text-xs">
-                {provider}
+                {getProviderLogoAndName(provider).displayName}
               </Tag>
             ))}
             {model.providers.length > 2 && <Text className="text-xs text-gray-500">+{model.providers.length - 2}</Text>}

@@ -617,20 +617,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         return (
           <div className="flex flex-wrap gap-1">
             {providers.map((provider) => {
-              const { logo } = getProviderLogoAndName(provider);
+              const { logo, displayName } = getProviderLogoAndName(provider);
               return (
                 <div key={provider} className="flex items-center space-x-1 px-2 py-1 bg-gray-100 rounded-sm text-xs">
                   {logo && (
                     <img
                       src={logo}
-                      alt={provider}
+                      alt={displayName}
                       className="w-3 h-3 shrink-0 object-contain"
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = "none";
                       }}
                     />
                   )}
-                  <span className="capitalize">{provider}</span>
+                  <span>{displayName}</span>
                 </div>
               );
             })}
@@ -1063,20 +1063,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       size="large"
                       allowClear
                       optionRender={(option) => {
-                        const { logo } = getProviderLogoAndName(option.value as string);
+                        const { logo, displayName } = getProviderLogoAndName(option.value as string);
                         return (
                           <div className="flex items-center space-x-2">
                             {logo && (
                               <img
                                 src={logo}
-                                alt={option.label as string}
+                                alt={displayName}
                                 className="w-5 h-5 shrink-0 object-contain"
                                 onError={(e) => {
                                   (e.target as HTMLImageElement).style.display = "none";
                                 }}
                               />
                             )}
-                            <span className="capitalize">{option.label}</span>
+                            <span>{displayName}</span>
                           </div>
                         );
                       }}
@@ -1085,7 +1085,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         Array.isArray(modelHubData) &&
                         getUniqueProviders(modelHubData).map((provider) => (
                           <Select.Option key={provider} value={provider}>
-                            {provider}
+                            {getProviderLogoAndName(provider).displayName}
                           </Select.Option>
                         ))}
                     </Select>

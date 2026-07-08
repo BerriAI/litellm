@@ -4,6 +4,7 @@ import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
 import { modelHubColumns } from "@/components/model_hub_table_columns";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
 import { Plugin } from "@/components/claude_code_plugins/types";
@@ -590,7 +591,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   <div className="flex flex-wrap gap-1 mt-1">
                     {selectedModel.providers.map((provider) => (
                       <Badge key={provider} color="blue">
-                        {provider}
+                        {getProviderLogoAndName(provider).displayName}
                       </Badge>
                     ))}
                   </div>
