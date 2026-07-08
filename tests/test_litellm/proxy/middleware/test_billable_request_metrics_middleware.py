@@ -46,7 +46,10 @@ def _make_app(recorder: Optional[FakeRecorder], status_code: int = 200, model_id
         "/v1/embeddings",
         "/v1/completions",
         "/mcp",
+        "/github/mcp",
+        "/toolset/my-tools/mcp",
         "/v1/mcp/tools",
+        "/v1/mcp/server",
         "/a2a/agent-1/message/send",
         "/v1/a2a/discover",
         "/health",
@@ -106,12 +109,12 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
-        ("/v1/mcp", (BillableCategory.MCP, "/v1/mcp")),
-        ("/v1/mcp/servers", (BillableCategory.MCP, "/v1/mcp")),
-        ("/a2a", (BillableCategory.A2A, "/a2a")),
+        ("/github/mcp", (BillableCategory.MCP, "/mcp")),
+        ("/github/mcp/", (BillableCategory.MCP, "/mcp")),
+        ("/toolset/my-tools/mcp", (BillableCategory.MCP, "/mcp")),
+        ("/github,slack/mcp", (BillableCategory.MCP, "/mcp")),
         ("/a2a/agent-1/message/send", (BillableCategory.A2A, "/a2a")),
-        ("/v1/a2a", (BillableCategory.A2A, "/v1/a2a")),
-        ("/v1/a2a/discover", (BillableCategory.A2A, "/v1/a2a")),
+        ("/v1/a2a/agent-9/message/send", (BillableCategory.A2A, "/a2a")),
     ],
 )
 def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
@@ -135,10 +138,35 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/langfuse/api/public/ingestion",
         # a bare provider prefix is not an inference call
         "/bedrock",
+        "/v1/mcp",
+        "/v1/mcp/tools",
+        "/v1/mcp/server",
+        "/v1/mcp/server/health",
+        "/v1/mcp/server/some-id",
+        "/v1/mcp/server/register",
+        "/v1/mcp/oauth/some-id/authorize",
+        "/a2a/agent-1/.well-known/agent-card.json",
+        "/v1/a2a/discover",
+        "/.well-known/oauth-protected-resource/github/mcp",
+        "/mcp-rest/tools/list",
+        "/mcp-rest/tools/call",
     ],
 )
 def test_classify_non_billable_returns_none(path: str):
     assert classify_billable_request(path) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/mcp/tools",
+        "/v1/mcp/server",
+        "/v1/mcp/server/register",
+        "/v1/a2a/discover",
+    ],
+)
+def test_classify_management_writes_are_not_billable(path: str):
+    assert classify_billable_request(path, "POST") is None
 
 
 @pytest.mark.parametrize(
@@ -190,7 +218,7 @@ def test_records_once_on_2xx_llm_with_model_id():
 
 def test_records_mcp_category():
     recorder = FakeRecorder()
-    TestClient(_make_app(recorder)).post("/v1/mcp/tools")
+    TestClient(_make_app(recorder)).post("/github/mcp")
     assert len(recorder.calls) == 1 and recorder.calls[0]["category"] == BillableCategory.MCP
 
 
@@ -198,6 +226,24 @@ def test_records_a2a_category():
     recorder = FakeRecorder()
     TestClient(_make_app(recorder)).post("/a2a/agent-1/message/send")
     assert len(recorder.calls) == 1 and recorder.calls[0]["category"] == BillableCategory.A2A
+
+
+def test_does_not_record_mcp_management_read():
+    recorder = FakeRecorder()
+    TestClient(_make_app(recorder)).get("/v1/mcp/tools")
+    assert recorder.calls == []
+
+
+def test_does_not_record_mcp_management_write():
+    recorder = FakeRecorder()
+    TestClient(_make_app(recorder)).post("/v1/mcp/server")
+    assert recorder.calls == []
+
+
+def test_does_not_record_a2a_discovery():
+    recorder = FakeRecorder()
+    TestClient(_make_app(recorder)).post("/v1/a2a/discover")
+    assert recorder.calls == []
 
 
 def test_does_not_record_on_4xx():
@@ -220,7 +266,7 @@ def test_does_not_record_non_billable_path():
 
 def test_no_model_id_when_header_absent():
     recorder = FakeRecorder()
-    TestClient(_make_app(recorder, status_code=200, model_id=None)).post("/v1/mcp/tools")
+    TestClient(_make_app(recorder, status_code=200, model_id=None)).post("/github/mcp")
     assert recorder.calls[0]["model_id"] is None
 
 

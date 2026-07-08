@@ -8,6 +8,7 @@ recorder is injected (non-enterprise, or metering misconfigured) this
 middleware is a transparent pass-through.
 """
 
+import re
 from enum import Enum
 from typing import Callable, Optional, Protocol, Sequence, runtime_checkable
 
@@ -81,18 +82,40 @@ def _classify_llm_route(path: str) -> Optional[str]:
     return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)
 
 
+_MCP_MANAGEMENT_PREFIX = "/v1/mcp"
+_MCP_DYNAMIC_TRANSPORT = re.compile(r"/(?:toolset/)?[^/]+/mcp")
+
+_A2A_INVOKE_SUFFIX = "/message/send"
+_A2A_TRANSPORT_PREFIXES: tuple[str, ...] = ("/v1/a2a/", "/a2a/")
+
+
+def _classify_mcp_route(path: str) -> Optional[str]:
+    if path == _MCP_MANAGEMENT_PREFIX or path.startswith(f"{_MCP_MANAGEMENT_PREFIX}/"):
+        return None
+    if path == "/mcp" or path.startswith("/mcp/"):
+        return "/mcp"
+    if _MCP_DYNAMIC_TRANSPORT.fullmatch(path) is not None:
+        return "/mcp"
+    return None
+
+
+def _classify_a2a_route(path: str) -> Optional[str]:
+    if path.endswith(_A2A_INVOKE_SUFFIX) and any(path.startswith(prefix) for prefix in _A2A_TRANSPORT_PREFIXES):
+        return "/a2a"
+    return None
+
+
 def classify_billable_request(path: str, method: str = "POST") -> Optional[tuple[BillableCategory, str]]:
     """Map a request path to its (category, normalized route), or None if not billable."""
     normalized = path.rstrip("/") or "/"
 
-    if normalized == "/mcp" or normalized.startswith("/mcp/"):
-        return (BillableCategory.MCP, "/mcp")
-    if normalized == "/v1/mcp" or normalized.startswith("/v1/mcp/"):
-        return (BillableCategory.MCP, "/v1/mcp")
-    if normalized == "/v1/a2a" or normalized.startswith("/v1/a2a/"):
-        return (BillableCategory.A2A, "/v1/a2a")
-    if normalized == "/a2a" or normalized.startswith("/a2a/"):
-        return (BillableCategory.A2A, "/a2a")
+    mcp_route = _classify_mcp_route(normalized)
+    if mcp_route is not None:
+        return (BillableCategory.MCP, mcp_route)
+
+    a2a_route = _classify_a2a_route(normalized)
+    if a2a_route is not None:
+        return (BillableCategory.A2A, a2a_route)
 
     # Inference calls are POSTs; GETs on these paths are reads (list videos,
     # fetch a response object), which write no SpendLogs row and must not bill.
