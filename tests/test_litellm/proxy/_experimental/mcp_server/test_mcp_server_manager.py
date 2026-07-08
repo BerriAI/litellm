@@ -1490,6 +1490,118 @@ class TestMCPServerManager:
         assert emitted.headers["Authorization"] == "Bearer upstream-token"
         assert not kwargs["extra_headers"] or "authorization" not in {k.lower() for k in kwargs["extra_headers"]}
 
+    @staticmethod
+    def _emitted_authorization(mock_client_cls) -> str:
+        kwargs = mock_client_cls.call_args.kwargs
+        emitted = httpx.Request("GET", "https://example.com/mcp")
+        flow = kwargs["resolved_auth"].auth_flow(emitted)
+        next(flow)
+        flow.close()
+        return emitted.headers["Authorization"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "per_server_header",
+        ["Bearer per-server-token", {"Authorization": "Bearer per-server-token"}],
+    )
+    async def test_create_mcp_client_passthrough_prefers_per_server_token(self, per_server_header):
+        """A per-server x-mcp-{alias}-authorization value is the explicit one-token-one-server
+        binding, so it must win over the request-wide Authorization and reach the upstream
+        verbatim through the passthrough arm."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="tp-per-server",
+            name="tp",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.resolve_mcp_auth",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as mock_client_cls,
+        ):
+            await manager._create_mcp_client(
+                server=server,
+                mcp_auth_header=per_server_header,
+                extra_headers={"Authorization": "Bearer global-token"},
+            )
+        mock_resolve.assert_not_awaited()
+        assert self._emitted_authorization(mock_client_cls) == "Bearer per-server-token"
+        kwargs = mock_client_cls.call_args.kwargs
+        assert not kwargs["extra_headers"] or "authorization" not in {k.lower() for k in kwargs["extra_headers"]}
+
+    def test_consumes_caller_authorization_per_mode(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _consumes_caller_authorization,
+        )
+
+        def build(**kwargs) -> MCPServer:
+            return MCPServer(
+                server_id="s",
+                name="s",
+                url="https://example.com",
+                transport=MCPTransport.http,
+                **kwargs,
+            )
+
+        assert _consumes_caller_authorization(build(auth_type=MCPAuth.true_passthrough)) is True
+        assert _consumes_caller_authorization(build(auth_type=MCPAuth.oauth_delegate)) is True
+        assert (
+            _consumes_caller_authorization(
+                build(auth_type=MCPAuth.none, extra_headers=["Authorization"], oauth_passthrough=True)
+            )
+            is True
+        )
+        assert _consumes_caller_authorization(build(auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True)) is True
+        assert _consumes_caller_authorization(build(auth_type=MCPAuth.api_key, authentication_token="x")) is False
+        assert (
+            _consumes_caller_authorization(
+                build(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=True,
+                    oauth2_flow="client_credentials",
+                    token_url="https://idp/token",
+                )
+            )
+            is False
+        )
+
+    def test_caller_authorization_fans_out_only_with_second_consumer(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _caller_authorization_fans_out,
+        )
+
+        delegate = MCPServer(
+            server_id="od",
+            name="od",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth_delegate,
+        )
+        second = MCPServer(
+            server_id="tp",
+            name="tp",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        static_server = MCPServer(
+            server_id="static",
+            name="static",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            authentication_token="x",
+        )
+
+        assert _caller_authorization_fans_out(delegate, None) is False
+        assert _caller_authorization_fans_out(delegate, [delegate]) is False
+        assert _caller_authorization_fans_out(delegate, [delegate, static_server]) is False
+        assert _caller_authorization_fans_out(delegate, [delegate, second]) is True
+
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):
         """Ensure prompts are fetched and prefixed when requested."""
