@@ -1,9 +1,7 @@
 import logging
 import os
 import sys
-from unittest.mock import AsyncMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -13,8 +11,8 @@ MARKER_QUERY = "MARKER_QUERY_do_not_log_at_info"
 MARKER_DOC = "MARKER_DOC_sensitive_customer_text"
 
 
-def _mock_cohere_response() -> AsyncMock:
-    mock_response = AsyncMock()
+def _mock_cohere_response() -> MagicMock:
+    mock_response = MagicMock()
 
     def return_val():
         return {
@@ -32,8 +30,7 @@ def _mock_cohere_response() -> AsyncMock:
     return mock_response
 
 
-@pytest.mark.asyncio
-async def test_rerank_does_not_log_request_content_at_info(caplog):
+def test_rerank_does_not_log_request_content_at_info(caplog):
     """Regression for #32525: rerank must not emit query/documents to logs at INFO.
 
     The mapped ``optional_rerank_params`` (which always contains ``query`` and
@@ -44,10 +41,10 @@ async def test_rerank_does_not_log_request_content_at_info(caplog):
     caplog.set_level(logging.DEBUG, logger="LiteLLM")
 
     with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
         return_value=_mock_cohere_response(),
     ):
-        await litellm.arerank(
+        litellm.rerank(
             model="cohere/rerank-english-v3.0",
             query=MARKER_QUERY,
             documents=[MARKER_DOC, "unrelated"],
