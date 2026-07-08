@@ -3,13 +3,18 @@ Integration tests for responses API background cost tracking
 """
 
 import asyncio
+import json
 import os
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+import litellm
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 
@@ -561,3 +566,162 @@ class TestCheckResponsesCost:
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 0
+
+
+def _make_responses_api_response(status, with_usage):
+    return ResponsesAPIResponse(
+        id="resp_finalize_test",
+        object="response",
+        created_at=int(datetime.now().timestamp()),
+        status=status,
+        model="gpt-5",
+        output=[],
+        usage=(
+            ResponseAPIUsage(
+                input_tokens=1000,
+                output_tokens=2000,
+                total_tokens=3000,
+            )
+            if with_usage
+            else None
+        ),
+    )
+
+
+class TestFinalizeRetrievedResponseLogging:
+    """Unit tests for BaseLLMHTTPHandler._finalize_retrieved_response_logging"""
+
+    def test_completed_response_stamps_model_when_missing(self):
+        logging_obj = SimpleNamespace(model=None, model_call_details={"model": None})
+        response = _make_responses_api_response("completed", with_usage=True)
+        response._hidden_params = {}
+
+        BaseLLMHTTPHandler._finalize_retrieved_response_logging(
+            logging_obj=logging_obj, response=response
+        )
+
+        assert logging_obj.model == "gpt-5"
+        assert logging_obj.model_call_details["model"] == "gpt-5"
+        assert "response_cost" not in response._hidden_params
+
+    def test_existing_model_is_not_overwritten(self):
+        logging_obj = SimpleNamespace(
+            model="already-set", model_call_details={"model": "already-set"}
+        )
+        response = _make_responses_api_response("completed", with_usage=True)
+        response._hidden_params = {}
+
+        BaseLLMHTTPHandler._finalize_retrieved_response_logging(
+            logging_obj=logging_obj, response=response
+        )
+
+        assert logging_obj.model == "already-set"
+        assert logging_obj.model_call_details["model"] == "already-set"
+
+    @pytest.mark.parametrize("status", ["queued", "in_progress"])
+    def test_non_terminal_poll_is_zero_cost(self, status):
+        logging_obj = SimpleNamespace(model=None, model_call_details={"model": None})
+        response = _make_responses_api_response(status, with_usage=True)
+        response._hidden_params = {}
+
+        BaseLLMHTTPHandler._finalize_retrieved_response_logging(
+            logging_obj=logging_obj, response=response
+        )
+
+        assert response._hidden_params["response_cost"] == 0.0
+        assert logging_obj.model == "gpt-5"
+
+
+class _CaptureLogger(CustomLogger):
+    def __init__(self):
+        self.events = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        slp = kwargs.get("standard_logging_object") or {}
+        self.events.append(
+            {
+                "model": slp.get("model"),
+                "response_cost": slp.get("response_cost"),
+                "status": getattr(response_obj, "status", None),
+            }
+        )
+
+
+def _fake_get_response(status, with_usage):
+    payload = {
+        "id": "resp_finalize_test",
+        "object": "response",
+        "created_at": 1,
+        "status": status,
+        "model": "gpt-5",
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "output": [],
+        "usage": (
+            {
+                "input_tokens": 1000,
+                "output_tokens": 2000,
+                "total_tokens": 3000,
+                "output_tokens_details": {"reasoning_tokens": 1500},
+            }
+            if with_usage
+            else None
+        ),
+    }
+
+    class _Resp:
+        status_code = 200
+        headers = {}
+        text = json.dumps(payload)
+
+        def json(self):
+            return payload
+
+        def raise_for_status(self):
+            return None
+
+    return _Resp()
+
+
+async def _capture_aget_responses(status, with_usage):
+    capture = _CaptureLogger()
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = [capture]
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
+            return_value=_fake_get_response(status, with_usage),
+        ):
+            await litellm.aget_responses(
+                response_id="resp_finalize_test",
+                custom_llm_provider="openai",
+                api_key="sk-fake",
+            )
+        for _ in range(30):
+            if capture.events:
+                break
+            await asyncio.sleep(0.1)
+    finally:
+        litellm.callbacks = original_callbacks
+    return capture.events
+
+
+class TestRetrievedResponseCostAttribution:
+    """End-to-end regression tests for spend logging on the responses retrieve path"""
+
+    @pytest.mark.asyncio
+    async def test_completed_retrieve_attributes_cost_to_model(self):
+        events = await _capture_aget_responses("completed", with_usage=True)
+
+        assert len(events) == 1
+        assert events[0]["model"] == "gpt-5"
+        assert events[0]["response_cost"] is not None
+        assert events[0]["response_cost"] > 0
+
+    @pytest.mark.asyncio
+    async def test_in_progress_poll_is_not_billed(self):
+        events = await _capture_aget_responses("in_progress", with_usage=True)
+
+        assert len(events) == 1
+        assert events[0]["response_cost"] == 0.0

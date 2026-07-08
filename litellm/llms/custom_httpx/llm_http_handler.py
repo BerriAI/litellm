@@ -2843,6 +2843,23 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    @staticmethod
+    def _finalize_retrieved_response_logging(
+        logging_obj: LiteLLMLoggingObj,
+        response: ResponsesAPIResponse,
+    ) -> None:
+        """Attribute a retrieved (polled) response's spend to its model and zero
+        the cost of ``queued`` / ``in_progress`` polls that carry no usage."""
+        model = response.model
+        if model:
+            if not logging_obj.model:
+                logging_obj.model = model
+            if not logging_obj.model_call_details.get("model"):
+                logging_obj.model_call_details["model"] = model
+
+        if response.status in ("queued", "in_progress"):
+            response._hidden_params["response_cost"] = 0.0
+
     def get_responses(
         self,
         response_id: str,
@@ -2919,10 +2936,15 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_get_response_api_response(
+        transformed_response = responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
+        self._finalize_retrieved_response_logging(
+            logging_obj=logging_obj,
+            response=transformed_response,
+        )
+        return transformed_response
 
     async def async_get_responses(
         self,
@@ -2992,10 +3014,15 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_get_response_api_response(
+        transformed_response = responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
+        self._finalize_retrieved_response_logging(
+            logging_obj=logging_obj,
+            response=transformed_response,
+        )
+        return transformed_response
 
     #####################################################################
     ################ LIST RESPONSES INPUT ITEMS HANDLER ###########################
