@@ -639,6 +639,39 @@ class TestMergePromptManagementMessagesIntoInput:
         assert r2 in result  # preserved via id fallback (would be dropped under identity-only)
         mock_warn.assert_not_called()
 
+    def test_partial_unlocatable_equal_count_uses_positional_fallback(self):
+        """The partial + equal-count case where a message is GENUINELY unlocatable
+        (replaced by a different message, no matching identity or id) but the count is
+        preserved. Rather than drop the item anchored to it, fall back to positional
+        substitution so it is preserved. (Order-preserving equal-count transform.)"""
+        a1 = {
+            "type": "message", "id": "msg_1", "role": "assistant",
+            "content": [{"type": "output_text", "text": "one", "annotations": []}],
+        }
+        a2 = {
+            "type": "message", "id": "msg_2", "role": "assistant",
+            "content": [{"type": "output_text", "text": "two", "annotations": []}],
+        }
+        r1 = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "e1"}
+        r2 = {"type": "reasoning", "id": "rs_2", "summary": [], "encrypted_content": "e2"}
+        u = {"role": "user", "content": "go"}
+        original = [r1, a1, r2, a2, u]
+        # a1 kept, a2 REPLACED by a different message (id msg_99 -> not locatable), u kept;
+        # count preserved (3 messages).
+        replacement = {
+            "type": "message", "id": "msg_99", "role": "assistant",
+            "content": [{"type": "output_text", "text": "replaced", "annotations": []}],
+        }
+        merged = [a1, replacement, u]
+
+        with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
+            result = _merge_prompt_management_messages_into_input(original, merged)
+
+        # positional fallback maps a2's slot to the replacement, preserving r2
+        assert result == [r1, a1, r2, replacement, u]
+        assert r2 in result  # preserved (previously dropped-and-warned)
+        mock_warn.assert_not_called()
+
     def test_full_template_replacement_drops_non_message_items_with_warning(self):
         """Mirrors a prompt template that REPLACES the incoming conversation with
         entirely new messages (different objects, different count). Non-message items

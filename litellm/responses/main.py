@@ -771,12 +771,15 @@ def _merge_prompt_management_messages_into_input(
         ``template + messages`` prepend) or deep-copied them while preserving their ids
         (anthropic cache-control): re-attach each non-message item next to its own
         message, wherever the hook moved it. Position-independent and never mis-pairs.
-      * no message locatable but equal count -- the hook deep-copied messages that had
-        no ids, preserving order and count: substitute messages slot-for-slot.
-      * otherwise -- the hook replaced/removed some messages (e.g. a prompt template
-        that replaces the incoming conversation): re-attach every non-message item whose
-        anchor is still locatable (by identity or id), drop the rest, and warn. Nothing
-        is ever attached to the wrong message.
+      * equal count but not all locatable -- the hook deep-copied id-less messages, or
+        edited/replaced some messages in place while keeping the count. Order-preserving
+        equal-count transforms map cleanly, so substitute messages slot-for-slot; this
+        preserves every non-message item instead of dropping those anchored to an
+        unlocatable message.
+      * otherwise (count changed) -- the hook added/removed messages (e.g. a prompt
+        template that replaces the incoming conversation): re-attach every non-message
+        item whose anchor is still locatable (by identity or id), drop the rest, and
+        warn. Nothing is ever attached to the wrong message.
     """
     if isinstance(original_input, str):
         # No non-message items to preserve.
@@ -800,16 +803,28 @@ def _merge_prompt_management_messages_into_input(
     if num_locatable == num_original_messages:
         # Every anchor is locatable: safest, position-independent path (no drops).
         reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages)
-    elif num_locatable == 0 and len(merged_messages) == num_original_messages:
-        # No anchor locatable but the count is preserved -> an in-place deep-copy
-        # transform on messages that carry no ids. Map slot-for-slot.
+    elif len(merged_messages) == num_original_messages:
+        # The count is preserved but not every message is locatable by identity/id --
+        # e.g. an id-less deep-copy, or a hook that edits/replaces some messages in
+        # place. Equal-count, order-preserving transforms map cleanly slot-for-slot, so
+        # fall back to positional substitution to preserve the non-message items anchored
+        # to the unlocatable messages rather than dropping them.
+        if num_locatable:
+            verbose_logger.debug(
+                "litellm.responses: %s of %s prompt-management messages were not "
+                "locatable by identity or id; using positional fallback to preserve "
+                "non-message items.",
+                num_original_messages - num_locatable,
+                num_original_messages,
+            )
         return cast(
             ResponseInputParam,
             _splice_messages_positional(original_items, merged_messages),
         )
     else:
-        # The hook replaced/removed some messages. Preserve every item whose anchor is
-        # still locatable (by identity or id); drop and warn for the rest.
+        # The count changed (messages added/removed), so positional cannot map slots.
+        # Preserve every item whose anchor is still locatable (by identity or id) and
+        # drop + warn for the rest.
         reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages)
 
     if dropped:
