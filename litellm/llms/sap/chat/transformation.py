@@ -2,23 +2,23 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+from functools import cached_property
 from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    FrozenSet,
+    Iterator,
     List,
     Optional,
-    Union,
-    Dict,
     Tuple,
-    Any,
-    TYPE_CHECKING,
-    Iterator,
-    AsyncIterator,
-    FrozenSet,
+    Union,
 )
-from functools import cached_property
-import litellm
+
 import httpx
 
-
+import litellm
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -32,6 +32,11 @@ else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
+from .handler import (
+    AsyncSAPStreamIterator,
+    GenAIHubOrchestrationError,
+    SAPStreamIterator,
+)
 from .models import (
     ChatCompletionTool,
     OrchestrationRequest,
@@ -41,11 +46,6 @@ from .models import (
     SAPMessage,
     SAPToolChatMessage,
     SAPUserMessage,
-)
-from .handler import (
-    GenAIHubOrchestrationError,
-    AsyncSAPStreamIterator,
-    SAPStreamIterator,
 )
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
