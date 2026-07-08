@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Iterator
 
 import pytest
 
-from e2e_config import UI_BASE_URL, UI_PASSWORD, UI_USERNAME
+from e2e_config import PROXY_BASE_URL, UI_PASSWORD, UI_USERNAME
 from management_client import ManagementClient, build_client
 
 if TYPE_CHECKING:
@@ -47,7 +47,7 @@ def ui_page(browser: "Browser") -> "Iterator[Page]":
     context = browser.new_context()
     try:
         page = context.new_page()
-        page.goto(f"{UI_BASE_URL}/")
+        page.goto(f"{PROXY_BASE_URL}/ui/")
         page.fill("#username", UI_USERNAME)
         page.fill("#password", UI_PASSWORD)
         page.click('input[type="submit"]')
