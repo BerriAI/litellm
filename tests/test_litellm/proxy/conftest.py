@@ -20,6 +20,31 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
 )
 
 
+class StubClientNotConnectedError(Exception):
+    pass
+
+
+class DisconnectedPrisma:
+    """Mimics prisma-client-py after disconnect(): ``is_connected()`` is False
+    and the ``_engine`` property raises ``ClientNotConnectedError``."""
+
+    def is_connected(self) -> bool:
+        return False
+
+    @property
+    def _engine(self) -> None:
+        raise StubClientNotConnectedError(
+            "Client is not connected to the query engine, you must call `connect()` "
+            "before attempting to query data."
+        )
+
+
+@pytest.fixture
+def disconnected_prisma() -> DisconnectedPrisma:
+    """A stand-in for a Prisma client wedged in the disconnected state."""
+    return DisconnectedPrisma()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_proxy_module_globals():
     """

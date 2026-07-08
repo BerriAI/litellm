@@ -11,7 +11,7 @@ sys.path.insert(
 
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
@@ -2653,3 +2653,184 @@ class TestGetBedrockModelIdArnHandling:
         """invoke/ prefix stripping still works after the fix."""
         model_id = self._call("invoke/anthropic.claude-3-sonnet-20240229-v1:0")
         assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+
+def _recomputed_sigv4_signature(url: str, secret_key: str, authorization: str, headers: Dict[str, Any], body) -> str:
+    import hashlib
+    import hmac
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    credential_scope = authorization.split("Credential=")[1].split(",")[0].split("/", 1)[1]
+    signed_header_names = authorization.split("SignedHeaders=")[1].split(",")[0].split(";")
+    header_lookup = {name.lower(): str(value) for name, value in headers.items()}
+    header_lookup["host"] = parsed.netloc
+    body_bytes = body if isinstance(body, bytes) else str(body).encode()
+    canonical_request = "\n".join(
+        [
+            "POST",
+            parsed.path or "/",
+            "",
+            "".join(f"{name}:{header_lookup[name]}\n" for name in signed_header_names),
+            ";".join(signed_header_names),
+            hashlib.sha256(body_bytes).hexdigest(),
+        ]
+    )
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            header_lookup["x-amz-date"],
+            credential_scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ]
+    )
+    key = f"AWS4{secret_key}".encode()
+    for scope_part in credential_scope.split("/"):
+        key = hmac.new(key, scope_part.encode(), hashlib.sha256).digest()
+    return hmac.new(key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+
+
+class TestSignRequestResign:
+    """Regression: retrying a Bedrock request with headers from a previous SigV4 sign
+    (e.g. the /v1/messages strip-thinking-and-retry path) must produce a fresh
+    Authorization / X-Amz-Date for the new body, not inherit the stale ones and 403."""
+
+    URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+    @pytest.fixture(autouse=True)
+    def _clean_aws_env(self, monkeypatch):
+        for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(env_var, raising=False)
+
+    def _optional_params(self) -> Dict[str, Any]:
+        return {
+            "aws_access_key_id": self.ACCESS_KEY,
+            "aws_secret_access_key": self.SECRET_KEY,
+            "aws_region_name": "us-east-1",
+        }
+
+    def _sign(self, headers: Dict[str, Any], request_data: Dict[str, Any]):
+        return BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params=self._optional_params(),
+            request_data=request_data,
+            api_base=self.URL,
+        )
+
+    def test_resign_with_previously_signed_headers_replaces_stale_sigv4_headers(self):
+        original_body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "x", "signature": ""}],
+                }
+            ]
+        }
+        first_headers, _ = self._sign(headers={"Content-Type": "application/json"}, request_data=original_body)
+        assert first_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+        stale_headers = {**first_headers, "X-Amz-Date": "20200101T000000Z"}
+        stripped_body = {"messages": [{"role": "user", "content": "hi"}]}
+        second_headers, second_signed_body = self._sign(headers=stale_headers, request_data=stripped_body)
+
+        assert second_headers["X-Amz-Date"] != "20200101T000000Z"
+        assert second_headers["Authorization"] != stale_headers["Authorization"]
+        assert second_headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+            url=self.URL,
+            secret_key=self.SECRET_KEY,
+            authorization=second_headers["Authorization"],
+            headers=second_headers,
+            body=second_signed_body,
+        )
+
+    def test_forwarded_headers_still_added_back_after_signing(self):
+        signed_headers, _ = self._sign(
+            headers={"Content-Type": "application/json", "anthropic-version": "bedrock-2023-05-31"},
+            request_data={"messages": []},
+        )
+        assert signed_headers["anthropic-version"] == "bedrock-2023-05-31"
+        assert signed_headers["Content-Type"] == "application/json"
+
+    def test_caller_supplied_bearer_authorization_survives_signing(self):
+        signed_headers, _ = self._sign(
+            headers={"Content-Type": "application/json", "Authorization": "Bearer caller-token"},
+            request_data={"messages": []},
+        )
+        assert signed_headers["Authorization"] == "Bearer caller-token"
+
+
+class TestGetRequestHeadersResign:
+    """Regression: get_request_headers (invoke/converse/embed/image paths) must not let
+    stale SigV4 values present in the input headers clobber the freshly computed signature."""
+
+    URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/converse"
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    SESSION_TOKEN = "fresh-session-token"
+
+    @pytest.fixture(autouse=True)
+    def _clean_aws_env(self, monkeypatch):
+        for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(env_var, raising=False)
+
+    def _prepare(self, headers: Dict[str, Any], data: str, extra_headers: Optional[Dict[str, str]] = None):
+        return BaseAWSLLM().get_request_headers(
+            credentials=Credentials(self.ACCESS_KEY, self.SECRET_KEY, self.SESSION_TOKEN),
+            aws_region_name="us-east-1",
+            extra_headers=extra_headers,
+            endpoint_url=self.URL,
+            data=data,
+            headers=headers,
+        )
+
+    def test_stale_sigv4_headers_in_input_replaced_by_fresh_signature(self):
+        first_prepped = self._prepare(
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"messages": [{"role": "user", "content": "original"}]}),
+        )
+        stale_authorization = first_prepped.headers["Authorization"]
+        assert stale_authorization.startswith("AWS4-HMAC-SHA256")
+
+        stale_headers = {
+            "Content-Type": "application/json",
+            "Authorization": stale_authorization,
+            "X-Amz-Date": "20200101T000000Z",
+            "X-Amz-Security-Token": "stale-session-token",
+        }
+        retry_data = json.dumps({"messages": [{"role": "user", "content": "retry"}]})
+        second_prepped = self._prepare(headers=stale_headers, data=retry_data)
+
+        assert second_prepped.headers["X-Amz-Date"] != "20200101T000000Z"
+        assert second_prepped.headers["X-Amz-Security-Token"] == self.SESSION_TOKEN
+        assert second_prepped.headers["Authorization"] != stale_authorization
+        assert second_prepped.headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+            url=self.URL,
+            secret_key=self.SECRET_KEY,
+            authorization=second_prepped.headers["Authorization"],
+            headers=dict(second_prepped.headers),
+            body=retry_data,
+        )
+
+    def test_forwarded_headers_still_added_back_after_signing(self):
+        prepped = self._prepare(
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "bedrock-2023-05-31",
+                "user-agent": "litellm-test-client",
+            },
+            data=json.dumps({"messages": []}),
+        )
+        assert prepped.headers["anthropic-version"] == "bedrock-2023-05-31"
+        assert prepped.headers["user-agent"] == "litellm-test-client"
+        assert prepped.headers["Content-Type"] == "application/json"
+
+    def test_extra_headers_bearer_authorization_still_overrides_signature(self):
+        prepped = self._prepare(
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"messages": []}),
+            extra_headers={"Authorization": "Bearer foo"},
+        )
+        assert prepped.headers["Authorization"] == "Bearer foo"

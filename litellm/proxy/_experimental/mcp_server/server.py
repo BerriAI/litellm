@@ -721,7 +721,7 @@ if MCP_AVAILABLE:
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
         host_token = getattr(host_ctx.meta, "progressToken", None)
-        if not (host_token and hasattr(host_ctx, "session") and host_ctx.session):
+        if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session = host_ctx.session
 
@@ -737,7 +737,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 verbose_logger.error(f"Failed to forward progress to Host: {e}")
 
-        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        verbose_logger.debug(f"Host progressToken captured: {str(host_token)[:8]}...")
         return forward_progress
 
     async def _build_virtual_call_logging_obj(
@@ -1432,18 +1432,8 @@ if MCP_AVAILABLE:
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(allowed_mcp_server_id)
             if mcp_server is not None:
-                # Apply oauth2_flow resolution for legacy DB rows where it may be NULL
-                resolved_flow = MCPServerManager._resolve_oauth2_flow(
-                    auth_type=mcp_server.auth_type,
-                    oauth2_flow=mcp_server.oauth2_flow,
-                    token_url=mcp_server.token_url,
-                    authorization_url=mcp_server.authorization_url,
-                    client_id=mcp_server.client_id,
-                    client_secret=mcp_server.client_secret,
-                )
-                if resolved_flow and resolved_flow != mcp_server.oauth2_flow:
-                    # Create a new instance with the resolved flow for this request
-                    mcp_server = mcp_server.model_copy(update={"oauth2_flow": resolved_flow})
+                # Apply the request-time oauth2_flow backstop for legacy null rows.
+                mcp_server = MCPServerManager.resolve_oauth2_flow_for_request(mcp_server)
                 allowed_mcp_servers.append(mcp_server)
 
         if mcp_servers is not None:
@@ -2838,6 +2828,9 @@ if MCP_AVAILABLE:
             for allowed_mcp_server_id in allowed_mcp_server_ids:
                 allowed_server = global_mcp_server_manager.get_mcp_server_by_id(allowed_mcp_server_id)
                 if allowed_server is not None:
+                    # Same request-time oauth2_flow backstop the listing path applies,
+                    # so a null-flow M2M-shape row is treated as M2M on tool calls too.
+                    allowed_server = MCPServerManager.resolve_oauth2_flow_for_request(allowed_server)
                     allowed_mcp_servers.append(allowed_server)
 
             allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(

@@ -626,3 +626,45 @@ def test_replicate_422_maps_to_unprocessable_entity():
         )
 
     assert excinfo.value.llm_provider == "replicate"
+
+
+def test_upstream_4xx_without_model_maps_to_bad_request():
+    """Responses API follow-ups (cancel/get/delete) call ``exception_type`` with
+    ``model=None``; the provider mapping used to be gated on ``if model:``, so an
+    upstream 400 like Azure's "Cannot cancel a synchronous response." fell through to
+    the generic 500 APIConnectionError instead of surfacing as a 400."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message='{"error": {"message": "Cannot cancel a synchronous response.", "type": "invalid_request_error"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "Cannot cancel a synchronous response." in excinfo.value.message
+
+
+def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=404,
+        message='{"error": {"message": "Response with id \'resp_abc\' not found.", "type": "invalid_request_error"}}',
+    )
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
