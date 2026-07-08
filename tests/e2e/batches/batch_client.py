@@ -1,11 +1,13 @@
 """Client for the batches e2e suite: file upload/download and the batch
 operations (create / retrieve / cancel / list) over the shared Gateway.
 
-`create_batch` returns the raw HTTP outcome (StreamingResponse) so a 403 model
-access denial and a provider-native batch body both surface; the test parses
-BatchObject from the body. A `provider` arg routes a call to /{provider}/v1/...,
-which the provider-fallback scenario needs (its ids are raw, not model-encoded).
-The request/response models are co-located here because only this suite uses them.
+Batch deployments are registered at runtime via /model/new (see conftest.py),
+not baked into the proxy config. `create_batch` returns the raw HTTP outcome
+(StreamingResponse) so a 403 model access denial and a provider-native batch
+body both surface; the test parses BatchObject from the body. A `provider` arg
+routes a call to /{provider}/v1/..., which the provider-fallback scenario needs
+(its ids are raw, not model-encoded). The request/response models are
+co-located here because only this suite uses them.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from e2e_http import (
     StreamingResponse,
     UnknownApiError,
 )
+from models import LiteLLMParamsBody
 
 
 class FileObject(BaseModel):
@@ -83,6 +86,12 @@ def is_result_access_denied[R: BaseModel](result: Result[R]) -> bool:
 @dataclass(frozen=True, slots=True)
 class BatchClient:
     gateway: Gateway
+
+    def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
+        return self.gateway.create_model(model_name, litellm_params, mode="batch")
+
+    def delete_model(self, model_id: str) -> None:
+        self.gateway.delete_model(model_id)
 
     def upload_file(
         self,

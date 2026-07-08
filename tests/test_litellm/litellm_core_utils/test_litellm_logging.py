@@ -704,7 +704,9 @@ async def test_logging_non_streaming_request():
         litellm.callbacks = original_callbacks
 
 
-@pytest.mark.parametrize("async_flag", ["acompletion", "aresponses"])
+@pytest.mark.parametrize(
+    "async_flag", ["acompletion", "aresponses", "allm_passthrough_route"]
+)
 def test_success_handler_skips_sync_callbacks_for_async_requests(
     logging_obj, async_flag
 ):
@@ -792,6 +794,21 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
 def test_is_sync_litellm_request():
     assert LitellmLogging._is_sync_litellm_request({}) is True
     assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+    assert (
+        LitellmLogging._is_sync_litellm_request({"allm_passthrough_route": True})
+        is False
+    )
+
+
+def test_get_litellm_params_propagates_allm_passthrough_route():
+    """`allm_passthrough_route=True` set on kwargs by the async passthrough entrypoint
+    must land in `litellm_params` so `_is_sync_litellm_request` sees it and the
+    request is classified as async. Regression guard for LIT-4192."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+
+    params = get_litellm_params(allm_passthrough_route=True)
+    assert params.get("allm_passthrough_route") is True
+    assert LitellmLogging._is_sync_litellm_request(params) is False
 
 
 @pytest.mark.asyncio

@@ -350,6 +350,136 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toBeUndefined();
     });
 
+    it("shows the token-exchange fields only for the OAuth Token Exchange (OBO) auth type", async () => {
+      await selectHttpTransport();
+
+      // Plain OAuth must not render the token-exchange section.
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.getByText("Token Exchange Endpoint (optional)")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Subject Token Type (optional)")).toBeInTheDocument();
+
+      // Switching away hides the section again.
+      await selectAntOption("Authentication", "API Key");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+
+      // Selecting token exchange and then switching transport to stdio unmounts the
+      // whole Authentication section (the section-level transport gate), taking the
+      // token-exchange fields with it — their required client_id/client_secret rules
+      // cannot block a stdio submit because antd does not validate unmounted fields.
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.getByText("Token Exchange Endpoint (optional)")).toBeInTheDocument();
+      });
+      await selectAntOption("Transport Type", "Standard Input/Output");
+      await waitFor(() => {
+        expect(screen.queryByText("Token Exchange Endpoint (optional)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
+    });
+
+    it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "TE_Server");
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://upstream.example.com/mcp");
+
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://idp.example.com/oauth2/token")).toBeInTheDocument();
+      });
+
+      await user.type(
+        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
+        "https://idp.example.com/oauth2/token",
+      );
+      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "te-client-id");
+      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "te-client-secret");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-te",
+        server_name: "TE_Server",
+        alias: "TE_Server",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2_token_exchange",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("oauth2_token_exchange");
+      expect(payload.token_exchange_endpoint).toBe("https://idp.example.com/oauth2/token");
+      expect(payload.token_exchange_profile).toBe("rfc8693");
+      expect(payload.credentials).toMatchObject({
+        client_id: "te-client-id",
+        client_secret: "te-client-secret",
+      });
+    });
+
+    it("makes scope required when the Entra OBO profile is selected", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      await user.type(getServerNameInput(), "Entra_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://upstream.example.com/mcp");
+
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://idp.example.com/oauth2/token")).toBeInTheDocument();
+      });
+
+      await selectAntOption("Profile", "Microsoft Entra OBO");
+
+      await user.type(
+        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
+        "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+      );
+      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "entra-client");
+      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "entra-secret");
+
+      // Selecting Entra OBO makes the scope required; submitting without one is blocked by validation
+      // (rfc8693 would not require it), which confirms the profile selection took effect.
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByText("Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default"),
+        ).toBeInTheDocument();
+      });
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+    });
+
     it("enforces the allowlist when the user explicitly deselects every tool", async () => {
       await selectHttpTransport();
 
@@ -989,5 +1119,101 @@ describe("CreateMCPServer", () => {
 
       expect(onBackToDiscovery).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("CreateMCPServer oauth2_flow persistence", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const createdServer = {
+    server_id: "new-server-oauth",
+    server_name: "OAuth_Server",
+    alias: "OAuth_Server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "oauth2",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+  };
+
+  async function setupHttpServerForm() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+    const nameInput = document.getElementById("server_name") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+    });
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+    });
+  }
+
+  async function submitCreate() {
+    const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+    await waitFor(() => {
+      expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it("persists authorization_code for an interactive OAuth create", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "OAuth");
+    await waitFor(() => {
+      expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+    });
+
+    const payload = await submitCreate();
+    expect(payload.auth_type).toBe("oauth2");
+    expect(payload.oauth2_flow).toBe("authorization_code");
+  });
+
+  it("persists client_credentials for an M2M OAuth create", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, oauth2_flow: "client_credentials" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "OAuth");
+    await waitFor(() => {
+      expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+    });
+    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Enter OAuth client ID")).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), { target: { value: "cid" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), { target: { value: "csecret" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://auth.example.com/oauth/token"), {
+        target: { value: "https://auth.example.com/oauth/token" },
+      });
+    });
+
+    const payload = await submitCreate();
+    expect(payload.oauth2_flow).toBe("client_credentials");
+  });
+
+  it("sends no oauth2_flow for a non-oauth2 create", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "none" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "None");
+
+    const payload = await submitCreate();
+    expect(payload.oauth2_flow).toBeUndefined();
   });
 });

@@ -130,11 +130,12 @@ class AutoRouter(CustomLogger):
             # do nothing, return same inputs
             return None
 
-        if self.routelayer is None:
+        routelayer = self.routelayer
+        if routelayer is None:
             #######################
             # Create the route layer
             #######################
-            self.routelayer = SemanticRouter(
+            routelayer = SemanticRouter(
                 routes=self.loaded_routes,
                 encoder=LiteLLMRouterEncoder(
                     litellm_router_instance=self.litellm_router_instance,
@@ -142,9 +143,10 @@ class AutoRouter(CustomLogger):
                 ),
                 auto_sync=self.auto_sync_value,
             )
+            self.routelayer = routelayer
 
         message_content = self._extract_text_from_messages(messages)
-        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)
+        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = routelayer(text=message_content)
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model

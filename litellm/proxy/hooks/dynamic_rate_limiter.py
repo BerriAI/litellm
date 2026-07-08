@@ -4,7 +4,8 @@
 
 import asyncio
 import os
-from typing import List, Optional, Tuple, Union
+from datetime import datetime
+from typing import Callable, List, Optional, Tuple, Union
 
 import litellm
 from litellm import ModelResponse, Router
@@ -30,12 +31,13 @@ class DynamicRateLimiterCache:
     Track number of active projects calling a model.
     """
 
-    def __init__(self, cache: DualCache) -> None:
+    def __init__(self, cache: DualCache, time_fn: Callable[[], datetime] = get_utc_datetime) -> None:
         self.cache = cache
         self.ttl = 60  # 1 min ttl
+        self.time_fn = time_fn
 
     async def async_get_cache(self, model: str) -> Optional[int]:
-        dt = get_utc_datetime()
+        dt = self.time_fn()
         current_minute = dt.strftime("%H-%M")
         key_name = "{}:{}".format(current_minute, model)
         _response = await self.cache.async_get_cache(key=key_name)
@@ -59,7 +61,7 @@ class DynamicRateLimiterCache:
         - Exception, if unable to connect to cache client (if redis caching enabled)
         """
         try:
-            dt = get_utc_datetime()
+            dt = self.time_fn()
             current_minute = dt.strftime("%H-%M")
 
             key_name = "{}:{}".format(current_minute, model)
@@ -75,8 +77,8 @@ class DynamicRateLimiterCache:
 
 class _PROXY_DynamicRateLimitHandler(CustomLogger):
     # Class variables or attributes
-    def __init__(self, internal_usage_cache: DualCache):
-        self.internal_usage_cache = DynamicRateLimiterCache(cache=internal_usage_cache)
+    def __init__(self, internal_usage_cache: DualCache, time_fn: Callable[[], datetime] = get_utc_datetime):
+        self.internal_usage_cache = DynamicRateLimiterCache(cache=internal_usage_cache, time_fn=time_fn)
 
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router

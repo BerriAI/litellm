@@ -1884,7 +1884,7 @@ class CustomStreamWrapper:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:  # type: ignore[union-attr]
+                async for chunk in self.completion_stream:  # pyright: ignore[reportOptionalIterable]  # is_async_iterable guard proves __aiter__
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 

@@ -69,6 +69,7 @@ class GenAI:
     RESPONSE_ID: Final = "gen_ai.response.id"
     RESPONSE_MODEL: Final = "gen_ai.response.model"
     RESPONSE_FINISH_REASONS: Final = "gen_ai.response.finish_reasons"
+    RESPONSE_TIME_TO_FIRST_CHUNK: Final = "gen_ai.response.time_to_first_chunk"
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"

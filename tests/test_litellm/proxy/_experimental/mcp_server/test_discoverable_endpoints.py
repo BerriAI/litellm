@@ -35,6 +35,7 @@ def _mock_callback_request(base_url: str = "http://localhost:3000/"):
     req = MagicMock()
     req.base_url = base_url
     req.headers = {}
+    req.cookies = {}
     return req
 
 
@@ -519,7 +520,12 @@ async def test_register_client_persists_dcr_client_identity():
     """A dynamic client registration (RFC 7591) must persist the issued client_id /
     client_secret / token_endpoint_auth_method and the token_url onto the server row so
     autonomous refresh can authenticate as the registered client. Without persistence the
-    minted client_id is discarded and the refresh_token grant has no client identity."""
+    minted client_id is discarded and the refresh_token grant has no client identity.
+
+    The persist must also stamp oauth2_flow="authorization_code": only the interactive
+    flow reaches this persist, and without the stamp the row (client creds + token_url,
+    no persisted authorization_url) matches the legacy M2M inference whenever endpoint
+    discovery fails at registry build, flipping the server to client_credentials."""
     try:
         from fastapi import Request
 
@@ -597,6 +603,7 @@ async def test_register_client_persists_dcr_client_identity():
     assert update_data.credentials["client_id"] == "generated-client"
     assert update_data.credentials["client_secret"] == "generated-secret"
     assert update_data.credentials["token_endpoint_auth_method"] == "client_secret_basic"
+    assert update_data.oauth2_flow == "authorization_code"
 
     mock_update_server.assert_called_once()
 
@@ -2628,6 +2635,162 @@ async def test_oauth_callback_accepts_same_origin_ui_redirect():
     assert "https://proxy.example.com/ui/mcp/oauth/callback" in response.headers["location"]
     assert "code=auth-code-123" in response.headers["location"]
     assert "state=state-123" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_forwards_short_state_and_round_trips_via_cookie(monkeypatch):
+    """LIT-4197: the ``state`` sent to the upstream authorization server must be
+    a short opaque handle, not the long encrypted OAuth session (some IdPs
+    reject an over-long state). The session must instead ride in a per-flow
+    HttpOnly cookie so ``/callback`` still recovers the client's original state
+    and redirects back to the client's redirect_uri."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name,
+        authorize_with_server,
+        callback,
+        decode_state_hash,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    # Real encryption so the cookie value is a genuine encrypted session.
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-LIT-4197")
+
+    client_state = "ee230e3dfd4f19c7441941684f39c8a4e0e2c3c61a088e33403df5662b4047b8"
+    client_redirect_uri = "http://127.0.0.1:6274/oauth/callback/debug"
+
+    server = MCPServer(
+        server_id="leanix_server",
+        name="leanix",
+        server_name="leanix",
+        alias="leanix",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="upstream-client-id",
+        authorization_url="https://idp.example.com/oauth/authorize",
+        token_url="https://idp.example.com/oauth/token",
+    )
+
+    authorize_request = MagicMock(spec=Request)
+    authorize_request.base_url = "https://proxy.example.com/"
+    authorize_request.headers = {}
+
+    authorize_response = await authorize_with_server(
+        request=authorize_request,
+        mcp_server=server,
+        client_id="upstream-client-id",
+        redirect_uri=client_redirect_uri,
+        state=client_state,
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+
+    location = authorize_response.headers["location"]
+    upstream_state = parse_qs(urlparse(location).query)["state"][0]
+
+    # The upstream must receive a short handle, not the encrypted session blob.
+    assert len(upstream_state) <= 64
+    assert upstream_state != client_state
+
+    # The encrypted session rides in a per-flow HttpOnly cookie bound to it.
+    jar = SimpleCookie()
+    jar.load(authorize_response.headers["set-cookie"])
+    cookie_name = _oauth_state_cookie_name(upstream_state)
+    assert cookie_name in jar
+    morsel = jar[cookie_name]
+    assert morsel["httponly"]
+    assert morsel["samesite"].lower() == "lax"
+    assert len(morsel.value) > len(upstream_state)
+    session = decode_state_hash(morsel.value)
+    assert session["original_state"] == client_state
+    assert session["client_redirect_uri"] == client_redirect_uri
+
+    # /callback recovers the original state from the cookie (not the handle) and
+    # redirects back to the client with the client's own state.
+    callback_request = MagicMock(spec=Request)
+    callback_request.base_url = "https://proxy.example.com/"
+    callback_request.headers = {}
+    callback_request.cookies = {cookie_name: morsel.value}
+
+    callback_response = await callback(
+        request=callback_request,
+        code="upstream-auth-code",
+        state=upstream_state,
+    )
+
+    assert callback_response.status_code == 302
+    cb_query = parse_qs(urlparse(callback_response.headers["location"]).query)
+    assert callback_response.headers["location"].startswith(client_redirect_uri)
+    assert cb_query["code"] == ["upstream-auth-code"]
+    assert cb_query["state"] == [client_state]
+
+    # The one-time cookie is expired on the callback response so it cannot be replayed.
+    cleared = SimpleCookie()
+    cleared.load(callback_response.headers["set-cookie"])
+    assert cookie_name in cleared
+    assert cleared[cookie_name].value == ""
+    assert cleared[cookie_name]["max-age"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_callback_error_path_reads_cookie_and_clears_it(monkeypatch):
+    """LIT-4197: an IdP error routed through /callback must recover the client's
+    original state from the cookie (not the short handle), propagate the error to
+    the client's redirect_uri, and expire the one-time cookie."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name,
+        callback,
+        encode_state_with_base_url,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-LIT-4197")
+
+    client_state = "client-original-state-abc"
+    client_redirect_uri = "http://127.0.0.1:6274/oauth/callback/debug"
+    handle = "shortRelayHandle123"
+    encoded_state = encode_state_with_base_url(
+        base_url=client_redirect_uri,
+        original_state=client_state,
+        client_redirect_uri=client_redirect_uri,
+    )
+    cookie_name = _oauth_state_cookie_name(handle)
+
+    request = MagicMock(spec=Request)
+    request.base_url = "https://proxy.example.com/"
+    request.headers = {}
+    request.cookies = {cookie_name: encoded_state}
+
+    response = await callback(
+        request=request,
+        error="access_denied",
+        error_description="User declined access",
+        state=handle,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith(client_redirect_uri)
+    query = parse_qs(urlparse(location).query)
+    assert query["error"] == ["access_denied"]
+    # The client's own state is echoed back, recovered from the cookie.
+    assert query["state"] == [client_state]
+
+    cleared = SimpleCookie()
+    cleared.load(response.headers["set-cookie"])
+    assert cookie_name in cleared
+    assert cleared[cookie_name].value == ""
+    assert cleared[cookie_name]["max-age"] == "0"
 
 
 @pytest.mark.asyncio

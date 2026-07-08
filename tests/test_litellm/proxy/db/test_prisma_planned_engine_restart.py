@@ -42,6 +42,7 @@ def mock_prisma_binary():
 def _make_wrapper(engine_pid: int = 111, iam: bool = False) -> PrismaWrapper:
     mock_prisma = MagicMock()
     mock_prisma.connect = AsyncMock()
+    mock_prisma.is_connected = MagicMock(return_value=True)
     mock_prisma._engine = MagicMock()
     mock_prisma._engine.process.pid = engine_pid
     return PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=iam)

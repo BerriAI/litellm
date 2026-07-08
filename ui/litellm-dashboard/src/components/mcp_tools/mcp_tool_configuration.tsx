@@ -3,6 +3,7 @@ import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
 import { Badge, Spin, Checkbox, Input, Radio } from "antd";
 import McpCrudPermissionPanel from "./McpCrudPermissionPanel";
+import { TOOL_DISPLAY_NAME_PATTERN } from "./utils";
 
 interface KeyTool {
   name: string;
@@ -60,86 +61,98 @@ const ToolRow: React.FC<ToolRowProps> = ({
   onToggleExpand,
   onDisplayNameChange,
   onDescriptionChange,
-}) => (
-  <div
-    className={`rounded-lg border transition-colors ${
-      isEnabled
-        ? "bg-blue-50 border-blue-300 hover:border-blue-400"
-        : "bg-gray-50 border-gray-200 hover:border-gray-300"
-    }`}
-  >
-    <div className="p-4 cursor-pointer" onClick={() => onToggle(tool.name)}>
-      <div className="flex items-start gap-3">
-        <Checkbox checked={isEnabled} onChange={() => onToggle(tool.name)} />
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <Text className="font-medium text-gray-900">{toolNameToDisplayName[tool.name] || tool.name}</Text>
-            <span
-              className={`px-2 py-0.5 text-xs rounded-full font-medium ${
-                isEnabled ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-              }`}
-            >
-              {isEnabled ? "Enabled" : "Disabled"}
-            </span>
-            {toolNameToDisplayName[tool.name] && (
-              <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-purple-100 text-purple-800">
-                Custom name
+}) => {
+  const displayNameValue = toolNameToDisplayName[tool.name] || "";
+  const isDisplayNameInvalid = displayNameValue !== "" && !TOOL_DISPLAY_NAME_PATTERN.test(displayNameValue);
+
+  return (
+    <div
+      className={`rounded-lg border transition-colors ${
+        isEnabled
+          ? "bg-blue-50 border-blue-300 hover:border-blue-400"
+          : "bg-gray-50 border-gray-200 hover:border-gray-300"
+      }`}
+    >
+      <div className="p-4 cursor-pointer" onClick={() => onToggle(tool.name)}>
+        <div className="flex items-start gap-3">
+          <Checkbox checked={isEnabled} onChange={() => onToggle(tool.name)} />
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <Text className="font-medium text-gray-900">{toolNameToDisplayName[tool.name] || tool.name}</Text>
+              <span
+                className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                  isEnabled ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                }`}
+              >
+                {isEnabled ? "Enabled" : "Disabled"}
               </span>
+              {toolNameToDisplayName[tool.name] && (
+                <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-purple-100 text-purple-800">
+                  Custom name
+                </span>
+              )}
+            </div>
+            {(toolNameToDescription[tool.name] || tool.description) && (
+              <Text className="text-gray-500 text-sm block mt-1">
+                {toolNameToDescription[tool.name] || tool.description}
+              </Text>
+            )}
+            <Text className="text-gray-400 text-xs block mt-1">
+              {isEnabled ? "✓ Users can call this tool" : "✗ Users cannot call this tool"}
+            </Text>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => onToggleExpand(tool.name, e)}
+            className={`p-1.5 rounded-md transition-colors ${
+              isEditExpanded ? "bg-blue-100 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+            }`}
+            title="Edit display name and description"
+          >
+            <EditOutlined />
+          </button>
+        </div>
+      </div>
+      {isEditExpanded && (
+        <div
+          className="px-4 pb-4 pt-3 border-t border-gray-200 space-y-3 bg-gray-50 rounded-b-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div>
+            <Text className="text-xs font-medium text-gray-600 mb-1 block">Display Name</Text>
+            <Input
+              placeholder={tool.name}
+              value={toolNameToDisplayName[tool.name] || ""}
+              onChange={(e) => onDisplayNameChange(tool.name, e.target.value)}
+              status={isDisplayNameInvalid ? "error" : undefined}
+            />
+            {isDisplayNameInvalid ? (
+              <Text className="text-xs text-red-500 mt-1 block">
+                Only letters, digits, underscores, and hyphens are allowed (no spaces).
+              </Text>
+            ) : (
+              <Text className="text-xs text-gray-400 mt-1 block">
+                Override how this tool&apos;s name appears to users. Leave blank to use original.
+              </Text>
             )}
           </div>
-          {(toolNameToDescription[tool.name] || tool.description) && (
-            <Text className="text-gray-500 text-sm block mt-1">
-              {toolNameToDescription[tool.name] || tool.description}
+          <div>
+            <Text className="text-xs font-medium text-gray-600 mb-1 block">Description</Text>
+            <Input.TextArea
+              placeholder={tool.description || "No description"}
+              value={toolNameToDescription[tool.name] || ""}
+              onChange={(e) => onDescriptionChange(tool.name, e.target.value)}
+              rows={2}
+            />
+            <Text className="text-xs text-gray-400 mt-1 block">
+              Override the tool description shown to users. Leave blank to use original.
             </Text>
-          )}
-          <Text className="text-gray-400 text-xs block mt-1">
-            {isEnabled ? "✓ Users can call this tool" : "✗ Users cannot call this tool"}
-          </Text>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={(e) => onToggleExpand(tool.name, e)}
-          className={`p-1.5 rounded-md transition-colors ${
-            isEditExpanded ? "bg-blue-100 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-          }`}
-          title="Edit display name and description"
-        >
-          <EditOutlined />
-        </button>
-      </div>
+      )}
     </div>
-    {isEditExpanded && (
-      <div
-        className="px-4 pb-4 pt-3 border-t border-gray-200 space-y-3 bg-gray-50 rounded-b-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div>
-          <Text className="text-xs font-medium text-gray-600 mb-1 block">Display Name</Text>
-          <Input
-            placeholder={tool.name}
-            value={toolNameToDisplayName[tool.name] || ""}
-            onChange={(e) => onDisplayNameChange(tool.name, e.target.value)}
-          />
-          <Text className="text-xs text-gray-400 mt-1 block">
-            Override how this tool&apos;s name appears to users. Leave blank to use original.
-          </Text>
-        </div>
-        <div>
-          <Text className="text-xs font-medium text-gray-600 mb-1 block">Description</Text>
-          <Input.TextArea
-            placeholder={tool.description || "No description"}
-            value={toolNameToDescription[tool.name] || ""}
-            onChange={(e) => onDescriptionChange(tool.name, e.target.value)}
-            rows={2}
-          />
-          <Text className="text-xs text-gray-400 mt-1 block">
-            Override the tool description shown to users. Leave blank to use original.
-          </Text>
-        </div>
-      </div>
-    )}
-  </div>
-);
+  );
+};
 
 const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   accessToken,

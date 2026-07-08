@@ -15,6 +15,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from e2e_config import unique_marker
 from e2e_http import (
@@ -39,6 +40,8 @@ from models import (
     SpendCalculateBody,
     SpendCalculateResponse,
     SpendLogRow,
+    SpendLogsPage,
+    SpendLogsPageParams,
     SpendTagsResponse,
     TagSpend,
 )
@@ -179,6 +182,28 @@ class SpendClient:
                 return spend
             time.sleep(self.gateway.poll_interval)
         return spend
+
+    def spend_logs_page(
+        self, *, api_key: str | None, page: int, page_size: int
+    ) -> SpendLogsPage:
+        """One page of /spend/logs/v2 over a window wide enough to contain every
+        row this test run wrote (the endpoint requires explicit dates)."""
+        now = datetime.now(timezone.utc)
+        fmt = "%Y-%m-%d %H:%M:%S"
+        return unwrap(
+            self.gateway.transport.get(
+                "/spend/logs/v2",
+                headers=self.gateway.transport.master,
+                params=SpendLogsPageParams(
+                    start_date=(now - timedelta(days=1)).strftime(fmt),
+                    end_date=(now + timedelta(days=1)).strftime(fmt),
+                    page=page,
+                    page_size=page_size,
+                    api_key=api_key,
+                ),
+                response_type=SpendLogsPage,
+            )
+        )
 
     def probe(self, path: str, *, params: DateRangeParams) -> ProbeResult:
         return self.gateway.transport.probe(path, params=params)

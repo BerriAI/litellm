@@ -92,6 +92,7 @@ async def test_recreate_prisma_client_kills_old_engine_on_disconnect_failure(
     """When disconnect() fails, recreate_prisma_client must SIGTERM/SIGKILL the old engine PID."""
     mock_prisma = AsyncMock()
     mock_prisma.disconnect.side_effect = Exception("engine hung")
+    mock_prisma.is_connected = MagicMock(return_value=True)
 
     # Simulate engine subprocess with a known PID
     mock_engine = MagicMock()
@@ -122,6 +123,7 @@ async def test_recreate_prisma_client_skips_kill_on_successful_disconnect(
 ):
     """When disconnect() succeeds, no kill should be attempted."""
     mock_prisma = AsyncMock()
+    mock_prisma.is_connected = MagicMock(return_value=True)
     mock_prisma.disconnect.return_value = None
 
     wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
@@ -142,6 +144,7 @@ async def test_recreate_prisma_client_handles_missing_engine_pid(
 ):
     """When engine PID is unavailable (no _engine attr), kill is skipped gracefully."""
     mock_prisma = AsyncMock()
+    mock_prisma.is_connected = MagicMock(return_value=True)
     mock_prisma.disconnect.side_effect = Exception("engine hung")
     mock_prisma._engine = None  # No engine subprocess
 
@@ -157,4 +160,36 @@ async def test_recreate_prisma_client_handles_missing_engine_pid(
         await wrapper.recreate_prisma_client("postgresql://new")
 
     mock_kill.assert_not_called()  # PID was 0, kill skipped
+    mock_new_prisma.connect.assert_awaited_once()
+
+
+def test_get_engine_pid_returns_zero_for_disconnected_client(disconnected_prisma):
+    """A disconnected client must read as "no engine" instead of raising,
+    otherwise the reconnect path can never recover."""
+    wrapper = PrismaWrapper(
+        original_prisma=disconnected_prisma, iam_token_db_auth=False
+    )
+
+    assert wrapper._get_engine_pid() == 0
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_recovers_from_disconnected_client(
+    mock_prisma_binary, disconnected_prisma
+):
+    """recreate_prisma_client must still build a replacement client when the
+    current one is disconnected."""
+    wrapper = PrismaWrapper(
+        original_prisma=disconnected_prisma, iam_token_db_auth=False
+    )
+
+    mock_new_prisma = AsyncMock()
+    mock_prisma_binary.Prisma.return_value = mock_new_prisma
+
+    with patch("os.kill") as mock_kill:
+        result = await wrapper.recreate_prisma_client("postgresql://new")
+
+    assert result is True
+    mock_kill.assert_not_called()
+    assert wrapper._original_prisma is mock_new_prisma
     mock_new_prisma.connect.assert_awaited_once()

@@ -77,6 +77,7 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
+        _apply_toolset_scope,
         _fire_mcp_success_logging,
         _tool_name_matches,
         execute_mcp_tool,
@@ -541,10 +542,37 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools",
         }
 
+    def _as_query_str(value: Any) -> Optional[str]:
+        """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
+        return value if isinstance(value, str) else None
+
+    async def _resolve_toolset_scope(
+        toolset_name: Optional[str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> UserAPIKeyAuth:
+        """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
+        if not toolset_name:
+            return user_api_key_dict
+
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw("Database not available. Connect a database to your proxy")
+        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name)
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Toolset '{toolset_name}' not found",
+            )
+        return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
+
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
         request: Request,
         server_id: Optional[str] = Query(None, description="The server id to list tools for"),
+        mcp_server_name: Optional[str] = Query(
+            None, description="Filter tools to a single MCP server by name or alias"
+        ),
+        toolset_name: Optional[str] = Query(None, description="Filter tools to a single toolset by name"),
         include_disabled_tools: bool = Query(
             False,
             description=(
@@ -582,16 +610,29 @@ if MCP_AVAILABLE:
         )
 
         try:
+            mcp_server_name = _as_query_str(mcp_server_name)
+            toolset_name = _as_query_str(toolset_name)
+
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
             apply_tool_filters = not (
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
 
-            if apply_tool_filters and getattr(
-                getattr(user_api_key_dict, "object_permission", None),
-                "mcp_tool_search_enabled",
-                False,
+            user_api_key_dict = await _resolve_toolset_scope(toolset_name, user_api_key_dict)
+
+            if server_id is None:
+                server_id = mcp_server_name
+
+            if (
+                apply_tool_filters
+                and server_id is None
+                and toolset_name is None
+                and getattr(
+                    getattr(user_api_key_dict, "object_permission", None),
+                    "mcp_tool_search_enabled",
+                    False,
+                )
             ):
                 from litellm.proxy._experimental.mcp_server.tool_search import (
                     get_virtual_tool_definitions,
@@ -719,6 +760,8 @@ if MCP_AVAILABLE:
                 request_path=request.scope.get("_original_path") or request.url.path,
             )
         except HTTPException as http_exc:
+            if http_exc.status_code == status.HTTP_404_NOT_FOUND:
+                raise
             # Internal access/IP 403s keep the legacy error-dict response shape
             # so the existing contract stays intact.
             verbose_logger.exception("HTTPException in list_tool_rest_api: %s", str(http_exc))
@@ -1079,11 +1122,6 @@ if MCP_AVAILABLE:
             forwarded_authorization = (
                 effective_oauth2_headers.get("Authorization") if effective_oauth2_headers else None
             )
-            is_interactive_authz_code = (
-                server_model.auth_type == MCPAuth.oauth2
-                and forwarded_authorization is not None
-                and to_server_spec(server_model) is not None
-            )
             preview_cred_provider = (
                 UpstreamCredentialProvider(
                     oauth_token_store=PresentedOAuthTokenStore(
@@ -1094,7 +1132,11 @@ if MCP_AVAILABLE:
                         )
                     )
                 )
-                if is_interactive_authz_code
+                if (
+                    server_model.auth_type == MCPAuth.oauth2
+                    and forwarded_authorization is not None
+                    and to_server_spec(server_model) is not None
+                )
                 else None
             )
 

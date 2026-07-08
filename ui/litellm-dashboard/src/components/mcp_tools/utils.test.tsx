@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { extractMCPToken, maskUrl, getMaskedAndFullUrl, validateMCPServerUrl, validateMCPServerName } from "./utils";
+import {
+  extractMCPToken,
+  maskUrl,
+  getMaskedAndFullUrl,
+  validateMCPServerUrl,
+  validateMCPServerName,
+  normalizeToolOverrideMap,
+} from "./utils";
 
 describe("extractMCPToken", () => {
   it("should extract token after /mcp/", () => {
@@ -65,5 +72,23 @@ describe("validateMCPServerName", () => {
 
   it("should reject names containing spaces", async () => {
     await expect(validateMCPServerName("my server")).rejects.toBeDefined();
+  });
+});
+
+describe("normalizeToolOverrideMap", () => {
+  it("returns empty object for nullish input", () => {
+    expect(normalizeToolOverrideMap(null)).toEqual({});
+    expect(normalizeToolOverrideMap(undefined)).toEqual({});
+  });
+
+  it("parses JSON string maps from legacy API responses", () => {
+    expect(normalizeToolOverrideMap('{"read_wiki_structure":"browse_docs"}')).toEqual({
+      read_wiki_structure: "browse_docs",
+    });
+  });
+
+  it("passes through object maps unchanged", () => {
+    const map = { read_user: "Read User" };
+    expect(normalizeToolOverrideMap(map)).toBe(map);
   });
 });

@@ -174,20 +174,13 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         logging_response = copy.deepcopy(self.completed_response)
 
         asyncio.create_task(
-            self.logging_obj.async_success_handler(
-                result=logging_response,
+            self.logging_obj.dispatch_success_handlers(
+                logging_response,
                 start_time=self.start_time,
                 end_time=datetime.now(),
                 cache_hit=None,
+                prefer_async_handlers=True,
             )
-        )
-
-        executor.submit(
-            self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=None,
-            start_time=self.start_time,
-            end_time=datetime.now(),
         )
 
 

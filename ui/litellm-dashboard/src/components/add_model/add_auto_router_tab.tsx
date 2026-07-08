@@ -55,6 +55,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     REASONING: "",
   });
 
+  const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
+
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
@@ -127,6 +129,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             model_type: "complexity_router",
             complexity_router_config: {
               tiers: complexityTiers,
+              ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
             },
             model_access_group: currentFormValues.model_access_group,
           };
@@ -280,6 +283,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
                 onChange={(tiers) => {
                   setComplexityTiers(tiers);
                 }}
+                customTechnicalKeywords={customTechnicalKeywords}
+                onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
               />
             </div>
           ) : (

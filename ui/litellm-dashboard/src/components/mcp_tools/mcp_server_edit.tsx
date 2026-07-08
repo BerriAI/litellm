@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
+import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import {
   AUTH_TYPE,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
+  MCP_OAUTH2_FLOW_INTERACTIVE,
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
   getMcpOAuthMode,
+  oauth2FlowToFormValue,
 } from "./types";
 import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential } from "../networking";
 import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
@@ -18,10 +20,17 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
+import {
+  validateMCPServerUrl,
+  validateMCPServerName,
+  normalizeEnvVars,
+  normalizeToolOverrideMap,
+  TOOL_DISPLAY_NAME_PATTERN,
+} from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -36,7 +45,12 @@ interface MCPServerEditProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [
+  ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
+  AUTH_TYPE.OAUTH2,
+  AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+  AUTH_TYPE.AWS_SIGV4,
+];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
@@ -67,9 +81,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
+  // Watch reflects a live toggle when the delegate switch is mounted; fall back to
+  // the stored value otherwise (useWatch returns undefined for an unmounted field,
+  // the same trap the oauth_flow_type field originally hit).
+  const delegateAuthWatched = Form.useWatch("delegate_auth_to_upstream", form) as boolean | undefined;
+  const isDelegateAuth = delegateAuthWatched ?? Boolean(mcpServer.delegate_auth_to_upstream);
 
   // Watch form fields that affect tool fetching
   const currentUrl = Form.useWatch("url", form);
@@ -219,7 +239,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       static_headers: initialStaticHeaders,
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
-      oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+      oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -257,8 +277,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (hasExistingToolAllowlist) {
       setAllowedTools(mcpServer.allowed_tools ?? []);
     }
-    setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
-    setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
+    setToolNameToDisplayName(normalizeToolOverrideMap(mcpServer.tool_name_to_display_name));
+    setToolNameToDescription(normalizeToolOverrideMap(mcpServer.tool_name_to_description));
   }, [mcpServer, hasExistingToolAllowlist]);
 
   useEffect(() => {
@@ -449,6 +469,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
+    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
+      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+    );
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
+      );
+      return;
+    }
     try {
       // Ensure access groups is always a string array
       const {
@@ -617,6 +646,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Remove UI-only fields
         stdio_config: undefined,
         env_json: undefined,
+        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
+          ? { authorization_url: null, token_url: null, registration_url: null }
+          : {}),
+        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
+        restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
+          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null, token_exchange_profile: null }
+          : {}),
         server_id: mcpServer.server_id,
         mcp_info: {
           ...(mcpServer.mcp_info ?? {}),
@@ -666,6 +702,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
             : false;
         })(),
+        ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && restValues.oauth_flow_type
+          ? {
+              oauth2_flow:
+                restValues.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
+            }
+          : {}),
         // Include token_validation when it is set (non-null) or when clearing an existing value
         ...(tokenValidation !== null || mcpServer.token_validation ? { token_validation: tokenValidation } : {}),
       };
@@ -689,7 +731,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream),
         });
         try {
-          if (oauthMode === "obo") {
+          if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
             await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, {
               access_token: oauthTokenResponse.access_token,
@@ -820,6 +862,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
+                  <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                   <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                 </Select>
               </Form.Item>
@@ -914,6 +957,31 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {!isStdioTransport && isOAuthAuthType && (
               <>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      OAuth Flow Type
+                      <Tooltip title="Machine-to-Machine (M2M) authenticates with client credentials and no user interaction. Interactive (PKCE) authorizes each user in the browser and stores per-user tokens. Servers created before this field existed have no stored value; choose one to persist it.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="oauth_flow_type"
+                >
+                  <Select placeholder="Select OAuth flow">
+                    <Select.Option value={OAUTH_FLOW.M2M}>Machine-to-Machine (M2M)</Select.Option>
+                    <Select.Option value={OAUTH_FLOW.INTERACTIVE}>Interactive (PKCE)</Select.Option>
+                  </Select>
+                </Form.Item>
+                {!oauthFlowTypeValue && !isDelegateAuth && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    className="mb-4 rounded-lg"
+                    message="This server has no OAuth flow set"
+                    description="Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
+                  />
+                )}
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -1087,6 +1155,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               </>
             )}
 
+            {!isStdioTransport && isTokenExchangeAuthType && <TokenExchangeFormFields isEditing />}
+
             {!isStdioTransport && isAwsSigV4AuthType && (
               <>
                 <p className="text-sm text-gray-500 mb-2">
@@ -1246,7 +1316,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: transportType ?? mcpServer.transport,
                   auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: currentTokenUrl ?? mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type:
+                    oauthFlowTypeValue ?? oauth2FlowToFormValue(mcpServer.oauth2_flow) ?? OAUTH_FLOW.INTERACTIVE,
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,

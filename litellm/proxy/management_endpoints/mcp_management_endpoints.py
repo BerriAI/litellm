@@ -215,6 +215,34 @@ if MCP_AVAILABLE:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 
+    def stamp_omitted_oauth2_flow(payload: NewMCPServerRequest) -> None:
+        """Fallback only: fill in oauth2_flow when an oauth2 create omits it.
+
+        An explicit oauth2_flow from the caller (the dashboard's flow selector, a REST
+        body, config.yaml) always wins and is never touched. The shape check below runs
+        solely for oauth2 creates that leave the field unset, so those rows still
+        persist a flow instead of relying on read-time inference.
+
+        The create payload carries the plaintext credentials, so the M2M-vs-interactive
+        decision is reliable here in a way it is not at read time (credentials are
+        encrypted at rest and redacted in responses). The client_credentials shape
+        mirrors the legacy inference in MCPServerManager._resolve_oauth2_flow; every
+        other oauth2 configuration is the authorization_code grant, including
+        delegate_auth_to_upstream, where the client runs that grant upstream.
+        """
+        if payload.auth_type != MCPAuth.oauth2:
+            return
+        if payload.oauth2_flow:
+            return
+        credentials = payload.credentials or {}
+        has_m2m_shape = bool(
+            payload.token_url
+            and credentials.get("client_id")
+            and credentials.get("client_secret")
+            and not payload.authorization_url
+        )
+        payload.oauth2_flow = "client_credentials" if has_m2m_shape else "authorization_code"
+
     _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(NewMCPServerRequest.model_fields)
 
     def _validate_mcp_required_fields(payload: Any) -> None:
@@ -509,6 +537,10 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
         # Drop env vars entirely rather than only blanking global values: the
         # names alone (DB_PASSWORD, GITHUB_API_KEY, ...) leak what secrets the
         # admin configured. Non-admins get the per-user vars they must fill in
@@ -550,6 +582,10 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
 
         sanitized.health_check_error = None
         sanitized.last_health_check = None
@@ -1057,6 +1093,7 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
         _validate_mcp_required_fields(payload)
 
         payload.approval_status = MCPApprovalStatus.pending_review
@@ -1322,6 +1359,7 @@ if MCP_AVAILABLE:
 
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -1413,6 +1451,7 @@ if MCP_AVAILABLE:
 
         # Validate and normalize payload fields (alias/server name rules)
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
 
         # Restrict to proxy admins similar to the persistent create endpoint
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:

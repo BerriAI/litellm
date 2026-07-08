@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import get_model_from_request
+from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -52,6 +53,61 @@ def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
     return {
         entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
     }
+
+
+def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: Optional[UserAPIKeyAuth]) -> bool:
+    """
+    Whether an over-budget key's own ``max_budget`` reservation should be
+    released rather than blocked, because the key opted into throttling: the
+    rate limiter slows it instead. Only the key's own ``max_budget`` counter is
+    exempt; team/user/window counters still enforce normally, and under-budget
+    requests never reach this branch so their concurrent-overspend protection is
+    untouched.
+    """
+    if valid_token is None:
+        return False
+    return counter_key == f"spend:key:{valid_token.token}" and should_throttle_budget_exceeded(valid_token)
+
+
+async def _apply_over_budget_reservation_policy(
+    counter: _BudgetCounter,
+    valid_token: Optional[UserAPIKeyAuth],
+    entry: dict[str, Any],
+    applied_entries: list[dict[str, Any]],
+    reservation_cost: float,
+    current_spend: float,
+) -> float:
+    """
+    Decide what to do when a counter is over budget, and return the reservation
+    cost to carry into the next counter. Three outcomes: an over-budget key that
+    opted into throttling releases its own reservation (the rate limiter slows
+    it) and keeps the cost; a partially-remaining budget resizes the reservation
+    down to what is left; anything else hard-blocks by raising.
+    """
+    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
+        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
+        applied_entries.remove(entry)
+        return reservation_cost
+
+    remaining_before_reservation = counter.max_budget - (current_spend - reservation_cost)
+    if remaining_before_reservation > 1e-12:
+        await _resize_applied_reservation(
+            entries=applied_entries,
+            current_reserved_cost=reservation_cost,
+            new_reserved_cost=remaining_before_reservation,
+        )
+        return remaining_before_reservation
+
+    raise litellm.BudgetExceededError(
+        current_cost=current_spend,
+        max_budget=counter.max_budget,
+        message=(
+            "Budget has been exceeded! "
+            f"{counter.entity_type}={counter.entity_id} "
+            f"Current cost: {current_spend}, "
+            f"Max budget: {counter.max_budget}"
+        ),
+    )
 
 
 async def reserve_budget_for_request(
@@ -130,25 +186,15 @@ async def reserve_budget_for_request(
                     cached_spend = await _get_current_counter_value(counter=counter)
                 current_spend = cached_spend + reservation_cost
             if current_spend > counter.max_budget:
-                remaining_before_reservation = counter.max_budget - (current_spend - reservation_cost)
-                if remaining_before_reservation > 1e-12:
-                    await _resize_applied_reservation(
-                        entries=applied_entries,
-                        current_reserved_cost=reservation_cost,
-                        new_reserved_cost=remaining_before_reservation,
-                    )
-                    reservation_cost = remaining_before_reservation
-                    continue
-                raise litellm.BudgetExceededError(
-                    current_cost=current_spend,
-                    max_budget=counter.max_budget,
-                    message=(
-                        "Budget has been exceeded! "
-                        f"{counter.entity_type}={counter.entity_id} "
-                        f"Current cost: {current_spend}, "
-                        f"Max budget: {counter.max_budget}"
-                    ),
+                reservation_cost = await _apply_over_budget_reservation_policy(
+                    counter=counter,
+                    valid_token=valid_token,
+                    entry=entry,
+                    applied_entries=applied_entries,
+                    reservation_cost=reservation_cost,
+                    current_spend=current_spend,
                 )
+                continue
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,

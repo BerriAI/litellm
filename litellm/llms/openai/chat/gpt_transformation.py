@@ -2,6 +2,7 @@
 Support for gpt model family
 """
 
+import json
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -782,8 +783,30 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 delta["reasoning_content"] = delta.pop("reasoning")
         return choices
 
+    @staticmethod
+    def _extract_error_from_chunk(chunk: dict) -> Optional[tuple[str, int]]:
+        """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
+        stream whose body carries an error payload, e.g.
+        ``data: {"error": {"message": "...", "code": 400}}``."""
+        error = chunk.get("error")
+        if not error:
+            return None
+        if not isinstance(error, dict):
+            return str(error), 500
+        message = error.get("message")
+        code = error.get("code")
+        status_code = code if isinstance(code, int) and 400 <= code < 600 else 500
+        return (message if isinstance(message, str) else json.dumps(error)), status_code
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
+            error_details = self._extract_error_from_chunk(chunk)
+            if error_details is not None:
+                error_message, error_status_code = error_details
+                raise OpenAIError(
+                    status_code=error_status_code,
+                    message=error_message,
+                )
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
 

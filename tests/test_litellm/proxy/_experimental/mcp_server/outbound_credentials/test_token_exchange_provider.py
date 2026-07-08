@@ -13,7 +13,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
     build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
-    Rfc8693TokenExchanger,
+    OboTokenExchanger,
     SubjectTokenRejected,
     TokenExchangeClientError,
 )
@@ -41,7 +41,7 @@ def _client_raising_4xx(body: object):
 
 
 def test_build_token_exchanger_returns_an_exchanger():
-    assert isinstance(build_token_exchanger(), Rfc8693TokenExchanger)
+    assert isinstance(build_token_exchanger(), OboTokenExchanger)
 
 
 def test_build_gives_each_caller_an_independent_cache():
@@ -116,3 +116,38 @@ async def test_post_returns_none_on_non_object_json(payload):
     with patch(_HTTP_CLIENT, return_value=_Client()):
         result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_post_threads_step_up_error_and_claims_into_subject_rejected():
+    # Entra Conditional Access: the 4xx body's machine code and claims blob must ride on the
+    # rejection so the edge challenge can drive the client's step-up; error_description never does.
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+    body = {
+        "error": "interaction_required",
+        "error_description": "AADSTS50079: the user must enroll MFA",
+        "claims": claims,
+    }
+    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx(body)):
+        with pytest.raises(SubjectTokenRejected) as exc_info:
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+    assert exc_info.value.claims == claims
+    assert "AADSTS50079" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_post_subject_rejection_without_claims_carries_none_claims():
+    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx({"error": "invalid_grant"})):
+        with pytest.raises(SubjectTokenRejected) as exc_info:
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+    assert exc_info.value.claims is None
+
+
+@pytest.mark.asyncio
+async def test_post_gateway_fault_still_wins_when_claims_are_present():
+    # A gateway-fault code stays a 500-class TokenExchangeClientError even if the body carries
+    # claims; the caller cannot fix invalid_client by stepping up.
+    body = {"error": "invalid_client", "claims": '{"access_token":{}}'}
+    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx(body)):
+        with pytest.raises(TokenExchangeClientError):
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
