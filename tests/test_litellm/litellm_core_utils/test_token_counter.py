@@ -1114,3 +1114,53 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "f",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"tags": {"type": "array"}},
+                        "required": ["tags"],
+                    },
+                },
+            }
+        ],
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "f",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"tags": {"type": "array", "items": [{"type": "string"}]}},
+                        "required": ["tags"],
+                    },
+                },
+            }
+        ],
+        [
+            {
+                "name": "f",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"tags": {"type": "array"}},
+                    "required": ["tags"],
+                },
+            }
+        ],
+    ],
+    ids=["openai_array_without_items", "openai_array_items_as_list", "anthropic_array_without_items"],
+)
+def test_token_counter_tool_array_param_missing_or_invalid_items(tools):
+    result = litellm.token_counter(
+        model="gpt-4o", messages=[{"role": "user", "content": "hi"}], tools=tools
+    )
+    assert isinstance(result, int)
+    assert result > 0
