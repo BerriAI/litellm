@@ -915,3 +915,25 @@ async def test_v2_wires_object_permission_onto_org_write(monkeypatch):
     assert "object_permission" in passed
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert write_data["object_permission_id"] == "op-123"
+
+
+@pytest.mark.asyncio
+async def test_v2_clears_object_permission_when_sent_null(monkeypatch):
+    """object_permission: null detaches the org's permission row (object_permission_id -> None), no merge."""
+    from litellm.proxy.management_endpoints import organization_endpoints
+
+    handle_mock = AsyncMock()
+    monkeypatch.setattr(organization_endpoints, "handle_update_object_permission", handle_mock)
+
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"object_permission": None},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+        update_budget_mock=AsyncMock(),
+        new_budget_mock=AsyncMock(),
+    )
+
+    handle_mock.assert_not_awaited()
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert write_data["object_permission_id"] is None

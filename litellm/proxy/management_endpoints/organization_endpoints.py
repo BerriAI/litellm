@@ -697,10 +697,11 @@ async def update_organization_v2(
         user_api_key_dict=user_api_key_dict,
     )
 
+    object_permission_cleared = "object_permission" in data.model_fields_set and data.object_permission is None
     object_permission_write: Mapping[str, object] = (
         {"object_permission": data.object_permission.model_dump(exclude_none=True)}
         if data.object_permission is not None
-        else {}
+        else ({"object_permission_id": None} if object_permission_cleared else {})
     )
 
     organization_write_data = prisma_client.jsonify_object(
