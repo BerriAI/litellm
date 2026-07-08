@@ -28,14 +28,13 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     build_token_endpoint_client_auth,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # RFC 8693 grant type constant
 TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
-
-DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 
 class TokenExchangeHandler:

@@ -60,6 +60,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.budget_throttle import (
+    budget_throttle_percentage,
+    should_throttle_budget_exceeded,
+)
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -2496,6 +2500,7 @@ def _copy_user_api_key_auth_for_cache(
 ) -> UserAPIKeyAuth:
     copied_key_obj = user_api_key_obj.model_copy()
     copied_key_obj.budget_reservation = None
+    copied_key_obj.budget_throttle_pct = None
     copied_key_obj.parent_otel_span = None
     copied_key_obj.request_route = None
     return copied_key_obj
@@ -3428,6 +3433,24 @@ async def is_valid_fallback_model(
     return True
 
 
+def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
+    """
+    Throttle an over-budget key instead of blocking it, when the key opted in
+    via `throttle_on_budget_exceeded` and a global percentage is configured.
+
+    Records the percentage on the request-scoped `budget_throttle_pct` so the
+    rate limiter scales the key's TPM/RPM down to it; the persistent limits are
+    left untouched so the throttle never compounds across requests. Returns True
+    when the key was throttled (caller skips raising), False when it should still
+    be hard-blocked.
+    """
+    pct = budget_throttle_percentage()
+    if pct is None or not should_throttle_budget_exceeded(valid_token):
+        return False
+    valid_token.budget_throttle_pct = pct
+    return True
+
+
 async def _virtual_key_max_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -3488,6 +3511,8 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            if _apply_budget_exceeded_throttle(valid_token):
+                return
             # name the key in the error so operators don't have to reverse-map
             # spend back to a key; key_name is the masked form (last 4 chars)
             key_label = valid_token.key_alias or "key"

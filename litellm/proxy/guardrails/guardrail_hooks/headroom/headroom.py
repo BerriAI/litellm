@@ -282,7 +282,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
-    ) -> tuple[list[dict[str, object]], bool]:
+    ) -> tuple[list[dict[str, object]], bool, dict[str, object]]:
         payload: dict[str, object] = {"messages": messages}
         if model:
             payload["model"] = model
@@ -310,15 +310,19 @@ class HeadroomGuardrail(CustomGuardrail):
                 messages,
                 "Headroom compression service returned no response",
                 {},
-            ), False
+            )
         response: HttpxResponse = raw_response
 
         if response.status_code != 200:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned an error",
-                {"status_code": response.status_code, "body": response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned an error",
+                    {"status_code": response.status_code, "body": response.text},
+                ),
+                False,
+                {},
+            )
 
         try:
             body: object = response.json()
@@ -329,27 +333,39 @@ class HeadroomGuardrail(CustomGuardrail):
                 {"body": response.text[:500]},
             ), False
         if not _is_str_object_dict(body):
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned unexpected response shape",
-                {"body": response.text[:500]},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned unexpected response shape",
+                    {"body": response.text[:500]},
+                ),
+                False,
+                {},
+            )
 
         compressed_messages = body.get("messages")
         if not _is_object_list(compressed_messages):
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service response missing 'messages'",
-                {"body": response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service response missing 'messages'",
+                    {"body": response.text},
+                ),
+                False,
+                {},
+            )
 
         filtered = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned empty message list",
-                {"body": response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned empty message list",
+                    {"body": response.text},
+                ),
+                False,
+                {},
+            )
 
         verbose_proxy_logger.debug(
             "Headroom: compressed %s tokens -> %s tokens (ratio %.2f)",
@@ -357,7 +373,19 @@ class HeadroomGuardrail(CustomGuardrail):
             body.get("tokens_after", "?"),
             body.get("compression_ratio", 0),
         )
-        return filtered, True
+
+        stats = {
+            key: body[key]
+            for key in (
+                "tokens_before",
+                "tokens_after",
+                "tokens_saved",
+                "compression_ratio",
+                "transforms_applied",
+            )
+            if key in body
+        }
+        return filtered, True, stats
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
         params: dict[str, str] = {}
@@ -421,10 +449,12 @@ class HeadroomGuardrail(CustomGuardrail):
             return inputs
 
         model = self.headroom_model or request_data.get("model")
-        compressed, compression_succeeded = await self._call_compress(
+        start_time = time.time()
+        compressed, compression_succeeded, stats = await self._call_compress(
             messages=messages,
             model=model if isinstance(model, str) else None,
         )
+        end_time = time.time()
 
         if not compression_succeeded:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]

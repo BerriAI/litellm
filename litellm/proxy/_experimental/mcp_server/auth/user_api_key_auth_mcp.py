@@ -8,6 +8,7 @@ from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
@@ -357,6 +358,7 @@ class MCPRequestHandler:
         # Inline imports avoid a circular dependency: mcp_server_manager imports
         # from this module.
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
             global_mcp_server_manager,
         )
         from litellm.types.mcp import MCPAuth
@@ -382,7 +384,18 @@ class MCPRequestHandler:
             # fetches the upstream token automatically using stored credentials,
             # so allowing anonymous bypass would let any external caller invoke
             # tools authenticated as LiteLLM's service account.
-            if server.has_client_credentials:
+            #
+            # Resolve the flow rather than reading has_client_credentials directly:
+            # this is a security gate, and a legacy row whose oauth2_flow was never
+            # stamped still carries the M2M credential shape (client_id/secret +
+            # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
+            # row as non-M2M here would reopen the anonymous bypass the explicit
+            # column no longer closes on its own. Shares the one resolution helper
+            # with the egress backstop and the anonymous-delegate allowlist; all fail
+            # closed on the ambiguous shape and are removed together once no null rows
+            # remain. A pure-PKCE delegate server (no stored credentials) resolves to a
+            # non-M2M flow and keeps its bypass.
+            if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
                 return False
         return True
 
@@ -726,6 +739,9 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
 
+        if user_api_key_auth.team_id == UI_TEAM_ID:
+            return None
+
         # Get the team object (which has object_permission already loaded)
         team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
             team_id=user_api_key_auth.team_id,
@@ -1019,6 +1035,9 @@ class MCPRequestHandler:
             )
 
             if user_api_key_auth is None or not user_api_key_auth.team_id or prisma_client is None:
+                return []
+
+            if user_api_key_auth.team_id == UI_TEAM_ID:
                 return []
 
             team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
@@ -1501,6 +1520,9 @@ class MCPRequestHandler:
 
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
+            return []
+
+        if user_api_key_auth.team_id == UI_TEAM_ID:
             return []
 
         try:

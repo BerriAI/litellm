@@ -2584,6 +2584,50 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_load_config_user_url_validation_handles_null_and_string_false(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.example"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["provider.example"])
+    null_config_file = tmp_path / "null_config.yaml"
+    null_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "user_url_allowed_hosts": None,
+                    "user_url_validation": None,
+                    "provider_url_destination_allowed_hosts": None,
+                },
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(null_config_file)
+    )
+    assert litellm.user_url_validation is True
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
+
+    false_config_file = tmp_path / "false_config.yaml"
+    false_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {"user_url_validation": "false"},
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(false_config_file)
+    )
+    assert litellm.user_url_validation is False
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
@@ -8600,6 +8644,149 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
+    """The throttle fraction is a litellm_settings scalar surfaced on the General
+    Settings table as a Float field so it sits with the other global limits; it
+    must appear in /config/list reading its live litellm.<attr> value."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.15)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "budget_exceeded_throttle_percentage" in fields
+        assert fields["budget_exceeded_throttle_percentage"]["field_type"] == "Float"
+        assert fields["budget_exceeded_throttle_percentage"]["field_value"] == 0.15
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_persists_to_litellm_settings(monkeypatch):
+    """Editing the throttle Float row on the General Settings table routes to
+    litellm_settings (not general_settings): it sets litellm.<attr> live and
+    persists under litellm_settings so the runtime read is unchanged."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="budget_exceeded_throttle_percentage",
+            field_value=0.1,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.budget_exceeded_throttle_percentage == 0.1
+    assert saved["litellm_settings"]["budget_exceeded_throttle_percentage"] == 0.1
+
+
+@pytest.mark.parametrize("bad_value", [0, -0.1, 1.5, True])
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_rejects_invalid(monkeypatch, bad_value):
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="budget_exceeded_throttle_percentage",
+                field_value=bad_value,
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+    assert exc.value.status_code == 400
+    assert litellm.budget_exceeded_throttle_percentage is None
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_rejected_for_non_admin(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    non_admin = UserAPIKeyAuth(api_key="k", user_id="u", user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(HTTPException):
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="budget_exceeded_throttle_percentage",
+                field_value=0.1,
+                config_type="general_settings",
+            ),
+            user_api_key_dict=non_admin,
+        )
+    assert litellm.budget_exceeded_throttle_percentage is None
+
+
 def test_preserve_redacted_plugin_keys_keeps_stored_credential():
     """A redacted or blank plugin_key on update must not overwrite the real key."""
     from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
@@ -8869,6 +9056,76 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     assert "sk-stored-secret" not in written["before_value"]
     assert "sk-stored-secret" not in written["updated_values"]
     assert before["some_api_key"] != "sk-stored-secret"
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_validation",
+            field_value="false",
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=["internal.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=["provider.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_validation is False
+    assert litellm.user_url_allowed_hosts == ["internal.example"]
+    assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
 
 
 @pytest.mark.asyncio
