@@ -144,6 +144,20 @@ class GenericGuardrailAPIRequest(BaseModel):
     model: Optional[str] = None  # the model being used for the LLM call
 
 
+def coerce_stream_holdback_value(value: Any) -> int:
+    """Coerce a single ``stream_holdback_chars`` entry to a non-negative int.
+
+    A guardrail returning a null, non-numeric, or negative holdback element must
+    not abort the streaming round, so malformed values degrade to 0 (no holdback)
+    rather than raising. Shared by response parsing (``from_dict``) and the
+    handler that applies holdback to in-process guardrail return values.
+    """
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
@@ -173,24 +187,11 @@ class GenericGuardrailAPIResponse:
         # processing round (word-boundary safety for text transformations).
         self.stream_holdback_chars = stream_holdback_chars
 
-    @staticmethod
-    def _coerce_holdback_value(value: Any) -> int:
-        """Coerce a single stream_holdback_chars entry to a non-negative int.
-
-        A guardrail service returning a null or non-numeric holdback element must
-        not abort the streaming round, so malformed values degrade to 0 (no
-        holdback) rather than raising.
-        """
-        try:
-            return max(0, int(value))
-        except (TypeError, ValueError):
-            return 0
-
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
         raw_holdback = data.get("stream_holdback_chars")
         stream_holdback_chars = (
-            [cls._coerce_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
+            [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
         )
         return cls(
             action=data.get("action", "NONE"),

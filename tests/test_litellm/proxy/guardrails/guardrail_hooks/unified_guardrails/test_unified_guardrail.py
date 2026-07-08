@@ -1008,3 +1008,16 @@ class TestStreamingTransform:
         # Round 1 (chunk 1) + end-of-stream flush = 2 calls. Without the terminal
         # skip, chunk 2 would be guardrailed by a sampled round AND the flush (3).
         assert guardrail.response_calls == 2
+
+    @pytest.mark.asyncio
+    async def test_malformed_holdback_from_in_process_guardrail_degrades(self):
+        """An in-process guardrail (bypassing from_dict) returning a null holdback
+        must degrade to 0 in the handler, not raise and abort the stream."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[None])
+
+        chunks = [_stream_chunk("abc"), _stream_chunk("def", finish_reason="stop")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        # None holdback treated as 0: full text emitted, no crash.
+        assert "".join(_delta_text(i) for i in out) == "ABCDEF"

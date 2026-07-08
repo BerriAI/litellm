@@ -30,6 +30,9 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    coerce_stream_holdback_value,
+)
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -637,7 +640,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             idx: (guardrailed_texts[i] if i < len(guardrailed_texts) else texts_to_check[i])
             for i, idx in enumerate(indices)
         }
-        sink.holdback_per_choice = {indices[i]: int(holdback[i]) for i in range(len(indices)) if i < len(holdback)}
+        sink.holdback_per_choice = {
+            indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
+        }
 
     def _combine_streaming_texts(
         self, responses_so_far: List["ModelResponseStream"]
