@@ -165,6 +165,15 @@ class MCPCredentials(TypedDict, total=False):
     sends HTTP Basic; defaults to "client_secret_post" when unset.
     """
 
+    redirect_uris: Optional[List[str]]
+    """
+    The redirect URIs a dynamically registered (RFC 7591) OAuth client was bound to at
+    registration time. Lets a later registration detect that the proxy's public origin no
+    longer matches the registered callback and re-register instead of reusing a client the
+    IdP will reject. Absent for admin-configured clients and for clients registered before
+    this field existed. Not a secret; stored unencrypted.
+    """
+
     token_exchange_profile: Optional[str]
     """
     Token exchange wire dialect: "rfc8693" (default, the standard token-exchange grant) or
