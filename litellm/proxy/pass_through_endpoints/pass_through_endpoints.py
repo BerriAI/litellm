@@ -820,21 +820,7 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
 
-        # Apply default query parameters if provided, regardless of merge_query_params setting
-        if default_query_params or merge_query_params:
-            # Determine what to merge based on settings
-            request_params = dict(request.query_params) if merge_query_params else {}
-
-            # Create a new URL with the merged query params
-            url = url.copy_with(
-                query=urlencode(
-                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
-                        existing_url=url,
-                        request_query_params=request_params,
-                        default_query_params=default_query_params,
-                    )
-                ).encode("ascii")
-            )
+        requested_query_params: Optional[dict] = query_params or dict(request.query_params)
 
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -952,9 +938,6 @@ async def pass_through_request(
         )
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
-        # combine url with query params for logging
-        requested_query_params: Optional[dict] = query_params or dict(request.query_params)
-
         ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
         # Resolve managed IDs in path, query params, and body back to raw
         # provider IDs before forwarding upstream.  Gated by feature flag and
@@ -1023,6 +1006,20 @@ async def pass_through_request(
                     request.url.path,
                     request.method,
                 )
+
+        # Apply default query parameters if provided, regardless of merge_query_params setting
+        if default_query_params or merge_query_params:
+            # Create a new URL with the merged query params
+            url = url.copy_with(
+                query=urlencode(
+                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+                        existing_url=url,
+                        request_query_params=requested_query_params,
+                        default_query_params=default_query_params,
+                    )
+                ).encode("ascii")
+            )
+            requested_query_params = None
 
         ## PASSTHROUGH MANAGED LIST (DB-only response) ##
         # For GET /v1/files and GET /v1/batches passthrough routes, serve the
