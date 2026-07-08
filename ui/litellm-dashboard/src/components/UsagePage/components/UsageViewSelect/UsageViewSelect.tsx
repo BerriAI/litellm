@@ -26,6 +26,7 @@ export interface UsageViewSelectProps {
   onChange: (value: UsageOption) => void;
   isAdmin: boolean;
   canViewTagUsage?: boolean;
+  enabledViews?: UsageOption[] | null;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -112,25 +113,59 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
 ];
+export interface UsageViewVisibilityContext {
+  isAdmin: boolean;
+  canViewTagUsage?: boolean;
+  enabledViews?: UsageOption[] | null;
+}
+
+const isVisibleByRole = (
+  option: OptionConfig,
+  { isAdmin, canViewTagUsage = false }: UsageViewVisibilityContext,
+): boolean => {
+  if (option.value === "tag" && canViewTagUsage) {
+    return true;
+  }
+  if (option.adminOnly && !isAdmin) {
+    return false;
+  }
+  return true;
+};
+
+export const getVisibleUsageOptions = (context: UsageViewVisibilityContext): UsageOption[] =>
+  OPTIONS.filter((option) => {
+    if (!isVisibleByRole(option, context)) {
+      return false;
+    }
+    if (!context.isAdmin && context.enabledViews != null && !context.enabledViews.includes(option.value)) {
+      return false;
+    }
+    return true;
+  }).map((option) => option.value);
+
+export const resolveActiveUsageView = (current: UsageOption, visibleViews: UsageOption[]): UsageOption =>
+  visibleViews.length === 0 || visibleViews.includes(current) ? current : visibleViews[0];
+
+export const getConfigurableNonAdminUsageViews = (): { value: UsageOption; label: string; description: string }[] =>
+  OPTIONS.filter((option) => isVisibleByRole(option, { isAdmin: false, canViewTagUsage: true })).map((option) => ({
+    value: option.value,
+    label: option.showForNonAdmin ?? option.label,
+    description: option.descriptionForNonAdmin ?? option.description,
+  }));
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
   isAdmin,
   canViewTagUsage = false,
+  enabledViews = null,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    const visibleValues = new Set(getVisibleUsageOptions({ isAdmin, canViewTagUsage, enabledViews }));
+    return OPTIONS.filter((option) => visibleValues.has(option.value)).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {

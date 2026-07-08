@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { UsageViewSelect } from "./UsageViewSelect";
+import {
+  getConfigurableNonAdminUsageViews,
+  getVisibleUsageOptions,
+  resolveActiveUsageView,
+  UsageViewSelect,
+} from "./UsageViewSelect";
 
 vi.mock("antd", async () => {
   const React = await import("react");
@@ -121,5 +126,103 @@ describe("UsageViewSelect", () => {
     render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} />);
 
     expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
+  });
+
+  it("should restrict non-admin options to enabledViews when set", () => {
+    render(
+      <UsageViewSelect
+        value="global"
+        onChange={mockOnChange}
+        isAdmin={false}
+        canViewTagUsage={true}
+        enabledViews={["global"]}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Your Usage" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Your Organization Usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Team Usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
+  });
+
+  it("should ignore enabledViews for admins", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={true} enabledViews={["global"]} />);
+
+    expect(screen.getByRole("option", { name: "Team Usage" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Organization Usage" })).toBeInTheDocument();
+  });
+
+  it("should show all non-admin options when enabledViews is null", () => {
+    render(
+      <UsageViewSelect
+        value="global"
+        onChange={mockOnChange}
+        isAdmin={false}
+        canViewTagUsage={true}
+        enabledViews={null}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Your Usage" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Your Organization Usage" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Team Usage" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
+  });
+});
+
+describe("getVisibleUsageOptions", () => {
+  it("should return only role-visible non-admin views by default", () => {
+    expect(getVisibleUsageOptions({ isAdmin: false, canViewTagUsage: true })).toEqual([
+      "global",
+      "organization",
+      "team",
+      "tag",
+    ]);
+  });
+
+  it("should exclude tag when canViewTagUsage is false", () => {
+    expect(getVisibleUsageOptions({ isAdmin: false, canViewTagUsage: false })).toEqual([
+      "global",
+      "organization",
+      "team",
+    ]);
+  });
+
+  it("should intersect with enabledViews for non-admins", () => {
+    expect(getVisibleUsageOptions({ isAdmin: false, canViewTagUsage: true, enabledViews: ["global", "team"] })).toEqual(
+      ["global", "team"],
+    );
+  });
+
+  it("should ignore enabledViews for admins", () => {
+    const adminViews = getVisibleUsageOptions({ isAdmin: true, enabledViews: ["global"] });
+    expect(adminViews).toContain("team");
+    expect(adminViews).toContain("tag");
+    expect(adminViews).toContain("customer");
+  });
+});
+
+describe("getConfigurableNonAdminUsageViews", () => {
+  it("should list exactly the views configurable for non-admins with their non-admin labels", () => {
+    expect(getConfigurableNonAdminUsageViews()).toEqual([
+      { value: "global", label: "Your Usage", description: "View your usage" },
+      { value: "organization", label: "Your Organization Usage", description: "View your organization's usage" },
+      { value: "team", label: "Team Usage", description: "View usage by team" },
+      { value: "tag", label: "Tag Usage", description: "View usage grouped by tags" },
+    ]);
+  });
+});
+
+describe("resolveActiveUsageView", () => {
+  it("should keep the current view when it is still visible", () => {
+    expect(resolveActiveUsageView("team", ["global", "team", "tag"])).toBe("team");
+  });
+
+  it("should fall back to the first visible view when the current one is hidden", () => {
+    expect(resolveActiveUsageView("team", ["global", "tag"])).toBe("global");
+  });
+
+  it("should keep the current view when there are no visible views to fall back to", () => {
+    expect(resolveActiveUsageView("team", [])).toBe("team");
   });
 });

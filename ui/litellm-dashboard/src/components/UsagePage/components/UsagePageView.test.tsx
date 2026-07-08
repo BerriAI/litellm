@@ -77,7 +77,26 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
     );
   };
   UsageViewSelect.displayName = "UsageViewSelect";
-  return { UsageViewSelect };
+  const getVisibleUsageOptions = ({
+    isAdmin,
+    canViewTagUsage = false,
+    enabledViews = null,
+  }: {
+    isAdmin: boolean;
+    canViewTagUsage?: boolean;
+    enabledViews?: string[] | null;
+  }) => {
+    const base = isAdmin
+      ? ["global", "my-usage", "organization", "team", "customer", "tag", "agent", "user", "user-agent-activity"]
+      : ["global", "organization", "team", ...(canViewTagUsage ? ["tag"] : [])];
+    if (!isAdmin && enabledViews != null) {
+      return base.filter((v) => enabledViews.includes(v));
+    }
+    return base;
+  };
+  const resolveActiveUsageView = (current: string, visibleViews: string[]) =>
+    visibleViews.length === 0 || visibleViews.includes(current) ? current : visibleViews[0];
+  return { UsageViewSelect, getVisibleUsageOptions, resolveActiveUsageView };
 });
 
 vi.mock("../../shared/advanced_date_picker", async () => {
@@ -124,6 +143,10 @@ vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useInfiniteUsers: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(() => ({ data: { values: {}, field_schema: {} } })),
 }));
 
 vi.mock("antd", async (importOriginal) => {
