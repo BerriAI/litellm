@@ -948,6 +948,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         Returns:
             Tracer: The tracer to use for this request
         """
+        dynamic_config = self._get_dynamic_otel_config_from_kwargs(kwargs)
+        if dynamic_config is not None:
+            verbose_logger.debug(
+                "[OTEL DEBUG] Using DYNAMIC config tracer with endpoint: %s",
+                dynamic_config.endpoint,
+            )
+            return self._get_tracer_with_dynamic_config(dynamic_config)
+
         dynamic_headers = self._get_dynamic_otel_headers_from_kwargs(kwargs)
 
         if dynamic_headers is not None:
@@ -989,6 +997,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return dynamic_headers if dynamic_headers else None
 
+    def _get_dynamic_otel_config_from_kwargs(self, kwargs: dict) -> Optional[OpenTelemetryConfig]:
+        """Extract a full dynamic exporter config from kwargs if available."""
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+            "standard_callback_dynamic_params"
+        )
+
+        if not standard_callback_dynamic_params:
+            return None
+
+        return self.construct_dynamic_otel_config(standard_callback_dynamic_params=standard_callback_dynamic_params)
+
+    def _get_tracer_with_dynamic_config(self, dynamic_config: OpenTelemetryConfig):
+        """Create (or reuse) a tracer whose exporter target comes from a per-request config."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        cache_key = f"dynamic_config:{dynamic_config.exporter}:{dynamic_config.endpoint}:{dynamic_config.headers}"
+        if cache_key in self._tracer_provider_cache:
+            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
+
+        temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        temp_provider.add_span_processor(self._get_span_processor(config_override=dynamic_config))
+
+        self._tracer_provider_cache[cache_key] = temp_provider
+
+        return temp_provider.get_tracer(LITELLM_TRACER_NAME)
+
     def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
         """Create a temporary tracer with dynamic headers for this request only."""
         from opentelemetry.sdk.trace import TracerProvider
@@ -1017,6 +1051,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         Returns:
             dict: A dictionary of dynamic headers
+        """
+        return None
+
+    def construct_dynamic_otel_config(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[OpenTelemetryConfig]:
+        """
+        Construct a full exporter config from standard callback dynamic params.
+
+        Override this when team/key dynamic params must control the export
+        target (exporter kind + endpoint), not just the request headers. When
+        this returns a config, it takes precedence over
+        construct_dynamic_otel_headers for the request.
         """
         return None
 
@@ -2747,7 +2794,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         verbose_logger.debug("OpenTelemetry: No parent context found, creating root span")
         return None, None
 
-    def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
+    def _get_span_processor(
+        self,
+        dynamic_headers: Optional[dict] = None,
+        config_override: Optional[OpenTelemetryConfig] = None,
+    ):
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -2755,13 +2806,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             SpanExporter,
         )
 
+        otel_exporter = config_override.exporter if config_override else self.OTEL_EXPORTER
+        otel_endpoint = config_override.endpoint if config_override else self.OTEL_ENDPOINT
+        otel_headers = config_override.headers if config_override else self.OTEL_HEADERS
+
         verbose_logger.debug(
-            "OpenTelemetry Logger, initializing span processor \nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
-            self.OTEL_EXPORTER,
-            self.OTEL_ENDPOINT,
-            self.OTEL_HEADERS,
+            "OpenTelemetry Logger, initializing span processor \nexporter: %s\nendpoint: %s\nheaders: %s",
+            otel_exporter,
+            otel_endpoint,
+            otel_headers,
         )
-        _split_otel_headers = OpenTelemetry._get_headers_dictionary(headers=dynamic_headers or self.OTEL_HEADERS)
+        _split_otel_headers = OpenTelemetry._get_headers_dictionary(headers=dynamic_headers or otel_headers)
 
         if dynamic_headers:
             verbose_logger.debug(
@@ -2771,24 +2826,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         else:
             verbose_logger.debug("[OTEL DEBUG] Creating span processor with GLOBAL headers")
 
-        if hasattr(self.OTEL_EXPORTER, "export"):  # Check if it has the export method that SpanExporter requires
+        if hasattr(otel_exporter, "export"):  # Check if it has the export method that SpanExporter requires
             verbose_logger.debug(
                 "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
-            return SimpleSpanProcessor(cast(SpanExporter, self.OTEL_EXPORTER))
+            return SimpleSpanProcessor(cast(SpanExporter, otel_exporter))
 
-        if self.OTEL_EXPORTER == "console":
+        if otel_exporter == "console":
             verbose_logger.debug(
                 "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
-        elif (
-            self.OTEL_EXPORTER == "otlp_http"
-            or self.OTEL_EXPORTER == "http/protobuf"
-            or self.OTEL_EXPORTER == "http/json"
-        ):
+        elif otel_exporter == "otlp_http" or otel_exporter == "http/protobuf" or otel_exporter == "http/json":
             try:
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter as OTLPSpanExporterHTTP,
@@ -2801,13 +2852,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             verbose_logger.debug(
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
-            normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "traces")
+            normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(endpoint=normalized_endpoint, headers=_split_otel_headers),
             )
-        elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+        elif otel_exporter == "otlp_grpc" or otel_exporter == "grpc":
             try:
                 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                     OTLPSpanExporter as OTLPSpanExporterGRPC,
@@ -2820,16 +2871,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             verbose_logger.debug(
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
-            normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "traces")
+            normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(endpoint=normalized_endpoint, headers=_split_otel_headers),
             )
         else:
             verbose_logger.debug(
                 "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
 
