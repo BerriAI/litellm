@@ -164,6 +164,31 @@ describe("CreateMCPServer", () => {
       });
     });
 
+    it("should warn that LiteLLM auth is disabled when True Passthrough is selected", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("True Passthrough disables LiteLLM authentication for this server"),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("should not show the True Passthrough warning when OAuth Delegate is selected", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+
+      await waitFor(() => {
+        expect(screen.getAllByText("OAuth Delegate (client-supplied upstream token)").length).toBeGreaterThan(0);
+      });
+      expect(
+        screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
+      ).not.toBeInTheDocument();
+    });
+
     it("should not require auth value when creating a server with API Key auth type", async () => {
       await selectHttpTransport();
 

@@ -307,6 +307,45 @@ describe("MCPServerEdit (delegate auth)", () => {
   });
 });
 
+describe("MCPServerEdit (true passthrough warning)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const renderWithAuthType = (authType: string) =>
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: authType,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+  it("warns that LiteLLM auth is disabled for a true_passthrough server", async () => {
+    renderWithAuthType("true_passthrough");
+
+    await waitFor(() => {
+      expect(screen.getByText("True Passthrough disables LiteLLM authentication for this server")).toBeInTheDocument();
+    });
+  });
+
+  it("does not warn for an oauth_delegate server", async () => {
+    renderWithAuthType("oauth_delegate");
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Save Changes" }).length).toBeGreaterThan(0);
+    });
+    expect(
+      screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("MCPServerEdit (auth type switch)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

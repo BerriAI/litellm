@@ -16,6 +16,7 @@ import {
   MCP_OAUTH2_FLOW_INTERACTIVE,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
+import TruePassthroughWarning from "./TruePassthroughWarning";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -970,8 +971,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                            <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
+                            <Select.Option value="oauth_delegate">
+                              OAuth Delegate (client-supplied upstream token)
+                            </Select.Option>
                           </Select>
                         </Form.Item>
+
+                        <TruePassthroughWarning authType={authType} />
 
                         {shouldShowAuthValueField && (
                           <Form.Item
