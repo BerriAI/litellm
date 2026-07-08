@@ -239,13 +239,31 @@ def render_prometheus(report: CoverageReport) -> str:
     return "\n".join(lines)
 
 
+def render_loki(report: CoverageReport) -> str:
+    lines = [
+        (
+            f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} "
+            f"covered={report.covered} total={report.total}"
+        )
+    ]
+    lines.extend(
+        (
+            f"COVERAGE_MODULE module={module.module} "
+            f"percent={module.coverage_percent:.1f} "
+            f"covered={module.covered} total={module.total}"
+        )
+        for module in report.modules
+    )
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = ArgumentParser()
     parser.add_argument(
         "--format",
-        choices=("text", "json", "prometheus"),
+        choices=("text", "json", "prometheus", "loki"),
         default="text",
-        help="Output format. Use prometheus or json for Grafana ingestion jobs.",
+        help="Output format. Use loki for structured stdout lines in the e2e job.",
     )
     parser.add_argument(
         "--strict",
@@ -265,9 +283,8 @@ def main() -> int:
         "text": render,
         "json": render_json,
         "prometheus": render_prometheus,
-    }[
-        args.format
-    ](report)
+        "loki": render_loki,
+    }[args.format](report)
     print(output)  # noqa: T201  # CLI entrypoint output
     if args.strict and report.orphan_markers:
         return 1

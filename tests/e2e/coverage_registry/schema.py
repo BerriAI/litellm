@@ -139,22 +139,22 @@ CORE_LLM_ENDPOINTS: frozenset[str] = frozenset(
 )
 
 PREFIX_ROLLUP: dict[str, str] = {
-    "mcp": "MCPs",
-    "mgmt": "Management/UI",
-    "reliability": "Reliability & Performance",
-    "logging": "Logging & Guardrails",
-    "guardrail": "Logging & Guardrails",
-    "other": "Other",
+    "mcp": "mcp",
+    "mgmt": "management_ui",
+    "reliability": "reliability_performance",
+    "logging": "logging_guardrails",
+    "guardrail": "logging_guardrails",
+    "other": "other",
 }
 
 MODULE_ORDER: tuple[str, ...] = (
-    "Core LLMs",
-    "Non-Core LLMs",
-    "MCPs",
-    "Management/UI",
-    "Reliability & Performance",
-    "Logging & Guardrails",
-    "Other",
+    "core_llms",
+    "non_core_llms",
+    "mcp",
+    "management_ui",
+    "reliability_performance",
+    "logging_guardrails",
+    "other",
 )
 
 
@@ -162,6 +162,6 @@ def dashboard_module(cell: Cell) -> str:
     """Return the Grafana/reporting module for a registry cell."""
     if isinstance(cell, LlmCell):
         if cell.subject_endpoint in CORE_LLM_ENDPOINTS:
-            return "Core LLMs"
-        return "Non-Core LLMs"
+            return "core_llms"
+        return "non_core_llms"
     return PREFIX_ROLLUP[cell.module]
