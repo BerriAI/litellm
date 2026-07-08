@@ -3894,12 +3894,15 @@ def test_gemini_nullable_object_tool_schema_httpx():
         }
     ]
 
-    response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash",
-        messages=[{"role": "user", "content": "call the tool"}],
-        tools=tools,
-        tool_choice="required",
-    )
+    try:
+        response = litellm.completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "call the tool"}],
+            tools=tools,
+            tool_choice="required",
+        )
+    except litellm.RateLimitError:
+        pytest.skip("Rate limit error")
 
     print(response)
 
