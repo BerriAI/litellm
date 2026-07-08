@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
 
 import { cn } from "@/lib/cva.config";
+import { getDaysUntilExpiration } from "@/utils/licenseUtils";
 
 interface UsageIndicatorProps {
   accessToken: string | null;
@@ -29,17 +30,6 @@ interface UsageData {
   total_teams_used: number;
   total_teams_remaining: number | null;
 }
-
-// Calculate days until expiration
-const getDaysUntilExpiration = (expirationDate: string | null): number | null => {
-  if (!expirationDate) return null;
-  const expDate = new Date(expirationDate + "T00:00:00Z"); // Force UTC midnight
-  const now = new Date();
-  now.setHours(0, 0, 0, 0); // Normalize to local midnight
-  const diffTime = expDate.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays;
-};
 
 // Format expiration for display
 const formatExpirationDisplay = (daysRemaining: number | null): string => {
