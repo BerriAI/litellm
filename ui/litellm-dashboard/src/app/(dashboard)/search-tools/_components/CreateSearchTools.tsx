@@ -100,8 +100,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
           : undefined,
       };
 
-      console.log(`Creating search tool with payload:`, payload);
-
       if (accessToken != null) {
         const response = await createSearchTool(accessToken, payload);
 

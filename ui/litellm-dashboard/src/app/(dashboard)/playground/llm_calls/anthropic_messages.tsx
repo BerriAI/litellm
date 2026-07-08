@@ -66,8 +66,6 @@ export async function makeAnthropicMessagesRequest(
     const stream = client.messages.stream(requestBody, { signal });
 
     for await (const messageStreamEvent of stream) {
-      console.log("Stream event:", messageStreamEvent);
-
       // Process content block deltas
       if (messageStreamEvent.type === "content_block_delta") {
         const delta = messageStreamEvent.delta;
@@ -76,7 +74,6 @@ export async function makeAnthropicMessagesRequest(
         if (!firstTokenReceived) {
           firstTokenReceived = true;
           const timeToFirstToken = Date.now() - startTime;
-          console.log("First token received! Time:", timeToFirstToken, "ms");
           if (onTimingData) {
             onTimingData(timeToFirstToken);
           }
@@ -96,7 +93,6 @@ export async function makeAnthropicMessagesRequest(
       // Process usage data from message_delta events
       if (messageStreamEvent.type === "message_delta" && (messageStreamEvent as any).usage && onUsageData) {
         const usage = (messageStreamEvent as any).usage;
-        console.log("Usage data found:", usage);
         const usageData: TokenUsage = {
           completionTokens: usage.output_tokens,
           promptTokens: usage.input_tokens,
@@ -107,7 +103,6 @@ export async function makeAnthropicMessagesRequest(
     }
   } catch (error) {
     if (signal?.aborted) {
-      console.log("Anthropic messages request was cancelled");
     } else {
       NotificationManager.fromBackend(
         `Error occurred while generating model response. Please try again. Error: ${error}`,

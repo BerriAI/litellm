@@ -1039,6 +1039,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    budget_fallbacks: Optional[dict[str, list[str]]] = None
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
@@ -1136,6 +1137,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
             "budget_limits",
         ]
@@ -1261,6 +1263,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1346,6 +1349,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod

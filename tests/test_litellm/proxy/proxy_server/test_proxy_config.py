@@ -784,6 +784,70 @@ def test_ProxyConfig__load_alerting_settings_invalid_alerting_raises():
         pc._load_alerting_settings({"alerting": 12345})
 
 
+def test_ProxyConfig__load_alerting_settings_does_not_log_general_settings_dict(monkeypatch):
+    """Regression for LIT-4152.
+
+    ``_load_alerting_settings`` used to log ``general_settings`` verbatim in a
+    line labelled ``_alerting_callbacks:``, leaking ``master_key``,
+    ``database_url``, and any other secret sitting in ``general_settings`` in
+    cleartext at DEBUG. The fix logs only the alerting callback list.
+
+    The regression check runs with the last-line-of-defense regex scrubber
+    (``SecretRedactionFilter``) DISABLED, since defense in depth is the point.
+    The caller must not construct the leaky string, so consumers of the log
+    stream that bypass the module filter (versions before it existed,
+    ``LITELLM_DISABLE_REDACT_SECRETS=true`` operators, downstream handlers
+    that snapshot the record pre-filter) still do not see the secret. Uses a
+    dedicated handler rather than caplog because caplog is unreliable under
+    pytest-xdist.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    master_key_secret = "sk-lit4152-regression-master-key-abcdef1234567890"
+    db_url_secret = "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db"
+    settings = {
+        "alerting": ["slack"],
+        "alerting_threshold": 300,
+        "master_key": master_key_secret,
+        "database_url": db_url_secret,
+    }
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        try:
+            ProxyConfig()._load_alerting_settings(settings)
+        except Exception:
+            pass  # downstream init may fail without full env; the debug log fires first
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    assert master_key_secret not in rendered, f"master_key leaked in logs: {rendered!r}"
+    assert db_url_secret not in rendered, f"database_url leaked in logs: {rendered!r}"
+    assert "leak_password_9090" not in rendered
+    assert any("['slack']" in r.getMessage() for r in handler.records), (
+        f"expected the alerting callback list to appear in a debug record; got {[r.getMessage() for r in handler.records]!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.initialize_secret_manager
 # ---------------------------------------------------------------------------
@@ -1548,3 +1612,164 @@ def test_ProxyConfig__update_config_fields_invalid_param_raises():
     with pytest.raises(Exception):
         # Missing required arg.
         pc._update_config_fields(current_config={}, param_name="general_settings")  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# ProxyConfig._update_config_from_db
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_secrets(
+    monkeypatch,
+):
+    """Regression for LIT-4152 on the store_model_in_db path.
+
+    ``_update_config_from_db`` logged each DB ``param_value`` verbatim at DEBUG;
+    for ``general_settings`` that value is the whole dict, leaking ``master_key``
+    and ``database_url`` the same way the startup config load did. The value now
+    routes through the recursive redactor. Asserted with the module regex
+    scrubber (``_ENABLE_SECRET_REDACTION``) disabled so the caller itself must
+    not build the leaky string. The merge into the returned config must still
+    carry the raw values, proving only the log record is redacted.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    def _fake_decrypt_value_helper(value, key, **_kwargs):
+        return value
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.decrypt_value_helper", _fake_decrypt_value_helper)
+
+    master_key_secret = "sk-lit4152-db-path-master-key-abcdef1234567890"
+    db_url_secret = "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db"
+    env_db_url_secret = "postgresql://env_leak_user:env_leak_password_9090@env-leak-host.internal:5432/env_leak_db"
+    nested_webhook_secret = "https://hooks.slack.com/services/T0/B0/db-path-webhook-secret"
+
+    responses = {
+        "general_settings": SimpleNamespace(
+            param_name="general_settings",
+            param_value={
+                "master_key": master_key_secret,
+                "database_url": db_url_secret,
+                "alert_to_webhook_url": {"budget_alerts": nested_webhook_secret},
+            },
+        ),
+        "router_settings": None,
+        "litellm_settings": None,
+        "environment_variables": SimpleNamespace(
+            param_name="environment_variables",
+            param_value={"DATABASE_URL": env_db_url_secret},
+        ),
+    }
+
+    async def _fake_get_config_param(prisma_client, key):
+        return responses[key]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", _fake_get_config_param)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        merged = await ProxyConfig()._update_config_from_db(
+            prisma_client=MagicMock(),
+            config={"general_settings": {}},
+            store_model_in_db=True,
+        )
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    for secret in (
+        master_key_secret,
+        db_url_secret,
+        env_db_url_secret,
+        nested_webhook_secret,
+        "leak_password_9090",
+        "env_leak_password_9090",
+    ):
+        assert secret not in rendered, f"leak: {secret} in {rendered!r}"
+    assert merged["general_settings"]["master_key"] == master_key_secret
+    assert merged["general_settings"]["database_url"] == db_url_secret
+    assert merged["environment_variables"]["DATABASE_URL"] == env_db_url_secret
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plain(
+    tmp_path, monkeypatch
+):
+    """Regression for LIT-4152 on the ``litellm_settings`` apply loop.
+
+    ``load_config`` logged ``setting litellm.<key>=<value>`` verbatim at DEBUG,
+    so a secret-bearing setting such as ``api_key`` leaked in cleartext. The
+    value now routes through ``_redact_general_setting_value``. Crucially the
+    redaction must be surgical: a secret-named key is masked, but a plain
+    operational setting like ``num_retries`` must still log its real value, so
+    the debug line keeps its signal. Asserted with the module regex scrubber
+    (``_ENABLE_SECRET_REDACTION``) disabled.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    api_key_secret = "sk-lit4152-litellm-settings-secret-abcdef1234567890"
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings:\n"
+        f"  api_key: {api_key_secret}\n"
+        "  num_retries: 7\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    original_api_key = getattr(litellm, "api_key", None)
+    original_num_retries = getattr(litellm, "num_retries", None)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+        litellm.api_key = original_api_key
+        litellm.num_retries = original_num_retries
+
+    assert api_key_secret not in rendered, f"api_key leaked in logs: {rendered!r}"
+    assert "num_retries=7" in rendered, (
+        f"non-secret num_retries value was over-redacted; expected it visible in {rendered!r}"
+    )
