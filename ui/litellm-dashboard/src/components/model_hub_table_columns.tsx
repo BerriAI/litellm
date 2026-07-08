@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface ModelHubData {
   model_group: string;
@@ -75,7 +76,9 @@ export const modelHubColumns = (
             </div>
             {/* Show provider on mobile when provider column is hidden */}
             <div className="md:hidden">
-              <Text className="text-xs text-gray-600">{model.providers.join(", ")}</Text>
+              <Text className="text-xs text-gray-600">
+                {model.providers.map((provider) => getProviderLogoAndName(provider).displayName).join(", ")}
+              </Text>
             </div>
           </div>
         );
@@ -86,8 +89,12 @@ export const modelHubColumns = (
       accessorKey: "providers",
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
-        const providersA = rowA.original.providers.join(", ");
-        const providersB = rowB.original.providers.join(", ");
+        // Sort by the rendered display name, not the raw provider slug — the
+        // cell below shows "Amazon Bedrock"/"Google AI Studio", not
+        // "bedrock"/"gemini", so sorting by slug would order rows
+        // inconsistently with what the column visibly displays.
+        const providersA = rowA.original.providers.map((p) => getProviderLogoAndName(p).displayName).join(", ");
+        const providersB = rowB.original.providers.map((p) => getProviderLogoAndName(p).displayName).join(", ");
         return providersA.localeCompare(providersB);
       },
       cell: ({ row }) => {
@@ -97,7 +104,7 @@ export const modelHubColumns = (
           <div className="flex flex-wrap gap-1">
             {model.providers.slice(0, 2).map((provider) => (
               <Tag key={provider} color="blue" className="text-xs">
-                {provider}
+                {getProviderLogoAndName(provider).displayName}
               </Tag>
             ))}
             {model.providers.length > 2 && <Text className="text-xs text-gray-500">+{model.providers.length - 2}</Text>}
