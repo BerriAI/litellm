@@ -28,7 +28,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
 
       {isExpanded && (
         <div
-          className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md text-sm text-gray-700 max-w-full overflow-x-auto whitespace-pre-wrap wrap-break-word"
+          className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md text-sm text-gray-700 max-w-full overflow-x-auto whitespace-pre-wrap break-words"
           style={{ wordBreak: "break-word", overflowWrap: "break-word" }}
         >
           <ReactMarkdown
