@@ -126,6 +126,8 @@ describe("MCP OAuth PKCE flow wrappers", () => {
       });
       expect(setTokenSpy).not.toHaveBeenCalled();
       expect(onSuccess).toHaveBeenCalledTimes(1);
+      // The user flow keeps the token server-side: onSuccess must receive no token.
+      expect(onSuccess).toHaveBeenCalledWith();
     });
 
     it("does not consume a result written under the tools flow's key", async () => {

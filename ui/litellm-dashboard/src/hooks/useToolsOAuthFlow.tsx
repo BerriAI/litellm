@@ -31,6 +31,11 @@ interface UseToolsOAuthFlowOptions {
   userId?: string | null;
   scopes?: string[];
   clientId?: string | null;
+  /**
+   * Invoked after the token is stored in sessionStorage. Receives the access
+   * token because the caller holds it in component state to list tools; contrast
+   * useUserMcpOAuthFlow, which persists the token server-side and exposes none.
+   */
   onSuccess: (accessToken: string) => void;
 }
 

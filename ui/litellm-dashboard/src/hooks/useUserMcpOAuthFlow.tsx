@@ -27,6 +27,12 @@ interface UseUserMcpOAuthFlowOptions {
   scopes?: string[];
   /** Pre-configured client_id if the MCP server record has one. */
   clientId?: string | null;
+  /**
+   * Invoked after the credential is persisted server-side. Receives no token by
+   * design: unlike useToolsOAuthFlow, this flow stores the token in the backend
+   * (storeMCPOAuthUserCredential) rather than handing it to the client, so the
+   * caller only needs a "done" signal to refresh UI state.
+   */
   onSuccess: () => void;
 }
 
@@ -73,7 +79,9 @@ export const useUserMcpOAuthFlow = ({
         expires_in: token.expires_in,
         scopes: flowState.scopes,
       }),
-    onSuccess,
+    // Explicitly drop the base hook's access_token argument: this flow keeps the
+    // token server-side, so the public onSuccess deliberately exposes none.
+    onSuccess: () => onSuccess(),
   };
   return useMcpOAuthPkceFlow(config);
 };
