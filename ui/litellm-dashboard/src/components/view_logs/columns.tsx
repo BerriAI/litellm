@@ -231,13 +231,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       : "Cost",
     accessorKey: "spend",
     size: 110,
+    meta: { numeric: true },
     cell: (info: any) => {
       const row = info.row.original;
       const mcpCount = row.mcp_tool_call_count || 0;
       const mcpSpend = row.mcp_tool_call_spend || 0;
 
       return (
-        <div className="flex flex-col">
+        <div className="flex flex-col items-end">
           <Tooltip title={`$${String(info.getValue() || 0)}`}>
             <span>{getSpendString(info.getValue() || 0)}</span>
           </Tooltip>
@@ -263,13 +264,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Duration (s)",
     accessorKey: "request_duration_ms",
+    meta: { numeric: true },
     cell: (info: any) => {
       const ms = info.getValue();
       if (ms == null) return <span>-</span>;
       const seconds = (ms / 1000).toFixed(2);
       return (
         <Tooltip title={`${ms}ms`}>
-          <span className="max-w-[15ch] truncate block">{seconds}</span>
+          <span className="max-w-[15ch] truncate inline-block">{seconds}</span>
         </Tooltip>
       );
     },
@@ -287,6 +289,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "TTFT (s)",
     accessorKey: "completionStartTime",
+    meta: { numeric: true },
     cell: (info: any) => {
       const row = info.row.original;
       const completionStartTime = info.getValue();
@@ -298,7 +301,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const ttftSeconds = (ttftMs / 1000).toFixed(2);
       return (
         <Tooltip title={`${ttftMs}ms`}>
-          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
+          <span className="max-w-[15ch] truncate inline-block">{ttftSeconds}</span>
         </Tooltip>
       );
     },
@@ -395,6 +398,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       : "Tokens",
     accessorKey: "total_tokens",
     size: 140,
+    meta: { numeric: true },
     cell: (info: any) => {
       const row = info.row.original;
       return (

@@ -164,6 +164,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const spendColumn = {
     header: "Spend (USD)",
     accessorKey: "spend",
+    meta: { numeric: true },
     cell: (info: any) => {
       const value = info.getValue();
       return value > 0 && value < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(value, 2)}`;
@@ -247,13 +248,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={topKeys}
-            renderSubComponent={() => <></>}
-            getRowCanExpand={() => false}
-            isLoading={false}
-          />
+          <DataTable columns={columns} data={topKeys} isLoading={false} />
         </div>
       )}
 
