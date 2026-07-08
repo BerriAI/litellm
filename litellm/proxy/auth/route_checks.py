@@ -61,6 +61,15 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
 
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(("openai_routes", "llm_api_routes"))
 
+_LLM_API_MODEL_DISCOVERY_ROUTES = frozenset(
+    (
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    )
+)
+
 
 class RouteChecks:
     @staticmethod
@@ -163,6 +172,9 @@ class RouteChecks:
                         # these paths are admin-only management writes and
                         # are intentionally not covered.
                         if RouteChecks._is_get_mcp_server_discovery_route(route=route, request=request):
+                            return True
+
+                        if route in _LLM_API_MODEL_DISCOVERY_ROUTES:
                             return True
 
         # check if wildcard pattern is allowed
