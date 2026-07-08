@@ -158,7 +158,8 @@ def rerank(
             instruction=instruction,
             non_default_params=kwargs,
         )
-        verbose_logger.info(f"optional_rerank_params: {optional_rerank_params}")
+        loggable_rerank_params = {k: v for k, v in optional_rerank_params.items() if k not in ("query", "documents")}
+        verbose_logger.info(f"optional_rerank_params: {loggable_rerank_params}")
         if isinstance(optional_params.timeout, str):
             optional_params.timeout = float(optional_params.timeout)
 
