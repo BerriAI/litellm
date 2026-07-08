@@ -37,6 +37,36 @@ class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
 
     @staticmethod
+    def merge_prompt_management_input(
+        original_input: Union[str, Any],
+        client_input: List[Any],
+        merged_input: List[Any],
+    ) -> Union[str, Any]:
+        """Reconstruct the Responses API input after a prompt management hook ran.
+
+        The hook only receives chat-style message items (dicts with a "role"),
+        so non-message items (reasoning, function_call, etc.) must be restored
+        into the final input; otherwise multi-turn reasoning inputs break
+        (https://github.com/BerriAI/litellm/issues/32335).
+        """
+        if isinstance(original_input, str) or not isinstance(original_input, list):
+            return merged_input
+        non_message_items = [item for item in original_input if not (isinstance(item, dict) and "role" in item)]
+        if not non_message_items:
+            return merged_input
+        if list(merged_input) == list(client_input):
+            return original_input
+        num_client_items = len(client_input)
+        if num_client_items and list(merged_input[-num_client_items:]) == list(client_input):
+            return list(merged_input[:-num_client_items]) + list(original_input)
+        verbose_logger.warning(
+            "Prompt management hook rewrote Responses API messages; %d non-message "
+            "input items (e.g. reasoning) could not be preserved and were dropped",
+            len(non_message_items),
+        )
+        return merged_input
+
+    @staticmethod
     def _check_valid_arg(
         supported_params: Optional[List[str]],
         non_default_params: Dict,

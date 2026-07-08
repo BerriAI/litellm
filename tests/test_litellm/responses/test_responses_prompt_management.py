@@ -54,18 +54,15 @@ def _patch_responses_dispatch():
             return_value=("gpt-4o", "openai", None, None),
         ),
         patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
             return_value=None,
         ),
         patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -77,7 +74,6 @@ def _patch_responses_dispatch():
 
 
 class TestResponsesAPIPromptManagement:
-
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
         template_messages: List[AllMessageValues] = [
@@ -108,9 +104,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):
@@ -393,3 +387,110 @@ class TestAsyncResponsesAPIPromptManagement:
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
+
+
+class TestPromptManagementPreservesNonMessageItems:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/32335
+
+    The prompt management hook only receives role-based message items. The
+    final request input must still contain non-message items (reasoning,
+    function_call, ...) or multi-turn reasoning requests fail with a 400.
+    """
+
+    REASONING_ITEM = {"type": "reasoning", "id": "rs_1", "summary": []}
+    MESSAGE_ITEM = {"role": "user", "content": "Hello"}
+
+    def test_helper_returns_merged_for_str_input(self):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        merged = [{"role": "system", "content": "t"}, {"role": "user", "content": "Hello"}]
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="Hello",
+            client_input=[{"role": "user", "content": "Hello"}],
+            merged_input=merged,
+        )
+        assert result == merged
+
+    def test_helper_keeps_original_when_hook_is_noop(self):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        original = [self.REASONING_ITEM, self.MESSAGE_ITEM]
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original,
+            client_input=[self.MESSAGE_ITEM],
+            merged_input=[self.MESSAGE_ITEM],
+        )
+        assert result == original
+
+    def test_helper_prepends_template_and_preserves_items(self):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        template = {"role": "system", "content": "You are helpful."}
+        original = [self.REASONING_ITEM, self.MESSAGE_ITEM]
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original,
+            client_input=[self.MESSAGE_ITEM],
+            merged_input=[template, self.MESSAGE_ITEM],
+        )
+        assert result == [template, self.REASONING_ITEM, self.MESSAGE_ITEM]
+
+    def test_helper_returns_merged_when_no_non_message_items(self):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        template = {"role": "system", "content": "t"}
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=[self.MESSAGE_ITEM],
+            client_input=[self.MESSAGE_ITEM],
+            merged_input=[template, self.MESSAGE_ITEM],
+        )
+        assert result == [template, self.MESSAGE_ITEM]
+
+    def test_sync_noop_hook_preserves_reasoning_items_downstream(self):
+        original_input = [
+            self.REASONING_ITEM,
+            {"type": "message", "id": "msg_1", "role": "assistant", "content": "hi"},
+            self.MESSAGE_ITEM,
+        ]
+        logging_obj = _make_logging_obj(
+            merged_model="gpt-4o",
+            merged_messages=[
+                {"type": "message", "id": "msg_1", "role": "assistant", "content": "hi"},
+                self.MESSAGE_ITEM,
+            ],
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=list(original_input),
+                model="gpt-4o",
+                prompt_id="noop-test",
+                litellm_logging_obj=logging_obj,
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert sent_input == original_input
+
+    def test_sync_template_hook_prepends_and_preserves_reasoning_items(self):
+        template = {"role": "system", "content": "You are helpful."}
+        original_input = [self.REASONING_ITEM, self.MESSAGE_ITEM]
+        logging_obj = _make_logging_obj(
+            merged_model="gpt-4o",
+            merged_messages=[template, self.MESSAGE_ITEM],
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=list(original_input),
+                model="gpt-4o",
+                prompt_id="template-test",
+                litellm_logging_obj=logging_obj,
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert sent_input == [template, self.REASONING_ITEM, self.MESSAGE_ITEM]
