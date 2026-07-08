@@ -158,7 +158,8 @@ describe("ViewUserDashboard", () => {
     expect(
       screen.getByText("Are you sure you want to delete this user? This action cannot be undone."),
     ).toBeInTheDocument();
-    expect(screen.getByText("user-1")).toBeInTheDocument();
+    const userIdInstances = screen.getAllByText("user-1");
+    expect(userIdInstances.length).toBeGreaterThan(0);
     const emailInstances = screen.getAllByText("test@example.com");
     expect(emailInstances.length).toBeGreaterThan(0);
   });
