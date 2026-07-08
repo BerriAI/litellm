@@ -19,14 +19,20 @@ vi.mock("../molecules/notifications_manager", () => ({
   },
 }));
 
-const mockOauth: { tokenResponse: any } = { tokenResponse: null };
+const mockOauth: {
+  tokenResponse: any;
+  getTemporaryPayload: (() => Record<string, unknown> | null) | null;
+} = { tokenResponse: null, getTemporaryPayload: null };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: () => ({
-    startOAuthFlow: vi.fn(),
-    status: "idle",
-    error: null,
-    tokenResponse: mockOauth.tokenResponse,
-  }),
+  useMcpOAuthFlow: (opts: { getTemporaryPayload?: () => Record<string, unknown> | null }) => {
+    mockOauth.getTemporaryPayload = opts?.getTemporaryPayload ?? null;
+    return {
+      startOAuthFlow: vi.fn(),
+      status: "idle",
+      error: null,
+      tokenResponse: mockOauth.tokenResponse,
+    };
+  },
 }));
 
 vi.mock("./mcp_server_cost_config", () => ({
@@ -343,6 +349,30 @@ describe("MCPServerEdit (true passthrough warning)", () => {
     expect(
       screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
     ).not.toBeInTheDocument();
+  });
+
+  it("browser-authorize temp payload uses the selected auth_type, not the stored one", async () => {
+    // Stored server is oauth2; the admin switches the dropdown to true_passthrough before saving.
+    // The temp OAuth-relay payload must reflect the selection so the exchange is treated as
+    // browser-held (no DB persistence), matching onTokenReceived and the create form.
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "oauth2" }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await waitFor(() => {
+      expect(mockOauth.getTemporaryPayload).toBeTruthy();
+    });
+    const payload = mockOauth.getTemporaryPayload!();
+    expect(payload).toBeTruthy();
+    expect(payload?.auth_type).toBe("true_passthrough");
   });
 });
 
