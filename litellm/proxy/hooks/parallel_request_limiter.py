@@ -638,6 +638,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # since those fields don't exist on UserAPIKeyAuth yet (see TODOs in
             # async_pre_call_hook). Add them to the limit_fields list here once
             # implemented, to avoid a current_requests leak for those scopes.
+            #
+            # Also applies to the key scope above: if rpm_limit, tpm_limit, and
+            # max_parallel_requests are all None, current_requests still grows
+            # un-decremented within a minute window. Harmless today since the
+            # pre-call effective limit is sys.maxsize in that case (no false
+            # rate-limit), but noting for completeness per review feedback.
             if user_api_key_user_id is not None and self._entity_has_any_limit(
                 full_user_api_key_dict,
                 ["user_rpm_limit", "user_tpm_limit"],
