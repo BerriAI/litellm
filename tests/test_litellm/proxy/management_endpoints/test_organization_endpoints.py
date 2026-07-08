@@ -716,14 +716,23 @@ def test_v2_empty_string_numeric_is_rejected():
         OrganizationUpdateRequestV2.model_validate({"tpm_limit": ""})
 
 
+class _FakeTxContext:
+    def __init__(self, tx):
+        self._tx = tx
+
+    async def __aenter__(self):
+        return self._tx
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 async def _run_update_organization_v2(
     monkeypatch,
     *,
     body: dict,
     existing_budget_id,
     existing_metadata,
-    update_budget_mock,
-    new_budget_mock,
 ):
     from litellm.proxy._types import (
         LitellmUserRoles,
@@ -746,9 +755,14 @@ async def _run_update_organization_v2(
 
     mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=existing_org)
     mock_prisma_client.db.litellm_organizationtable.update = AsyncMock(return_value=MagicMock())
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+
+    tx = MagicMock()
+    tx.litellm_organizationtable = mock_prisma_client.db.litellm_organizationtable
+    tx.litellm_budgettable = mock_prisma_client.db.litellm_budgettable
+    mock_prisma_client.db.tx = MagicMock(return_value=_FakeTxContext(tx))
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr(organization_endpoints, "update_budget", update_budget_mock)
-    monkeypatch.setattr(organization_endpoints, "new_budget", new_budget_mock)
     monkeypatch.setattr(organization_endpoints, "_verify_org_access", AsyncMock())
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
@@ -762,26 +776,18 @@ async def _run_update_organization_v2(
 
 @pytest.mark.asyncio
 async def test_v2_update_clears_tpm_limit_and_metadata(monkeypatch):
-    """A cleared tpm_limit reaches update_budget as None; a cleared metadata is written as {}."""
-    update_budget_mock = AsyncMock()
-    new_budget_mock = AsyncMock()
-
+    """A cleared tpm_limit is written to the budget row as None; a cleared metadata is written as {}."""
     prisma = await _run_update_organization_v2(
         monkeypatch,
         body={"tpm_limit": None, "metadata": None},
         existing_budget_id="budget-1",
         existing_metadata={"stale": "value"},
-        update_budget_mock=update_budget_mock,
-        new_budget_mock=new_budget_mock,
     )
 
-    update_budget_mock.assert_awaited_once()
-    budget_obj = update_budget_mock.await_args.kwargs["budget_obj"]
-    assert budget_obj.budget_id == "budget-1"
-    assert budget_obj.tpm_limit is None
-    assert "tpm_limit" in budget_obj.model_fields_set
-    assert "soft_budget" not in budget_obj.model_fields_set
-    new_budget_mock.assert_not_awaited()
+    budget_write = prisma.db.litellm_budgettable.update.await_args
+    assert budget_write.kwargs["where"] == {"budget_id": "budget-1"}
+    assert budget_write.kwargs["data"]["tpm_limit"] is None
+    assert "soft_budget" not in budget_write.kwargs["data"]
 
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert json.loads(write_data["metadata"]) == {}
@@ -790,21 +796,15 @@ async def test_v2_update_clears_tpm_limit_and_metadata(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_v2_update_untouched_fields_not_written(monkeypatch):
-    """Omitted fields are left untouched: only organization_alias is written, no budget call."""
-    update_budget_mock = AsyncMock()
-    new_budget_mock = AsyncMock()
-
+    """Omitted fields are left untouched: only organization_alias is written, no budget-row write."""
     prisma = await _run_update_organization_v2(
         monkeypatch,
         body={"organization_alias": "renamed"},
         existing_budget_id="budget-1",
         existing_metadata={"keep": "me"},
-        update_budget_mock=update_budget_mock,
-        new_budget_mock=new_budget_mock,
     )
 
-    update_budget_mock.assert_not_awaited()
-    new_budget_mock.assert_not_awaited()
+    prisma.db.litellm_budgettable.update.assert_not_awaited()
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert write_data["organization_alias"] == "renamed"
     assert "metadata" not in write_data
@@ -819,8 +819,6 @@ async def test_v2_update_metadata_replaces_not_merges(monkeypatch):
         body={"metadata": {"a": 1}},
         existing_budget_id="budget-1",
         existing_metadata={"stale": "value"},
-        update_budget_mock=AsyncMock(),
-        new_budget_mock=AsyncMock(),
     )
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert json.loads(write_data["metadata"]) == {"a": 1}
@@ -828,7 +826,7 @@ async def test_v2_update_metadata_replaces_not_merges(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_v2_rejects_null_clear_of_non_nullable_fields(monkeypatch):
-    """organization_alias and models are non-nullable columns, so a null clear is a 400, not a 500."""
+    """organization_alias and models are non-nullable columns, so a null clear is a 422, not a 500."""
     from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
 
@@ -842,12 +840,12 @@ async def test_v2_rejects_null_clear_of_non_nullable_fields(monkeypatch):
                 data=OrganizationUpdateRequestV2.model_validate(body),
                 user_api_key_dict=auth,
             )
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_v2_rejects_negative_max_budget(monkeypatch):
-    """v2 rejects a negative max_budget with a 400 before touching the DB."""
+    """v2 rejects a negative max_budget with a 422 before touching the DB."""
     from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
 
@@ -860,7 +858,7 @@ async def test_v2_rejects_negative_max_budget(monkeypatch):
             data=OrganizationUpdateRequestV2.model_validate({"max_budget": -5}),
             user_api_key_dict=auth,
         )
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 422
     assert "max_budget" in str(exc.value.detail)
 
 
@@ -906,8 +904,6 @@ async def test_v2_wires_object_permission_onto_org_write(monkeypatch):
         body={"object_permission": {"vector_stores": ["vs-1"]}},
         existing_budget_id="budget-1",
         existing_metadata={},
-        update_budget_mock=AsyncMock(),
-        new_budget_mock=AsyncMock(),
     )
 
     organization_endpoints.handle_update_object_permission.assert_awaited_once()
@@ -930,10 +926,52 @@ async def test_v2_clears_object_permission_when_sent_null(monkeypatch):
         body={"object_permission": None},
         existing_budget_id="budget-1",
         existing_metadata={},
-        update_budget_mock=AsyncMock(),
-        new_budget_mock=AsyncMock(),
     )
 
     handle_mock.assert_not_awaited()
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert write_data["object_permission_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_v2_writes_budget_and_org_in_one_transaction(monkeypatch):
+    """A change touching both the budget row and the org row runs both writes inside one prisma transaction."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"tpm_limit": 500, "metadata": {"a": 1}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+    )
+
+    prisma.db.tx.assert_called_once()
+    prisma.db.litellm_budgettable.update.assert_awaited_once()
+    prisma.db.litellm_organizationtable.update.assert_awaited_once()
+
+
+def test_v2_rejects_unknown_field():
+    """An unknown/misspelled key is a validation error, not a silently dropped no-op."""
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import OrganizationUpdateRequestV2
+
+    with pytest.raises(ValidationError):
+        OrganizationUpdateRequestV2.model_validate({"tmp_limit": None})
+
+
+def test_build_budget_write_data_recomputes_reset_at_on_duration():
+    """A sent budget_duration recomputes budget_reset_at so the reset window follows the new duration."""
+    from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data
+
+    data = build_budget_write_data({"budget_duration": "30d"}, "admin-1")
+    assert data["budget_duration"] == "30d"
+    assert "budget_reset_at" in data
+    assert data["updated_by"] == "admin-1"
+
+
+def test_build_budget_write_data_no_reset_at_without_duration():
+    """Clearing a limit writes it through untouched and does not recompute budget_reset_at."""
+    from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data
+
+    data = build_budget_write_data({"tpm_limit": None}, "admin-1")
+    assert data["tpm_limit"] is None
+    assert "budget_reset_at" not in data

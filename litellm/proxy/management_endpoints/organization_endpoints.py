@@ -25,6 +25,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
@@ -141,24 +142,22 @@ def build_organization_update_plan(
     )
 
 
-async def _apply_organization_budget_updates(
-    budget_id: str,
-    budget_updates: Mapping[str, object],
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
+def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
     """
-    Apply budget writes to the organization's existing budget row.
+    Columns to write to the organization's budget row for a v2 update.
 
-    Passing a field explicitly as ``None`` clears it, since ``update_budget`` persists every field
-    it receives via ``exclude_unset``. Every organization always has a ``budget_id`` (non-nullable FK).
+    ``budget_reset_at`` is recomputed only when a non-null ``budget_duration`` is sent, mirroring
+    ``update_budget``; every other sent budget field (including an explicit ``None`` clear) is
+    written as-is. Pure: the caller performs the write inside the update transaction so the budget
+    and org rows change atomically.
     """
-    if not budget_updates:
-        return
-
-    await update_budget(
-        budget_obj=BudgetNewRequest.model_validate({"budget_id": budget_id, **budget_updates}),
-        user_api_key_dict=user_api_key_dict,
+    budget_duration = budget_updates.get("budget_duration")
+    recomputed_reset_at: Mapping[str, object] = (
+        {"budget_reset_at": get_budget_reset_time(budget_duration=budget_duration)}
+        if isinstance(budget_duration, str)
+        else {}
     )
+    return {**budget_updates, **recomputed_reset_at, "updated_by": updated_by}
 
 
 def handle_nested_budget_structure_in_organization_update_request(
@@ -629,12 +628,14 @@ async def update_organization_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Partial update of an organization (RESTful PATCH).
+    Partial update of an organization (RESTful PATCH, RFC 7396 JSON Merge Patch semantics).
 
-    A field present in the request body is written - a ``null``/``[]``/``{}`` value clears it,
-    any other value sets it - and an omitted field is left untouched. Presence is read from
-    ``model_fields_set``, so clearing a limit or the metadata now persists instead of being
-    dropped as though it were never sent.
+    A field present in the request body is written and an omitted field is left untouched; presence
+    is read from ``model_fields_set``, so clearing a limit or the metadata now persists instead of
+    being dropped as though it were never sent. Clear tokens are per field: budget limits and
+    ``metadata`` clear with ``null``, ``models`` clears with ``[]``, and ``organization_alias``
+    cannot be cleared (it is required). Validation failures return 422, and the budget-row and
+    org-row writes are applied atomically in a single transaction.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -654,23 +655,32 @@ async def update_organization_v2(
 
     if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
         )
     if data.soft_budget is not None and (not math.isfinite(data.soft_budget) or data.soft_budget < 0):
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+    if data.model_max_budget:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            validate_model_max_budget,
+        )
+
+        try:
+            validate_model_max_budget(data.model_max_budget)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail={"error": str(e)})
 
     if "organization_alias" in data.model_fields_set and data.organization_alias is None:
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail={"error": "organization_alias cannot be cleared; it is required"},
         )
     if "models" in data.model_fields_set and data.models is None:
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail={"error": "models cannot be set to null; send [] to clear it"},
         )
 
@@ -690,12 +700,6 @@ async def update_organization_v2(
         )
 
     plan = build_organization_update_plan(present_keys=data.model_fields_set, validated_data=data)
-
-    await _apply_organization_budget_updates(
-        budget_id=existing_organization_row.budget_id,
-        budget_updates=plan.budget_updates,
-        user_api_key_dict=user_api_key_dict,
-    )
 
     object_permission_cleared = "object_permission" in data.model_fields_set and data.object_permission is None
     object_permission_write: Mapping[str, object] = (
@@ -717,11 +721,17 @@ async def update_organization_v2(
             existing_organization_row=existing_organization_row,
         )
 
-    response = await OrganizationRepository(prisma_client).table.update(
-        where={"organization_id": organization_id},
-        data=organization_write_data,
-        include={"members": True, "teams": True, "litellm_budget_table": True},
-    )
+    async with prisma_client.db.tx() as tx:
+        if plan.budget_updates:
+            await tx.litellm_budgettable.update(
+                where={"budget_id": existing_organization_row.budget_id},
+                data=dict(build_budget_write_data(plan.budget_updates, user_api_key_dict.user_id)),
+            )
+        response = await tx.litellm_organizationtable.update(
+            where={"organization_id": organization_id},
+            data=organization_write_data,
+            include={"members": True, "teams": True, "litellm_budget_table": True},
+        )
 
     return response
 

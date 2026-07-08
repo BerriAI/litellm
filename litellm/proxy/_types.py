@@ -2642,13 +2642,18 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
 
 class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
     """
-    Typed PATCH body for ``/v2/organization/{organization_id}``.
+    Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 JSON Merge Patch).
 
-    Presence is read from ``model_fields_set``: a field present in the request (even as
-    null) is written, an omitted field is left untouched. A ``null``/``[]``/``{}`` value
-    clears; any other value sets. There is no additive metadata merge - sending ``metadata``
-    replaces it wholesale.
+    Presence is read from ``model_fields_set``: a field present in the request is written, an
+    omitted field is left untouched. Clear tokens are per field - a budget limit or ``metadata``
+    clears with ``null``, ``models`` clears with ``[]``, and ``organization_alias`` cannot be
+    cleared (it is required). Metadata is replace-when-sent; there is no additive merge.
+
+    ``extra="forbid"`` so an unknown or misspelled key is a 422 rather than a silently dropped
+    no-op - the whole contract hinges on which keys are present.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     organization_alias: Optional[str] = None
     models: Optional[List[str]] = None
