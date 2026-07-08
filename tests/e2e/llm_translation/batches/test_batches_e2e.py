@@ -23,7 +23,7 @@ import pytest
 
 from e2e_config import unique_marker
 
-from batch_client import (
+from llm_translation.batches.batch_client import (
     BatchClient,
     BatchCreateBody,
     BatchObject,
@@ -31,7 +31,7 @@ from batch_client import (
     is_model_access_denied,
     is_result_access_denied,
 )
-from capabilities import (
+from llm_translation.batches.capabilities import (
     BATCH_ID_SHAPE,
     CAPABILITIES,
     FILE_ID_SHAPE,
@@ -51,7 +51,20 @@ from e2e_http import (
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, SpendLogRow, SpendLogsParams
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="non_core_llms",
+        endpoint="/v1/batches",
+        provider="multiple",
+        params=[
+            "batch_lifecycle",
+            "file_upload",
+            "key_model_access",
+            "rate_limit_spend",
+        ],
+    ),
+]
 
 CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
 BATCH_CANCEL_DELAY_SECONDS = 2
@@ -215,9 +228,7 @@ def test_batch_lifecycle(
     if cap.can_cancel:
         time.sleep(BATCH_CANCEL_DELAY_SECONDS)
         pre_cancel = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
-        assert (
-            pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL
-        ), (
+        assert pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL, (
             f"batch reached {pre_cancel.status!r} before cancel; "
             "provider likely rejected the input"
         )
@@ -229,9 +240,9 @@ def test_batch_lifecycle(
         valid_post_cancel = {"cancelling", "cancelled"}
         if cap.provider == "vertex_ai":
             valid_post_cancel |= CREATED_BATCH_STATUSES
-        assert cancelled.status in valid_post_cancel, (
-            f"unexpected post-cancel status {cancelled.status!r}"
-        )
+        assert (
+            cancelled.status in valid_post_cancel
+        ), f"unexpected post-cancel status {cancelled.status!r}"
 
     if cap.can_list:
         listed = unwrap(client.list_batches(key=key, provider=provider))
@@ -329,12 +340,15 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     """
     user_id = f"e2e-batch-rl-{unique_marker()}"
     key = client.gateway.generate_key(
-        KeyGenerateBody(models=[], tpm_limit=1_000_000, rpm_limit=1_000, user_id=user_id)
+        KeyGenerateBody(
+            models=[], tpm_limit=1_000_000, rpm_limit=1_000, user_id=user_id
+        )
     )
     resources.defer(lambda: client.gateway.delete_key(key))
 
     before = frozenset(
-        row.request_id for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
+        row.request_id
+        for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
     )
 
     file = unwrap(

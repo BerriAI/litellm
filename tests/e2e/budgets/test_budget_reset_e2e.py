@@ -17,7 +17,15 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["budget_reset"],
+    ),
+]
 
 
 def _call(client: BudgetClient, key: str):

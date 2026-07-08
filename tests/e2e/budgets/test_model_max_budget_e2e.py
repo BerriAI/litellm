@@ -15,7 +15,15 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["model_max_budget"],
+    ),
+]
 
 CAPPED_MODEL = "claude-haiku-4-5"
 FREE_MODEL = "gemini-2.5-flash"
@@ -51,7 +59,7 @@ def test_model_max_budget_isolates_per_model(
 
     # The other model shares the key but has its own (large) cap -> still works.
     other = _call(client, key, FREE_MODEL)
-    assert not is_budget_block(other), (
-        f"{FREE_MODEL} was blocked by {CAPPED_MODEL}'s budget; per-model caps not isolated"
-    )
+    assert not is_budget_block(
+        other
+    ), f"{FREE_MODEL} was blocked by {CAPPED_MODEL}'s budget; per-model caps not isolated"
     require_successful_call(other)

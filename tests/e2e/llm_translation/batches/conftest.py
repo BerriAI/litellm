@@ -16,9 +16,9 @@ from typing import Iterator
 
 import pytest
 
-from batch_client import BatchClient, build_client
-from capabilities import PROVIDERS
 from e2e_http import NoBody
+from llm_translation.batches.batch_client import BatchClient, build_client
+from llm_translation.batches.capabilities import PROVIDERS
 
 
 def pytest_configure(config: pytest.Config) -> None:

@@ -6,18 +6,22 @@ Code-style rules for writing tests under `tests/e2e/`. The harness already encod
 
 Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family or behavior area. If you add a new folder, you must add a line here describing what kind of tests belong in it, so the layout stays self-describing. `gateway/` is the exception: it holds proxy configuration only and never tests
 
-- `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, and the non-chat inference endpoints (`/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`), each against a deployment the test creates via `/model/new` and deletes on teardown
+- `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, realtime, batches, and every LLM data-plane endpoint (`/chat/completions`, `/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`, `/v1/batches`, `/v1/realtime`, etc.), each against a deployment the test creates via `/model/new` and deletes on teardown where applicable. Any test whose primary subject is an LLM endpoint belongs here, even if the endpoint uses websockets, files, provider passthrough, or a non-chat modality.
 - `access_control/` - the gateway's authorization and error-shape contract: per-key model allow-lists, route-group permissions (`allowed_routes`), and unknown-model validation
-- `embeddings/` - the `/embeddings` endpoint across providers
-- `batches/` - the `/batches` endpoint (placeholder until the first test lands)
-- `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `budgets/` - budget definition, enforcement, and reset windows (key, team, tag, soft, multi-window)
+- `rate_limits/` - rate-limit enforcement behavior across keys, teams, models, tags, and endpoint families; endpoint-specific LLM translation assertions still live under `llm_translation/`
 - `spend_tracking/` - spend logging and cost attribution on `/spend/*`
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
+- `mcp/` - MCP protocol behavior and coverage rows: tool/resource/prompt operations, auth-family handling, and MCP-specific error shapes
 - `logging/` - logging-integration delivery (datadog and friends)
+- `reliability/` - routing and reliability behavior (fallbacks, retries, cooldowns, routing strategies)
+- `other/` - temporary holding area for coverage rows that do not yet have a stable suite owner; promote rows out of here when a module boundary becomes clear
 - `security/` - secret handling and log-leak protection
-- `router/` - routing and reliability behavior (rate limits, fallbacks, cooldowns)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
+
+Do not add new top-level folders for LLM data-plane endpoints. Put endpoint-specific
+LLM suites under `llm_translation/` and create a subfolder there only when the
+endpoint needs its own client, fixtures, or coverage matrix.
 
 ## Lay the pattern down in a class
 
@@ -59,94 +63,44 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 The harness is fully typed and new code must not add `Any` or widen the basedpyright budgets. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
 
-## Coverage registry
+## Coverage metadata
 
-The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
+Every collected pytest under `tests/e2e` must declare the e2e surface it covers with `@pytest.mark.e2e_coverage(...)`. The marker is the source of truth; there are no coverage YAML files. Use a module-level `pytestmark` when all tests in a file cover the same surface, or add per-test markers when a file mixes endpoints/providers.
 
-Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
-
-The metric is coverage: the share of registry rows that have a passing covering test, reported to Grafana per module so a gap surfaces as an uncovered row rather than a silent absence
-
-Tests do not declare a dashboard module directly. They only declare the registry cell id with `@pytest.mark.covers("...")`; the registry row decides the module, tier, endpoint, and dashboard rollup. Run `python -m coverage_registry.collector --strict` when you want CI to reject unknown marker ids. Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
-
-### Naming grammar per module
-
-LLMs - endpoint features (subject = the route), seeded from the Claude Code compat matrix. `chat_completions`, `messages`, and `responses` roll up to `Core LLMs`. Other LLM endpoints, including `batches` and `realtime`, roll up to `Non-Core LLMs`.
-
-```
-llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
-  endpoint   : chat_completions | messages | responses | embeddings | batches | files
-               | rerank | images_generations | audio_speech | audio_transcriptions | moderations
-               | realtime
-  route      : openai | azure_openai | anthropic | bedrock_converse | vertex | azure_foundry
-               | cohere | together_ai
-               (vocab varies per endpoint; messages is anthropic-format only)
-  capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
-               | service_tier
-  streaming  : stream | nonstream   (omit where n/a)
-  assertion  : works | cost_logged
-  label (not in id): model = haiku-4.5 | sonnet-4.6 | opus-4.7 | gpt-*
-  e.g.  llm.chat_completions.bedrock_converse.tool_use.stream.works
-        llm.messages.anthropic.prompt_cache_1h.nonstream.cache_hit
+```python
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="openai",
+        params=["tools", "streaming"],
+    ),
+]
 ```
 
-Management / UI - endpoint features (surface tag: api | ui)
+Required fields:
 
-```
-mgmt.<endpoint>.<assertion>
-  endpoint  : key.generate | key.update | key.delete | team.new | user.new
-              | budget.new | model.add | ... (one per management route)
-  assertion : persists | member_forbidden | admin_only | happy_path
-  e.g.  mgmt.key.generate.persists        (surface=api)
-        mgmt.key.generate.happy_path      (surface=ui)
-```
+- `module`: one of `core_llms`, `non_core_llms`, `access_control`, `budgets`, `spend_tracking`, `management`, `mcp`, `rate_limits`, `reliability`, `logging`, `guardrails`, or `other`.
+- `endpoint`: a known endpoint/surface from `coverage_registry/schema.py`, such as `/chat/completions`, `/v1/messages`, `/v1/batches`, `/budget/*`, or `/spend/*`.
+- `provider`: a known provider/integration from `coverage_registry/schema.py`, such as `proxy`, `openai`, `anthropic`, `vertex_ai`, or `multiple`.
+- `params`: one or more explicit lowercase parameter/behavior names, such as `tools`, `streaming`, `key_rpm_limit`, `budget_enforcement`, or `spend_routes`.
 
-MCPs - endpoint features with the protocol op as the variant
+The collector reads these markers with pytest collect-only and reports unique endpoint x provider x parameter units plus test counts by module. Run this before opening or updating a PR:
 
-```
-mcp.<operation>.<auth_family>.<assertion>
-  operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
-  auth_family : none | api_key | bearer | oauth
-  assertion   : succeeds | denied_without_permission
-  e.g.  mcp.call_tool.oauth.succeeds
+```bash
+cd tests/e2e && PYTHONPATH=. python -m coverage_registry.check_coverage_sync
 ```
 
-Reliability & Performance - behavior features (no route; endpoint is exercised_on)
+The sync check fails if any collected test is missing `e2e_coverage`, uses an unknown module/endpoint/provider, has empty params, or has pytest collection errors.
 
-```
-reliability.<behavior>.<variant>.<assertion>
-  behavior  : fallback | retry | cooldown | timeout | ratelimit | routing | cache | circuit_breaker | perf
-  variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
-              <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
-              <dimension> latency | throughput   (perf only; SLO/threshold assertion, not binary)
-  assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
-              | trips_then_recovers | under_slo
-  e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]
-        reliability.ratelimit.rpm.blocks_over_limit                exercised_on=[chat_completions, messages]
-```
+### Marker value grammar
 
-Logging & Guardrails - behavior features (config-driven; endpoint is exercised_on)
+Use stable, dashboard-safe values. Do not include spaces or prose in marker fields. If a new endpoint or provider is legitimate, add it to `coverage_registry/schema.py` in the same PR so the CI check teaches the dashboard about it.
 
-```
-logging.<integration>.<event>.<assertion>
-  integration : langfuse | s3 | otel | prometheus | datadog | ...
-  event       : success | failure | stream
-  assertion   : logs_spend | writes_object | exports_metric
-  e.g.  logging.langfuse.success.logs_spend                        exercised_on=[chat_completions]
+- Core LLM endpoint tests: `module="core_llms"`, endpoints `/chat/completions`, `/v1/messages`, or `/v1/responses`.
+- Other LLM endpoint tests: `module="non_core_llms"`, endpoints such as `/v1/batches`, `/v1/realtime`, `/v1/embeddings`, `/v1/audio/speech`, `/v1/images/generations`, or `/rerank`.
+- Proxy behavior tests: use the owning module (`budgets`, `rate_limits`, `access_control`, `spend_tracking`, `management`) and the route family being exercised.
+- Harness/tooling tests: use `module="other"` or `module="reliability"` with endpoint `e2e_harness` or `coverage_registry`.
 
-guardrail.<provider>.<hook_point>.<assertion>
-  provider   : presidio | lakera | bedrock | aporia | ...
-  hook_point : pre_call | post_call | during | logging_only
-  assertion  : blocks | masks | allows
-  e.g.  guardrail.presidio.pre_call.masks                          exercised_on=[chat_completions]
-```
-
-Other - holding pen (endpoint or behavior)
-
-```
-other.<area>.<case>.<assertion>
-  area : auth | lifecycle | config | ...
-  rule : audited periodically; a cluster here promotes to a new component
-  e.g.  other.auth.jwt.valid_token_allows
-        other.lifecycle.readiness.reports_db
-```
+Prefer precise params like `key_rpm_limit`, `budget_enforcement`, `prompt_cache`, `tool_calling`, or `spend_routes` over generic params like `works`.

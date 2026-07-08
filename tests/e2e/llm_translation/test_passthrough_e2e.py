@@ -25,10 +25,20 @@ from passthrough_client import (
     PassthroughClient,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/v1/messages",
+        provider="anthropic",
+        params=["passthrough", "cost_logging", "streaming", "tool_calling"],
+    ),
+]
 
 
-def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) -> SpendLogRow:
+def _fetch_cost_breakdown(
+    client: PassthroughClient, result: StreamingResponse
+) -> SpendLogRow:
     """The passthrough call's logged row, polled until it carries a cost.
 
     Asserts (not skips) that a 2xx passthrough call produced a costed row - the

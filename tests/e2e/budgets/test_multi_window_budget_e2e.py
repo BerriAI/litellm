@@ -18,7 +18,15 @@ from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["multi_window_budget"],
+    ),
+]
 
 WINDOW_SECONDS = 30  # the tight window; calls succeed again only after it elapses
 
@@ -62,9 +70,11 @@ def test_short_window_blocks_then_resets(
         result = _call(client, key)
         if result.ok:
             elapsed = time.monotonic() - start
-            assert elapsed < WINDOW_SECONDS + 90, (
-                f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
-            )
+            assert (
+                elapsed < WINDOW_SECONDS + 90
+            ), f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
             return
-        assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
+        assert is_budget_block(
+            result
+        ), f"non-budget error during reset wait: {result.body[:200]}"
     pytest.fail(f"{WINDOW_SECONDS}s window never reset within 150s")

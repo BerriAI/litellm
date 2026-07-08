@@ -12,11 +12,23 @@ import pytest
 from budget_client import BudgetClient
 from lifecycle import ResourceManager
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/budget/*",
+        provider="proxy",
+        params=["budget_crud", "budget_duration"],
+    ),
+]
 
 
-def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager) -> None:
-    budget_id = client.create_budget(max_budget=12.5, soft_budget=10.0, budget_duration="30d")
+def test_budget_crud_roundtrip(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
+    budget_id = client.create_budget(
+        max_budget=12.5, soft_budget=10.0, budget_duration="30d"
+    )
     resources.defer(lambda: client.delete_budget(budget_id))
 
     rows = client.budget_info(budget_id)
@@ -31,19 +43,23 @@ def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager)
     resources.defer(lambda: client.delete_key(key))
     info = client.gateway.key_info(key)
     linked = info.litellm_budget_table
-    assert info.budget_id == budget_id or (linked is not None and linked.max_budget == 12.5), (
-        f"key does not reflect attached budget: {info.budget_id}, {linked}"
-    )
+    assert info.budget_id == budget_id or (
+        linked is not None and linked.max_budget == 12.5
+    ), f"key does not reflect attached budget: {info.budget_id}, {linked}"
 
 
-def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManager) -> None:
+def test_budget_delete_removes_it(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     budget_id = client.create_budget(max_budget=1.0)
     resources.defer(lambda: client.delete_budget(budget_id))
     client.delete_budget(budget_id)
     assert not client.budget_info(budget_id), "budget still present after delete"
 
 
-def test_budget_duration_schedules_reset_on_key(client: BudgetClient, resources: ResourceManager) -> None:
+def test_budget_duration_schedules_reset_on_key(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     key = client.generate_key(max_budget=10.0, budget_duration="30d")
     resources.defer(lambda: client.delete_key(key))
 
@@ -57,4 +73,6 @@ def test_budget_duration_schedules_reset_on_key(client: BudgetClient, resources:
     # get current time -> assert budget from days_left - budget_duration == days_left
     reset_dt = datetime.fromisoformat(str(reset_at).replace("Z", "+00:00"))
     days_out = (reset_dt - datetime.now(timezone.utc)).total_seconds() / 86400
-    assert 0 < days_out < 40, f"reset should be scheduled ahead, got {days_out:.1f}d out"
+    assert (
+        0 < days_out < 40
+    ), f"reset should be scheduled ahead, got {days_out:.1f}d out"

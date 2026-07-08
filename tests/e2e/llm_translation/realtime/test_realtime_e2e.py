@@ -15,7 +15,7 @@ REALTIME_COVERAGE_MATRIX.md.
 import pytest
 from pydantic import BaseModel
 
-from realtime_client import (
+from llm_translation.realtime.realtime_client import (
     PROVIDERS,
     ConversationItemCreate,
     FunctionCallArgumentsDone,
@@ -36,7 +36,15 @@ from realtime_client import (
     user_message,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="non_core_llms",
+        endpoint="/v1/realtime",
+        provider="multiple",
+        params=["text_conversation", "tool_calling"],
+    ),
+]
 
 PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
 

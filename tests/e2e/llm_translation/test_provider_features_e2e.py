@@ -30,7 +30,15 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="multiple",
+        params=["service_tier", "prompt_cache"],
+    ),
+]
 
 SERVICE_TIER = "flex"
 CACHE_MIN_READ_TOKENS = 1
@@ -76,9 +84,6 @@ def post_chat(client: PassthroughClient, key: str, body: BaseModel) -> ChatRespo
 
 
 class TestServiceTier:
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[]
-    )
     def test_openai_service_tier_is_echoed(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -110,10 +115,6 @@ class TestServiceTier:
 
 
 class TestPromptCaching:
-    @pytest.mark.covers(
-        "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works",
-        exercised_on=[],
-    )
     def test_bedrock_cache_control_produces_cache_read(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:

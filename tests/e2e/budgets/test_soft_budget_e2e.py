@@ -14,7 +14,15 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["soft_budget"],
+    ),
+]
 
 
 def test_soft_budget_does_not_block(
@@ -32,4 +40,6 @@ def test_soft_budget_does_not_block(
             "soft_budget blocked a request; it must alert only, not block "
             f"(body={result.body[:200]})"
         )
-        require_successful_call(result)  # any other non-2xx (e.g. provider down) is a hard fail
+        require_successful_call(
+            result
+        )  # any other non-2xx (e.g. provider down) is a hard fail

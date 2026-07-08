@@ -79,6 +79,11 @@ jobs:
       - name: code_qa_check_tests
         run: uv run --no-sync python ./tests/code_coverage_tests/code_qa_check_tests.py
 
+      - name: e2e_coverage_registry_sync
+        run: |
+          cd tests/e2e
+          PYTHONPATH=. uv run --no-sync python -m coverage_registry.check_coverage_sync
+
       - name: check_get_model_cost_key_performance
         run: uv run --no-sync python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
 

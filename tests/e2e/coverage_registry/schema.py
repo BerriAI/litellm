@@ -1,182 +1,180 @@
-"""Registry row schema: the contract every denominator cell validates against.
+"""Schema for e2e coverage declared directly on pytest tests.
 
-A cell is one customer-noticeable behavior a single e2e test can assert pass/fail
-on. `module` is the id's segment-1 prefix (seven of them); dashboard rollups can
-split or merge those prefixes. The union is discriminated on `module`, so an LLM
-row cannot carry a guardrail field and vice versa.
+Each collected e2e pytest must provide:
+
+    @pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="openai",
+        params=["tools"],
+    )
+
+The collector turns those markers into endpoint x provider x parameter coverage
+units and Grafana-ready module summaries.
 """
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Annotated, Literal
+import re
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
-class Tier(str, Enum):
-    P0 = "P0"
-    P1 = "P1"
-    P2 = "P2"
-
-
-class FailBeforeFix(str, Enum):
-    proven = "proven"
-    unproven = "unproven"
-
-
-LlmEndpoint = Literal[
-    "chat_completions",
-    "messages",
-    "responses",
-    "embeddings",
-    "batches",
-    "files",
-    "rerank",
-    "images_generations",
-    "audio_speech",
-    "audio_transcriptions",
-    "moderations",
-    "realtime",
+CoverageModule = Literal[
+    "core_llms",
+    "non_core_llms",
+    "access_control",
+    "budgets",
+    "spend_tracking",
+    "management",
+    "mcp",
+    "rate_limits",
+    "reliability",
+    "logging",
+    "guardrails",
+    "other",
 ]
 
-LlmRoute = Literal[
-    "anthropic",
-    "azure_foundry",
-    "azure_openai",
-    "bedrock_converse",
-    "cohere",
-    "openai",
-    "together_ai",
-    "vertex",
-]
-
-LlmCapability = Literal[
-    "basic",
-    "prompt_cache_5m",
-    "service_tier",
-    "structured_output",
-    "thinking",
-    "tool_use",
-    "vision",
-]
-
-
-class _Base(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: str
-    tier: Tier
-    assertions: tuple[str, ...]
-    source: str
-    rationale: str = ""
-    fail_before_fix: FailBeforeFix = FailBeforeFix.unproven
-    supported: bool = True
-
-
-class LlmCell(_Base):
-    module: Literal["llm"]
-    subject_endpoint: LlmEndpoint
-    route: LlmRoute
-    capability: LlmCapability
-    streaming: Literal["stream", "nonstream", "na"]
-
-
-class MgmtCell(_Base):
-    module: Literal["mgmt"]
-    surface: Literal["api", "ui"]
-
-
-class McpCell(_Base):
-    module: Literal["mcp"]
-    operation: str
-    auth_family: Literal["none", "api_key", "bearer", "oauth"]
-
-
-class ReliabilityCell(_Base):
-    module: Literal["reliability"]
-    behavior: str
-    variant: str
-    exercised_on: tuple[str, ...]
-
-
-class LoggingCell(_Base):
-    module: Literal["logging"]
-    event: str
-    exercised_on: tuple[str, ...]
-
-
-class GuardrailCell(_Base):
-    module: Literal["guardrail"]
-    hook_point: str
-    exercised_on: tuple[str, ...]
-
-
-class OtherCell(_Base):
-    module: Literal["other"]
-    area: str
-
-
-Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
-    Field(discriminator="module"),
-]
-
-CELL_ADAPTER: TypeAdapter[Cell] = TypeAdapter(Cell)
-
-CORE_LLM_ENDPOINTS: frozenset[str] = frozenset(
-    {
-        "chat_completions",
-        "messages",
-        "responses",
-    }
+MODULE_ORDER: tuple[CoverageModule, ...] = (
+    "core_llms",
+    "non_core_llms",
+    "access_control",
+    "budgets",
+    "spend_tracking",
+    "management",
+    "mcp",
+    "rate_limits",
+    "reliability",
+    "logging",
+    "guardrails",
+    "other",
 )
 
-PREFIX_ROLLUP: dict[str, str] = {
-    "mcp": "MCPs",
-    "mgmt": "Management/UI",
-    "reliability": "Reliability & Performance",
-    "logging": "Logging & Guardrails",
-    "guardrail": "Logging & Guardrails",
+MODULE_DISPLAY_NAMES: dict[str, str] = {
+    "core_llms": "Core LLMs",
+    "non_core_llms": "Non-Core LLMs",
+    "access_control": "Access Control",
+    "budgets": "Budgets",
+    "spend_tracking": "Spend Tracking",
+    "management": "Management",
+    "mcp": "MCP",
+    "rate_limits": "Rate Limits",
+    "reliability": "Reliability",
+    "logging": "Logging",
+    "guardrails": "Guardrails",
     "other": "Other",
 }
 
-MODULE_ORDER: tuple[str, ...] = (
-    "Core LLMs",
-    "Non-Core LLMs",
-    "MCPs",
-    "Management/UI",
-    "Reliability & Performance",
-    "Logging & Guardrails",
-    "Other",
+KNOWN_ENDPOINTS: frozenset[str] = frozenset(
+    {
+        "/chat/completions",
+        "/v1/messages",
+        "/v1/responses",
+        "/v1/batches",
+        "/v1/realtime",
+        "/v1/audio/speech",
+        "/v1/embeddings",
+        "/v1/images/generations",
+        "/rerank",
+        "/anthropic/*",
+        "/vertex_ai/*",
+        "/model/*",
+        "/key/*",
+        "/team/*",
+        "/user/*",
+        "/organization/*",
+        "/budget/*",
+        "/spend/*",
+        "/global/spend/*",
+        "/mcp/*",
+        "/guardrails/*",
+        "/health/*",
+        "coverage_registry",
+        "e2e_harness",
+        "logging",
+        "reliability",
+    }
 )
 
-LOKI_MODULE_LABELS: dict[str, str] = {
-    "Core LLMs": "core_llms",
-    "Non-Core LLMs": "non_core_llms",
-    "MCPs": "mcp",
-    "Management/UI": "management_ui",
-    "Reliability & Performance": "reliability_performance",
-    "Logging & Guardrails": "logging_guardrails",
-    "Other": "other",
-}
+KNOWN_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "anthropic",
+        "azure",
+        "azure_ai",
+        "azure_document_intelligence",
+        "bedrock",
+        "cohere",
+        "deepseek",
+        "gemini",
+        "litellm",
+        "mistral",
+        "multiple",
+        "openai",
+        "prometheus",
+        "proxy",
+        "vertex_ai",
+        "xai",
+    }
+)
+
+_PARAM_RE = re.compile(r"^[a-z0-9][a-z0-9_.:/-]*$")
 
 
-def dashboard_module(cell: Cell) -> str:
-    """Return the Grafana/reporting module for a registry cell."""
-    if isinstance(cell, LlmCell):
-        if cell.subject_endpoint in CORE_LLM_ENDPOINTS:
-            return "Core LLMs"
-        return "Non-Core LLMs"
-    return PREFIX_ROLLUP[cell.module]
+class CoveragePoint(BaseModel):
+    """Validated data carried by @pytest.mark.e2e_coverage."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    module: CoverageModule
+    endpoint: str
+    provider: str
+    params: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("endpoint")
+    @classmethod
+    def endpoint_must_be_known(cls, value: str) -> str:
+        if value not in KNOWN_ENDPOINTS:
+            raise ValueError(f"unknown endpoint {value!r}")
+        return value
+
+    @field_validator("provider")
+    @classmethod
+    def provider_must_be_known(cls, value: str) -> str:
+        if value not in KNOWN_PROVIDERS:
+            raise ValueError(f"unknown provider {value!r}")
+        return value
+
+    @field_validator("params")
+    @classmethod
+    def params_must_be_normalized(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        invalid = [param for param in value if not _PARAM_RE.fullmatch(param)]
+        if invalid:
+            raise ValueError(f"invalid params: {invalid}")
+        return value
 
 
-def loki_module_label(module: str) -> str:
-    """Return the log-safe Loki label for a dashboard module."""
-    return LOKI_MODULE_LABELS[module]
+class CoverageUnit(BaseModel):
+    """One endpoint x provider x parameter combination covered by a test."""
+
+    model_config = ConfigDict(frozen=True)
+
+    module: CoverageModule
+    endpoint: str
+    provider: str
+    param: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.module}|{self.endpoint}|{self.provider}|{self.param}"
+
+
+def units_for_point(point: CoveragePoint) -> tuple[CoverageUnit, ...]:
+    return tuple(
+        CoverageUnit(
+            module=point.module,
+            endpoint=point.endpoint,
+            provider=point.provider,
+            param=param,
+        )
+        for param in point.params
+    )

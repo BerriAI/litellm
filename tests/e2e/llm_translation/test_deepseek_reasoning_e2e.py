@@ -28,7 +28,15 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, ThinkingParam
 from passthrough_client import PassthroughClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="deepseek",
+        params=["reasoning"],
+    ),
+]
 
 REASONER = "deepseek/deepseek-reasoner"
 PROMPT = "What is 17 + 26? Answer with just the number."

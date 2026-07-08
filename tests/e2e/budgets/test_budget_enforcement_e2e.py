@@ -21,7 +21,16 @@ from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import run_case
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["budget_enforcement"],
+    ),
+]
+
 
 def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> None:
     """Send paid calls until the entity's budget blocks one. Key/user/org/member
@@ -142,7 +151,5 @@ def _case_id(case_cls: Type[_BudgetCase]) -> str:
     ],
     ids=_case_id,
 )
-def test_budget_enforcement(
-    client: BudgetClient, case_cls: Type[_BudgetCase]
-) -> None:
+def test_budget_enforcement(client: BudgetClient, case_cls: Type[_BudgetCase]) -> None:
     run_case(case_cls(client))

@@ -25,7 +25,15 @@ from access_control_client import (
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="access_control",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["model_access", "route_permission", "unknown_model"],
+    ),
+]
 
 ALLOWED_MODEL = "gemini-2.5-flash"
 DISALLOWED_MODEL = "gpt-5.5"
@@ -51,9 +59,9 @@ class TestAccessControl:
             f"key limited to {ALLOWED_MODEL!r} calling {DISALLOWED_MODEL!r} must be "
             f"denied 403, got {result.status_code}: {result.body[:300]}"
         )
-        assert MODEL_ACCESS_DENIED_MARKER in result.body, (
-            f"403 body must be a model-access denial, got: {result.body[:300]}"
-        )
+        assert (
+            MODEL_ACCESS_DENIED_MARKER in result.body
+        ), f"403 body must be a model-access denial, got: {result.body[:300]}"
 
     def test_llm_only_key_forbidden_from_management_route_403(
         self, client: AccessControlClient, resources: ResourceManager
@@ -65,9 +73,9 @@ class TestAccessControl:
             f"llm-only key calling a management route must be denied 403, got "
             f"{result.status_code}: {result.body[:300]}"
         )
-        assert ROUTE_NOT_ALLOWED_MARKER in result.body, (
-            f"403 body must be a route-permission denial, got: {result.body[:300]}"
-        )
+        assert (
+            ROUTE_NOT_ALLOWED_MARKER in result.body
+        ), f"403 body must be a route-permission denial, got: {result.body[:300]}"
 
     def test_unknown_model_returns_400(
         self, client: AccessControlClient, resources: ResourceManager
@@ -80,4 +88,6 @@ class TestAccessControl:
             f"unknown model must be rejected 400 before forwarding, got "
             f"{result.status_code}: {result.body[:300]}"
         )
-        assert _is_json(result.body), f"400 body must be valid JSON: {result.body[:300]}"
+        assert _is_json(
+            result.body
+        ), f"400 body must be valid JSON: {result.body[:300]}"

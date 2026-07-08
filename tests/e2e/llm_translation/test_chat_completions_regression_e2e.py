@@ -18,7 +18,15 @@ from e2e_http import unwrap
 from models import ChatBody, ChatMessage
 from passthrough_client import PassthroughClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="multiple",
+        params=["chat_completions_regression"],
+    ),
+]
 
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
     ("gpt-5.5", "openai"),
@@ -32,12 +40,6 @@ class TestChatCompletionsRegression:
         ("model", "route"),
         CHAT_MODELS,
         ids=[f"{model}-{route}" for model, route in CHAT_MODELS],
-    )
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.basic.nonstream.works",
-        "llm.chat_completions.anthropic.basic.nonstream.works",
-        "llm.chat_completions.vertex.basic.nonstream.works",
-        exercised_on=[],
     )
     def test_chat_returns_real_completion(
         self, client: PassthroughClient, scoped_key: str, model: str, route: str

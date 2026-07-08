@@ -33,7 +33,15 @@ from lifecycle import ResourceManager
 from models import SpendLogRow
 from passthrough_client import PassthroughClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="non_core_llms",
+        endpoint="/vertex_ai/*",
+        provider="vertex_ai",
+        params=["passthrough"],
+    ),
+]
 
 VERTEX_MODEL = "gemini-2.5-flash"
 # The added deployment's region and the passthrough URL's region are the same constant,
@@ -148,7 +156,9 @@ class TestVertexPassthroughSpendTracking:
         vertex_credentials: str,
     ) -> None:
         model_name = f"e2e-vertex-pt-{unique_marker()}"
-        model_id = _add_vertex_passthrough_model(client, model_name, vertex_project, vertex_credentials)
+        model_id = _add_vertex_passthrough_model(
+            client, model_name, vertex_project, vertex_credentials
+        )
         resources.defer(lambda: _delete_model(client, model_id))
 
         result = client.vertex_generate(
@@ -159,8 +169,12 @@ class TestVertexPassthroughSpendTracking:
             text=f"reply with one word {unique_marker()}",
         )
         require_successful_call(result)
-        assert '"candidates"' in result.body, f"vertex passthrough returned no candidates: {result.body[:300]}"
+        assert (
+            '"candidates"' in result.body
+        ), f"vertex passthrough returned no candidates: {result.body[:300]}"
 
         row = _costed_row(client, result.call_id)
-        assert row.custom_llm_provider == "vertex_ai", f"passthrough spend logged under the wrong provider: {row}"
+        assert (
+            row.custom_llm_provider == "vertex_ai"
+        ), f"passthrough spend logged under the wrong provider: {row}"
         assert "gemini" in (row.model or ""), f"unexpected model in spend log: {row}"
