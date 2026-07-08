@@ -773,7 +773,8 @@ def _select_model_name_for_cost_calc(
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
-    elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
+
+    if hidden_params is not None and hidden_params.get("region_name", None) is not None:
         region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
