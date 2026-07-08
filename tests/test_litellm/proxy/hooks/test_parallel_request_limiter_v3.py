@@ -675,7 +675,12 @@ async def test_async_log_failure_event_v3():
 
     def kwargs_with_slot(slot_id):
         return {
-            "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: slot_id},
+            "metadata": {
+                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                    "slot_id": slot_id,
+                    "counter_keys": [counter_key],
+                }
+            },
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         }
 
@@ -798,8 +803,10 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
         data=admitted_data,
         call_type="",
     )
-    acquired_slot_id = admitted_data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
-    assert isinstance(acquired_slot_id, str) and acquired_slot_id
+    acquisition = admitted_data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
+    assert isinstance(acquisition, dict)
+    assert isinstance(acquisition["slot_id"], str) and acquisition["slot_id"]
+    assert acquisition["counter_keys"] == [f"{{api_key:{_api_key}}}:max_parallel_requests"]
 
     for _ in range(3):
         with pytest.raises(HTTPException):
@@ -812,7 +819,7 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
 
     await handler.async_log_failure_event(
         kwargs={
-            "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: acquired_slot_id},
+            "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: acquisition},
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         },
         response_obj=None,
@@ -859,8 +866,11 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
         data=data,
         call_type="",
     )
-    stashed_slot_id = data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
+    stashed_acquisition = data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
+    assert isinstance(stashed_acquisition, dict)
+    stashed_slot_id = stashed_acquisition["slot_id"]
     assert isinstance(stashed_slot_id, str) and stashed_slot_id
+    assert stashed_acquisition["counter_keys"] == [counter_key]
     assert captured_calls == [
         ([counter_key], [5, PARALLEL_REQUEST_SLOT_TTL_SECONDS, stashed_slot_id])
     ]
@@ -3503,12 +3513,107 @@ async def test_release_max_parallel_requests_on_disconnect_v3():
 
     await handler.async_release_max_parallel_requests_on_disconnect(
         user_api_key_dict,
-        request_data={"metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID}},
+        request_data={
+            "metadata": {
+                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                    "slot_id": _TEST_SLOT_ID,
+                    "counter_keys": [counter_key],
+                }
+            }
+        },
     )
 
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=counter_key)
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_release_on_disconnect_works_when_key_config_changed_v3():
+    """
+    The disconnect release must be driven by the stashed acquisition, not the
+    key object's current max_parallel_requests configuration: if the limit is
+    cleared on the key while a request is in flight, the acquired slot still
+    has to be released or it lingers until TTL pruning.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    await _seed_max_parallel_requests_slots(local_cache, counter_key, [_TEST_SLOT_ID])
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None),
+        request_data={
+            "metadata": {
+                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                    "slot_id": _TEST_SLOT_ID,
+                    "counter_keys": [counter_key],
+                }
+            }
+        },
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
+    """
+    When Redis scripting fails after having worked, the local cache holds the
+    integer in-flight count mirrored from the last successful script call.
+    The in-memory fallback must treat that count as real occupancy (and
+    release must decrement it, floored at 0), not start over from an empty
+    registry, which would double the admitted concurrency during a Redis
+    outage.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    async def failing_script(keys, args):
+        raise ConnectionError("redis unavailable")
+
+    handler.parallel_acquire_script = failing_script
+    handler.parallel_release_script = failing_script
+
+    await local_cache.async_set_cache(key=counter_key, value=5, local_only=True)
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+
+    await local_cache.async_set_cache(key=counter_key, value=4, local_only=True)
+    admitted_data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=admitted_data,
+        call_type="",
+    )
+    assert await local_cache.async_get_cache(key=counter_key) == 5
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "metadata": admitted_data["metadata"],
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert await local_cache.async_get_cache(key=counter_key) == 4
 
 
 @pytest.mark.asyncio
@@ -3573,7 +3678,12 @@ async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
             user_api_key_dict=user_api_key_dict,
             request_data={
                 "model": "claude-test",
-                "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID},
+                "metadata": {
+                    MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                        "slot_id": _TEST_SLOT_ID,
+                        "counter_keys": [counter_key],
+                    }
+                },
             },
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -3623,7 +3733,12 @@ async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect
                 user_api_key_dict=user_api_key_dict,
                 request_data={
                     "model": "gpt-test",
-                    "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID},
+                    "metadata": {
+                    MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                        "slot_id": _TEST_SLOT_ID,
+                        "counter_keys": [counter_key],
+                    }
+                },
                 },
             )
             await gen.__anext__()
@@ -3681,7 +3796,12 @@ async def test_async_data_generator_releases_counter_when_wrapped_v3():
                 user_api_key_dict=user_api_key_dict,
                 request_data={
                     "model": "gpt-test",
-                    "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: _TEST_SLOT_ID},
+                    "metadata": {
+                    MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
+                        "slot_id": _TEST_SLOT_ID,
+                        "counter_keys": [counter_key],
+                    }
+                },
                 },
             )
             await gen.__anext__()

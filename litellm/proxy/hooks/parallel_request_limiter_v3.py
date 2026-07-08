@@ -312,11 +312,12 @@ RATE_LIMIT_DESCRIPTORS_KEY = "_litellm_rate_limit_descriptors"
 # mirror ``x-ratelimit-*`` headers into the SLP. Streaming exits
 # common_request_processing before ``async_post_call_success_hook`` runs.
 RATE_LIMIT_RESPONSE_KEY = "_litellm_proxy_rate_limit_response"
-# Holds the slot id the pre-call hook acquired for this request. The
-# success/failure callbacks release only this slot id: those callbacks also
-# fire for requests rejected at pre-call (which never acquired a slot), and
-# an id-less release would free a slot still owned by another in-flight
-# request — every rejection would then raise effective concurrency above the
+# Holds the acquisition the pre-call hook made for this request: the slot id
+# plus the gauge counter keys it was registered under. The success/failure
+# callbacks release only this exact acquisition: those callbacks also fire
+# for requests rejected at pre-call (which never acquired a slot), and an
+# id-less release would free a slot still owned by another in-flight request
+# — every rejection would then raise effective concurrency above the
 # configured limit.
 MAX_PARALLEL_SLOT_ACQUIRED_KEY = "_litellm_max_parallel_slot_acquired"
 # How long an acquired slot counts toward the in-flight total before it is
@@ -355,6 +356,11 @@ class ParallelRequestGauge(TypedDict):
     counter_key: str
     limit: int
     descriptor_key: str
+
+
+class ParallelSlotAcquisition(TypedDict):
+    slot_id: str
+    counter_keys: List[str]
 
 
 class RateLimitStatus(TypedDict):
@@ -1091,68 +1097,89 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         slot_id: str,
         parent_otel_span: Optional[Span] = None,
     ) -> RateLimitResponse:
-        """All-or-nothing in-memory slot-registry acquire. Caller holds the lock."""
+        """
+        All-or-nothing in-memory slot-registry acquire. Caller holds the lock.
+
+        A cached dict is the authoritative in-memory registry. A cached
+        integer is the count mirrored from the last successful Redis script
+        call: when Redis fails over to this path, that mirror still counts
+        the slots in flight on the Redis side, so it is carried forward as
+        an integer counter (not discarded as an empty registry, which would
+        briefly double the admitted concurrency during a Redis outage).
+        """
         now = self._get_current_time().timestamp()
         cutoff = now - PARALLEL_REQUEST_SLOT_TTL_SECONDS
-        registries: List[Dict[str, float]] = []
+        states: List[Tuple[Optional[Dict[str, float]], int]] = []
         for gauge in gauges:
             raw_value = await self.internal_usage_cache.async_get_cache(
                 key=gauge["counter_key"],
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
             )
-            registry: Dict[str, float] = (
-                {key: float(ts) for key, ts in raw_value.items() if isinstance(ts, (int, float)) and ts >= cutoff}
-                if isinstance(raw_value, dict)
-                else {}
-            )
-            if len(registry) + 1 > gauge["limit"]:
+            if isinstance(raw_value, dict):
+                registry: Optional[Dict[str, float]] = {
+                    key: float(ts) for key, ts in raw_value.items() if isinstance(ts, (int, float)) and ts >= cutoff
+                }
+                in_flight = len(registry or {})
+            elif raw_value is None:
+                registry = {}
+                in_flight = 0
+            else:
+                registry = None
+                in_flight = max(0, int(raw_value))
+            if in_flight + 1 > gauge["limit"]:
                 return RateLimitResponse(
                     overall_code="OVER_LIMIT",
-                    statuses=[self._gauge_status(gauge, len(registry), "OVER_LIMIT")],
+                    statuses=[self._gauge_status(gauge, in_flight, "OVER_LIMIT")],
                 )
-            registries.append(registry)
+            states.append((registry, in_flight))
 
         statuses = []
-        for gauge, registry in zip(gauges, registries):
-            updated_registry = {**registry, slot_id: now}
+        for gauge, (registry, in_flight) in zip(gauges, states):
+            new_value: Union[Dict[str, float], int] = (
+                {**registry, slot_id: now} if registry is not None else in_flight + 1
+            )
             await self.internal_usage_cache.async_set_cache(
                 key=gauge["counter_key"],
-                value=updated_registry,
+                value=new_value,
                 ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
             )
-            statuses.append(self._gauge_status(gauge, len(updated_registry), "OK"))
+            statuses.append(self._gauge_status(gauge, in_flight + 1, "OK"))
         return RateLimitResponse(overall_code="OK", statuses=statuses)
 
-    async def _release_parallel_request_slot(
+    async def _release_parallel_request_slots(
         self,
-        user_api_key: str,
-        slot_id: str,
+        acquisition: ParallelSlotAcquisition,
         parent_otel_span: Optional[Span] = None,
     ) -> None:
         """
-        Release the api-key max_parallel_requests slot acquired at pre-call
-        by removing this request's slot id from the registry. Removing an
-        absent slot id is a no-op, so a release without a matching acquire
-        or a double-fired release can never free another request's slot.
+        Release the max_parallel_requests slots acquired at pre-call by
+        removing this request's slot id from every gauge it was registered
+        under. Removing an absent slot id is a no-op, so a release without a
+        matching acquire or a double-fired release can never free another
+        request's slot. The in-memory fallback decrements integer mirror
+        values (floored at 0) because the mirror carries no per-slot ids.
         """
-        counter_key = self.create_rate_limit_keys(
-            key="api_key",
-            value=user_api_key,
-            rate_limit_type="max_parallel_requests",
-        )
+        counter_keys = acquisition["counter_keys"]
+        slot_id = acquisition["slot_id"]
+        if not counter_keys or not slot_id:
+            return
         if self.parallel_release_script is not None:
             try:
-                raw = await self.parallel_release_script(keys=[counter_key], args=[slot_id])
-                await self.internal_usage_cache.async_set_cache(
-                    key=counter_key,
-                    value=max(0, int(raw[0])),
-                    ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
+                raw = await self.parallel_release_script(
+                    keys=counter_keys,
+                    args=[slot_id for _ in counter_keys],
                 )
+                for counter_key, remaining in zip(counter_keys, raw):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=counter_key,
+                        value=max(0, int(remaining)),
+                        ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+                        litellm_parent_otel_span=parent_otel_span,
+                        local_only=True,
+                    )
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
                 verbose_proxy_logger.warning(
@@ -1160,20 +1187,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
         async with self._check_and_increment_lock:
-            raw_value = await self.internal_usage_cache.async_get_cache(
-                key=counter_key,
-                litellm_parent_otel_span=parent_otel_span,
-                local_only=True,
-            )
-            if not isinstance(raw_value, dict) or slot_id not in raw_value:
-                return
-            await self.internal_usage_cache.async_set_cache(
-                key=counter_key,
-                value={key: ts for key, ts in raw_value.items() if key != slot_id},
-                ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-                litellm_parent_otel_span=parent_otel_span,
-                local_only=True,
-            )
+            for counter_key in counter_keys:
+                raw_value = await self.internal_usage_cache.async_get_cache(
+                    key=counter_key,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+                if isinstance(raw_value, dict):
+                    if slot_id not in raw_value:
+                        continue
+                    new_value: Union[Dict[str, float], int] = {
+                        key: ts for key, ts in raw_value.items() if key != slot_id
+                    }
+                elif raw_value is None:
+                    continue
+                else:
+                    new_value = max(0, int(raw_value) - 1)
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value=new_value,
+                    ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
 
     async def atomic_check_and_increment_by_n(
         self,
@@ -2376,10 +2412,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # shrinking the effective TPM budget by N and causing
             # false-positive 429s under bursts. When reservation is disabled,
             # this pass enforces TPM directly from the post-call counters.
-            has_parallel_limits = any(
-                (d.get("rate_limit") or {}).get("max_parallel_requests") is not None for d in descriptors
-            )
-            parallel_slot_id = uuid.uuid4().hex if has_parallel_limits else None
+            parallel_counter_keys = [
+                self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
+                for d in descriptors
+                if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
+            ]
+            parallel_slot_id = uuid.uuid4().hex if parallel_counter_keys else None
 
             response = await self.should_rate_limit(
                 descriptors=descriptors,
@@ -2408,7 +2446,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._stash_value_in_metadata_channels(
                         data=data,
                         key=MAX_PARALLEL_SLOT_ACQUIRED_KEY,
-                        value=parallel_slot_id,
+                        value={
+                            "slot_id": parallel_slot_id,
+                            "counter_keys": parallel_counter_keys,
+                        },
                     )
 
             # ----------------------------------------------------------------
@@ -2469,11 +2510,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
-                    acquired_slot_id = self._get_parallel_slot_id(kwargs=data)
-                    if user_api_key_dict.api_key and acquired_slot_id is not None:
-                        await self._release_parallel_request_slot(
-                            user_api_key=user_api_key_dict.api_key,
-                            slot_id=acquired_slot_id,
+                    acquisition = self._get_parallel_slot_acquisition(kwargs=data)
+                    if acquisition is not None:
+                        await self._release_parallel_request_slots(
+                            acquisition=acquisition,
                             parent_otel_span=user_api_key_dict.parent_otel_span,
                         )
                         self._clear_parallel_slot_marker(data)
@@ -2850,14 +2890,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return bool(cls._lookup_stashed_value(kwargs, standard_logging_metadata, TPM_RESERVATION_RELEASED_KEY))
 
     @classmethod
-    def _get_parallel_slot_id(
+    def _get_parallel_slot_acquisition(
         cls,
         kwargs: Any,
         standard_logging_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
-        """Slot id acquired by this request's pre-call hook, if any."""
+    ) -> Optional[ParallelSlotAcquisition]:
+        """The slot acquisition this request's pre-call hook made, if any."""
         candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, MAX_PARALLEL_SLOT_ACQUIRED_KEY)
-        return candidate if isinstance(candidate, str) and candidate else None
+        if not isinstance(candidate, dict):
+            return None
+        slot_id = candidate.get("slot_id")
+        counter_keys = candidate.get("counter_keys")
+        if not isinstance(slot_id, str) or not slot_id:
+            return None
+        if not isinstance(counter_keys, list) or not counter_keys:
+            return None
+        if not all(isinstance(key, str) and key for key in counter_keys):
+            return None
+        return ParallelSlotAcquisition(slot_id=slot_id, counter_keys=counter_keys)
 
     @staticmethod
     def _clear_parallel_slot_marker(data: Any) -> None:
@@ -3109,15 +3159,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             standard_logging_object = kwargs.get("standard_logging_object") or {}
             standard_logging_metadata = standard_logging_object.get("metadata") or {}
-            user_api_key = standard_logging_metadata.get("user_api_key_hash")
-            acquired_slot_id = self._get_parallel_slot_id(
+            acquisition = self._get_parallel_slot_acquisition(
                 kwargs=kwargs,
                 standard_logging_metadata=standard_logging_metadata,
             )
-            if user_api_key and acquired_slot_id is not None:
-                await self._release_parallel_request_slot(
-                    user_api_key=user_api_key,
-                    slot_id=acquired_slot_id,
+            if acquisition is not None:
+                await self._release_parallel_request_slots(
+                    acquisition=acquisition,
                     parent_otel_span=litellm_parent_otel_span,
                 )
                 self._clear_parallel_slot_marker(kwargs)
@@ -3258,18 +3306,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             litellm_parent_otel_span: Union[Span, None] = _get_parent_otel_span_from_kwargs(kwargs)
             standard_logging_object = kwargs.get("standard_logging_object") or {}
             standard_logging_metadata = standard_logging_object.get("metadata") or {}
-            user_api_key = standard_logging_metadata.get("user_api_key_hash")
 
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
-            acquired_slot_id = self._get_parallel_slot_id(
+            acquisition = self._get_parallel_slot_acquisition(
                 kwargs=kwargs,
                 standard_logging_metadata=standard_logging_metadata,
             )
-            if user_api_key and acquired_slot_id is not None:
-                await self._release_parallel_request_slot(
-                    user_api_key=user_api_key,
-                    slot_id=acquired_slot_id,
+            if acquisition is not None:
+                await self._release_parallel_request_slots(
+                    acquisition=acquisition,
                     parent_otel_span=litellm_parent_otel_span,
                 )
                 self._clear_parallel_slot_marker(kwargs)
@@ -3337,18 +3383,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         client cancels a stream mid-flight, the cancellation surfaces as
         ``asyncio.CancelledError`` / ``GeneratorExit`` and neither callback
         runs, so without this the slot leaks per cancelled stream until its
-        TTL prunes it. ``request_data`` carries the stashed slot id; without
-        it there is nothing to release.
+        TTL prunes it. ``request_data`` carries the stashed acquisition;
+        its presence (not the key object's current max_parallel_requests
+        configuration, which can change mid-request) decides whether there
+        is anything to release.
         """
-        if not user_api_key_dict.api_key or user_api_key_dict.max_parallel_requests is None:
-            return
-        acquired_slot_id = self._get_parallel_slot_id(kwargs=request_data)
-        if acquired_slot_id is None:
+        acquisition = self._get_parallel_slot_acquisition(kwargs=request_data)
+        if acquisition is None:
             return
 
-        await self._release_parallel_request_slot(
-            user_api_key=user_api_key_dict.api_key,
-            slot_id=acquired_slot_id,
+        await self._release_parallel_request_slots(
+            acquisition=acquisition,
             parent_otel_span=None,
         )
         self._clear_parallel_slot_marker(request_data)
