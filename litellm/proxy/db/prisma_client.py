@@ -137,8 +137,17 @@ class PrismaWrapper:
         self.on_engine_replaced: Callable[[], None] | None = None
 
     def _get_engine_pid(self) -> int:
-        """Get the PID of the current Prisma engine subprocess, or 0 if unavailable."""
+        """Get the PID of the current Prisma engine subprocess, or 0 if unavailable.
+
+        Must never raise: it runs inside the reconnect path, where the client
+        may be in any broken state. Prisma's ``_engine`` is a property that
+        raises ``ClientNotConnectedError`` on a disconnected client; if that
+        escaped here, ``recreate_prisma_client`` would fail before it could
+        build a replacement client and the reconnect loop could never recover.
+        """
         try:
+            if self._original_prisma.is_connected() is not True:
+                return 0
             engine = self._original_prisma._engine
             process = getattr(engine, "process", None) if engine is not None else None
             if process is not None:

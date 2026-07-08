@@ -1,0 +1,81 @@
+# Visit https://goreleaser.com for documentation on how to customize this
+# behavior.
+version: 2
+before:
+  hooks:
+    # this is just an example and not a requirement for provider building/publishing
+    - go mod tidy
+builds:
+- env:
+    # goreleaser does not work with CGO, it could also complicate
+    # usage by users in CI/CD systems like HCP Terraform where
+    # they are unable to install libraries.
+    - CGO_ENABLED=0
+  mod_timestamp: '{{ .CommitTimestamp }}'
+  flags:
+    - -trimpath
+  ldflags:
+    - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
+  goos:
+    - freebsd
+    - windows
+    - linux
+    - darwin
+  goarch:
+    - amd64
+    - '386'
+    - arm
+    - arm64
+  ignore:
+    # macOS doesn't support 32-bit anymore
+    - goos: darwin
+      goarch: '386'
+    # Windows ARM is uncommon for Terraform usage
+    - goos: windows
+      goarch: arm
+    - goos: windows
+      goarch: arm64
+    # FreeBSD ARM is rarely used
+    - goos: freebsd
+      goarch: arm
+    - goos: freebsd
+      goarch: arm64
+  # This builds the following key targets for Terraform users:
+  # - linux/amd64 (most common CI/CD)
+  # - linux/arm64 (Graviton, ARM-based CI)
+  # - linux/386 (legacy 32-bit systems)
+  # - linux/arm (Raspberry Pi, etc.)
+  # - darwin/amd64 (Intel Macs)
+  # - darwin/arm64 (Apple Silicon Macs)
+  # - windows/amd64 (Windows desktops)
+  # - freebsd/amd64, freebsd/386 (FreeBSD servers)
+  binary: '{{ .ProjectName }}_v{{ .Version }}'
+archives:
+- format: zip
+  name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+checksum:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+signs:
+  - artifacts: checksum
+    args:
+      # if you are using this in a GitHub action or some other automated pipeline, you 
+      # need to pass the batch flag to indicate its not interactive.
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}" # set this environment variable for your signing key
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+release:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+  # If you want to manually examine the release before its live, uncomment this line:
+  # draft: true
+changelog:
+  disable: true

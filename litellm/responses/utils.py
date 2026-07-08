@@ -204,6 +204,9 @@ class ResponsesAPIRequestUtils:
         if response_id is None:
             return responses_api_response
 
+        if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
+            return responses_api_response
+
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
@@ -469,6 +472,14 @@ class ResponsesAPIRequestUtils:
                 model_id=None,
                 response_id=response_id,
             )
+
+    @staticmethod
+    def _is_litellm_encoded_response_id(response_id: str) -> bool:
+        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        return (
+            decoded_response_id.get("model_id") is not None
+            or decoded_response_id.get("custom_llm_provider") is not None
+        )
 
     @staticmethod
     def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:

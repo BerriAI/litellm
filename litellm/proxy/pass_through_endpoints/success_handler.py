@@ -34,6 +34,18 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
 
 
+def _safe_response_text(httpx_response: httpx.Response) -> str:
+    """
+    Streamed passthrough responses are relayed to the client without being read
+    into memory, so accessing .text on them raises ResponseNotRead. Their body is
+    intentionally uninspected; log an empty string instead of failing the row.
+    """
+    try:
+        return httpx_response.text
+    except httpx.ResponseNotRead:
+        return ""
+
+
 class PassThroughEndpointLogging:
     def __init__(self):
         self.TRACKED_VERTEX_ROUTES = [
@@ -306,7 +318,9 @@ class PassThroughEndpointLogging:
             ]
             kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
         if standard_logging_response_object is None:
-            standard_logging_response_object = StandardPassThroughResponseObject(response=httpx_response.text)
+            standard_logging_response_object = StandardPassThroughResponseObject(
+                response=_safe_response_text(httpx_response)
+            )
 
         kwargs = self._set_cost_per_request(
             logging_obj=logging_obj,

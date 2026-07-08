@@ -374,3 +374,35 @@ def test_raise_token_exchange_challenge_includes_server_root_path():
         raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www
+
+
+def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="")
+    assert exc_info.value.headers["WWW-Authenticate"] == (
+        'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+
+
+def test_raise_token_exchange_challenge_uses_insufficient_claims_with_claims_present():
+    # Per the Microsoft claims-challenge format, a claims challenge MUST use error=insufficient_claims
+    # (the value MSAL-family clients key on), and the claims ride base64-encoded, never raw.
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="", claims=claims)
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
+    assert 'error="insufficient_claims"' in www
+    assert 'error="invalid_token"' not in www
+    assert f'claims="{base64.b64encode(claims.encode()).decode()}"' in www
+    assert claims not in www  # raw JSON never appears; only the base64 form
