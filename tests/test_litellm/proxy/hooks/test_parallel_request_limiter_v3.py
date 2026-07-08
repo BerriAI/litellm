@@ -3573,3 +3573,136 @@ async def test_pre_call_hook_skips_reservation_when_disabled(monkeypatch):
     )
 
     assert TPM_RESERVED_TOKENS_KEY not in (data.get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_per_tag_rate_limit_independent_counters_v3(monkeypatch):
+    """
+    A single key with per-tag RPM limits tracks each tag independently: a tag
+    at its limit returns 429 while a different (unlimited) tag keeps flowing,
+    governed only by the generous key-level limit.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-per-tag-rpm")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        rpm_limit=100,
+        metadata={"tag_rpm_limit": {"cell-1": 2}},
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def call(tag: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": [tag]}},
+            call_type="",
+        )
+
+    await call("cell-1")
+    await call("cell-1")
+    with pytest.raises(HTTPException) as exc_info:
+        await call("cell-1")
+    assert exc_info.value.status_code == 429
+    assert "tag_per_key" in str(exc_info.value.detail)
+
+    # cell-2 has no configured tag limit, so cell-1's exhausted counter must
+    # not block it; only the generous key-level limit applies.
+    for _ in range(5):
+        await call("cell-2")
+
+
+@pytest.mark.asyncio
+async def test_per_tag_descriptor_creation_v3():
+    """
+    _create_rate_limit_descriptors emits a tag_per_key descriptor carrying the
+    configured RPM limit only for request tags present in the configured map.
+    """
+    _api_key = hash_token("sk-per-tag-desc")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        metadata={"tag_rpm_limit": {"cell-1": 5}},
+    )
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=user_api_key_dict,
+        data={"model": "gpt-3.5-turbo", "metadata": {"tags": ["cell-1", "cell-2"]}},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+
+    tag_descriptors = [d for d in descriptors if d["key"] == "tag_per_key"]
+    assert len(tag_descriptors) == 1, "only the configured tag yields a descriptor"
+    descriptor = tag_descriptors[0]
+    assert descriptor["value"] == f"{_api_key}:cell-1"
+    assert descriptor["rate_limit"]["requests_per_unit"] == 5
+
+
+@pytest.mark.asyncio
+async def test_per_tag_descriptor_absent_without_config_v3():
+    """No tag_per_key descriptor is created when the key has no tag limits."""
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-no-tag"),
+        rpm_limit=10,
+    )
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=user_api_key_dict,
+        data={"model": "gpt-3.5-turbo", "metadata": {"tags": ["cell-1"]}},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+
+    assert not [d for d in descriptors if d["key"] == "tag_per_key"]
+
+
+@pytest.mark.asyncio
+async def test_per_tag_untagged_request_governed_by_key_limit_v3(monkeypatch):
+    """
+    Per-tag limits are opt-in sub-limits under the key-level ceiling, not a
+    standalone enforcement boundary: a request that carries no tag (or a tag
+    without a configured limit) is not rejected by any tag counter, but it is
+    still bounded by the key-level rpm_limit. This pins the documented
+    untagged-fallback behavior so a future "fail closed on missing tag" change
+    would fail here instead of silently breaking it.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-untagged-fallback")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        rpm_limit=3,
+        metadata={"tag_rpm_limit": {"cell-1": 2}},
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def call(metadata: dict) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": metadata},
+            call_type="",
+        )
+
+    # Untagged and unconfigured-tag requests share the key-level budget of 3
+    # and never hit a tag_per_key counter.
+    await call({})
+    await call({"tags": ["cell-99"]})
+    await call({})
+    with pytest.raises(HTTPException) as exc_info:
+        await call({"tags": ["cell-99"]})
+    assert exc_info.value.status_code == 429
+    assert "tag_per_key" not in str(exc_info.value.detail)
