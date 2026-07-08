@@ -163,7 +163,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         description: values.description || mcpServer.description,
         url,
         transport,
-        auth_type: AUTH_TYPE.OAUTH2,
+        auth_type:
+          mcpServer.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH || mcpServer.auth_type === AUTH_TYPE.OAUTH_DELEGATE
+            ? mcpServer.auth_type
+            : AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
