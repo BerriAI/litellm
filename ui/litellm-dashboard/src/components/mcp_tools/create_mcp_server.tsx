@@ -603,9 +603,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Clear form, tools, and OAuth state when the modal closes so a previous server's
   // authorization, credentials, or tool list never bleed into the next "Add New MCP
   // Server" session, including when a parent dismisses the modal without routing
-  // through handleCancel or handleCreate.
+  // through handleCancel or handleCreate. Only a real open -> closed transition may
+  // trigger this: on the post-OAuth-redirect remount the modal starts closed while
+  // resumeOAuthFlow's token exchange is in flight, and resetting then discards the
+  // fetched token.
+  const wasModalVisibleRef = React.useRef(isModalVisible);
   React.useEffect(() => {
-    if (!isModalVisible) {
+    const wasVisible = wasModalVisibleRef.current;
+    wasModalVisibleRef.current = isModalVisible;
+    if (!isModalVisible && wasVisible) {
       form.resetFields();
       setFormValues({});
       setOauthAccessToken(null);

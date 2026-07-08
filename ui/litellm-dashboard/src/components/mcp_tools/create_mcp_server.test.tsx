@@ -937,6 +937,22 @@ describe("CreateMCPServer", () => {
       const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com") as HTMLInputElement;
       expect(reopenedUrlInput.value).toBe("");
     });
+
+    it("does not reset an in-flight OAuth resume when mounted with the modal closed (post-redirect restore)", () => {
+      // After the "Authorize & Fetch Token" redirect the page reloads and this
+      // component mounts with isModalVisible=false while useMcpOAuthFlow is still
+      // exchanging the authorization code. Calling reset() during that mount bumps
+      // the hook's reset version and the fetched token is silently discarded, so
+      // the user sees no Connection Status / Tool Configuration and must authorize
+      // again after saving.
+      const { rerender } = render(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      expect(oauthHook.reset).not.toHaveBeenCalled();
+
+      // A real open -> closed transition must still reset (the #30000 leak fix).
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      expect(oauthHook.reset).toHaveBeenCalled();
+    });
   });
 
   describe("when stdio transport is selected", () => {
