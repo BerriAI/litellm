@@ -57,7 +57,9 @@ class ResponsesAPIRequestUtils:
         if list(merged_input) == list(client_input):
             return original_input
         num_client_items = len(client_input)
-        if num_client_items and list(merged_input[-num_client_items:]) == list(client_input):
+        if num_client_items == 0:
+            return list(merged_input) + list(original_input)
+        if list(merged_input[-num_client_items:]) == list(client_input):
             return list(merged_input[:-num_client_items]) + list(original_input)
         verbose_logger.warning(
             "Prompt management hook rewrote Responses API messages; %d non-message "

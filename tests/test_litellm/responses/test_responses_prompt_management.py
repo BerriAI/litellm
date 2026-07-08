@@ -422,6 +422,18 @@ class TestPromptManagementPreservesNonMessageItems:
         )
         assert result == original
 
+    def test_helper_preserves_items_when_input_has_no_message_items(self):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        template = {"role": "system", "content": "You are helpful."}
+        original = [self.REASONING_ITEM]
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original,
+            client_input=[],
+            merged_input=[template],
+        )
+        assert result == [template, self.REASONING_ITEM]
+
     def test_helper_prepends_template_and_preserves_items(self):
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
