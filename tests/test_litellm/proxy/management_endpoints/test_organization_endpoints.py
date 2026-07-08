@@ -971,6 +971,26 @@ async def test_v2_writes_budget_and_org_in_one_transaction(monkeypatch):
     prisma.db.litellm_organizationtable.update.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_v2_serializes_model_max_budget_on_budget_write(monkeypatch):
+    """model_max_budget is a Json column, so it is JSON-serialized on the budget-row write like new_budget/metadata."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.validate_model_max_budget",
+        lambda _: None,
+    )
+
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"model_max_budget": {"gpt-4o": {"max_budget": 10}}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+    )
+
+    written = prisma.db.litellm_budgettable.update.await_args.kwargs["data"]["model_max_budget"]
+    assert isinstance(written, str)
+    assert json.loads(written) == {"gpt-4o": {"max_budget": 10}}
+
+
 def test_v2_rejects_unknown_field():
     """An unknown/misspelled key is a validation error, not a silently dropped no-op."""
     from pydantic import ValidationError

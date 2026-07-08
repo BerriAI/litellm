@@ -733,7 +733,9 @@ async def update_organization_v2(
         if plan.budget_updates:
             await tx.litellm_budgettable.update(
                 where={"budget_id": existing_organization_row.budget_id},
-                data=dict(build_budget_write_data(plan.budget_updates, user_api_key_dict.user_id)),
+                data=prisma_client.jsonify_object(
+                    dict(build_budget_write_data(plan.budget_updates, user_api_key_dict.user_id))
+                ),
             )
         response = await tx.litellm_organizationtable.update(
             where={"organization_id": organization_id},
