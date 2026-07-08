@@ -716,7 +716,7 @@ if MCP_AVAILABLE:
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
         host_token = getattr(host_ctx.meta, "progressToken", None)
-        if not (host_token and hasattr(host_ctx, "session") and host_ctx.session):
+        if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session = host_ctx.session
 
@@ -732,7 +732,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 verbose_logger.error(f"Failed to forward progress to Host: {e}")
 
-        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        verbose_logger.debug(f"Host progressToken captured: {str(host_token)[:8]}...")
         return forward_progress
 
     async def _build_virtual_call_logging_obj(
