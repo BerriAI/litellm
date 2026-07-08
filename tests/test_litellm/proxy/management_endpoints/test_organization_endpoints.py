@@ -653,67 +653,55 @@ def _build_v2_plan(body: dict):
     return build_organization_update_plan(present_keys=data.model_fields_set, validated_data=data)
 
 
-def test_v2_plan_change_limit():
-    plan = _build_v2_plan({"tpm_limit": 500})
-    assert plan.budget_updates == {"tpm_limit": 500}
-    assert "tpm_limit" not in plan.org_column_updates
+@pytest.mark.parametrize(
+    "body, expected_budget, expected_org",
+    [
+        ({"tpm_limit": 500}, {"tpm_limit": 500}, {}),
+        ({"tpm_limit": None}, {"tpm_limit": None}, {}),
+        ({"metadata": {"a": 1}}, {}, {"metadata": {"a": 1}}),
+        ({"metadata": None}, {}, {"metadata": {}}),
+        ({"organization_alias": "x"}, {}, {"organization_alias": "x"}),
+        ({"models": ["m1", "m2"]}, {}, {"models": ["m1", "m2"]}),
+        ({"models": []}, {}, {"models": []}),
+        ({}, {}, {}),
+        (
+            {"tpm_limit": 5, "rpm_limit": 9, "max_budget": 10, "metadata": {"a": 1}, "models": ["m"]},
+            {"tpm_limit": 5, "rpm_limit": 9, "max_budget": 10},
+            {"metadata": {"a": 1}, "models": ["m"]},
+        ),
+    ],
+    ids=[
+        "set-limit",
+        "clear-limit-not-dropped",
+        "set-metadata",
+        "clear-metadata-to-empty-dict",
+        "set-alias-leaves-metadata-untouched",
+        "set-models",
+        "clear-models-to-empty-list",
+        "touch-nothing",
+        "budget-and-org-fields-split",
+    ],
+)
+def test_v2_plan_splits_present_fields(body, expected_budget, expected_org):
+    """Each sent field routes to budget vs org columns; absent fields are omitted and clears are kept (exact match)."""
+    plan = _build_v2_plan(body)
+    assert dict(plan.budget_updates) == expected_budget
+    assert dict(plan.org_column_updates) == expected_org
 
 
-def test_v2_plan_clear_limit_is_present_not_dropped():
-    plan = _build_v2_plan({"tpm_limit": None})
-    assert "tpm_limit" in plan.budget_updates
-    assert plan.budget_updates["tpm_limit"] is None
-
-
-def test_v2_plan_untouched_budget_fields_never_written():
-    plan = _build_v2_plan({"tpm_limit": 5})
-    for untouched in ("soft_budget", "max_parallel_requests", "model_max_budget", "rpm_limit", "max_budget"):
-        assert untouched not in plan.budget_updates
-
-
-def test_v2_plan_set_metadata():
-    plan = _build_v2_plan({"metadata": {"a": 1}})
-    assert plan.org_column_updates["metadata"] == {"a": 1}
-
-
-def test_v2_plan_clear_metadata_present_as_empty_dict():
-    plan = _build_v2_plan({"metadata": None})
-    assert "metadata" in plan.org_column_updates
-    assert plan.org_column_updates["metadata"] == {}
-
-
-def test_v2_plan_metadata_absent_is_untouched():
-    plan = _build_v2_plan({"organization_alias": "x"})
-    assert "metadata" not in plan.org_column_updates
-
-
-def test_v2_plan_change_and_clear_models():
-    assert _build_v2_plan({"models": ["m1", "m2"]}).org_column_updates["models"] == ["m1", "m2"]
-    cleared = _build_v2_plan({"models": []})
-    assert "models" in cleared.org_column_updates
-    assert cleared.org_column_updates["models"] == []
-
-
-def test_v2_plan_touch_nothing():
-    plan = _build_v2_plan({})
-    assert plan.budget_updates == {}
-    assert dict(plan.org_column_updates) == {}
-
-
-def test_v2_plan_budget_fields_never_land_in_org_columns():
-    from litellm.proxy._types import LiteLLM_BudgetTable
-
-    plan = _build_v2_plan({"tpm_limit": 5, "rpm_limit": 9, "max_budget": 10, "metadata": {"a": 1}, "models": ["m"]})
-    assert not (set(LiteLLM_BudgetTable.model_fields) & set(plan.org_column_updates))
-
-
-def test_v2_empty_string_numeric_is_rejected():
+@pytest.mark.parametrize(
+    "body",
+    [{"tpm_limit": ""}, {"tmp_limit": None}],
+    ids=["non-numeric-limit", "unknown-key"],
+)
+def test_v2_model_rejects_invalid_body(body):
+    """A non-numeric limit and an unknown/misspelled key are both rejected at model validation (422 at the route)."""
     from pydantic import ValidationError
 
     from litellm.proxy._types import OrganizationUpdateRequestV2
 
     with pytest.raises(ValidationError):
-        OrganizationUpdateRequestV2.model_validate({"tpm_limit": ""})
+        OrganizationUpdateRequestV2.model_validate(body)
 
 
 class _FakeTxContext:
@@ -989,16 +977,6 @@ async def test_v2_serializes_model_max_budget_on_budget_write(monkeypatch):
     written = prisma.db.litellm_budgettable.update.await_args.kwargs["data"]["model_max_budget"]
     assert isinstance(written, str)
     assert json.loads(written) == {"gpt-4o": {"max_budget": 10}}
-
-
-def test_v2_rejects_unknown_field():
-    """An unknown/misspelled key is a validation error, not a silently dropped no-op."""
-    from pydantic import ValidationError
-
-    from litellm.proxy._types import OrganizationUpdateRequestV2
-
-    with pytest.raises(ValidationError):
-        OrganizationUpdateRequestV2.model_validate({"tmp_limit": None})
 
 
 def test_build_budget_write_data_recomputes_reset_at_on_duration():

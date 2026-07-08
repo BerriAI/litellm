@@ -18801,15 +18801,13 @@ export interface paths {
         head?: never;
         /**
          * Update Organization V2
-         * @description Partial update of an organization (RESTful PATCH, RFC 7396 JSON Merge Patch semantics).
+         * @description Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
          *
-         *     A field present in the request body is written and an omitted field is left untouched; presence
-         *     is read from ``model_fields_set``, so clearing a limit or the metadata now persists instead of
-         *     being dropped as though it were never sent. Clear tokens are per field: budget limits and
-         *     ``metadata`` clear with ``null``, ``models`` clears with ``[]``, ``object_permission`` clears
-         *     with ``null`` (it merges when sent, so an empty ``{}`` is rejected rather than silently no-op'd),
-         *     and ``organization_alias`` cannot be cleared (it is required). Validation failures return 422,
-         *     and the budget-row and org-row writes are applied atomically in a single transaction.
+         *     A sent field is written and an omitted one is left untouched (presence is read from
+         *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+         *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+         *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+         *     Validation failures return 422; the budget-row and org-row writes are one transaction.
          */
         patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
         trace?: never;
@@ -28352,15 +28350,11 @@ export interface components {
         };
         /**
          * OrganizationUpdateRequestV2
-         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 JSON Merge Patch).
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
          *
-         *     Presence is read from ``model_fields_set``: a field present in the request is written, an
-         *     omitted field is left untouched. Clear tokens are per field - a budget limit or ``metadata``
-         *     clears with ``null``, ``models`` clears with ``[]``, and ``organization_alias`` cannot be
-         *     cleared (it is required). Metadata is replace-when-sent; there is no additive merge.
-         *
-         *     ``extra="forbid"`` so an unknown or misspelled key is a 422 rather than a silently dropped
-         *     no-op - the whole contract hinges on which keys are present.
+         *     Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+         *     left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+         *     the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
          */
         OrganizationUpdateRequestV2: {
             /** Budget Duration */

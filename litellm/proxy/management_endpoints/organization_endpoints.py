@@ -122,12 +122,9 @@ def build_organization_update_plan(
     validated_data: OrganizationUpdateRequestV2,
 ) -> OrganizationUpdatePlan:
     """
-    Split a validated v2 update into budget writes and org-column writes.
-
-    ``present_keys`` is ``model_fields_set`` - only fields the caller actually sent. A sent
-    field is written (``None`` clears via ``update_budget``'s ``exclude_unset``); an unsent
-    field is left untouched. Metadata is replace-when-sent and, since the org ``metadata``
-    Json column is non-nullable (``@default("{}")``), a cleared metadata is written as ``{}``.
+    Split the fields the caller sent (``present_keys`` is ``model_fields_set``) into budget-row
+    writes and org-column writes. A cleared ``metadata`` is written as ``{}`` since its column is
+    non-nullable.
     """
     field_values = _STR_OBJECT_DICT_ADAPTER.validate_python(validated_data.model_dump())
     budget_updates = {field: field_values[field] for field in present_keys if field in _BUDGET_SETTABLE_FIELDS}
@@ -144,12 +141,8 @@ def build_organization_update_plan(
 
 def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
     """
-    Columns to write to the organization's budget row for a v2 update.
-
-    ``budget_reset_at`` is recomputed only when a non-null ``budget_duration`` is sent, mirroring
-    ``update_budget``; every other sent budget field (including an explicit ``None`` clear) is
-    written as-is. Pure: the caller performs the write inside the update transaction so the budget
-    and org rows change atomically.
+    Budget-row columns to write. ``budget_reset_at`` is recomputed only when a non-null
+    ``budget_duration`` is sent; other sent fields (including a ``None`` clear) are written as-is.
     """
     budget_duration = budget_updates.get("budget_duration")
     recomputed_reset_at: Mapping[str, object] = (
@@ -628,15 +621,13 @@ async def update_organization_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Partial update of an organization (RESTful PATCH, RFC 7396 JSON Merge Patch semantics).
+    Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
 
-    A field present in the request body is written and an omitted field is left untouched; presence
-    is read from ``model_fields_set``, so clearing a limit or the metadata now persists instead of
-    being dropped as though it were never sent. Clear tokens are per field: budget limits and
-    ``metadata`` clear with ``null``, ``models`` clears with ``[]``, ``object_permission`` clears
-    with ``null`` (it merges when sent, so an empty ``{}`` is rejected rather than silently no-op'd),
-    and ``organization_alias`` cannot be cleared (it is required). Validation failures return 422,
-    and the budget-row and org-row writes are applied atomically in a single transaction.
+    A sent field is written and an omitted one is left untouched (presence is read from
+    ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+    ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+    so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+    Validation failures return 422; the budget-row and org-row writes are one transaction.
     """
     from litellm.proxy.proxy_server import prisma_client
 
