@@ -274,6 +274,23 @@ def test_walk_user_text_redacts_function_call_output_text():
     assert data["input"][2]["output"][0]["text"] == "[REDACTED] tool"
 
 
+def test_walk_user_text_redacts_function_call_output_string_output():
+    """LIT-4294: ``function_call_output.output`` is also a plain string in
+    OpenAI's Responses spec; the redact walker must handle both forms."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "AKIAEXAMPLE tool",
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 1
+    assert data["input"][0]["output"] == "[REDACTED] tool"
+
+
 def test_walk_user_text_redacts_mixed_list_input():
     """Read and write helpers must agree on coverage — bare strings inside
     a mixed ``input`` list are inspected by both."""
@@ -345,7 +362,7 @@ def test_build_inspection_messages_drops_messages_with_no_text():
 
 def test_build_inspection_messages_responses_api_tool_call_taxonomy():
     """LIT-4294: mixed Responses ``input`` (message + function_call +
-    function_call_output) must produce a non-empty inspection list — an
+    function_call_output) must produce a non-empty inspection list. An
     empty ``messages`` posted to AIM's ``/fw/v1/analyze`` gets rejected with
     a 422 ``No messages in the request`` and every other guardrail silently
     scans nothing."""
