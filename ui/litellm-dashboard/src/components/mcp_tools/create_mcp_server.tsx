@@ -45,6 +45,7 @@ interface CreateMCPServerProps {
   setModalVisible: (visible: boolean) => void;
   availableAccessGroups: string[];
   prefillData?: DiscoverableMCPServer | null;
+  duplicateServer?: MCPServer | null;
   onBackToDiscovery?: () => void;
 }
 
@@ -75,6 +76,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   setModalVisible,
   availableAccessGroups,
   prefillData,
+  duplicateServer,
   onBackToDiscovery,
 }) => {
   const [form] = Form.useForm();
@@ -332,6 +334,122 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setAliasManuallyEdited(false);
   }, [isModalVisible, prefillData, form]);
 
+  React.useEffect(() => {
+    if (!isModalVisible || !duplicateServer) {
+      return;
+    }
+
+    form.resetFields();
+    setCostConfig({});
+    clearTools();
+    setAllowedTools([]);
+    setHasToolAllowlistInteraction(false);
+    setLogoUrl(undefined);
+    setToolNameToDisplayName({});
+    setToolNameToDescription({});
+
+    const transport = duplicateServer.spec_path ? TRANSPORT.OPENAPI : duplicateServer.transport || "";
+    setTransportType(transport);
+
+    const copySuffix = "_copy";
+    const baseName = (duplicateServer.server_name || duplicateServer.alias || "").replace(/_copy$/, "");
+    const baseAlias = (duplicateServer.alias || duplicateServer.server_name || "").replace(/_copy$/, "");
+    const newName = baseName + copySuffix;
+    const newAlias = baseAlias + copySuffix;
+
+    const isM2MDuplicate = duplicateServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M;
+
+    const prefillValues: Record<string, any> = {
+      server_name: newName,
+      alias: newAlias,
+      description: duplicateServer.description || "",
+      transport: transport,
+      auth_type: duplicateServer.auth_type || "none",
+      oauth_flow_type: isM2MDuplicate ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+      mcp_access_groups: duplicateServer.mcp_access_groups || [],
+      allow_all_keys: duplicateServer.allow_all_keys ?? false,
+      available_on_public_internet: duplicateServer.available_on_public_internet ?? false,
+      delegate_auth_to_upstream: duplicateServer.delegate_auth_to_upstream ?? false,
+      oauth_passthrough: duplicateServer.oauth_passthrough ?? false,
+      source_url: duplicateServer.source_url || "",
+    };
+
+    if (transport === "stdio") {
+      const stdioObj: Record<string, any> = {};
+      if (duplicateServer.command) stdioObj.command = duplicateServer.command;
+      if (duplicateServer.args && duplicateServer.args.length > 0) stdioObj.args = duplicateServer.args;
+      if (duplicateServer.env && Object.keys(duplicateServer.env).length > 0) {
+        stdioObj.env = duplicateServer.env;
+      }
+      if (Object.keys(stdioObj).length > 0) {
+        prefillValues.stdio_config = JSON.stringify(stdioObj, null, 2);
+      }
+    } else if (transport === TRANSPORT.OPENAPI && duplicateServer.spec_path) {
+      prefillValues.spec_path = duplicateServer.spec_path;
+    } else if (duplicateServer.url) {
+      prefillValues.url = duplicateServer.url;
+    }
+
+    if (duplicateServer.static_headers && Object.keys(duplicateServer.static_headers).length > 0) {
+      prefillValues.static_headers = Object.entries(duplicateServer.static_headers).map(([header, value]) => ({
+        header,
+        value,
+      }));
+    }
+
+    if (duplicateServer.env_vars && duplicateServer.env_vars.length > 0) {
+      prefillValues.env_vars = duplicateServer.env_vars.map((v) => ({
+        name: v.name,
+        value: v.value,
+        scope: v.scope,
+        description: v.description || "",
+      }));
+    }
+
+    if (duplicateServer.is_byok) {
+      prefillValues.is_byok = true;
+      prefillValues.byok_description = duplicateServer.byok_description || [];
+      prefillValues.byok_api_key_help_url = duplicateServer.byok_api_key_help_url || "";
+    }
+
+    if (duplicateServer.authorization_url) {
+      prefillValues.authorization_url = duplicateServer.authorization_url;
+    }
+    if (duplicateServer.token_url) {
+      prefillValues.token_url = duplicateServer.token_url;
+    }
+    if (duplicateServer.registration_url) {
+      prefillValues.registration_url = duplicateServer.registration_url;
+    }
+
+    if (duplicateServer.mcp_info?.logo_url) {
+      setLogoUrl(duplicateServer.mcp_info.logo_url);
+    }
+
+    const duplicateAllowedTools = duplicateServer.allowed_tools ?? [];
+    if (duplicateAllowedTools.length > 0) {
+      setAllowedTools(duplicateAllowedTools);
+    }
+    if (duplicateAllowedTools.length > 0 || Boolean(duplicateServer.mcp_info?.tool_allowlist_enforced)) {
+      setHasToolAllowlistInteraction(true);
+    }
+
+    if (duplicateServer.tool_name_to_display_name) {
+      setToolNameToDisplayName(duplicateServer.tool_name_to_display_name);
+    }
+    if (duplicateServer.tool_name_to_description) {
+      setToolNameToDescription(duplicateServer.tool_name_to_description);
+    }
+
+    if (duplicateServer.mcp_info?.mcp_server_cost_info) {
+      setCostConfig(duplicateServer.mcp_info.mcp_server_cost_info);
+    }
+
+    form.setFieldsValue(prefillValues);
+    setFormValues(prefillValues);
+    setAliasManuallyEdited(true);
+  }, [isModalVisible, duplicateServer, form]);
+
   const handleCreate = async (values: Record<string, any>) => {
     const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
       ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
@@ -529,6 +647,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setHasToolAllowlistInteraction(false);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
+        setToolNameToDisplayName({});
+        setToolNameToDescription({});
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -551,6 +671,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
+    setToolNameToDisplayName({});
+    setToolNameToDescription({});
     setModalVisible(false);
   };
 

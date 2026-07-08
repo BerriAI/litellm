@@ -134,6 +134,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
+  const [duplicateServer, setDuplicateServer] = useState<MCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   // Per-user env-var fill modal target + deep-link source captured once from the URL.
@@ -310,6 +311,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setIsDeleteModalOpen(true);
   }
 
+  const handleDuplicate = (server: MCPServer) => {
+    setDuplicateServer(server);
+    setPrefillData(null);
+    setModalVisible(true);
+  };
+
   const confirmDelete = async () => {
     if (serverIdToDelete == null || accessToken == null) {
       return;
@@ -349,6 +356,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
     setModalVisible(false);
+    setDuplicateServer(null);
     refetch();
   };
 
@@ -434,12 +442,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
-        setModalVisible={setModalVisible}
+        setModalVisible={(visible) => {
+          setModalVisible(visible);
+          if (!visible) {
+            setDuplicateServer(null);
+          }
+        }}
         availableAccessGroups={uniqueMcpAccessGroups}
         prefillData={prefillData}
+        duplicateServer={duplicateServer}
         onBackToDiscovery={() => {
           setModalVisible(false);
           setPrefillData(null);
+          setDuplicateServer(null);
           setDiscoveryVisible(true);
         }}
       />
@@ -637,6 +652,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
                           onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          onDuplicate={isAdminRole(userRole) ? () => handleDuplicate(server) : undefined}
                         />
                       ))}
                     </div>

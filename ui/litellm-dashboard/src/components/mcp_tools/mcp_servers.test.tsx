@@ -428,4 +428,68 @@ describe("MCPServers", () => {
     // The server list refresh must NOT trigger a second health check
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
   });
+
+  const duplicableServer = {
+    server_id: "server-1",
+    server_name: "Test_Server",
+    alias: "test_server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "none",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    teams: [],
+    mcp_access_groups: [],
+  };
+
+  it("duplicates a server from the card actions menu, opening the create modal pre-filled with a _copy suffix", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([duplicableServer]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test_Server")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /server actions/i }));
+
+    const duplicateItem = await screen.findByText("Duplicate");
+    fireEvent.click(duplicateItem);
+
+    await waitFor(() => {
+      expect((document.getElementById("server_name") as HTMLInputElement).value).toBe("Test_Server_copy");
+    });
+    expect((document.getElementById("alias") as HTMLInputElement).value).toBe("test_server_copy");
+  });
+
+  it("does not offer Duplicate in the card actions menu for non-admin users", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([duplicableServer]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers accessToken="123" userRole="Internal User" userID="user-1" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test_Server")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /server actions/i }));
+
+    // The menu still opens for non-admins (Test Connection is available), but
+    // Duplicate is gated behind admin like Delete.
+    expect(await screen.findByText("Test Connection")).toBeInTheDocument();
+    expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
+  });
 });

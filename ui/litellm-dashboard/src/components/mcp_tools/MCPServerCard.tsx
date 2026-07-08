@@ -3,6 +3,7 @@ import { Dropdown, Tooltip, Typography, Tag } from "antd";
 import type { MenuProps } from "antd";
 import {
   CheckOutlined,
+  CopyOutlined,
   DeleteOutlined,
   ExclamationCircleFilled,
   MoreOutlined,
@@ -26,6 +27,7 @@ interface MCPServerCardProps {
   onByokConnect?: () => void;
   onOpenFillFields?: () => void;
   onDelete?: () => void;
+  onDuplicate?: () => void;
 }
 
 const HEALTH_TONE: Record<string, { dot: string }> = {
@@ -47,6 +49,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onByokConnect,
   onOpenFillFields,
   onDelete,
+  onDuplicate,
 }) => {
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
@@ -116,6 +119,17 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
       onClick: ({ domEvent }) => {
         domEvent.stopPropagation();
         onRecheckHealth();
+      },
+    });
+  }
+  if (onDuplicate) {
+    menuItems.push({
+      key: "duplicate",
+      label: "Duplicate",
+      icon: <CopyOutlined />,
+      onClick: ({ domEvent }) => {
+        domEvent.stopPropagation();
+        onDuplicate();
       },
     });
   }
