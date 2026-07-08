@@ -554,19 +554,17 @@ class GraySwanGuardrail(CustomGuardrail):
         inbound_headers = self._extract_inbound_headers(request_data, logging_obj)
 
         litellm_metadata = request_data.get("litellm_metadata")
-        if isinstance(litellm_metadata, dict) and litellm_metadata:
-            cleaned_litellm_metadata = dict(litellm_metadata)
-            if inbound_headers:
-                existing_headers = cleaned_litellm_metadata.get("headers")
-                cleaned_litellm_metadata["headers"] = (
-                    {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
-                )
-            # cleaned_litellm_metadata.pop("user_api_key_auth", None)
+        cleaned_litellm_metadata = dict(litellm_metadata) if isinstance(litellm_metadata, dict) else {}
+        if inbound_headers:
+            existing_headers = cleaned_litellm_metadata.get("headers")
+            cleaned_litellm_metadata["headers"] = (
+                {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
+            )
+        # cleaned_litellm_metadata.pop("user_api_key_auth", None)
+        if cleaned_litellm_metadata:
             sanitized = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
             if isinstance(sanitized, dict) and sanitized:
                 payload["litellm_metadata"] = sanitized
-        elif inbound_headers:
-            payload["litellm_metadata"] = {"headers": inbound_headers}
 
         return payload
 

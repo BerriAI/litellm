@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
     GraySwanGuardrailAPIError,
@@ -117,6 +118,26 @@ def test_prepare_payload_merges_scan_id_with_existing_metadata_headers(
             "shade_scan_id": "scan-123",
         },
     }
+
+
+def test_prepare_payload_sanitizes_headers_when_litellm_metadata_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "proxy_server_request": {
+            "headers": {
+                "shade_scan_id": "scan-123",
+            }
+        }
+    }
+
+    monkeypatch.setattr(grayswan_module, "safe_dumps", lambda _data: "{}")
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert "litellm_metadata" not in payload
 
 
 def test_process_response_does_not_block_under_threshold(
