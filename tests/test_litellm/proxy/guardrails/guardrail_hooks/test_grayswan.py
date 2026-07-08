@@ -77,7 +77,7 @@ def test_prepare_payload_forwards_only_scan_id_header(
     request_data = {
         "proxy_server_request": {
             "headers": {
-                "shade_scan_id": "scan-123",
+                "SHADE_SCAN_ID": "scan-123",
                 "authorization": "Bearer secret",
             }
         },
@@ -88,7 +88,7 @@ def test_prepare_payload_forwards_only_scan_id_header(
 
     assert payload["litellm_metadata"] == {
         "request_id": "request-123",
-        "headers": {"shade_scan_id": "scan-123"},
+        "headers": {"SHADE_SCAN_ID": "scan-123"},
     }
 
 
