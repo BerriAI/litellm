@@ -1225,6 +1225,67 @@ def test_completion_cost_fireworks_ai(model):
     assert cost > 0
 
 
+def test_fireworks_ai_cost_per_token_honors_cached_tokens():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/32496
+
+    The fireworks_ai cost calculator billed 100% of prompt tokens at the full
+    input rate, ignoring usage.prompt_tokens_details.cached_tokens and the
+    model's cache_read_input_token_cost. Cached tokens must be billed at the
+    cache-read rate.
+    """
+    from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "accounts/fireworks/models/glm-5p2"
+    input_cost = litellm.model_cost["fireworks_ai/" + model]["input_cost_per_token"]
+    cache_read_cost = litellm.model_cost["fireworks_ai/" + model]["cache_read_input_token_cost"]
+    assert cache_read_cost < input_cost
+
+    usage = Usage(
+        prompt_tokens=8174,
+        completion_tokens=200,
+        total_tokens=8374,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=8165),
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage=usage)
+
+    expected = (8174 - 8165) * input_cost + 8165 * cache_read_cost
+    assert prompt_cost == pytest.approx(expected)
+    # must be far below the old "everything at full input rate" behavior
+    assert prompt_cost < usage.prompt_tokens * input_cost
+
+
+def test_fireworks_ai_cost_per_token_no_cache_read_price_falls_back():
+    """
+    When a fireworks model has no cache_read_input_token_cost, cached tokens
+    fall back to the full input rate so behavior is unchanged for those models.
+    """
+    from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "accounts/fireworks/models/deepseek-v3p1"
+    assert litellm.model_cost["fireworks_ai/" + model].get("cache_read_input_token_cost") is None
+    input_cost = litellm.model_cost["fireworks_ai/" + model]["input_cost_per_token"]
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=50,
+        total_tokens=1050,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage=usage)
+    assert prompt_cost == pytest.approx(1000 * input_cost)
+
+
 def test_cost_azure_openai_prompt_caching():
     from litellm.utils import Choices, Message, ModelResponse, Usage
     from litellm.types.utils import (
