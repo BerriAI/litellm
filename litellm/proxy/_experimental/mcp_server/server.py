@@ -3064,6 +3064,8 @@ if MCP_AVAILABLE:
                 mcp_server_logo_url=mcp_info.get("logo_url"),
                 namespaced_tool_name=namespaced_tool_name,
                 mcp_session_id=session_id,
+                mcp_auth_mode=mcp_server.auth_type,
+                mcp_server_resource=mcp_server.url,
             )
         else:
             return StandardLoggingMCPToolCall(
