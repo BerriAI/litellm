@@ -1867,6 +1867,27 @@ def _auto_router_deployment(config="/path/to/config", model_id="ar-id"):
     )
 
 
+def test_deregister_strategy_router_removes_all_registries(model_list):
+    """_deregister_strategy_router must drop the model_name from every per-strategy registry,
+    and tolerate a missing name or None."""
+    router = Router(model_list=model_list)
+    sentinel = MagicMock()
+    router.auto_routers["x"] = sentinel
+    router.complexity_routers["x"] = sentinel
+    router.quality_routers["x"] = sentinel
+    router.adaptive_routers["x"] = sentinel
+
+    router._deregister_strategy_router(model_name="x")
+
+    assert "x" not in router.auto_routers
+    assert "x" not in router.complexity_routers
+    assert "x" not in router.quality_routers
+    assert "x" not in router.adaptive_routers
+
+    router._deregister_strategy_router(model_name="not-present")
+    router._deregister_strategy_router(model_name=None)
+
+
 @patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
 def test_delete_deployment_deregisters_auto_router(mock_auto_router, model_list):
     """Regression: deleting an auto-router deployment must drop it from ``auto_routers`` so the
