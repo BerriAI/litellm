@@ -73,11 +73,13 @@ const sessionLogs = [
 const renderSessionDrawer = () => {
   vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: sessionLogs, total: 4, total_pages: 1 });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  const drawer = (open: boolean) => (
     <QueryClientProvider client={queryClient}>
-      <LogDetailsDrawer open onClose={() => {}} logEntry={null} sessionId="session-1" accessToken="token" />
-    </QueryClientProvider>,
+      <LogDetailsDrawer open={open} onClose={() => {}} logEntry={null} sessionId="session-1" accessToken="token" />
+    </QueryClientProvider>
   );
+  const { rerender } = render(drawer(true));
+  return { rerender, drawer };
 };
 
 const sidebarEventNames = () =>
@@ -99,6 +101,19 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
     await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
 
     fireEvent.click(screen.getByText("Duration"));
+
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  });
+
+  it("resets the sort mode back to duration when the drawer is closed and reopened", async () => {
+    const { rerender, drawer } = renderSessionDrawer();
+    await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));
+
+    fireEvent.click(screen.getByText("Start time"));
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
+
+    rerender(drawer(false));
+    rerender(drawer(true));
 
     await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
   });
