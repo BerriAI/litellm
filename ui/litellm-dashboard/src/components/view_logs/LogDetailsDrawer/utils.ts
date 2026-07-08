@@ -3,6 +3,25 @@
  * These functions handle data formatting, validation, and guardrail calculations.
  */
 
+import { LogEntry } from "../columns";
+
+export type SessionSortBy = "duration" | "start_time";
+
+export function getRowDurationMs(row: LogEntry): number {
+  if (row.request_duration_ms != null) return row.request_duration_ms;
+  const start = Date.parse(row.startTime);
+  const end = Date.parse(row.endTime);
+  if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+  return end - start;
+}
+
+export function sortSessionLogs(logs: readonly LogEntry[], sortBy: SessionSortBy): LogEntry[] {
+  if (sortBy === "start_time") {
+    return [...logs].sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+  }
+  return [...logs].sort((a, b) => getRowDurationMs(b) - getRowDurationMs(a));
+}
+
 /**
  * Formats data for display. If input is a string, attempts to parse as JSON.
  * @param input - Data to format (string or object)
