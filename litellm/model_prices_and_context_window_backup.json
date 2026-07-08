@@ -44996,6 +44996,3210 @@
         "supports_reasoning": false,
         "source": "https://pinstripes.io/pricing"
     },
+    "tokenlab/allam-2-7b": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 8e-08,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/claude-fable-5": {
+        "cache_creation_input_token_cost": 8.125e-06,
+        "cache_read_input_token_cost": 6.5e-07,
+        "input_cost_per_token": 6.5e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.25e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/claude-haiku-4-5": {
+        "cache_creation_input_token_cost": 8.125e-07,
+        "cache_read_input_token_cost": 6.5e-08,
+        "input_cost_per_token": 6.5e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 3.25e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/claude-opus-4-6": {
+        "cache_creation_input_token_cost": 4.0625e-06,
+        "cache_read_input_token_cost": 3.25e-07,
+        "input_cost_per_token": 3.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.625e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/claude-opus-4-7": {
+        "cache_creation_input_token_cost": 4.0625e-06,
+        "cache_read_input_token_cost": 3.25e-07,
+        "input_cost_per_token": 3.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.625e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/claude-opus-4-8": {
+        "cache_creation_input_token_cost": 4.0625e-06,
+        "cache_read_input_token_cost": 3.25e-07,
+        "input_cost_per_token": 3.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.625e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/claude-sonnet-4-6": {
+        "cache_creation_input_token_cost": 2.4375e-06,
+        "cache_read_input_token_cost": 1.95e-07,
+        "input_cost_per_token": 1.95e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 9.75e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/claude-sonnet-5": {
+        "cache_creation_input_token_cost": 1.625e-06,
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 1.3e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/deepseek-v3": {
+        "cache_read_input_token_cost": 2.8e-09,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/deepseek-v3-2": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.8e-08,
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 2.94118e-09,
+        "input_cost_per_token": 1.4705882e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 3.67647e-09,
+        "input_cost_per_token": 4.4117647e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 8.8235294e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-1.5-lite-32k": {
+        "cache_read_input_token_cost": 8.57143e-09,
+        "input_cost_per_token": 4.411765e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 8.823529e-08,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-1.5-pro-32k": {
+        "cache_read_input_token_cost": 2.2e-08,
+        "input_cost_per_token": 1.1764706e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-1.5-pro-32k-character": {
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764706e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 12288,
+        "max_tokens": 12288,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-1.5-vision-pro": {
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764706e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-1.6": {
+        "cache_read_input_token_cost": 3.602941e-08,
+        "input_cost_per_token": 1.7647059e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.17647059e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-seed-1.6-flash": {
+        "cache_read_input_token_cost": 8.52941e-09,
+        "input_cost_per_token": 4.411765e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-seed-1.6-vision": {
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764706e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.17647059e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-1.8": {
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764706e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.17647059e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-seed-2.0-code": {
+        "cache_read_input_token_cost": 9.411765e-08,
+        "input_cost_per_token": 4.7058824e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 229376,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.35294118e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-seed-2.0-lite": {
+        "cache_read_input_token_cost": 1.764706e-08,
+        "input_cost_per_token": 8.823529e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 229376,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5.2941176e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-2.0-mini": {
+        "cache_read_input_token_cost": 5.88235e-09,
+        "input_cost_per_token": 2.941176e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 229376,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-2.0-pro": {
+        "cache_read_input_token_cost": 9.411765e-08,
+        "input_cost_per_token": 4.7058824e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 229376,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.35294118e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-2.1-pro": {
+        "cache_read_input_token_cost": 1.7647059e-07,
+        "input_cost_per_token": 8.8235294e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.41176471e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-2.1-turbo": {
+        "cache_read_input_token_cost": 8.823529e-08,
+        "input_cost_per_token": 4.4117647e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.20588235e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-character": {
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764706e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 98304,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/doubao-seed-code": {
+        "cache_read_input_token_cost": 3.529412e-08,
+        "input_cost_per_token": 1.7647059e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.17647059e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/doubao-seed-evolving": {
+        "cache_read_input_token_cost": 1.7647059e-07,
+        "input_cost_per_token": 8.8235294e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.41176471e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/farui-plus": {
+        "input_cost_per_token": 2.94117647e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 12000,
+        "max_output_tokens": 2000,
+        "max_tokens": 2000,
+        "mode": "chat",
+        "output_cost_per_token": 2.94117647e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/gemini-2.5-pro": {
+        "cache_read_input_token_cost": 6.25e-08,
+        "input_cost_per_token": 6.25e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gemini-3.1-flash-lite": {
+        "cache_read_input_token_cost": 1.25e-08,
+        "input_cost_per_token": 1.25e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gemini-3.1-pro-preview": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gemini-3.5-flash": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/glm-4.7": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/glm-5": {
+        "cache_read_input_token_cost": 1.1764706e-07,
+        "input_cost_per_token": 5.8823529e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.64705882e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/glm-5-turbo": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.4e-07,
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/glm-5.1": {
+        "cache_creation_input_token_cost": 1.10294118e-06,
+        "cache_read_input_token_cost": 1.7647059e-07,
+        "input_cost_per_token": 8.8235294e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.52941176e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/glm-5.2": {
+        "cache_read_input_token_cost": 2.9411765e-07,
+        "input_cost_per_token": 1.17647059e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.11764706e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/glm-5v-turbo": {
+        "cache_read_input_token_cost": 2.4e-07,
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-4.1-mini": {
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1047576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.12e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-4o": {
+        "cache_read_input_token_cost": 8.75e-07,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-4o-mini": {
+        "cache_read_input_token_cost": 5.25e-08,
+        "input_cost_per_token": 1.05e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5": {
+        "cache_read_input_token_cost": 8.75e-08,
+        "input_cost_per_token": 8.75e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5-mini": {
+        "cache_read_input_token_cost": 1.75e-08,
+        "input_cost_per_token": 1.75e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5-nano": {
+        "cache_read_input_token_cost": 3.5e-09,
+        "input_cost_per_token": 3.5e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5-pro": {
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.00012,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5-search-api": {
+        "cache_read_input_token_cost": 1e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.1": {
+        "cache_read_input_token_cost": 8.75e-08,
+        "input_cost_per_token": 8.75e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.2": {
+        "cache_read_input_token_cost": 1.225e-07,
+        "input_cost_per_token": 1.225e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9.8e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.2-pro": {
+        "cache_read_input_token_cost": 1.05e-05,
+        "input_cost_per_token": 2.1e-05,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.000168,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.3-codex": {
+        "cache_read_input_token_cost": 1.225e-07,
+        "input_cost_per_token": 1.225e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9.8e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.4": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.4-mini": {
+        "cache_read_input_token_cost": 2.25e-08,
+        "input_cost_per_token": 2.25e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.35e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.4-nano": {
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 8.75e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.4-pro": {
+        "cache_read_input_token_cost": 3e-06,
+        "input_cost_per_token": 3e-05,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.00018,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.5": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-5.5-pro": {
+        "input_cost_per_token": 3e-05,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.00018,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/gpt-oss-120b": {
+        "cache_read_input_token_cost": 5.25e-08,
+        "input_cost_per_token": 1.05e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/gpt-oss-20b": {
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/grok-4-fast": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 2000000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/grok-4.1-fast": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 2000000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/grok-4.20": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/grok-4.20-multi-agent": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/grok-4.20-non-reasoning": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/grok-4.3": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/grok-build-0.1": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/groq-compound": {
+        "input_cost_per_token": 5.9e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 7.9e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/groq-compound-mini": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 8e-08,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/hunyuan-role": {
+        "input_cost_per_token": 3.5294118e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 28672,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.41176471e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/hy-mt2-pro": {
+        "input_cost_per_token": 2.2058824e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 6.6176471e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/hy3-preview": {
+        "cache_read_input_token_cost": 5.882353e-08,
+        "input_cost_per_token": 1.7647059e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5.8823529e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/kimi-k2.5": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/kimi-k2.6": {
+        "cache_read_input_token_cost": 1.6e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/kimi-k2.7-code-highspeed": {
+        "cache_read_input_token_cost": 3.8e-07,
+        "input_cost_per_token": 1.9e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/mimo-v2-flash": {
+        "cache_read_input_token_cost": 8e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/mimo-v2-omni": {
+        "cache_read_input_token_cost": 8e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/mimo-v2-pro": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/mimo-v2.5": {
+        "cache_read_input_token_cost": 8e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/mimo-v2.5-pro": {
+        "cache_read_input_token_cost": 2.0588235e-07,
+        "input_cost_per_token": 1.02941176e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.08823529e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/minimax-m2": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/minimax-m2.1": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/minimax-m2.1-highspeed": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/minimax-m2.5": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 204800,
+        "max_tokens": 204800,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/minimax-m2.5-highspeed": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/minimax-m2.7": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/minimax-m2.7-highspeed": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/minimax-m3": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/o1": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 7.5e-06,
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "max_tokens": 100000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/o1-pro": {
+        "cache_read_input_token_cost": 7.5e-05,
+        "input_cost_per_token": 0.00015,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "max_tokens": 100000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0006,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/o3": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "max_tokens": 100000,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/o3-mini": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 5.5e-07,
+        "input_cost_per_token": 1.1e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "max_tokens": 100000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/o4-mini": {
+        "cache_read_input_token_cost": 1.925e-07,
+        "input_cost_per_token": 7.7e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "max_tokens": 100000,
+        "mode": "chat",
+        "output_cost_per_token": 3.08e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen-deep-research": {
+        "input_cost_per_token": 7.94117647e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 997952,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.397058824e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-doc-turbo": {
+        "cache_creation_input_token_cost": 1.1029412e-07,
+        "cache_read_input_token_cost": 1.764706e-08,
+        "input_cost_per_token": 8.82353e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 253952,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.4705882e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-flash": {
+        "cache_creation_input_token_cost": 2.852941e-08,
+        "cache_read_input_token_cost": 4.41176e-09,
+        "input_cost_per_token": 2.205882e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 997952,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.2058823e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-flash-character": {
+        "cache_read_input_token_cost": 7.35294e-09,
+        "input_cost_per_token": 3.676471e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 2.2058823e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-max": {
+        "cache_read_input_token_cost": 7.058824e-08,
+        "input_cost_per_token": 3.5294117e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 30720,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.4117647e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-mt-flash": {
+        "input_cost_per_token": 1.0294118e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.8676471e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-mt-lite": {
+        "input_cost_per_token": 8.82353e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.3529412e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-mt-plus": {
+        "input_cost_per_token": 2.6470589e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 7.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-mt-turbo": {
+        "input_cost_per_token": 1.0294118e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.8676471e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-omni-turbo": {
+        "cache_read_input_token_cost": 1.17647e-08,
+        "input_cost_per_token": 5.882353e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 30720,
+        "max_output_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "chat",
+        "output_cost_per_token": 2.3529412e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen-omni-turbo-realtime": {
+        "input_cost_per_token": 2.3529412e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 30720,
+        "max_output_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "chat",
+        "output_cost_per_token": 9.4117647e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-plus": {
+        "cache_creation_input_token_cost": 1.4705882e-07,
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764705e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 997952,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-plus-character": {
+        "cache_read_input_token_cost": 2.352941e-08,
+        "input_cost_per_token": 1.1764705e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen-vl-ocr": {
+        "input_cost_per_token": 4.411764e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 30000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 7.352941e-08,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen2.5-omni-7b": {
+        "input_cost_per_token": 8.82353e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 30720,
+        "max_output_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "chat",
+        "output_cost_per_token": 3.5294117e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen3-coder-flash": {
+        "cache_creation_input_token_cost": 1.8382353e-07,
+        "cache_read_input_token_cost": 2.941177e-08,
+        "input_cost_per_token": 1.4705882e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 997952,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 5.8823529e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3-livetranslate-flash": {
+        "input_cost_per_token": 1.47058824e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.47058824e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3-livetranslate-flash-realtime": {
+        "input_cost_per_token": 9.4117647e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 9.4117647e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3-omni-flash": {
+        "input_cost_per_token": 2.6470589e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.01470589e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen3-omni-flash-realtime": {
+        "input_cost_per_token": 3.2352941e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.22058824e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3-vl-embedding": {
+        "input_cost_per_token": 1.0294118e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ],
+        "supports_vision": true
+    },
+    "tokenlab/qwen3-vl-plus": {
+        "cache_creation_input_token_cost": 1.8382353e-07,
+        "cache_read_input_token_cost": 2.941177e-08,
+        "input_cost_per_token": 1.4705882e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 260096,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.47058824e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen3.5-27b": {
+        "input_cost_per_token": 8.82353e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 260096,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 7.0588236e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.5-flash": {
+        "cache_creation_input_token_cost": 3.676471e-08,
+        "cache_read_input_token_cost": 2.94117e-09,
+        "input_cost_per_token": 2.941177e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.5-livetranslate-flash-realtime": {
+        "input_cost_per_token": 5.88235294e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.470588236e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.5-ocr": {
+        "input_cost_per_token": 7.352941e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 2.9411765e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen3.5-omni-flash": {
+        "input_cost_per_token": 2.64705882e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.05882353e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen3.5-omni-flash-realtime": {
+        "input_cost_per_token": 3.97058824e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.573529412e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.5-omni-plus": {
+        "input_cost_per_token": 7.79411765e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 3.132352941e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "tokenlab/qwen3.5-omni-plus-realtime": {
+        "input_cost_per_token": 1.176470588e-05,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.411764706e-05,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.5-plus": {
+        "cache_creation_input_token_cost": 1.4705882e-07,
+        "cache_read_input_token_cost": 1.17647e-08,
+        "input_cost_per_token": 1.1764705e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 7.0588236e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.6-27b": {
+        "input_cost_per_token": 4.4117647e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.64705882e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.6-flash": {
+        "cache_creation_input_token_cost": 2.2058823e-07,
+        "cache_read_input_token_cost": 1.764706e-08,
+        "input_cost_per_token": 1.7647059e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.05882353e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.6-max-preview": {
+        "cache_read_input_token_cost": 1.475e-07,
+        "input_cost_per_token": 1.43264706e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 8.59632353e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/qwen3.6-plus": {
+        "cache_creation_input_token_cost": 3.6764706e-07,
+        "cache_read_input_token_cost": 2.941177e-08,
+        "input_cost_per_token": 2.9411765e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.76470588e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.7-max": {
+        "cache_creation_input_token_cost": 2.20588235e-06,
+        "cache_read_input_token_cost": 3.5294117e-07,
+        "input_cost_per_token": 1.76470588e-06,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 5.29411764e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/qwen3.7-plus": {
+        "cache_creation_input_token_cost": 3.6764706e-07,
+        "cache_read_input_token_cost": 5.882353e-08,
+        "input_cost_per_token": 2.9411765e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.17647059e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/step-3.5-flash": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "tokenlab/step-3.7-flash": {
+        "cache_read_input_token_cost": 3.970588e-08,
+        "input_cost_per_token": 1.9852941e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.19117647e-06,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/text-embedding-3-large": {
+        "input_cost_per_token": 1.3e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "tokenlab/text-embedding-3-small": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "tokenlab/text-embedding-ada-002": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "tokenlab/text-embedding-v4": {
+        "input_cost_per_token": 7.352941e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "tokenlab/tongyi-intent-detect-v3": {
+        "input_cost_per_token": 5.882353e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.4705882e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/tongyi-xiaomi-analysis-flash": {
+        "input_cost_per_token": 2.941177e-08,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 28672,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 5.882353e-08,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
+    "tokenlab/tongyi-xiaomi-analysis-pro": {
+        "input_cost_per_token": 1.4705882e-07,
+        "litellm_provider": "tokenlab",
+        "max_input_tokens": 28672,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 3.9705883e-07,
+        "source": "https://api.tokenlab.sh/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_native_streaming": true,
+        "supports_system_messages": true
+    },
     "fallback_generalizations": {
         "rules": [
             {
