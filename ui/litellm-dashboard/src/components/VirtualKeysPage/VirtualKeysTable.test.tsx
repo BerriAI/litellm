@@ -1,4 +1,5 @@
-import { act, screen, waitFor, within, fireEvent } from "@testing-library/react";
+import { screen, waitFor, within, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
@@ -175,7 +176,7 @@ it("should display key information correctly", async () => {
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
     expect(screen.getByText("Test Team")).toBeInTheDocument();
-    expect(screen.getByText("5.5000")).toBeInTheDocument();
+    expect(screen.getByText("$5.5000")).toBeInTheDocument();
   });
 });
 
@@ -477,9 +478,8 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
     const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
     expect(tag).toHaveTextContent("Blocked");
 
-    act(() => {
-      fireEvent.mouseEnter(tag);
-    });
+    const user = userEvent.setup();
+    await user.hover(tag);
     await waitFor(() => {
       expect(screen.getByText(/Blocked by SCIM/i)).toBeInTheDocument();
     });

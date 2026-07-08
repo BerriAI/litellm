@@ -50,6 +50,7 @@ import {
   getProxyUISettings,
 } from "./networking";
 import TopKeyView from "./UsagePage/components/EntityUsage/TopKeyView";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface UsagePageProps {
@@ -644,9 +645,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                                     <TableRow key={provider.provider}>
                                       <TableCell>{provider.provider}</TableCell>
                                       <TableCell>
-                                        {parseFloat(provider.spend.toFixed(2)) < 0.00001
-                                          ? "less than 0.00"
-                                          : formatNumberWithCommas(provider.spend, 2)}
+                                        <MoneyCell value={provider.spend} decimals={2} />
                                       </TableCell>
                                     </TableRow>
                                   ))}
@@ -819,7 +818,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                   {topUsers?.map((user: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell>{user.end_user}</TableCell>
-                      <TableCell>{formatNumberWithCommas(user.total_spend, 2)}</TableCell>
+                      <TableCell>
+                        <MoneyCell value={user.total_spend} decimals={2} />
+                      </TableCell>
                       <TableCell>{user.total_count}</TableCell>
                     </TableRow>
                   ))}

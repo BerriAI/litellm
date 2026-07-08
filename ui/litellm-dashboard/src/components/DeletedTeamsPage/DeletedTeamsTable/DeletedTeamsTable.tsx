@@ -1,5 +1,5 @@
 "use client";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
@@ -51,14 +51,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       header: "Team ID",
       size: 150,
       maxSize: 250,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">{value || "-"}</span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => <IdCell value={info.getValue() as string} />,
     },
     {
       id: "created_at",
@@ -66,12 +59,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       header: "Created",
       size: 120,
       maxSize: 140,
-      cell: (info) => {
-        const value = info.getValue();
-        return (
-          <span className="block max-w-[140px]">{value ? new Date(value as string).toLocaleDateString() : "-"}</span>
-        );
-      },
+      cell: (info) => <DateCell value={info.getValue() as string | null | undefined} precision="date" />,
     },
     {
       id: "spend",
@@ -79,12 +67,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       header: "Spend (USD)",
       size: 100,
       maxSize: 140,
-      cell: (info) => {
-        const spend = (info.row.original as any).spend as number | undefined;
-        return (
-          <span className="block max-w-[140px]">{spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}</span>
-        );
-      },
+      cell: (info) => <MoneyCell value={info.getValue() as number | undefined} decimals={4} />,
     },
     {
       id: "max_budget",
@@ -92,14 +75,9 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       header: "Budget (USD)",
       size: 110,
       maxSize: 150,
-      cell: (info) => {
-        const maxBudget = info.getValue() as number | null;
-        return (
-          <span className="block max-w-[150px]">
-            {maxBudget === null || maxBudget === undefined ? "No limit" : `$${formatNumberWithCommas(maxBudget)}`}
-          </span>
-        );
-      },
+      cell: (info) => (
+        <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
+      ),
     },
     {
       id: "models",
@@ -148,14 +126,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       header: "Organization",
       size: 150,
       maxSize: 200,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">{value || "-"}</span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => <IdCell value={info.getValue() as string} variant="plain" />,
     },
     {
       id: "deleted_at",
@@ -163,10 +134,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       header: "Deleted At",
       size: 120,
       maxSize: 140,
-      cell: (info) => {
-        const value = (info.row.original as any).deleted_at as string | null | undefined;
-        return <span className="block max-w-[140px]">{value ? new Date(value).toLocaleDateString() : "-"}</span>;
-      },
+      cell: (info) => <DateCell value={info.getValue() as string | null | undefined} precision="date" />,
     },
     {
       id: "deleted_by",

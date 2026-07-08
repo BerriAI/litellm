@@ -2,7 +2,7 @@
 
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
@@ -12,18 +12,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Badge,
-  Button,
-  Icon,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-} from "@tremor/react";
+import { Badge, Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Popover, Skeleton, Tooltip, Typography } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
@@ -214,23 +203,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Key ID",
         size: 100,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={value}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-                onClick={() => setSelectedKey(info.row.original)}
-              >
-                {value ?? "-"}
-              </Button>
-            </Tooltip>
-          );
-        },
+        cell: (info) => (
+          <IdCell value={info.getValue() as string | null} onClick={() => setSelectedKey(info.row.original)} />
+        ),
       },
       {
         id: "key_alias",
@@ -310,10 +285,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Created At",
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "-";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" />,
       },
       {
         id: "created_by",
@@ -380,10 +352,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Updated At",
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "last_active",
@@ -401,16 +370,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         ),
         size: 130,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          if (!value) return "Unknown";
-          const date = new Date(value as string);
-          return (
-            <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
-              <span>{date.toLocaleDateString()}</span>
-            </Tooltip>
-          );
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
       },
       {
         id: "expires",
@@ -418,10 +378,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Expires",
         size: 120,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "spend",
@@ -429,7 +386,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Spend (USD)",
         size: 100,
         enableSorting: true,
-        cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
+        cell: (info) => <MoneyCell value={info.getValue() as number | null} decimals={4} />,
       },
       {
         id: "max_budget",
@@ -437,11 +394,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Budget (USD)",
         size: 110,
         enableSorting: true,
-        cell: (info) => {
-          const maxBudget = info.getValue() as number | null;
-          if (maxBudget === null) return "Unlimited";
-          return `$${formatNumberWithCommas(maxBudget)}`;
-        },
+        cell: (info) => (
+          <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
+        ),
       },
       {
         id: "budget_reset_at",
@@ -449,10 +404,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Budget Reset",
         size: 130,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
       },
       {
         id: "models",

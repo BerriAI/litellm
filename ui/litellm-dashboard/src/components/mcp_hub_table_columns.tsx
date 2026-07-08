@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 
 export interface MCPServerData {
   server_id: string;
@@ -124,21 +125,17 @@ export const mcpHubColumns = (
       cell: ({ row }) => {
         const server = row.original;
 
-        const statusColors: Record<string, string> = {
-          active: "green",
-          inactive: "red",
-          unknown: "gray",
-          healthy: "green",
-          unhealthy: "red",
+        const statusTones: Record<string, StatusTone> = {
+          active: "success",
+          inactive: "error",
+          unknown: "neutral",
+          healthy: "success",
+          unhealthy: "error",
         };
 
-        const color = statusColors[server.status] || "gray";
+        const tone = statusTones[server.status] || "neutral";
 
-        return (
-          <Badge color={color} size="sm">
-            {server.status || "unknown"}
-          </Badge>
-        );
+        return <StatusBadge tone={tone} label={server.status || "unknown"} />;
       },
     },
     {

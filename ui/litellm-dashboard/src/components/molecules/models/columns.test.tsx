@@ -451,6 +451,64 @@ describe("columns", () => {
     expect(costCells.length).toBeGreaterThan(0);
   });
 
+  it("should call setSelectedModelId without triggering the row click when the model ID pill is clicked", async () => {
+    const user = userEvent.setup();
+    const setSelectedModelId = vi.fn();
+    const cols = columns(
+      defaultProps.userRole,
+      defaultProps.userID,
+      defaultProps.premiumUser,
+      setSelectedModelId,
+      defaultProps.setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+    );
+
+    const model = createMockModel();
+    const rowClick = vi.fn();
+    render(
+      <div onClick={rowClick}>
+        <TestTable data={[model]} columns={cols} />
+      </div>,
+    );
+
+    await user.click(screen.getByText("test-model-id"));
+    expect(setSelectedModelId).toHaveBeenCalledWith("test-model-id");
+    expect(rowClick).not.toHaveBeenCalled();
+  });
+
+  it("should call setSelectedTeamId without triggering the row click when the team ID pill is clicked", async () => {
+    const user = userEvent.setup();
+    const setSelectedTeamId = vi.fn();
+    const cols = columns(
+      defaultProps.userRole,
+      defaultProps.userID,
+      defaultProps.premiumUser,
+      defaultProps.setSelectedModelId,
+      setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+    );
+
+    const model = createMockModel();
+    const rowClick = vi.fn();
+    render(
+      <div onClick={rowClick}>
+        <TestTable data={[model]} columns={cols} />
+      </div>,
+    );
+
+    await user.click(screen.getByText("test-team-id"));
+    expect(setSelectedTeamId).toHaveBeenCalledWith("test-team-id");
+    expect(rowClick).not.toHaveBeenCalled();
+  });
+
   it("should display '-' when team ID is missing", () => {
     const cols = columns(
       defaultProps.userRole,
