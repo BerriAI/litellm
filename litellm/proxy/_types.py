@@ -1015,6 +1015,12 @@ from litellm.types.object_permission import (  # noqa: E402
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
+def normalize_empty_budget_duration(value: Optional[str]) -> Optional[str]:
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -1059,6 +1065,11 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
         if v == "":
             return None
         return v
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        return normalize_empty_budget_duration(v)
 
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
@@ -1634,6 +1645,11 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         description="Datetime when the budget is reset",
     )
 
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        return normalize_empty_budget_duration(v)
+
 
 class BudgetRequest(LiteLLMPydanticObjectBase):
     budgets: List[str]
@@ -1811,6 +1827,11 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None  # multiple concurrent budget windows
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        return normalize_empty_budget_duration(v)
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):

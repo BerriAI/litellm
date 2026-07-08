@@ -107,6 +107,32 @@ def test_user_api_key_auth_hashes_authorization_header_form_of_key():
         assert not from_header.api_key.lower().startswith("bearer")
 
 
+@pytest.mark.parametrize(
+    "model_name, extra_kwargs",
+    [
+        ("GenerateKeyRequest", {}),
+        ("NewUserRequest", {}),
+        ("UpdateUserRequest", {"user_id": "u1"}),
+        ("NewCustomerRequest", {"user_id": "c1"}),
+        ("NewTeamRequest", {}),
+        ("UpdateTeamRequest", {"team_id": "t1"}),
+    ],
+)
+def test_request_models_normalize_empty_budget_duration(model_name, extra_kwargs):
+    """Regression for https://github.com/BerriAI/litellm/issues/32474: clearing a budget
+    from the UI sends budget_duration="", which downstream duration parsing rejects with
+    "Invalid duration format". Request models must coerce empty/whitespace values to None
+    while leaving real durations untouched."""
+    import litellm.proxy._types as proxy_types
+
+    model = getattr(proxy_types, model_name)
+
+    assert model(budget_duration="", **extra_kwargs).budget_duration is None
+    assert model(budget_duration="   ", **extra_kwargs).budget_duration is None
+    assert model(budget_duration=None, **extra_kwargs).budget_duration is None
+    assert model(budget_duration="30d", **extra_kwargs).budget_duration == "30d"
+
+
 def test_proxy_exception_str_returns_message():
     """ProxyException must stringify to its message: OTEL's
     ``span.record_exception`` and ``str(exc)``-based logging read the string
