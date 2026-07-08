@@ -910,9 +910,10 @@ async def _reuse_persisted_dcr_client_if_available(
         return False
     persisted_mcp_server, credentials = persisted
     if current_redirect_uri is not None and _redirect_uri_not_registered(credentials, current_redirect_uri):
-        verbose_logger.warning(
+        verbose_logger.debug(
             "register_client_with_server: not reusing persisted DCR client for server_id=%s; its registered "
-            "redirect_uris=%s do not include the current callback %s",
+            "redirect_uris=%s do not include the current callback %s. The operator-facing warning for this "
+            "re-registration event is emitted once by _persisted_dcr_redirect_uri_is_stale.",
             mcp_server.server_id,
             credentials.redirect_uris,
             current_redirect_uri,
