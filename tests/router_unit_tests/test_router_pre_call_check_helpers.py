@@ -8,6 +8,8 @@ but the repo's router_code_coverage.py check only scans files whose *filename*
 contains "router", so this file calls both helpers directly to satisfy it.
 """
 
+from unittest.mock import patch
+
 from litellm import Router
 
 
@@ -33,9 +35,13 @@ class TestRouterModelGroupHasMaxInputTokens:
         router = _make_router(max_input_tokens=100)
         assert router._model_group_has_max_input_tokens(model="gpt-5-mini") is True
 
-    def test_false_when_no_deployment_has_max_input_tokens(self):
+    def test_false_when_no_deployment_resolves_max_input_tokens(self):
         router = _make_router()
-        assert router._model_group_has_max_input_tokens(model="gpt-5-mini") is False
+        # max_input_tokens can also be resolved via litellm's model cost map
+        # (get_router_model_info), not just a static model_info override -
+        # mock it directly so this test isn't coupled to gpt-5-mini's cost-map entry.
+        with patch.object(router, "get_router_model_info", return_value={}):
+            assert router._model_group_has_max_input_tokens(model="gpt-5-mini") is False
 
 
 class TestRouterGetMessagesForPreCallCheck:
@@ -52,11 +58,12 @@ class TestRouterGetMessagesForPreCallCheck:
         )
         assert result is None
 
-    def test_returns_none_when_no_deployment_has_max_input_tokens(self):
+    def test_returns_none_when_no_deployment_resolves_max_input_tokens(self):
         router = _make_router()
-        result = router._get_messages_for_pre_call_check(
-            model="gpt-5-mini", kwargs={"input": "hi", "_responses_api_pre_call_check": True}
-        )
+        with patch.object(router, "get_router_model_info", return_value={}):
+            result = router._get_messages_for_pre_call_check(
+                model="gpt-5-mini", kwargs={"input": "hi", "_responses_api_pre_call_check": True}
+            )
         assert result is None
 
     def test_converts_input_to_messages_for_responses_api_call(self):

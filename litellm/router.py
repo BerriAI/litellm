@@ -4363,16 +4363,24 @@ class Router:
 
     def _model_group_has_max_input_tokens(self, model: str) -> bool:
         """
-        Return True if any deployment in the model group has max_input_tokens set.
+        Return True if any deployment in the model group resolves to a
+        max_input_tokens value via get_router_model_info().
 
         Used to decide whether it's worth paying the cost of converting Responses
         API `input` into `messages` just so `_pre_call_checks` can run context
-        window checks - if no deployment declares max_input_tokens, there's
+        window checks - if no deployment resolves a max_input_tokens, there's
         nothing to check.
+
+        Mirrors _pre_call_checks' own resolution: max_input_tokens is not only a
+        user-set model_info override, it's also commonly derived from litellm's
+        model cost map, which get_router_model_info() takes into account.
         """
         deployments = self.get_model_list(model_name=model) or []
         for deployment in deployments:
-            model_info = deployment.get("model_info")
+            try:
+                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
+            except Exception:
+                continue
             if isinstance(model_info, dict) and model_info.get("max_input_tokens") is not None:
                 return True
         return False
@@ -9913,13 +9921,13 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
-        # get_router_model_info() and RPM cache reads are only useful when at least one
-        # deployment in the model group actually declares the relevant config. Precompute
-        # these once so we can skip the expensive per-deployment lookups entirely for
-        # model groups that don't use them.
-        _any_deployment_has_max_input_tokens = any(
-            (d.get("model_info") or {}).get("max_input_tokens") is not None for d in _returned_deployments
-        )
+        # The RPM cache read is only useful when at least one deployment in the model
+        # group actually declares `rpm` in litellm_params - that's set directly by the
+        # user, so it's safe to check statically. max_input_tokens has no equivalent
+        # static check: get_router_model_info() also derives it from litellm's model
+        # cost map (the common case for models without a manual model_info override),
+        # so we can't know whether a deployment needs the context-window check without
+        # actually calling it.
         _any_deployment_has_rpm = self.routing_strategy != "usage-based-routing-v2" and any(
             (d.get("litellm_params") or {}).get("rpm") is not None for d in _returned_deployments
         )
@@ -9940,37 +9948,36 @@ class Router:
 
             # see if we have the info for this model
             _deployment_model = None  # per-deployment model name (avoids overwriting the outer `model` group name)
-            if _any_deployment_has_max_input_tokens:
-                try:
-                    base_model = _model_info.get("base_model", None)
-                    if base_model is None:
-                        base_model = _litellm_params.get("base_model", None)
-                    model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
-                    _deployment_model = base_model or _litellm_params.get("model", None)
+            try:
+                base_model = _model_info.get("base_model", None)
+                if base_model is None:
+                    base_model = _litellm_params.get("base_model", None)
+                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
+                _deployment_model = base_model or _litellm_params.get("model", None)
 
-                    max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                    if isinstance(max_input_tokens, int):
-                        if input_tokens is None:
-                            try:
-                                input_tokens = litellm.token_counter(messages=messages)
-                            except Exception as e:
-                                verbose_router_logger.error(
-                                    "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
-                                        str(e)
-                                    )
+                max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
+                if isinstance(max_input_tokens, int):
+                    if input_tokens is None:
+                        try:
+                            input_tokens = litellm.token_counter(messages=messages)
+                        except Exception as e:
+                            verbose_router_logger.error(
+                                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
+                                    str(e)
                                 )
-                                return _returned_deployments
-                        if input_tokens > max_input_tokens:
-                            invalid_model_indices.add(idx)
-                            _context_window_error = True
-                            _potential_error_str += "Model={}, Max Input Tokens={}, Got={}".format(
-                                _deployment_model,
-                                max_input_tokens,
-                                input_tokens,
                             )
-                            continue
-                except Exception as e:
-                    verbose_router_logger.exception("An error occurs - {}".format(str(e)))
+                            return _returned_deployments
+                    if input_tokens > max_input_tokens:
+                        invalid_model_indices.add(idx)
+                        _context_window_error = True
+                        _potential_error_str += "Model={}, Max Input Tokens={}, Got={}".format(
+                            _deployment_model,
+                            max_input_tokens,
+                            input_tokens,
+                        )
+                        continue
+            except Exception as e:
+                verbose_router_logger.exception("An error occurs - {}".format(str(e)))
 
             ## RPM CHECK ##
             if _any_deployment_has_rpm and isinstance(model_group_cache, dict):
@@ -10004,11 +10011,7 @@ class Router:
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params is False:
-                # get supported params — use per-deployment model to avoid overwriting the outer model group name.
-                # _deployment_model is only populated above when the max_input_tokens check ran; fall back to the
-                # deployment's own litellm_params model here so we don't end up using the model *group* name below.
-                if _deployment_model is None:
-                    _deployment_model = _litellm_params.get("model", None)
+                # get supported params — use per-deployment model to avoid overwriting the outer model group name
                 _dep_model_for_params = _deployment_model or model
                 (
                     _dep_model_for_params,

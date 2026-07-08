@@ -66,8 +66,13 @@ class TestResponsesAPIPreCallCheckIntegration:
     @pytest.mark.asyncio
     async def test_responses_api_skips_conversion_without_max_input_tokens(self):
         """
-        If no deployment has max_input_tokens, the router should not convert
-        Responses API input just for pre-call checks.
+        If no deployment resolves a max_input_tokens value, the router should
+        not convert Responses API input just for pre-call checks.
+
+        max_input_tokens can be resolved via litellm's model cost map (not
+        only a static model_info override), so get_router_model_info is
+        mocked directly to simulate "no limit" regardless of the deployment's
+        underlying model.
         """
         with (
             patch("litellm.aresponses", new_callable=AsyncMock) as mock_aresponses,
@@ -80,10 +85,11 @@ class TestResponsesAPIPreCallCheckIntegration:
             mock_aresponses.return_value = expected_response
             router = _router_with_optional_max_input_tokens(max_input_tokens=None)
 
-            result = await router.aresponses(
-                model="test-model",
-                input="short input",
-            )
+            with patch.object(router, "get_router_model_info", return_value={}):
+                result = await router.aresponses(
+                    model="test-model",
+                    input="short input",
+                )
 
             assert result == expected_response
             mock_converter.assert_not_called()

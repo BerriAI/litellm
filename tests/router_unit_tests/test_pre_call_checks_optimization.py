@@ -204,12 +204,20 @@ class TestPreCallChecksLazyGuarding:
             enable_pre_call_checks=True,
         )
 
-    def test_no_tokenization_when_no_deployment_has_max_input_tokens(self, router_no_limits):
-        """token_counter must not be called when no deployment has max_input_tokens."""
+    def test_no_tokenization_when_no_deployment_resolves_max_input_tokens(self, router_no_limits):
+        """
+        token_counter must not be called when no deployment resolves a
+        max_input_tokens value (mock get_router_model_info directly, since
+        max_input_tokens is commonly derived from litellm's model cost map
+        rather than statically declared in model_info).
+        """
         deployments = router_no_limits.get_model_list(model_name="test-model")
         assert deployments is not None
 
-        with patch("litellm.token_counter") as mock_token_counter:
+        with (
+            patch.object(router_no_limits, "get_router_model_info", return_value={}),
+            patch("litellm.token_counter") as mock_token_counter,
+        ):
             result = router_no_limits._pre_call_checks(
                 model="test-model",
                 healthy_deployments=deployments,
@@ -219,19 +227,28 @@ class TestPreCallChecksLazyGuarding:
         mock_token_counter.assert_not_called()
         assert len(result) == 2, "All deployments should be returned"
 
-    def test_no_model_info_lookup_when_no_deployment_has_max_input_tokens(self, router_no_limits):
-        """get_router_model_info must not be called when no deployment has max_input_tokens."""
+    def test_model_info_lookup_always_runs_per_deployment(self, router_no_limits):
+        """
+        get_router_model_info must be called for every deployment, since
+        max_input_tokens can come from litellm's model cost map (not just a
+        static model_info override) and there's no cheap way to know in
+        advance whether a deployment resolves a limit.
+        """
         deployments = router_no_limits.get_model_list(model_name="test-model")
         assert deployments is not None
 
-        with patch.object(router_no_limits, "get_router_model_info") as mock_get_info:
+        with patch.object(
+            router_no_limits,
+            "get_router_model_info",
+            wraps=router_no_limits.get_router_model_info,
+        ) as mock_get_info:
             result = router_no_limits._pre_call_checks(
                 model="test-model",
                 healthy_deployments=deployments,
                 messages=[{"role": "user", "content": "hello world"}],
             )
 
-        mock_get_info.assert_not_called()
+        assert mock_get_info.call_count == 2
         assert len(result) == 2
 
     def test_no_rpm_cache_lookup_when_no_deployment_has_rpm(self, router_no_limits):
@@ -249,18 +266,21 @@ class TestPreCallChecksLazyGuarding:
         mock_cache.assert_not_called()
         assert len(result) == 2
 
-    def test_zero_calls_when_nothing_configured(self, router_no_limits):
+    def test_zero_tokenization_or_rpm_cache_calls_when_nothing_configured(self, router_no_limits):
         """
-        A router with zero max_input_tokens-configured and zero rpm-configured
-        deployments must make zero calls to litellm.token_counter(),
-        get_router_model_info(), and the RPM cache get - regardless of message size.
+        A router with zero deployments resolving max_input_tokens and zero
+        rpm-configured deployments must make zero calls to
+        litellm.token_counter() and the RPM cache get - regardless of message
+        size. get_router_model_info() itself still runs per deployment (see
+        test_model_info_lookup_always_runs_per_deployment for why it can't be
+        statically skipped), it's just mocked here to return no limit.
         """
         deployments = router_no_limits.get_model_list(model_name="test-model")
         assert deployments is not None
 
         with (
+            patch.object(router_no_limits, "get_router_model_info", return_value={}),
             patch("litellm.token_counter") as mock_token_counter,
-            patch.object(router_no_limits, "get_router_model_info") as mock_get_info,
             patch.object(
                 router_no_limits.cache,
                 "get_cache",
@@ -274,7 +294,6 @@ class TestPreCallChecksLazyGuarding:
             )
 
         mock_token_counter.assert_not_called()
-        mock_get_info.assert_not_called()
         mock_cache.assert_not_called()
         assert len(result) == 2, "All deployments should pass when no limits are configured"
 
@@ -293,8 +312,8 @@ class TestPreCallChecksLazyGuarding:
         mock_token_counter.assert_called_once()
         assert len(result) == 2, "Both deployments should pass (100 < 500000)"
 
-    def test_model_info_lookup_only_for_deployment_with_max_input_tokens(self, router_with_context_limit):
-        """get_router_model_info should only be called for the deployment that has max_input_tokens."""
+    def test_model_info_lookup_includes_deployment_with_max_input_tokens(self, router_with_context_limit):
+        """get_router_model_info should be called for the deployment that has max_input_tokens."""
         deployments = router_with_context_limit.get_model_list(model_name="test-model")
         assert deployments is not None
 
