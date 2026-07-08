@@ -48,7 +48,7 @@ configs:
 
 services:
   litellm:
-    image: ${LITELLM_E2E_IMAGE:-ghcr.io/berriai/litellm:main-latest}
+    image: ghcr.io/berriai/litellm:main-latest
     depends_on:
       db:
         condition: service_healthy
