@@ -4156,3 +4156,62 @@ async def test_store_per_user_token_server_side_skips_invalidate_when_db_write_f
 
     invalidate_mock.assert_not_awaited()
     cache_set_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_pairs_client_secret_with_server_client_id():
+    """Re-auth regression: the register short-circuit hands the browser a placeholder
+    ``client_secret: "dummy"``, which the browser echoes back to /token. The server-side
+    persisted client_id wins the resolution, so the secret must come from the same (server)
+    source; pairing the persisted public PKCE client (no stored secret) with the caller's
+    placeholder makes the IdP reject the exchange with 401 on every re-auth."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="srv-1",
+        server_name="srv-1",
+        alias="srv-1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="persisted-client",
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"access_token": "at", "token_type": "Bearer"}
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            client_id="srv-1",
+            client_secret="dummy",
+            code_verifier="verifier",
+        )
+
+    sent = mock_async_client.post.call_args.kwargs["data"]
+    assert sent["client_id"] == "persisted-client"
+    assert "client_secret" not in sent
