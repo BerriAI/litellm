@@ -765,7 +765,10 @@ class BaseResponsesAPITest(ABC):
                 max_output_tokens=256,
                 tools=tools,
                 tool_choice="auto",
+                timeout=90,
             )
+        except litellm.Timeout:
+            pytest.skip("Provider did not answer the shell tool request within 90s")
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to litellm.InternalServerError")
         except litellm.BadRequestError as e:
