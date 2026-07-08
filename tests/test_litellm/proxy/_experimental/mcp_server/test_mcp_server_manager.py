@@ -2941,6 +2941,39 @@ class TestMCPServerManager:
         assert calls == []  # short-circuited on the None spec, never hit the resolver
 
     @pytest.mark.asyncio
+    async def test_invalidate_user_oauth_token_cache_delegates_to_store(self):
+        """The write side's cache drop reaches the same per-user store the resolver reads."""
+
+        class _Store:
+            def __init__(self) -> None:
+                self.invalidations: list[tuple[str, str]] = []
+
+            async def fetch(self, user_id: str, server_id: str):
+                return None
+
+            async def invalidate(self, user_id: str, server_id: str) -> None:
+                self.invalidations.append((user_id, server_id))
+
+        store = _Store()
+        manager = MCPServerManager(per_user_oauth_token_store=store)
+        await manager.invalidate_user_oauth_token_cache("alice", "srv-1")
+        assert store.invalidations == [("alice", "srv-1")]
+
+    @pytest.mark.asyncio
+    async def test_invalidate_user_oauth_token_cache_swallows_store_errors(self):
+        """A cache-drop failure must not fail the credential write that triggered it."""
+
+        class _Store:
+            async def fetch(self, user_id: str, server_id: str):
+                return None
+
+            async def invalidate(self, user_id: str, server_id: str) -> None:
+                raise RuntimeError("redis down")
+
+        manager = MCPServerManager(per_user_oauth_token_store=_Store())
+        await manager.invalidate_user_oauth_token_cache("alice", "srv-1")
+
+    @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_no_user_id(self):
         """Skip lookup entirely when user_api_key_auth has no user_id."""
         from litellm.proxy._types import UserAPIKeyAuth
