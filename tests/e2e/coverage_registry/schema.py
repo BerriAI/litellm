@@ -112,6 +112,13 @@ class GuardrailCell(_Base):
     exercised_on: tuple[str, ...]
 
 
+class RateLimitingCell(_Base):
+    module: Literal["rate_limiting"]
+    scope: Literal["key", "team", "user", "customer", "model_per_key"]
+    limit: Literal["tpm", "rpm", "parallel_requests"]
+    behavior: Literal["allows_under_limit", "blocks_over_limit"]
+
+
 class OtherCell(_Base):
     module: Literal["other"]
     area: str
@@ -124,6 +131,7 @@ Cell = Annotated[
     | ReliabilityCell
     | LoggingCell
     | GuardrailCell
+    | RateLimitingCell
     | OtherCell,
     Field(discriminator="module"),
 ]
@@ -144,6 +152,7 @@ PREFIX_ROLLUP: dict[str, str] = {
     "reliability": "reliability_performance",
     "logging": "logging_guardrails",
     "guardrail": "logging_guardrails",
+    "rate_limiting": "rate_limiting",
     "other": "other",
 }
 
@@ -152,6 +161,7 @@ MODULE_ORDER: tuple[str, ...] = (
     "non_core_llms",
     "mcp",
     "management_ui",
+    "rate_limiting",
     "reliability_performance",
     "logging_guardrails",
     "other",
