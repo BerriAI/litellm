@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { modelAvailableCall } from "../networking";
 import { KeyEditView } from "./key_edit_view";
 
 vi.mock("../networking", async () => {
@@ -987,6 +988,41 @@ describe("KeyEditView", () => {
 
       expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
       expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
+    });
+
+    it("should not duplicate the all-proxy-models option when the teamless model list already carries the sentinel", async () => {
+      vi.mocked(modelAvailableCall).mockResolvedValueOnce({
+        data: [{ id: "all-proxy-models" }, { id: "gpt-4" }],
+      });
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const proxyOptionLabels = () =>
+        Array.from(document.querySelectorAll('[role="option"]')).map((option) => option.getAttribute("aria-label"));
+
+      await waitFor(() => {
+        expect(proxyOptionLabels()).toContain("gpt-4");
+      });
+
+      const labels = proxyOptionLabels();
+      expect(labels.filter((label) => label === "All Proxy Models")).toHaveLength(1);
+      expect(labels).not.toContain("all-proxy-models");
     });
   });
 });

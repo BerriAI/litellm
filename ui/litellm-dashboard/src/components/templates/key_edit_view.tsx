@@ -133,7 +133,7 @@ export function KeyEditView({
           // Fetch user models if no team
           const model_available = await modelAvailableCall(accessToken, userID, userRole);
           const available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-          setAvailableModels(available_model_names);
+          setAvailableModels(excludeProxyWideSentinel(available_model_names));
         } else if (team?.team_id) {
           // Fetch team models if team exists
           const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
