@@ -426,6 +426,49 @@ def test_prepare_mcp_server_headers_scope_counts_legacy_delegate_as_consumer():
     assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
 
 
+def test_prepare_mcp_server_headers_fanout_withhold_survives_extra_headers_loop():
+    """Regression: when fan-out withholds the request-wide Authorization from a client-forwarded
+    server, the later server.extra_headers copy loop must not re-add it from raw_headers even if
+    the server lists Authorization in extra_headers. Otherwise one bearer is replayed across every
+    consuming upstream in the scope (the exact cross-resource replay the withholding prevents)."""
+    delegate = MCPServer(
+        server_id="od-extra-hdr",
+        name="od-extra-hdr",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+        extra_headers=["Authorization"],
+    )
+    second_consumer = _client_forwarded_mode_server("tp-peer", MCPAuth.true_passthrough)
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, second_consumer])
+
+    assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
+
+def test_prepare_mcp_server_headers_sole_consumer_still_forwards_via_extra_headers():
+    """Guard the fix does not over-withhold: with no second consumer in scope, a client-forwarded
+    server that lists Authorization in extra_headers still forwards the caller's bearer."""
+    delegate = MCPServer(
+        server_id="od-extra-sole",
+        name="od-extra-sole",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+        extra_headers=["Authorization"],
+    )
+    static_server = MCPServer(
+        server_id="static-peer",
+        name="static-peer",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="static-key",
+    )
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, static_server])
+
+    assert extra_headers is not None
+    assert extra_headers.get("Authorization") == "Bearer upstream-token"
+
+
 @pytest.mark.asyncio
 async def test_call_tool_m2m_skips_authorization_headers():
     """M2M call_tool must not forward caller Authorization in oauth2/raw headers."""

@@ -1565,6 +1565,16 @@ if MCP_AVAILABLE:
             )
 
         extra_headers: Optional[Dict[str, str]] = None
+        is_client_forwarded_mode = server.is_true_passthrough or server.is_oauth_delegate
+        # In a multi-server listing scope the request-wide Authorization can only carry one token,
+        # so it is withheld from a client-forwarded server when another server in scope also consumes
+        # it (RFC 9700 cross-resource replay); such scopes must bind per-server via
+        # x-mcp-{alias}-authorization. The decision is computed once so BOTH the forwarding branch and
+        # the extra_headers copy loop below honor it — otherwise a server that lists Authorization in
+        # extra_headers would re-copy the withheld bearer from raw_headers and replay it anyway.
+        withhold_forwarded_authorization = is_client_forwarded_mode and _caller_authorization_fans_out(
+            server, scope_servers
+        )
         if server.auth_type == MCPAuth.oauth2:
             # For OAuth2 M2M servers, upstream Authorization must come from
             # client_credentials token fetch, never from caller headers.
@@ -1583,8 +1593,8 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
-        elif server.is_true_passthrough or server.is_oauth_delegate:
-            if not _caller_authorization_fans_out(server, scope_servers):
+        elif is_client_forwarded_mode:
+            if not withhold_forwarded_authorization:
                 extra_headers = _client_forwarded_authorization_headers(
                     mcp_server=server,
                     oauth2_headers=oauth2_headers,
@@ -1611,7 +1621,9 @@ if MCP_AVAILABLE:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if header.lower() == "authorization" and strip_caller_authorization:
+                if header.lower() == "authorization" and (
+                    strip_caller_authorization or withhold_forwarded_authorization
+                ):
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
