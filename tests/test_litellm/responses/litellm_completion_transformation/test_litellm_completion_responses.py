@@ -11,10 +11,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import (
-    ChatCompletionResponseMessage,
-    ChatCompletionToolMessage,
-)
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -608,6 +604,71 @@ class TestLiteLLMCompletionResponsesConfig:
         assert hasattr(responses_api_response, "_hidden_params")
         assert responses_api_response._hidden_params == {}
 
+    def test_transform_chat_completion_response_restores_namespace_tool_call(self):
+        tool_call_id = "call_namespace_restore"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-3.1-pro-preview-customtools",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(
+                                    name="collaboration__spawn_agent",
+                                    arguments='{"message":"hello"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Spawn an agent",
+                responses_api_request={
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "collaboration",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "spawn_agent",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {},
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                },
+                chat_completion_response=chat_completion_response,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [
+            item
+            for item in responses_api_response.output
+            if item.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "spawn_agent"
+        assert tool_calls[0].namespace == "collaboration"
+        assert tool_calls[0].arguments == '{"message":"hello"}'
+
 
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
@@ -1015,6 +1076,29 @@ class TestContentTypeTransformation:
         assert len(result) == 2
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
+
+    def test_encrypted_content_blocks_preserved_as_text(self):
+        """
+        OpenAI Responses agent messages can include encrypted_content blocks.
+        Chat-completions providers need the payload as text instead of silently
+        dropping it.
+        """
+        content = [
+            {"type": "input_text", "text": "Payload:\n"},
+            {
+                "type": "encrypted_content",
+                "encrypted_content": "Reply exactly INPUT_AGENT_OK",
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+
+        assert result == [
+            {"type": "text", "text": "Payload:\n"},
+            {"type": "text", "text": "Reply exactly INPUT_AGENT_OK"},
+        ]
 
 
 class TestToolTransformation:
@@ -1621,6 +1705,181 @@ class TestToolTransformation:
 
         assert "web_search_options" not in result
 
+    def test_transform_nested_namespace_tools_to_function_tools(self):
+        """Codex Responses namespace tools contain nested functions that chat
+        providers need as flattened function names."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "description": "Multi-agent tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "description": "Spawn an agent",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_name": {"type": "string"},
+                            "message": {"type": "string"},
+                        },
+                        "required": ["task_name", "message"],
+                    },
+                }
+            ],
+        }
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "collaboration__spawn_agent"
+        assert result_tool["function"]["parameters"] == namespace_tool["tools"][0]["parameters"]
+        assert result_tool["function"]["description"] == "Multi-agent tools\n\nSpawn an agent"
+
+    def test_transform_flat_namespace_tools_to_function_tools(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+            "description": "Run JavaScript in the node REPL",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "JavaScript source to evaluate",
+                    }
+                },
+                "required": ["code"],
+            },
+        }
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "mcp__node_repl"
+        assert result_tool["function"]["description"] == "Run JavaScript in the node REPL"
+        assert result_tool["function"]["parameters"] == namespace_tool["parameters"]
+
+    def test_namespace_tool_name_map_accepts_unique_unqualified_tool_names(self):
+        """Some chat providers return the nested tool name without its namespace."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "wait_agent",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+
+        result = LiteLLMCompletionResponsesConfig._namespace_tool_name_map(
+            [namespace_tool]
+        )
+
+        assert result["collaboration__wait_agent"] == ("collaboration", "wait_agent")
+        assert result["wait_agent"] == ("collaboration", "wait_agent")
+
+    def test_namespace_tool_name_map_drops_ambiguous_unqualified_names(self):
+        tools = [
+            {"type": "function", "name": "ordinary"},
+            {
+                "type": "namespace",
+                "name": "alpha",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "beta",
+                "tools": [
+                    {"type": "namespace", "name": "ignored"},
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "gamma",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig._namespace_tool_name_map(
+            tools
+        )
+
+        assert result["alpha__run"] == ("alpha", "run")
+        assert result["beta__run"] == ("beta", "run")
+        assert result["gamma__run"] == ("gamma", "run")
+        assert "run" not in result
+
+    def test_restore_namespace_tool_name_leaves_unknown_tool_unchanged(self):
+        tool_name, namespace = LiteLLMCompletionResponsesConfig._restore_namespace_tool_name(
+            "mcp__node_repl",
+            {},
+        )
+
+        assert tool_name == "mcp__node_repl"
+        assert namespace is None
+
+    def test_transform_nested_namespace_ignores_non_function_subtools(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "tools": [
+                "ignored",
+                {"type": "namespace", "name": "ignored"},
+                {
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "parameters": {"properties": {"task_name": {"type": "string"}}},
+                },
+            ],
+        }
+
+        result_tools, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["function"]["name"] == "collaboration__spawn_agent"
+        assert result_tools[0]["function"]["parameters"] == {
+            "properties": {"task_name": {"type": "string"}},
+            "type": "object",
+        }
+
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
         End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array
@@ -2039,7 +2298,7 @@ class TestStreamingIDConsistency:
         # Transform chunks to response API events
         event1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk1)
         event2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk2)
-        event3 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
 
         # Assert: All events should use the same item_id (from the first chunk)
         assert event1 is not None, "First event should not be None"
@@ -2466,8 +2725,6 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
-        from unittest.mock import MagicMock
-
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
@@ -2482,6 +2739,15 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._cached_reasoning_item_id = None
         iterator._reasoning_active = False
         iterator._pending_response_events = []
+        iterator._pending_tool_events = []
+        iterator._tool_output_index_by_call_id = {}
+        iterator._tool_args_by_call_id = {}
+        iterator._tool_call_id_by_index = {}
+        iterator._ambiguous_tool_call_indexes = set()
+        iterator._next_tool_output_index = 1
+        iterator._final_tool_events_queued = False
+        iterator._custom_tool_names = set()
+        iterator.responses_api_request = {}
         return iterator
 
     def _make_text_chunk(self):
@@ -2527,6 +2793,187 @@ class TestEnsureOutputItemContentPartAdded:
         assert events[1].type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
         assert events[1].part.type == "output_text"
         assert iterator.sent_content_part_added_event is True
+
+    def test_streaming_namespace_tool_calls_restore_responses_namespace(self):
+        """Flattened chat-completion namespace tool calls must stream back as
+        Responses function calls with name + namespace split."""
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "spawn_agent",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "collaboration__spawn_agent",
+                        "arguments": '{"task_name":"input_test"}',
+                    },
+                }
+            ]
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.name == "spawn_agent"
+        assert added.item.namespace == "collaboration"
+
+    def test_streaming_unqualified_namespace_tool_calls_restore_namespace(self):
+        """A unique nested tool name without the namespace still maps back."""
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "wait_agent",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "wait_agent",
+                        "arguments": "{}",
+                    },
+                }
+            ]
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.name == "wait_agent"
+        assert added.item.namespace == "collaboration"
+
+    def test_streaming_flat_namespace_tool_call_keeps_flat_name(self):
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "mcp__node_repl",
+                    "description": "Run JavaScript",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}},
+                    },
+                }
+            ]
+        }
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "mcp__node_repl",
+                        "arguments": '{"code":"1+1"}',
+                    },
+                }
+            ]
+        )
+
+        chat_completion_response = ModelResponse(
+            id="chatcmpl-test",
+            created=1234567890,
+            model="gemini-3.1-pro-preview-customtools",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="mcp__node_repl",
+                                    arguments='{"code":"1+1"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        iterator._queue_final_tool_call_done_events(chat_completion_response)
+
+        added = iterator._pending_tool_events[0]
+        done = iterator._pending_tool_events[-1]
+        assert added.item.name == "mcp__node_repl"
+        assert getattr(added.item, "namespace", None) is None
+        assert done.item.name == "mcp__node_repl"
+        assert getattr(done.item, "namespace", None) is None
+
+    def test_streaming_final_only_namespace_tool_call_restores_namespace(self):
+        from unittest.mock import MagicMock
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "spawn_agent",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                }
+            ]
+        }
+        message = MagicMock()
+        message.tool_calls = [
+            {
+                "id": "call_1",
+                "function": {
+                    "name": "collaboration__spawn_agent",
+                    "arguments": '{"message":"hello world"}',
+                },
+            }
+        ]
+        complete_response = MagicMock()
+        complete_response.choices = [MagicMock(message=message)]
+
+        iterator._queue_final_tool_call_done_events(complete_response)
+
+        added = iterator._pending_tool_events[0]
+        delta_events = iterator._pending_tool_events[1:-2]
+        done = iterator._pending_tool_events[-1]
+        assert added.item.name == "spawn_agent"
+        assert added.item.namespace == "collaboration"
+        assert "".join(event.delta for event in delta_events) == '{"message":"hello world"}'
+        assert done.item.name == "spawn_agent"
+        assert done.item.namespace == "collaboration"
 
     def test_emit_response_completed_uses_stream_finish_reason(self):
         """
