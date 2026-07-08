@@ -117,7 +117,7 @@ export function LogDetailsDrawer({
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
-  const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("grouped");
+  const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
@@ -173,9 +173,9 @@ export function LogDetailsDrawer({
   const sessionTruncated = sessionTotalCount > sessionLogs.length;
 
   // Default selection for a freshly opened session: the most recent log (latest
-  // startTime). The list is sorted newest-first, but MCP calls are grouped last,
-  // so the latest log by time is not necessarily sessionLogs[0]; compute it
-  // explicitly. A clicked/remembered log still wins over this default.
+  // startTime). The list is ordered by the selected sort mode, so the latest
+  // log by time is not necessarily sessionLogs[0]; compute it explicitly.
+  // A clicked/remembered log still wins over this default.
   const mostRecentLog = useMemo<LogEntry | null>(
     () =>
       sessionLogs.reduce<LogEntry | null>(
@@ -387,16 +387,18 @@ export function LogDetailsDrawer({
                 </div>
               )}
               {isSessionMode && (
-                <Segmented
-                  size="small"
-                  className="mt-1.5"
-                  options={[
-                    { label: "Grouped", value: "grouped" },
-                    { label: "Start time", value: "chronological" },
-                  ]}
-                  value={sessionSortMode}
-                  onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
-                />
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">Sort by</span>
+                  <Segmented
+                    size="small"
+                    options={[
+                      { label: "Duration", value: "duration" },
+                      { label: "Start time", value: "start_time" },
+                    ]}
+                    value={sessionSortMode}
+                    onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                  />
+                </div>
               )}
             </div>
 

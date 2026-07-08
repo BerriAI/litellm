@@ -53,13 +53,13 @@ const sessionLogs = [
     model: "tool-early",
     call_type: "call_mcp_tool",
     startTime: "2026-07-08T10:00:01.000Z",
-    endTime: "2026-07-08T10:00:01.500Z",
+    endTime: "2026-07-08T10:00:06.000Z",
   }),
   makeLog({
     request_id: "llm-late",
     model: "llm-late",
     startTime: "2026-07-08T10:00:02.000Z",
-    endTime: "2026-07-08T10:00:04.000Z",
+    endTime: "2026-07-08T10:00:05.000Z",
   }),
   makeLog({
     request_id: "mcp-late",
@@ -84,10 +84,10 @@ const sidebarEventNames = () =>
   screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
 
 describe("LogDetailsDrawer session sidebar sorting", () => {
-  it("defaults to grouped order: LLM calls newest first, MCP calls grouped last", async () => {
+  it("defaults to duration order, longest call first across LLM and MCP calls", async () => {
     renderSessionDrawer();
     await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));
-    expect(sidebarEventNames()).toEqual(["llm-late", "llm-early", "tool-late", "tool-early"]);
+    expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]);
   });
 
   it("switches to chronological order across LLM and MCP calls when Start time is selected", async () => {
@@ -98,8 +98,8 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
 
     await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
 
-    fireEvent.click(screen.getByText("Grouped"));
+    fireEvent.click(screen.getByText("Duration"));
 
-    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-late", "llm-early", "tool-late", "tool-early"]));
+    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
   });
 });
