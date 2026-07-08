@@ -4161,7 +4161,12 @@ def _inject_fake_passthrough_client(transport, timeout):
     )
     cache = litellm.in_memory_llm_clients_cache
     cache_key = next(
-        key for key, cached in cache.cache_dict.items() if cached is real_handler
+        (key for key, cached in cache.cache_dict.items() if cached is real_handler),
+        None,
+    )
+    assert cache_key is not None, (
+        "PassThroughEndpoint client not found in in_memory_llm_clients_cache; "
+        "get_async_httpx_client may not be caching this provider."
     )
     fake_client = httpx.AsyncClient(transport=transport)
     cache.cache_dict[cache_key] = SimpleNamespace(client=fake_client)
