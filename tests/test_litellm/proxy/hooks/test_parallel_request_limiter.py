@@ -307,3 +307,89 @@ async def test_async_log_success_event_model_key_block_unaffected():
     )
     assert current is not None, "model+key block should still write when model_rpm_limit is set"
     assert current["current_tpm"] == 20
+
+
+def test_entity_has_any_limit_returns_true_when_auth_object_missing():
+    assert _PROXY_MaxParallelRequestsHandler._entity_has_any_limit(None, ["rpm_limit"]) is True
+
+
+def test_entity_has_any_limit_returns_false_when_all_fields_none():
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    assert auth.rpm_limit is None
+    assert auth.tpm_limit is None
+    assert _PROXY_MaxParallelRequestsHandler._entity_has_any_limit(auth, ["rpm_limit", "tpm_limit"]) is False
+
+
+def test_entity_has_any_limit_returns_true_when_one_field_set():
+    auth = UserAPIKeyAuth(api_key="sk-test", rpm_limit=100)
+    assert _PROXY_MaxParallelRequestsHandler._entity_has_any_limit(auth, ["rpm_limit", "tpm_limit"]) is True
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_skips_decrement_when_no_limits_configured():
+    _api_key = hash_token("sk-fail-no-limits")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    await handler.internal_usage_cache.async_set_cache(
+        key=f"{_api_key}::{precise_minute}::request_count",
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": _api_key,
+                "user_api_key_auth": UserAPIKeyAuth(api_key=_api_key),
+            }
+        },
+        "exception": ValueError("test error"),
+    }
+    await handler.async_log_failure_event(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    current = await handler.internal_usage_cache.async_get_cache(
+        key=f"{_api_key}::{precise_minute}::request_count",
+        litellm_parent_otel_span=None,
+    )
+    assert current["current_requests"] == 1, "failure decrement should be skipped when no limits are configured"
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_decrements_when_limit_configured():
+    _api_key = hash_token("sk-fail-with-limit")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    await handler.internal_usage_cache.async_set_cache(
+        key=f"{_api_key}::{precise_minute}::request_count",
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": _api_key,
+                "user_api_key_auth": UserAPIKeyAuth(api_key=_api_key, rpm_limit=100),
+            }
+        },
+        "exception": ValueError("test error"),
+    }
+    await handler.async_log_failure_event(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    current = await handler.internal_usage_cache.async_get_cache(
+        key=f"{_api_key}::{precise_minute}::request_count",
+        litellm_parent_otel_span=None,
+    )
+    assert current["current_requests"] == 0, "failure decrement should happen when limit is configured"
