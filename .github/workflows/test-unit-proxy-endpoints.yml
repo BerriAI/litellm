@@ -7,10 +7,6 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
-    paths-ignore:
-      - "ui/**"
-      - "**.md"
-      - "**.mdx"
   workflow_dispatch:
 
 permissions:
