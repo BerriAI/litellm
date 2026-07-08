@@ -32,7 +32,9 @@ class TestRerank:
         model = f"e2e-rerank-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(model="cohere/rerank-v3.5", api_key="os.environ/COHERE_API_KEY"),
+            LiteLLMParamsBody(
+                model="cohere/rerank-v3.5", api_key="os.environ/COHERE_API_KEY"
+            ),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
@@ -44,6 +46,6 @@ class TestRerank:
         parsed = RerankResult.model_validate_json(result.body)
         assert parsed.results, f"/rerank returned no results: {result.body[:300]}"
         assert len(parsed.results) <= 3, f"top_n=3 not honored: {result.body[:300]}"
-        assert parsed.results[0].relevance_score is not None, (
-            f"top rerank result has no relevance_score: {result.body[:300]}"
-        )
+        assert (
+            parsed.results[0].relevance_score is not None
+        ), f"top rerank result has no relevance_score: {result.body[:300]}"

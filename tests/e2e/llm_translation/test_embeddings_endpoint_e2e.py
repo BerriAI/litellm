@@ -20,6 +20,11 @@ pytestmark = pytest.mark.e2e
 
 
 class TestEmbeddingsEndpoint:
+    @pytest.mark.e2e_coverage(
+        endpoint="/embeddings",
+        provider="openai",
+        params=("model", "input"),
+    )
     def test_embeddings_returns_vector(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
@@ -27,7 +32,8 @@ class TestEmbeddingsEndpoint:
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/text-embedding-3-small", api_key="os.environ/OPENAI_API_KEY"
+                model="openai/text-embedding-3-small",
+                api_key="os.environ/OPENAI_API_KEY",
             ),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
@@ -36,7 +42,9 @@ class TestEmbeddingsEndpoint:
         result = endpoints_client.embeddings(key, model, "Say this is a test!")
         require_successful_call(result)
         parsed = EmbeddingsResult.model_validate_json(result.body)
-        assert parsed.first_vector, f"/embeddings returned no vector: {result.body[:300]}"
-        assert any(component != 0.0 for component in parsed.first_vector), (
-            f"embedding vector is all zeros: {result.body[:300]}"
-        )
+        assert (
+            parsed.first_vector
+        ), f"/embeddings returned no vector: {result.body[:300]}"
+        assert any(
+            component != 0.0 for component in parsed.first_vector
+        ), f"embedding vector is all zeros: {result.body[:300]}"

@@ -24,7 +24,6 @@ import requests
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
 
-
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 
 
@@ -36,6 +35,13 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
+    )
+    config.addinivalue_line(
+        "markers",
+        (
+            "e2e_coverage(endpoint, provider/providers, params, method='post'): "
+            "OpenAPI endpoint/provider/request-param surfaces this e2e test covers"
+        ),
     )
 
 
@@ -102,7 +108,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
         reset_spend_logs()
     except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
-        print(f"spend-log cleanup skipped: {exc}")
+        print(f"spend-log cleanup skipped: {exc}")  # noqa: T201
     finally:
         if spend_dir in sys.path:
             sys.path.remove(spend_dir)

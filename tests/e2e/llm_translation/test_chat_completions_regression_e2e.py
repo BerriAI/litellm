@@ -39,6 +39,11 @@ class TestChatCompletionsRegression:
         "llm.chat_completions.vertex.basic.nonstream.works",
         exercised_on=[],
     )
+    @pytest.mark.e2e_coverage(
+        endpoint="/chat/completions",
+        providers=("openai", "anthropic", "gemini"),
+        params=("model", "messages", "max_tokens"),
+    )
     def test_chat_returns_real_completion(
         self, client: PassthroughClient, scoped_key: str, model: str, route: str
     ) -> None:

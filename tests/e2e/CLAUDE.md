@@ -61,6 +61,57 @@ The harness is fully typed and new code must not add `Any` or widen the basedpyr
 
 ## Coverage registry
 
+### OpenAPI surface coverage
+
+For endpoint coverage, prefer the OpenAPI-backed coverage marker:
+
+```python
+@pytest.mark.e2e_coverage(
+    endpoint="/chat/completions",
+    providers=("openai", "anthropic"),
+    params=("model", "messages", "stream"),
+)
+```
+
+This marker means the test proves real request surfaces from the generated proxy
+OpenAPI schema. Coverage is measured as:
+
+```
+covered endpoint/provider/request-param surfaces
+/
+total OpenAPI endpoint/provider/request-param surfaces
+```
+
+Rules:
+
+- `endpoint` must be a concrete OpenAPI route. Do not use wildcards.
+- `provider` / `providers` must be concrete provider labels. Do not use `multiple`.
+- `params` must be real top-level OpenAPI request params for that endpoint. Do not
+  use behavior labels like `tool-calling`; use the actual param, for example
+  `tools`, `tool_choice`, `stream`, `messages`, `input`, or `max_tokens`.
+- LLM endpoints are provider-expanded by the collector. For example,
+  `/chat/completions + stream` is counted separately for OpenAI, Anthropic,
+  Bedrock, Vertex, and the other configured LLM provider families.
+- Non-LLM proxy endpoints use `provider="proxy"`.
+
+Run the LLM dashboard view locally with:
+
+```bash
+PYTHONPATH=tests/e2e uv run --extra proxy python -m coverage_registry.openapi_surface --scope llm
+```
+
+Run the full proxy OpenAPI view with:
+
+```bash
+PYTHONPATH=tests/e2e uv run --extra proxy python -m coverage_registry.openapi_surface --scope all
+```
+
+If a route exists but OpenAPI does not expose a request body or request params,
+the collector reports an `OpenAPI schema gap` instead of counting fake coverage.
+Fix the route's OpenAPI request schema first, then add the matching test marker.
+
+### Legacy behavior registry
+
 The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
 
 Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`

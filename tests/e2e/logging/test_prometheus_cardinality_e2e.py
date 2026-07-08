@@ -18,7 +18,6 @@ from __future__ import annotations
 import time
 
 import pytest
-from prometheus_client.parser import text_string_to_metric_families
 
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
@@ -34,9 +33,10 @@ DISTINCT_KEYS = 3
 
 def _aliases_in_metric(exposition: str, metric: str, label: str) -> frozenset[str]:
     """The set of ``label`` values present on ``metric`` samples in a scrape."""
+    prometheus_parser = pytest.importorskip("prometheus_client.parser")
     return frozenset(
         sample.labels[label]
-        for family in text_string_to_metric_families(exposition)
+        for family in prometheus_parser.text_string_to_metric_families(exposition)
         for sample in family.samples
         if sample.name == metric and label in sample.labels
     )
@@ -52,13 +52,17 @@ class TestPrometheusPerKeyCardinality:
             key = client.key_with_alias(alias, models=[DRIVER_MODEL])
             resources.defer(lambda k=key: client.delete_key(k))
             response = client.chat(key, DRIVER_MODEL, f"reply with one word {alias}")
-            assert response.model, f"driver call for {alias} returned no model: {response}"
+            assert (
+                response.model
+            ), f"driver call for {alias} returned no model: {response}"
 
         wanted = frozenset(aliases)
         deadline = time.monotonic() + client.gateway.poll_timeout
         seen: frozenset[str] = frozenset()
         while time.monotonic() < deadline:
-            seen = _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
+            seen = _aliases_in_metric(
+                client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL
+            )
             if wanted <= seen:
                 break
             time.sleep(client.gateway.poll_interval)

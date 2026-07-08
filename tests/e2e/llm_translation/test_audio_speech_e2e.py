@@ -34,7 +34,7 @@ class TestAudioSpeech:
 
         result = endpoints_client.audio_speech(key, model, "Hello!")
         require_successful_call(result)
-        assert "audio" in (result.content_type or ""), (
-            f"/audio/speech content-type is not audio: {result.content_type!r}"
-        )
+        assert "audio" in (
+            result.content_type or ""
+        ), f"/audio/speech content-type is not audio: {result.content_type!r}"
         assert result.body, "/audio/speech returned an empty body"
