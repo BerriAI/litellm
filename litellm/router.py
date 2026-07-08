@@ -3048,14 +3048,14 @@ class Router:
         result = await asyncio.to_thread(
             stream_chunk_builder, chunks, messages=messages
         )
-        if result is None:
+        if not isinstance(result, ModelResponse):
             raise litellm.APIError(
                 status_code=500,
-                message="stream_chunk_builder returned None: provider returned an empty stream",
+                message="stream_chunk_builder did not return a ModelResponse: provider returned an empty or non-chat stream",
                 llm_provider="",
                 model="",
             )
-        return cast(ModelResponse, result)
+        return result
 
     async def _collect_until_first_token(
         self,
