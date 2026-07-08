@@ -17,7 +17,7 @@ const ROOT = process.env.SERVER_ROOT_PATH ?? "";
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pathRe = (segment: string) => new RegExp(`${esc(ROOT)}/ui/${esc(segment)}/?($|\\?)`);
-const virtualKeysLink = (page: Page) => page.getByRole("link", { name: "Virtual Keys", exact: true });
+const virtualKeysLink = (page: Page) => page.getByRole("menuitem", { name: "Virtual Keys", exact: true });
 
 /** The dashboard shell is present (sidebar rendered); page didn't 404 / crash. */
 async function expectRendered(page: Page) {
@@ -31,12 +31,13 @@ async function expectRendered(page: Page) {
 async function clickSidebar(page: Page, segment: string) {
   const link = page.locator(`a[href$="/ui/${segment}"]`).first();
   for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
-    const collapsedSubmenu = page
-      .locator(".ant-menu-submenu:not(.ant-menu-submenu-open) > .ant-menu-submenu-title")
-      .first();
-    if (!(await collapsedSubmenu.isVisible().catch(() => false))) break;
-    await collapsedSubmenu.click();
-    await page.waitForTimeout(250);
+    const closedTrigger = page.locator('button[role="menuitem"]:not([data-panel-open])').first();
+    if (await closedTrigger.isVisible().catch(() => false)) {
+      await closedTrigger.click();
+      await page.waitForTimeout(250);
+      continue;
+    }
+    break;
   }
   await link.click();
 }
