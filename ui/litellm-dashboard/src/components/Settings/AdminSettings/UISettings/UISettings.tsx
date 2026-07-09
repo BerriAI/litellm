@@ -5,6 +5,7 @@ import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdat
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import PageVisibilitySettings from "./PageVisibilitySettings";
+import UsageViewVisibilitySettings from "./UsageViewVisibilitySettings";
 import { Alert, Card, Divider, Skeleton, Space, Switch, Typography } from "antd";
 
 export default function UISettings() {
@@ -21,6 +22,7 @@ export default function UISettings() {
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enableChatUIProperty = schema?.properties?.enable_chat_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
+  const enabledUsageViewsProperty = schema?.properties?.enabled_usage_views_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
   const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
   const disableVectorStoresProperty = schema?.properties?.disable_vector_stores_for_internal_users;
@@ -65,6 +67,17 @@ export default function UISettings() {
     updateSettings(settings, {
       onSuccess: () => {
         NotificationManager.success("Page visibility settings updated successfully");
+      },
+      onError: (error) => {
+        NotificationManager.fromBackend(error);
+      },
+    });
+  };
+
+  const handleUpdateUsageViewVisibility = (settings: { enabled_usage_views_internal_users: string[] | null }) => {
+    updateSettings(settings, {
+      onSuccess: () => {
+        NotificationManager.success("Usage view visibility settings updated successfully");
       },
       onError: (error) => {
         NotificationManager.fromBackend(error);
@@ -490,6 +503,15 @@ export default function UISettings() {
             enabledPagesPropertyDescription={enabledPagesProperty?.description}
             isUpdating={isUpdating}
             onUpdate={handleUpdatePageVisibility}
+          />
+
+          <Divider />
+
+          <UsageViewVisibilitySettings
+            enabledViewsInternalUsers={values.enabled_usage_views_internal_users}
+            enabledViewsPropertyDescription={enabledUsageViewsProperty?.description}
+            isUpdating={isUpdating}
+            onUpdate={handleUpdateUsageViewVisibility}
           />
         </Space>
       )}

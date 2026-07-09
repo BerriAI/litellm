@@ -50,7 +50,13 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
-import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import {
+  getVisibleUsageOptions,
+  resolveActiveUsageView,
+  UsageOption,
+  UsageViewSelect,
+} from "./UsageViewSelect/UsageViewSelect";
 
 interface UsagePageProps {
   teams: Team[];
@@ -83,6 +89,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
+  const { data: uiSettings } = useUISettings();
+  const enabledUsageViews = (uiSettings?.values?.enabled_usage_views_internal_users ?? null) as UsageOption[] | null;
+  const visibleUsageOptions = useMemo(
+    () => getVisibleUsageOptions({ isAdmin, canViewTagUsage, enabledViews: enabledUsageViews }),
+    [isAdmin, canViewTagUsage, enabledUsageViews],
+  );
 
   // Debounced search for user selector
   const [userSearchInput, setUserSearchInput] = useState("");
@@ -151,8 +163,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     }
   }, [isAdmin, userID]);
 
+  const effectiveUsageView = resolveActiveUsageView(usageView, visibleUsageOptions);
+
   // For non-admins or "my-usage" view, always pass their own user_id
-  const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
+  const effectiveUserId = effectiveUsageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -444,10 +458,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         <div className="flex-1">
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
             <UsageViewSelect
-              value={usageView}
+              value={effectiveUsageView}
               onChange={(value) => setUsageView(value)}
               isAdmin={isAdmin}
               canViewTagUsage={canViewTagUsage}
+              enabledViews={enabledUsageViews}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
@@ -489,9 +504,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
           )}
           {/* Your Usage / Global Usage Panel */}
-          {(usageView === "global" || usageView === "my-usage") && (
+          {(effectiveUsageView === "global" || effectiveUsageView === "my-usage") && (
             <>
-              {isAdmin && usageView === "global" && (
+              {isAdmin && effectiveUsageView === "global" && (
                 <div className="mb-4">
                   <Text className="mb-2">Filter by user</Text>
                   <Select
@@ -844,7 +859,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* Organization Usage Panel */}
 
-          {usageView === "organization" && (
+          {effectiveUsageView === "organization" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="organization"
@@ -862,7 +877,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
 
           {/* Team Usage Panel */}
-          {usageView === "team" && (
+          {effectiveUsageView === "team" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="team"
@@ -880,7 +895,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
 
           {/* Customer Usage Panel */}
-          {usageView === "customer" && (
+          {effectiveUsageView === "customer" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="customer"
@@ -897,7 +912,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
           )}
           {/* Tag Usage Panel */}
-          {usageView === "tag" && (
+          {effectiveUsageView === "tag" && (
             <>
               {showCredentialBanner && (
                 <Alert
@@ -927,7 +942,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               />
             </>
           )}
-          {usageView === "agent" && (
+          {effectiveUsageView === "agent" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="agent"
@@ -941,7 +956,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
           )}
           {/* User Usage Panel */}
-          {usageView === "user" && (
+          {effectiveUsageView === "user" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="user"
@@ -953,7 +968,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
           )}
           {/* User Agent Activity Panel */}
-          {usageView === "user-agent-activity" && (
+          {effectiveUsageView === "user-agent-activity" && (
             <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
           )}
         </div>
