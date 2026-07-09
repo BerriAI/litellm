@@ -1,15 +1,14 @@
-"""
-Regression tests for Redis connection pool leak fixes (RC1-RC5).
-
-Tests are pure unit tests — no Redis server required.
-"""
-
+import inspect as real_inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import redis.asyncio as async_redis
 
-from litellm._redis import get_redis_async_client, get_redis_connection_pool
+from litellm._redis import (
+    _coerce_redis_kwargs_types,
+    _get_redis_client_logic,
+    get_redis_async_client,
+    get_redis_connection_pool,
+)
 
 
 def test_url_config_uses_passed_pool():
@@ -60,16 +59,14 @@ def test_max_connections_url_config_string_value(monkeypatch):
     assert pool.max_connections == 25
 
 
-def test_max_connections_url_config_invalid_value():
-    """Invalid max_connections should be silently ignored, falling back
-    to the pool default (50 for BlockingConnectionPool)."""
-    with patch("litellm._redis._get_redis_client_logic") as mock_logic:
-        mock_logic.return_value = {
-            "url": "redis://localhost:6379/0",
-            "max_connections": "not_a_number",
-        }
+def test_max_connections_url_config_invalid_value(monkeypatch):
+    """Invalid max_connections from an env var should be silently dropped,
+    falling back to the pool default (50 for BlockingConnectionPool)."""
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS", "not_a_number")
 
-        pool = get_redis_connection_pool()
+    pool = get_redis_connection_pool()
 
     # BlockingConnectionPool default is 50
     assert pool.max_connections == 50
@@ -128,3 +125,115 @@ async def test_disconnect_idempotent():
 
     await cache.disconnect()
     await cache.disconnect()  # should not raise
+
+
+def test_coerce_redis_kwargs_types_int():
+    """String values for int-typed Redis params are coerced to int."""
+    result = _coerce_redis_kwargs_types({"health_check_interval": "30", "port": "6380", "db": "1"})
+    assert result["health_check_interval"] == 30
+    assert isinstance(result["health_check_interval"], int)
+    assert result["port"] == 6380
+    assert result["db"] == 1
+
+
+def test_coerce_redis_kwargs_types_bool():
+    """String values for bool-typed Redis params are coerced to bool."""
+    result = _coerce_redis_kwargs_types({"ssl": "true", "decode_responses": "false"})
+    assert result["ssl"] is True
+    assert result["decode_responses"] is False
+
+
+def test_coerce_redis_kwargs_types_none_default_numeric():
+    """String values for known None-default numeric params are coerced."""
+    result = _coerce_redis_kwargs_types({"max_connections": "20", "socket_timeout": "5.5"})
+    assert result["max_connections"] == 20
+    assert isinstance(result["max_connections"], int)
+    assert result["socket_timeout"] == 5.5
+    assert isinstance(result["socket_timeout"], float)
+
+
+def test_coerce_redis_kwargs_types_invalid_drops_key():
+    """A string that cannot be coerced to the expected numeric type is dropped."""
+    result = _coerce_redis_kwargs_types({"health_check_interval": "not_a_number"})
+    assert "health_check_interval" not in result
+
+
+def test_coerce_redis_kwargs_types_non_string_unchanged():
+    """Non-string values pass through without modification."""
+    result = _coerce_redis_kwargs_types({"health_check_interval": 30, "ssl": True})
+    assert result["health_check_interval"] == 30
+    assert result["ssl"] is True
+
+
+def test_health_check_interval_from_env_is_int(monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    monkeypatch.setenv("REDIS_HEALTH_CHECK_INTERVAL", "30")
+
+    pool = get_redis_connection_pool()
+
+    assert pool is not None
+    interval = pool.connection_kwargs.get("health_check_interval")
+    assert interval == 30
+    assert isinstance(interval, int), f"Expected int, got {type(interval)}: {interval!r}"
+
+
+def test_coerce_redis_kwargs_types_empty_default_param_unchanged():
+    """String params whose signature entry has no default (inspect.Parameter.empty) are left as-is."""
+    empty_param = real_inspect.Parameter(
+        "testkey", real_inspect.Parameter.POSITIONAL_OR_KEYWORD
+    )
+    fake_sig = MagicMock()
+    fake_sig.parameters = {"testkey": empty_param}
+
+    with patch("litellm._redis.inspect.signature", return_value=fake_sig):
+        result = _coerce_redis_kwargs_types({"testkey": "some_value"})
+
+    assert result["testkey"] == "some_value"
+    assert isinstance(result["testkey"], str)
+
+
+def test_coerce_redis_kwargs_types_float_valid():
+    """String values for params whose signature default is a float are coerced to float."""
+    float_param = real_inspect.Parameter(
+        "myparam", real_inspect.Parameter.POSITIONAL_OR_KEYWORD, default=1.0
+    )
+    fake_sig = MagicMock()
+    fake_sig.parameters = {"myparam": float_param}
+
+    with patch("litellm._redis.inspect.signature", return_value=fake_sig):
+        result = _coerce_redis_kwargs_types({"myparam": "3.14"})
+
+    assert result["myparam"] == pytest.approx(3.14)
+    assert isinstance(result["myparam"], float)
+
+
+def test_coerce_redis_kwargs_types_float_invalid_drops_key():
+    """An unconvertible string for a float-default param is dropped from the result."""
+    float_param = real_inspect.Parameter(
+        "myparam", real_inspect.Parameter.POSITIONAL_OR_KEYWORD, default=1.0
+    )
+    fake_sig = MagicMock()
+    fake_sig.parameters = {"myparam": float_param}
+
+    with patch("litellm._redis.inspect.signature", return_value=fake_sig):
+        result = _coerce_redis_kwargs_types({"myparam": "not_a_float"})
+
+    assert "myparam" not in result
+
+
+def test_get_redis_client_logic_raises_without_host_or_url(monkeypatch):
+    """_get_redis_client_logic raises ValueError when neither host nor url is provided."""
+    for envvar in [
+        "REDIS_URL",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_CLUSTER_NODES",
+        "REDIS_SENTINEL_NODES",
+    ]:
+        monkeypatch.delenv(envvar, raising=False)
+
+    with patch("litellm._redis._redis_kwargs_from_environment", return_value={}):
+        with pytest.raises(
+            ValueError, match="Either 'host' or 'url' must be specified for redis"
+        ):
+            _get_redis_client_logic()
