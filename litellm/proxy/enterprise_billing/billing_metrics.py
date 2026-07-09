@@ -229,14 +229,24 @@ def load_billing_metrics_config(
         )
         return None
 
-    required_paths = [paths.client_cert_path, paths.client_key_path] + (
-        [paths.ca_cert_path] if paths.ca_cert_path else []
-    )
-    unreadable = [path for path in required_paths if not os.path.isfile(path)]
+    # Report the variable names, never their values. A value that is neither a
+    # readable path nor recognizable PEM is still secret material, and this
+    # warning would otherwise copy a client key straight into the proxy logs.
+    unreadable = [
+        env_name
+        for env_name, path in (
+            (CLIENT_CERT_ENV, paths.client_cert_path),
+            (CLIENT_KEY_ENV, paths.client_key_path),
+            (CA_CERT_ENV, paths.ca_cert_path),
+        )
+        if path and not os.path.isfile(path)
+    ]
     if unreadable:
         verbose_proxy_logger.warning(
-            "Enterprise billing metrics disabled: certificate file(s) not found: %s",
+            "Enterprise billing metrics disabled: %s did not resolve to a readable certificate file. "
+            "Set each to a file path, or to inline PEM content beginning with '%s'.",
             ", ".join(unreadable),
+            _PEM_PREFIX,
         )
         return None
 

@@ -240,6 +240,31 @@ def test_load_config_with_inline_pem_disabled_when_unwritable(monkeypatch):
     assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
 
 
+def test_load_config_never_logs_credential_values(monkeypatch):
+    """
+    A value that is neither a readable path nor `-----BEGIN`-prefixed PEM is
+    still secret material. The disable warning must name the env vars, never
+    echo their contents, or a malformed key lands in the proxy logs.
+    """
+    secret_material = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ-not-pem-prefixed"
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4317")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, secret_material)
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, secret_material)
+
+    logged: List[str] = []
+
+    def _capture(msg, *args):
+        logged.append(msg % args if args else msg)
+
+    monkeypatch.setattr(bm.verbose_proxy_logger, "warning", _capture)
+
+    assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
+
+    joined = "\n".join(logged)
+    assert secret_material not in joined
+    assert bm.CLIENT_CERT_ENV in joined and bm.CLIENT_KEY_ENV in joined
+
+
 def test_load_config_with_empty_pem_env_is_disabled(monkeypatch):
     """Empty stays empty: an unset secret must not be mistaken for inline PEM."""
     monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4317")
