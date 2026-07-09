@@ -1309,9 +1309,6 @@
     }
   },
   "src/components/alerting/dynamic_form.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
     "no-restricted-imports": {
       "count": 1
     }
