@@ -266,7 +266,7 @@ class A2AConfig(BaseConfig):
             from litellm.proxy.agent_endpoints.agent_registry import (
                 global_agent_registry,
             )
-        except ImportError:  # pragma: no cover - registry only exists in a proxy context
+        except ImportError:
             return None
 
         agent = global_agent_registry.get_agent_by_name(agent_name)
@@ -288,7 +288,7 @@ class A2AConfig(BaseConfig):
                 to_core_send_message_request,
             )
             from a2a.compat.v0_3.types import MessageSendParams, SendMessageRequest
-        except ImportError as e:  # pragma: no cover - a2a-sdk is an optional dependency
+        except ImportError as e:
             raise A2AError(
                 status_code=500,
                 message=(

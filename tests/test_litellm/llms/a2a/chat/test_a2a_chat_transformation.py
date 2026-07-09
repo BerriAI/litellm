@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from litellm.llms.a2a.chat.transformation import A2A_PROTOCOL_VERSION_PARAM, A2AConfig
 from litellm.types.utils import ModelResponse
 
@@ -46,6 +48,7 @@ def test_transform_request_defaults_to_0_3():
 def test_transform_request_v1_uses_send_message():
     """Regression for #32609: a 1.0-pinned agent must get the 1.0 method and the
     protobuf-JSON envelope (uppercase role enum, parts without ``kind``)."""
+    pytest.importorskip("a2a")
     request = A2AConfig().transform_request(
         "a2a/agent", _MESSAGES, {A2A_PROTOCOL_VERSION_PARAM: "1.0"}, {}, {}
     )
@@ -57,6 +60,7 @@ def test_transform_request_v1_uses_send_message():
 
 
 def test_transform_request_v1_streaming_uses_send_streaming_message():
+    pytest.importorskip("a2a")
     request = A2AConfig().transform_request(
         "a2a/agent", _MESSAGES, {A2A_PROTOCOL_VERSION_PARAM: "1.0", "stream": True}, {}, {}
     )
@@ -65,6 +69,7 @@ def test_transform_request_v1_streaming_uses_send_streaming_message():
 
 def test_transform_request_v1_from_litellm_params():
     """The pinned version may arrive via litellm_params (direct SDK usage)."""
+    pytest.importorskip("a2a")
     request = A2AConfig().transform_request(
         "a2a/agent", _MESSAGES, {}, {A2A_PROTOCOL_VERSION_PARAM: "1.0"}, {}
     )
