@@ -137,17 +137,26 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 }
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, authLoading } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
-  if (authLoading) {
+  // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
+  // /onboarding route. Redirect once ui-config has loaded so migratedHref resolves the SERVER_ROOT_PATH base.
+  useEffect(() => {
+    if (!authLoading && isInvitationFlow) {
+      router.replace(`${migratedHref("onboarding")}?${searchParams.toString()}`);
+    }
+  }, [authLoading, isInvitationFlow, router, searchParams]);
+
+  if (authLoading || isInvitationFlow) {
     return <LoadingScreen />;
   }
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      {isInvitationFlow ? children : <DashboardShell>{children}</DashboardShell>}
+      <DashboardShell>{children}</DashboardShell>
     </ThemeProvider>
   );
 }
