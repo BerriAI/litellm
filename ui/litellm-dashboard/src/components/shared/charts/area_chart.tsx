@@ -67,7 +67,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
             )}
           />
         )}
-        {showLegend && <ChartLegend verticalAlign="top" content={<ChartLegendContent />} />}
+        {showLegend && <ChartLegend verticalAlign="top" content={<ChartLegendContent className="justify-end" />} />}
         {categories.map((category, i) => (
           <Area
             key={category}
