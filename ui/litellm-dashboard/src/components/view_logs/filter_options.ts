@@ -64,6 +64,11 @@ export function getLogFilterOptions(accessToken: string): FilterOption[] {
       isSearchable: false,
     },
     {
+      name: FILTER_KEYS.SESSION_ID,
+      label: "Session ID",
+      isSearchable: false,
+    },
+    {
       name: "Model",
       label: "Model",
       customComponent: PaginatedModelSelect,

@@ -48633,6 +48633,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description request_id to get spend logs for specific request_id */
                 request_id?: string | null;
+                /** @description Filter spend logs by session_id */
+                session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */
@@ -48739,6 +48741,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description request_id to get spend logs for specific request_id */
                 request_id?: string | null;
+                /** @description Filter spend logs by session_id */
+                session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */

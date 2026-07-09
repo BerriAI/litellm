@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import datetime
 import json
 import os
@@ -85,6 +86,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         '"user"': "user",
         "api_key": "api_key",
         "request_id": "request_id",
+        "session_id": "session_id",
         "model": "model",
         "model_id": "model_id",
         "model_group": "model_group",
@@ -162,7 +164,21 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
         async def count(self, *args, **kwargs):
             return len(filter_fn(kwargs.get("where", {})))
 
+        async def group_by(self, by, where, count):
+            allowed = set(where["session_id"]["in"])
+            tallied = collections.Counter(
+                log["session_id"]
+                for log in mock_spend_logs
+                if log.get("session_id") in allowed
+            )
+            return [
+                {"session_id": sid, "_count": {"session_id": n}}
+                for sid, n in tallied.items()
+            ]
+
         async def query_raw(self, sql_query, *params):
+            if "mcp_tool_call_count" in sql_query:
+                return []
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
             total = len(filtered)
             if "COUNT(*)" in sql_query:
@@ -595,6 +611,74 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["user"] == "test_user_1"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_session_id(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "session_id": "session-abc",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "session_id": "session-abc",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+        {
+            "id": "log3",
+            "request_id": "req3",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "session_id": "session-other",
+            "spend": 0.02,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_by_session(where):
+        if "session_id" in where:
+            return [
+                log
+                for log in mock_spend_logs
+                if log["session_id"] == where["session_id"]
+            ]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_session),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "session_id": "session-abc",
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert {log["request_id"] for log in data["data"]} == {"req1", "req2"}
+    assert all(log["session_id"] == "session-abc" for log in data["data"])
 
 
 # Mock spend logs with distinct values for sorting tests.
