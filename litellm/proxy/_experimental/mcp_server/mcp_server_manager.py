@@ -171,6 +171,16 @@ _user_env_vars_cache: dict[tuple[str, str], tuple[dict[str, str], float]] = {}
 _USER_ENV_VARS_CACHE_TTL = 60  # seconds
 _USER_ENV_VARS_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 
+# Auth types whose upstream OAuth endpoints (protected-resource + authorization-server metadata) the
+# gateway discovers from the upstream itself: interactive oauth2 and the two client-forwarded modes.
+# OBO/M2M endpoint discovery is decided separately via _obo_needs_endpoint_discovery. Shared by the
+# config-YAML and DB server loaders so the two paths cannot drift on which modes trigger discovery.
+_UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
+    MCPAuth.oauth2,
+    MCPAuth.true_passthrough,
+    MCPAuth.oauth_delegate,
+)
+
 
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
     """Drop a cached entry after the user stores or clears their env var values
@@ -983,9 +993,8 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
-            config_upstream_oauth_auth_types = (MCPAuth.oauth2, MCPAuth.true_passthrough, MCPAuth.oauth_delegate)
             if server_url and (
-                auth_type in config_upstream_oauth_auth_types
+                auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
                 or self._obo_needs_endpoint_discovery(
                     auth_type,
                     server_config.get("token_exchange_endpoint"),
@@ -994,7 +1003,7 @@ class MCPServerManager:
             ):
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
-                    allow_origin_fallback=auth_type in config_upstream_oauth_auth_types,
+                    allow_origin_fallback=auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
                 )
             else:
                 mcp_oauth_metadata = None
@@ -1385,9 +1394,8 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
-        upstream_oauth_auth_types = (MCPAuth.oauth2, MCPAuth.true_passthrough, MCPAuth.oauth_delegate)
         needs_discovery = bool(server_url) and (
-            (auth_type in upstream_oauth_auth_types and not mcp_server.authorization_url)
+            (auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and not mcp_server.authorization_url)
             or self._obo_needs_endpoint_discovery(
                 auth_type,
                 mcp_server.token_exchange_endpoint
@@ -1398,7 +1406,7 @@ class MCPServerManager:
         mcp_oauth_metadata = (
             await self._descovery_metadata(
                 server_url=server_url,  # type: ignore[arg-type]
-                allow_origin_fallback=auth_type in upstream_oauth_auth_types,
+                allow_origin_fallback=auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
             )
             if needs_discovery
             else None
