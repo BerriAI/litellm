@@ -22,6 +22,7 @@ from e2e_http import (
     Result,
     StreamingResponse,
     Success,
+    UnknownApiError,
 )
 from models import (
     LiteLLMParamsBody,
@@ -43,6 +44,7 @@ class _RecordingTransport:
 
     posts: list[tuple[str, BaseModel]] = field(default_factory=list)
     servable_after_gets: int = 0
+    models_error: UnknownApiError | None = None
     model_gets: int = 0
     _created: list[str] = field(default_factory=list)
 
@@ -83,6 +85,8 @@ class _RecordingTransport:
     ) -> Result[R]:
         if path == "/v1/models" and response_type is ModelsListResponse:
             self.model_gets += 1
+            if self.models_error is not None:
+                return self.models_error
             visible = self._created if self.model_gets > self.servable_after_gets else []
             return Success(
                 data=response_type.model_validate({"data": [{"id": name} for name in visible]})
@@ -162,9 +166,20 @@ def test_gateway_create_model_fails_loudly_when_never_servable() -> None:
         gateway.create_model("e2e-ghost-model", LiteLLMParamsBody(model="openai/gpt-4o-mini"))
 
 
+def test_gateway_create_model_surfaces_the_last_data_plane_error() -> None:
+    transport = _RecordingTransport(
+        models_error=UnknownApiError(status_code=503, body="data plane down")
+    )
+    gateway = Gateway(transport=transport, poll_timeout=0.05, poll_interval=0.0)
+
+    with pytest.raises(AssertionError, match="data plane down") as excinfo:
+        gateway.create_model("e2e-flaky-model", LiteLLMParamsBody(model="openai/gpt-4o-mini"))
+    assert "503" in str(excinfo.value)
+
+
 def test_batch_client_create_model_registers_a_batch_mode_deployment() -> None:
     transport = _RecordingTransport()
-    client = BatchClient(gateway=Gateway(transport=transport))
+    client = BatchClient(gateway=Gateway(transport=transport, poll_interval=0.0))
 
     model_id = client.create_model(
         "e2e-batch-model", LiteLLMParamsBody(model="openai/gpt-4o-mini")

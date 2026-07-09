@@ -156,22 +156,28 @@ class Gateway:
         not within poll_timeout (a real propagation/config problem, surfaced here
         instead of as a downstream "Invalid model name passed")."""
         deadline = time.monotonic() + self.poll_timeout
+        last_result: Result[ModelsListResponse] | None = None
         while time.monotonic() < deadline:
-            result = self.transport.get(
+            last_result = self.transport.get(
                 "/v1/models",
                 headers=self.transport.master,
                 params=NoBody(),
                 response_type=ModelsListResponse,
             )
-            if isinstance(result, Success) and any(
-                entry.id == model_name for entry in result.data.data
+            if isinstance(last_result, Success) and any(
+                entry.id == model_name for entry in last_result.data.data
             ):
                 return
             time.sleep(self.poll_interval)
+        last_error = (
+            f"; last /v1/models poll did not succeed: {last_result}"
+            if last_result is not None and not isinstance(last_result, Success)
+            else ""
+        )
         raise AssertionError(
             f"model {model_name!r} was created but never became servable on the data "
             f"plane within {self.poll_timeout}s of /model/new (control/data-plane "
-            "propagation or STORE_MODEL_IN_DB reload issue)"
+            f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
         )
 
     def delete_model(self, model_id: str) -> None:
