@@ -204,6 +204,40 @@ Behavior matches the AWS stack 1:1; the only naming differences are
 `otel_headers_secret` (a Secret Manager resource ID) vs AWS's
 `otel_headers_secret_arn` (a Secrets Manager ARN).
 
+### Enterprise billing metrics
+
+License-gated request metering is opt-in and gated entirely on
+`billing_metrics_endpoint`. Empty (default) and no billing env is added to
+the container, so existing deployments are unchanged. Set it and both
+gateway and backend export billable-request counts over OTLP/HTTP,
+authenticating to the collector with the mTLS client certificate issued for
+your deployment.
+
+The proxy accepts the certificate, key, and CA bundle as either a file path
+or literal PEM content. This stack takes the PEM, writes each one to its own
+Secret Manager entry, grants the runtime service account
+`roles/secretmanager.secretAccessor` on them, and injects them as Cloud Run
+secret env vars `LITELLM_BILLING_METRICS_CLIENT_CERT` / `_CLIENT_KEY` (and
+`_CA_CERT` when set), so no volume mount is needed.
+
+```hcl
+billing_metrics_endpoint = "https://telemetry.litellm.ai/v1/metrics"
+```
+
+```bash
+export TF_VAR_billing_metrics_client_cert_pem="$(cat client.crt)"
+export TF_VAR_billing_metrics_client_key_pem="$(cat client.key)"
+```
+
+`billing_metrics_ca_cert_pem` is only for private or test collectors whose
+CA is not in the system trust store; leave it empty against
+`telemetry.litellm.ai`. Metering requires an enterprise license, so pair
+this with `litellm_license`. To tune the export cadence, set
+`LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
+`backend_extra_env`
+
+Behavior matches the AWS stack 1:1; the variable names are identical
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

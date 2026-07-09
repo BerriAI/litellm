@@ -76,6 +76,33 @@ locals {
     { name = "OTEL_HEADERS", valueFrom = var.otel_headers_secret_arn },
   ] : []
 
+  # Enterprise request metering, gated on billing_metrics_endpoint. The
+  # endpoint rides in as a plain env var; the mTLS material is stored in
+  # Secrets Manager (secrets.tf) and injected as PEM-valued env vars, which
+  # the proxy accepts in place of file paths. Each PEM is wired only when the
+  # operator supplied it, so an empty ca_cert_pem falls back to the system
+  # trust store.
+  billing_metrics_enabled             = var.billing_metrics_endpoint != ""
+  billing_metrics_client_cert_enabled = local.billing_metrics_enabled && var.billing_metrics_client_cert_pem != ""
+  billing_metrics_client_key_enabled  = local.billing_metrics_enabled && var.billing_metrics_client_key_pem != ""
+  billing_metrics_ca_cert_enabled     = local.billing_metrics_enabled && var.billing_metrics_ca_cert_pem != ""
+
+  billing_metrics_env = local.billing_metrics_enabled ? [
+    { name = "LITELLM_BILLING_METRICS_ENDPOINT", value = var.billing_metrics_endpoint },
+  ] : []
+
+  billing_metrics_secrets = concat(
+    local.billing_metrics_client_cert_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CLIENT_CERT", valueFrom = aws_secretsmanager_secret.billing_metrics_client_cert[0].arn },
+    ] : [],
+    local.billing_metrics_client_key_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CLIENT_KEY", valueFrom = aws_secretsmanager_secret.billing_metrics_client_key[0].arn },
+    ] : [],
+    local.billing_metrics_ca_cert_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CA_CERT", valueFrom = aws_secretsmanager_secret.billing_metrics_ca_cert[0].arn },
+    ] : [],
+  )
+
   shared_env = [
     { name = "IAM_TOKEN_DB_AUTH", value = "true" },
     { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
@@ -108,6 +135,7 @@ locals {
       { name = "LITELLM_LICENSE", valueFrom = aws_secretsmanager_secret.license[0].arn },
     ],
     local.otel_secrets,
+    local.billing_metrics_secrets,
   )
 
   # Backend-only managed secrets. UI_PASSWORD is consumed by the management
@@ -198,6 +226,7 @@ resource "aws_ecs_task_definition" "gateway" {
         environment = concat(
           local.shared_env,
           local.gateway_otel_env,
+          local.billing_metrics_env,
           local.gateway_extra_env_list,
           local.proxy_config_env,
         )
@@ -284,6 +313,7 @@ resource "aws_ecs_task_definition" "backend" {
           local.shared_env,
           local.backend_default_env,
           local.backend_otel_env,
+          local.billing_metrics_env,
           local.backend_extra_env_list,
           local.proxy_config_env,
         )
