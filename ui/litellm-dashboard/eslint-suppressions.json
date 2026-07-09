@@ -156,16 +156,6 @@
       "count": 8
     }
   },
-  "src/app/(dashboard)/guardrails-monitor/components/ScoreChart.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails-monitor/components/ScoreChart.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails.ts": {
     "no-restricted-syntax": {
       "count": 1

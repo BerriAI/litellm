@@ -220,10 +220,36 @@ if (!URL.revokeObjectURL) {
   URL.revokeObjectURL = () => {};
 }
 
-// Mock ResizeObserver for components that use it (e.g., Tremor UI components)
-// This prevents "ResizeObserver is not defined" errors in JSDOM
+// Mock ResizeObserver for components that use it (recharts, Tremor UI components).
+// JSDOM has no layout, so like a real browser's initial notification after observe(),
+// the mock immediately reports a fixed 800x400 box; recharts needs this to render at all.
+const MOCK_RESIZE_BOX = { inlineSize: 800, blockSize: 400 };
+const MOCK_RESIZE_RECT: DOMRectReadOnly = {
+  width: 800,
+  height: 400,
+  top: 0,
+  left: 0,
+  bottom: 400,
+  right: 800,
+  x: 0,
+  y: 0,
+  toJSON: () => ({}),
+};
 global.ResizeObserver = class ResizeObserver {
-  observe() {}
+  private readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+  observe(target: Element) {
+    const entry: ResizeObserverEntry = {
+      target,
+      contentRect: MOCK_RESIZE_RECT,
+      borderBoxSize: [MOCK_RESIZE_BOX],
+      contentBoxSize: [MOCK_RESIZE_BOX],
+      devicePixelContentBoxSize: [MOCK_RESIZE_BOX],
+    };
+    this.callback([entry], this);
+  }
   unobserve() {}
   disconnect() {}
 };

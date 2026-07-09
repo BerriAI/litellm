@@ -3,6 +3,8 @@ import * as React from "react";
 import { describe, expect, it } from "vitest";
 
 import { Button } from "./button";
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./card";
+import { ChartContainer } from "./chart";
 import { Input } from "./input";
 import { Label } from "./label";
 import { Separator } from "./separator";
@@ -45,6 +47,46 @@ describe("ui primitives forward refs to their DOM node", () => {
     const ref = React.createRef<SVGSVGElement>();
     render(<UiLoadingSpinner ref={ref} />);
     expect(ref.current).toBeInstanceOf(SVGSVGElement);
+  });
+
+  it("Card family", () => {
+    const card = React.createRef<HTMLDivElement>();
+    const header = React.createRef<HTMLDivElement>();
+    const title = React.createRef<HTMLDivElement>();
+    const description = React.createRef<HTMLDivElement>();
+    const action = React.createRef<HTMLDivElement>();
+    const content = React.createRef<HTMLDivElement>();
+    const footer = React.createRef<HTMLDivElement>();
+
+    render(
+      <Card ref={card}>
+        <CardHeader ref={header}>
+          <CardTitle ref={title}>t</CardTitle>
+          <CardDescription ref={description}>d</CardDescription>
+          <CardAction ref={action}>a</CardAction>
+        </CardHeader>
+        <CardContent ref={content}>c</CardContent>
+        <CardFooter ref={footer}>f</CardFooter>
+      </Card>,
+    );
+
+    expect(card.current).toBeInstanceOf(HTMLDivElement);
+    expect(header.current).toBeInstanceOf(HTMLDivElement);
+    expect(title.current).toBeInstanceOf(HTMLDivElement);
+    expect(description.current).toBeInstanceOf(HTMLDivElement);
+    expect(action.current).toBeInstanceOf(HTMLDivElement);
+    expect(content.current).toBeInstanceOf(HTMLDivElement);
+    expect(footer.current).toBeInstanceOf(HTMLDivElement);
+  });
+
+  it("ChartContainer", () => {
+    const ref = React.createRef<HTMLDivElement>();
+    render(
+      <ChartContainer ref={ref} config={{ passed: { label: "passed", color: "#22c55e" } }}>
+        <svg />
+      </ChartContainer>,
+    );
+    expect(ref.current).toBeInstanceOf(HTMLDivElement);
   });
 
   it("Table family", () => {
