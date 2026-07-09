@@ -261,7 +261,7 @@ async def aresponses_api_with_mcp(
             pre_processed_mcp_tools=original_mcp_tools,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+        mcp_streaming_response = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
@@ -272,6 +272,16 @@ async def aresponses_api_with_mcp(
             tool_server_map=tool_server_map,
             **kwargs,
         )
+        # Make the initial LLM call eagerly, before any SSE bytes are written,
+        # so a pre-stream failure (e.g. an invalid previous_response_id ->
+        # provider 400 "No tool output found for function call ...") surfaces
+        # as a normal HTTP error instead of an HTTP 200 whose stream emits
+        # mcp_list_tools events with no response.created (which crashes SDK
+        # stream accumulators).
+        await mcp_streaming_response._create_initial_response_iterator()
+        if mcp_streaming_response._initial_creation_error is not None:
+            raise mcp_streaming_response._initial_creation_error
+        return mcp_streaming_response
 
     # Determine if we should auto-execute tools
     should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(

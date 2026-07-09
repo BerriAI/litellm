@@ -211,3 +211,8 @@ litellm_settings:
     sandbox_tool_name: e2b_sandbox
   callbacks:
     - code_interpreter_interception
+
+mcp_servers:
+  deepwiki:
+    url: "https://mcp.deepwiki.com/mcp"
+    transport: "http"
