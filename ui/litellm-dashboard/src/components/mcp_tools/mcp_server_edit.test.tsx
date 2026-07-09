@@ -1339,6 +1339,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
       const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
       expect(payload.credentials).toBeUndefined();
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
     },
   );
 
