@@ -29,7 +29,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   colors,
   valueFormatter,
   yAxisWidth = 56,
-  showLegend = false,
+  showLegend = true,
   showGridLines = true,
   showTooltip = true,
   customTooltip,
@@ -38,9 +38,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
 }: AreaChartProps<TDatum>) {
   const gradientId = React.useId().replace(/:/g, "");
   const fills = categoryFills(categories.length, colors);
-  const config: ChartConfig = Object.fromEntries(
-    categories.map((category, i) => [category, { label: category, color: fills[i] }]),
-  );
+  const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const TooltipContent = customTooltip ?? ValueTooltip;
 
   return (

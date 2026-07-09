@@ -34,7 +34,7 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
   const config: ChartConfig = Object.fromEntries(
     data.map((datum, i) => {
       const name = String(datum[index] ?? i);
-      return [name, { label: name, color: fills[i] }];
+      return [name, { label: name }];
     }),
   );
 

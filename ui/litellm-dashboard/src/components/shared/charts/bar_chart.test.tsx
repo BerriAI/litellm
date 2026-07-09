@@ -88,15 +88,22 @@ describe("BarChart", () => {
     expect(screen.getAllByText(/ req$/).length).toBeGreaterThan(0);
   });
 
-  it("renders a legend only when showLegend is set", () => {
+  it("renders a legend by default, matching tremor, and hides it when showLegend is false", () => {
     const { container, rerender } = render(
       <BarChart data={data} index="date" categories={["passed"]} colors={["green"]} />,
     );
-    expect(screen.queryByText("passed")).not.toBeInTheDocument();
-
-    rerender(<BarChart data={data} index="date" categories={["passed"]} colors={["green"]} showLegend={true} />);
     expect(screen.getByText("passed")).toBeInTheDocument();
     expect(container.querySelector(".recharts-legend-wrapper")).not.toBeNull();
+
+    rerender(<BarChart data={data} index="date" categories={["passed"]} colors={["green"]} showLegend={false} />);
+    expect(screen.queryByText("passed")).not.toBeInTheDocument();
+  });
+
+  it("emits no per-chart style tag; colors flow through fills, not CSS vars", () => {
+    const { container } = render(
+      <BarChart data={data} index="date" categories={["passed", "blocked"]} colors={["green", "red"]} />,
+    );
+    expect(container.querySelector("style")).toBeNull();
   });
 
   it("stacks bars into a single column per index when stack is set", () => {

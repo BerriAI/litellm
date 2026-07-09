@@ -37,7 +37,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   layout = "horizontal",
   yAxisWidth = 56,
   tickGap = 5,
-  showLegend = false,
+  showLegend = true,
   showXAxis = true,
   showGridLines = true,
   showTooltip = true,
@@ -47,9 +47,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   style,
 }: BarChartProps<TDatum>) {
   const fills = categoryFills(categories.length, colors);
-  const config: ChartConfig = Object.fromEntries(
-    categories.map((category, i) => [category, { label: category, color: fills[i] }]),
-  );
+  const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const vertical = layout === "vertical";
   const TooltipContent = customTooltip ?? ValueTooltip;
 

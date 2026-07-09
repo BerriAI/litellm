@@ -72,6 +72,9 @@ const ChartContainer = React.forwardRef<
 });
 ChartContainer.displayName = "ChartContainer";
 
+const cssVarName = (key: string) => key.replace(/[^a-zA-Z0-9_-]/g, "_");
+const cssColorValue = (color: string) => color.replace(/[;{}<>]/g, "");
+
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(([, config]) => config.theme ?? config.color);
 
@@ -90,7 +93,7 @@ ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
     const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ?? itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null;
+    return color ? `  --color-${cssVarName(key)}: ${cssColorValue(color)};` : null;
   })
   .join("\n")}
 }
