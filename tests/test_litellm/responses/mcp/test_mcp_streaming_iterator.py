@@ -101,12 +101,15 @@ async def test_eager_creation_reraises_pre_stream_failure_as_http_error(monkeypa
     the stashed creation failure, so the proxy returns a real 4xx/5xx before
     any SSE bytes are written instead of an HTTP 200 with a broken stream.
     """
+    from mcp.types import Tool as MCPTool
+
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 
+    resolved_tool = MCPTool(name="read_wiki_contents", description="read", inputSchema={"type": "object"})
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
         "_process_mcp_tools_without_openai_transform",
-        AsyncMock(return_value=([], {})),
+        AsyncMock(return_value=([resolved_tool], {"read_wiki_contents": "deepwiki"})),
     )
     boom = litellm.BadRequestError(
         message="Previous response with id 'resp_bogus' not found.",

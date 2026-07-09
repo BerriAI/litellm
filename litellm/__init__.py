@@ -316,6 +316,12 @@ disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
 disable_vertex_batch_output_transformation: bool = False
+# Raise a 400 when a Responses API request asks for MCP gateway tools
+# (server_url litellm_proxy/...) but zero tools resolve (key/team lacks server
+# access, unknown server name, or allowed_tools matches nothing) and the
+# request carries no other tools. Without this the model is silently called
+# with no tools and hallucinates. Set to False to restore the old behaviour.
+reject_empty_mcp_resolved_tools: bool = True
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
