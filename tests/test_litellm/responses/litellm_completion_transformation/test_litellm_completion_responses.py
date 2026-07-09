@@ -2943,3 +2943,56 @@ class TestCacheControlPreservationOnMessages:
         assert "cache_control" not in result[0]
         assert result[1].get("cache_control") == {"type": "ephemeral"}
         assert result[2].get("cache_control") == {"type": "ephemeral"}
+
+    def test_cache_control_propagated_to_last_content_block_for_list_content(self):
+        """
+        For Anthropic/Bedrock, cache_control must also be set on the last
+        content block (not just the message level) to actually activate
+        prompt caching when content is a list of blocks.
+        """
+        input_item = {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "first block"},
+                {"type": "input_text", "text": "last block"},
+            ],
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(result) == 1
+        msg = result[0]
+        assert msg.get("cache_control") == {"type": "ephemeral"}
+        assert isinstance(msg["content"], list)
+        assert "cache_control" not in msg["content"][0]
+        assert msg["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_does_not_overwrite_existing_block_level_cache_control(self):
+        """
+        If the last content block already carries its own cache_control
+        (preserved by _transform_responses_api_content_to_chat_completion_content),
+        the message-level cache_control must not silently overwrite it.
+        """
+        input_item = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "last block",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                },
+            ],
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(result) == 1
+        msg = result[0]
+        assert msg.get("cache_control") == {"type": "ephemeral"}
+        assert msg["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
