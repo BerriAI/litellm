@@ -2783,6 +2783,7 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock request
         mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"code": "some-auth-code"}
 
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456"
 
@@ -2824,6 +2825,7 @@ class TestCLIKeyRegenerationFlow:
         from litellm.proxy.management_endpoints.ui_sso import auth_callback
 
         mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"code": "some-auth-code"}
         cli_state = (
             f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456:WXYZ-2345"
         )
@@ -7254,3 +7256,61 @@ async def test_cli_poll_key_tolerates_missing_user_row():
     assert result["status"] == "ready"
     assert result["key"] == mock_jwt_token
     assert result["user_id"] == "just-created-user"
+
+
+def _make_sso_callback_request(query_params: dict) -> MagicMock:
+    mock_request = MagicMock(spec=Request)
+    mock_request.query_params = query_params
+    return mock_request
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_surfaces_oauth_error_with_description():
+    """
+    Regression: when the IdP denies access it redirects back with
+    ?error=...&error_description=... and no `code`. The callback must surface
+    that reason as a 401 instead of failing later on the missing `code` param.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+    mock_request = _make_sso_callback_request(
+        {"error": "access_denied", "error_description": "User is not assigned to the client application"}
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_callback(request=mock_request, state=None)
+
+    assert exc_info.value.status_code == 401
+    assert "access_denied" in str(exc_info.value.detail)
+    assert "User is not assigned to the client application" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_surfaces_oauth_error_without_description():
+    """error_description is optional in the OAuth error response; the 401 detail must not render 'None'."""
+    from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+    mock_request = _make_sso_callback_request({"error": "access_denied"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_callback(request=mock_request, state=None)
+
+    assert exc_info.value.status_code == 401
+    assert "access_denied" in str(exc_info.value.detail)
+    assert "None" not in str(exc_info.value.detail)
+    assert "error_description" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_without_oauth_error_proceeds_to_normal_flow():
+    """Without an `error` query param the guard must not fire; the callback proceeds into the normal flow."""
+    from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+    mock_request = _make_sso_callback_request({"code": "some-auth-code"})
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_callback(request=mock_request, state=None)
+
+    assert exc_info.value.status_code == 500
+    assert "DB not connected" in str(exc_info.value.detail)
