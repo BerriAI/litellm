@@ -14,7 +14,9 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
-from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
+from mcp.types import CallToolResult as MCPCallToolResult
+from mcp.types import ListToolsResult, PaginatedRequestParams
+from mcp.types import Tool as MCPTool
 
 
 def test_mcp_client_uses_configurable_default_timeout():
@@ -187,6 +189,119 @@ class TestMCPClientUnitTests:
         assert result == mock_tools
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.list_tools.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
+    async def test_list_tools_follows_next_cursor_until_exhausted(
+        self,
+        mock_session_class,
+        mock_transport,
+    ):
+        """Test listing tools follows MCP pagination cursors until exhausted."""
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        first_page_tools = [
+            MCPTool(name=f"tool_{idx}", description=f"Tool {idx}", inputSchema={}) for idx in range(100)
+        ]
+        second_page_tool = MCPTool(
+            name="tool_100",
+            description="Tool 100",
+            inputSchema={},
+        )
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(tools=first_page_tools, nextCursor="page-2"),
+            ListToolsResult(tools=[second_page_tool]),
+        ]
+
+        client = MCPClient("http://example.com")
+        result = await client.list_tools()
+
+        assert result == [*first_page_tools, second_page_tool]
+        assert mock_session_instance.list_tools.call_count == 2
+        second_call_params = mock_session_instance.list_tools.call_args_list[1].kwargs["params"]
+        assert isinstance(second_call_params, PaginatedRequestParams)
+        assert second_call_params.cursor == "page-2"
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
+    async def test_list_tools_stops_when_pagination_reaches_page_cap(
+        self,
+        mock_session_class,
+        mock_transport,
+        monkeypatch,
+    ):
+        """Test listing tools returns accumulated tools if an upstream keeps returning new cursors."""
+        monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_MAX_PAGES", 2, raising=False)
+
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(
+                tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
+                nextCursor="page-2",
+            ),
+            ListToolsResult(
+                tools=[MCPTool(name="tool_1", description="Tool 1", inputSchema={})],
+                nextCursor="page-3",
+            ),
+            ListToolsResult(
+                tools=[MCPTool(name="tool_2", description="Tool 2", inputSchema={})],
+            ),
+        ]
+
+        client = MCPClient("http://example.com")
+        result = await client.list_tools(raise_on_error=True)
+
+        assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+        assert mock_session_instance.list_tools.call_count == 2
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
+    async def test_list_tools_raises_on_repeated_next_cursor(
+        self,
+        mock_session_class,
+        mock_transport,
+    ):
+        """Test listing tools fails if an upstream repeats a cursor."""
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(tools=[], nextCursor="same-cursor"),
+            ListToolsResult(tools=[], nextCursor="same-cursor"),
+        ]
+
+        client = MCPClient("http://example.com")
+        with pytest.raises(RuntimeError, match="repeated tools/list cursor"):
+            await client.list_tools(raise_on_error=True)
+
+        assert mock_session_instance.list_tools.call_count == 2
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
