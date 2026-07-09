@@ -28,6 +28,9 @@ from models import (
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
+    FileListResponse,
+    FineTuningJobsParams,
+    FineTuningJobsResponse,
     KeyDeleteBody,
     KeyGenerateBody,
     KeyGenerateResponse,
@@ -118,6 +121,24 @@ class Gateway:
                 response_type=ModelInfoResponse,
             )
         ).data
+
+    def list_files(self, key: str) -> Result[FileListResponse]:
+        return self.transport.get(
+            "/v1/files",
+            headers=self.transport.bearer(key),
+            params=NoBody(),
+            response_type=FileListResponse,
+        )
+
+    def list_fine_tuning_jobs(
+        self, key: str, params: FineTuningJobsParams
+    ) -> Result[FineTuningJobsResponse]:
+        return self.transport.get(
+            "/v1/fine_tuning/jobs",
+            headers=self.transport.bearer(key),
+            params=params,
+            response_type=FineTuningJobsResponse,
+        )
 
     def create_model(
         self,
