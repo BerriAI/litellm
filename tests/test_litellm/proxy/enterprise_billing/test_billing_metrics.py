@@ -8,7 +8,9 @@ collectors), the metric attribute mapping, and that recording produces the
 expected OTLP counter via an in-memory reader.
 """
 
+import os
 import socket
+import stat
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -160,6 +162,90 @@ def test_load_config_with_empty_string_env_is_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv(bm.ENDPOINT_ENV, "")
     monkeypatch.setenv(bm.CLIENT_CERT_ENV, paths[bm.CLIENT_CERT_ENV])
     monkeypatch.setenv(bm.CLIENT_KEY_ENV, paths[bm.CLIENT_KEY_ENV])
+    assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
+
+
+_CLIENT_CERT_PEM = "-----BEGIN CERTIFICATE-----\nclient-cert-body\n-----END CERTIFICATE-----"
+_CLIENT_KEY_PEM = "-----BEGIN PRIVATE KEY-----\nclient-key-body\n-----END PRIVATE KEY-----"
+_CA_CERT_PEM = "-----BEGIN CERTIFICATE-----\nca-body\n-----END CERTIFICATE-----"
+
+
+def test_load_config_materializes_inline_pem_content(monkeypatch):
+    """
+    ECS and Cloud Run inject secrets as env content, not as mounted files, so the
+    cert env vars must accept PEM directly. The exporter takes paths, so the PEM
+    is written to disk and the config points at those files.
+    """
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4317")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, _CLIENT_CERT_PEM)
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, _CLIENT_KEY_PEM)
+    monkeypatch.setenv(bm.CA_CERT_ENV, _CA_CERT_PEM)
+
+    config = bm.load_billing_metrics_config(license_data=None, litellm_version="1.0")
+
+    assert config is not None
+    assert config.ca_cert_path is not None
+    written = {
+        config.client_cert_path: _CLIENT_CERT_PEM,
+        config.client_key_path: _CLIENT_KEY_PEM,
+        config.ca_cert_path: _CA_CERT_PEM,
+    }
+    for path, pem in written.items():
+        assert path != pem, "config must carry a file path, not the PEM itself"
+        assert os.path.isfile(path)
+        assert Path(path).read_text(encoding="utf-8") == f"{pem}\n"
+
+    # The private key must not be world- or group-readable.
+    assert stat.S_IMODE(os.stat(config.client_key_path).st_mode) == 0o600
+
+
+def test_load_config_accepts_a_mix_of_pem_content_and_file_paths(monkeypatch, tmp_path):
+    """A deployment may mount the CA but inject the client credentials inline."""
+    paths = _write_certs(tmp_path)
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4317")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, _CLIENT_CERT_PEM)
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, _CLIENT_KEY_PEM)
+    monkeypatch.setenv(bm.CA_CERT_ENV, paths[bm.CA_CERT_ENV])
+
+    config = bm.load_billing_metrics_config(license_data=None, litellm_version="1.0")
+
+    assert config is not None
+    assert config.ca_cert_path == paths[bm.CA_CERT_ENV]
+    assert Path(config.client_cert_path).read_text(encoding="utf-8") == f"{_CLIENT_CERT_PEM}\n"
+
+
+def test_load_config_leaves_file_paths_untouched(monkeypatch, tmp_path):
+    """Path-valued env vars keep working; nothing is copied or rewritten."""
+    paths = _set_full_env(monkeypatch, tmp_path)
+
+    config = bm.load_billing_metrics_config(license_data=None, litellm_version="1.0")
+
+    assert config is not None
+    assert config.client_cert_path == paths[bm.CLIENT_CERT_ENV]
+    assert config.client_key_path == paths[bm.CLIENT_KEY_ENV]
+    assert config.ca_cert_path == paths[bm.CA_CERT_ENV]
+
+
+def test_load_config_with_inline_pem_disabled_when_unwritable(monkeypatch):
+    """A failure to materialize the PEM disables metering instead of raising."""
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4317")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, _CLIENT_CERT_PEM)
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, _CLIENT_KEY_PEM)
+
+    def _explode(prefix=None):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(bm.tempfile, "mkdtemp", _explode)
+
+    assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
+
+
+def test_load_config_with_empty_pem_env_is_disabled(monkeypatch):
+    """Empty stays empty: an unset secret must not be mistaken for inline PEM."""
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4317")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, "")
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, "")
+
     assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
 
 

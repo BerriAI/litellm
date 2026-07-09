@@ -14,6 +14,7 @@ payload; the secret license key is never sent as an attribute or header.
 """
 
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -39,6 +40,15 @@ EXPORT_INTERVAL_ENV = "LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS"
 DEFAULT_EXPORT_INTERVAL_MS = 60_000
 SHUTDOWN_FLUSH_TIMEOUT_MS = 5_000
 _METRICS_PATH = "/v1/metrics"
+
+# The cert env vars take a path or the PEM itself. Secret stores that inject
+# values as env content cannot mount them as files, so inline PEM is written out.
+_PEM_PREFIX = "-----BEGIN"
+_PEM_DIR_PREFIX = "litellm-billing-mtls-"
+_PEM_FILE_MODE = 0o600
+_CLIENT_CERT_FILENAME = "client.crt"
+_CLIENT_KEY_FILENAME = "client.key"
+_CA_CERT_FILENAME = "ca.crt"
 
 METRIC_NAME = "litellm.enterprise.billable_requests"
 METER_NAME = "litellm.enterprise.billing"
@@ -136,6 +146,55 @@ def _export_interval_ms() -> int:
         return DEFAULT_EXPORT_INTERVAL_MS
 
 
+@dataclass(frozen=True, slots=True)
+class _CredentialPaths:
+    client_cert_path: str
+    client_key_path: str
+    ca_cert_path: Optional[str]
+
+
+def _is_pem_content(value: str) -> bool:
+    return value.lstrip().startswith(_PEM_PREFIX)
+
+
+def _write_pem(directory: str, filename: str, pem: str) -> str:
+    path = os.path.join(directory, filename)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(pem if pem.endswith("\n") else f"{pem}\n")
+    os.chmod(path, _PEM_FILE_MODE)
+    return path
+
+
+def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: Optional[str]) -> _CredentialPaths:
+    """
+    Accept either a filesystem path or inline PEM content for each credential.
+
+    Secret stores that inject values as environment content rather than mounted
+    files (ECS tasks reading AWS Secrets Manager, Cloud Run reading Secret
+    Manager) can only deliver the certificate as a string. The OTLP exporter
+    takes paths, so inline PEM is written to a private directory once, when the
+    recorder is built. Raises OSError if that write fails; the caller disables
+    metering rather than propagating.
+    """
+    inline = tuple(value for value in (client_cert, client_key, ca_cert) if value and _is_pem_content(value))
+    if not inline:
+        return _CredentialPaths(client_cert, client_key, ca_cert)
+
+    # mkdtemp is 0o700, so the 0o600 key file it holds is unreachable by other users.
+    directory = tempfile.mkdtemp(prefix=_PEM_DIR_PREFIX)
+    return _CredentialPaths(
+        client_cert_path=(
+            _write_pem(directory, _CLIENT_CERT_FILENAME, client_cert) if _is_pem_content(client_cert) else client_cert
+        ),
+        client_key_path=(
+            _write_pem(directory, _CLIENT_KEY_FILENAME, client_key) if _is_pem_content(client_key) else client_key
+        ),
+        ca_cert_path=(
+            _write_pem(directory, _CA_CERT_FILENAME, ca_cert) if ca_cert and _is_pem_content(ca_cert) else ca_cert
+        ),
+    )
+
+
 def load_billing_metrics_config(
     *, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
 ) -> Optional[BillingMetricsConfig]:
@@ -162,7 +221,17 @@ def load_billing_metrics_config(
         )
         return None
 
-    required_paths = [client_cert, client_key] + ([ca_cert] if ca_cert else [])
+    try:
+        paths = _resolve_credential_paths(client_cert=client_cert, client_key=client_key, ca_cert=ca_cert)
+    except OSError as exc:
+        verbose_proxy_logger.warning(
+            "Enterprise billing metrics disabled: could not write inline certificate content to disk: %s", exc
+        )
+        return None
+
+    required_paths = [paths.client_cert_path, paths.client_key_path] + (
+        [paths.ca_cert_path] if paths.ca_cert_path else []
+    )
     unreadable = [path for path in required_paths if not os.path.isfile(path)]
     if unreadable:
         verbose_proxy_logger.warning(
@@ -173,9 +242,9 @@ def load_billing_metrics_config(
 
     return BillingMetricsConfig(
         endpoint=endpoint,
-        client_cert_path=client_cert,
-        client_key_path=client_key,
-        ca_cert_path=ca_cert,
+        client_cert_path=paths.client_cert_path,
+        client_key_path=paths.client_key_path,
+        ca_cert_path=paths.ca_cert_path,
         export_interval_ms=_export_interval_ms(),
         litellm_version=litellm_version,
         license_id=(license_data or {}).get("user_id"),
