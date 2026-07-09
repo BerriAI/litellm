@@ -433,7 +433,7 @@ class TestCallToolRestApiVirtualTools:
                 return_value=fake_result,
             ) as mock_execute,
             patch(
-                "litellm.proxy._experimental.mcp_server.rest_endpoints._fire_mcp_success_logging",
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._fire_mcp_tool_call_logging",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("logging failed"),
             ) as mock_fire_logging,

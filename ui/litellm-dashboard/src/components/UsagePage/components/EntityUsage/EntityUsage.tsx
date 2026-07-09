@@ -1,4 +1,5 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   BarChart,
@@ -665,7 +666,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                                 .map((entity) => (
                                   <TableRow key={entity.metadata.id}>
                                     <TableCell>{entity.metadata.alias}</TableCell>
-                                    <TableCell>${formatNumberWithCommas(entity.metrics.spend, 4)}</TableCell>
+                                    <TableCell>
+                                      <MoneyCell value={entity.metrics.spend} decimals={4} />
+                                    </TableCell>
                                     <TableCell className="text-green-600">
                                       {entity.metrics.successful_requests.toLocaleString()}
                                     </TableCell>
@@ -777,7 +780,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                                     <span>{provider.provider}</span>
                                   </div>
                                 </TableCell>
-                                <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
+                                <TableCell>
+                                  <MoneyCell value={provider.spend} decimals={2} />
+                                </TableCell>
                                 <TableCell className="text-green-600">
                                   {provider.successful_requests.toLocaleString()}
                                 </TableCell>

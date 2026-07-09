@@ -1474,7 +1474,7 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     elif last_db_access_time[key][0] is not None:  # check db for non-null values (for refresh operations)
         return True
     elif last_db_access_time[key][0] is None:
-        if current_time - last_db_access_time[key] >= db_cache_expiry:
+        if current_time - last_db_access_time[key][1] >= db_cache_expiry:
             return True
     return False
 
@@ -1649,6 +1649,12 @@ async def get_user_object(
                     include={"organization_memberships": True},
                 )
             else:
+                if should_check_db:
+                    _update_last_db_access_time(
+                        key=db_access_time_key,
+                        value=None,
+                        last_db_access_time=last_db_access_time,
+                    )
                 raise Exception
 
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:

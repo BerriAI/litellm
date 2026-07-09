@@ -141,6 +141,9 @@ class LLMCost:
 class SpanError:
     error_type: str | None = None
     message: str | None = None
+    code: str | None = None
+    stack_trace: str | None = None
+    llm_provider: str | None = None
 
 
 @dataclass(frozen=True)
@@ -571,6 +574,9 @@ def _parse_error(payload: "StandardLoggingPayload") -> SpanError | None:
     return SpanError(
         error_type=as_str(info.get("error_class")) or as_str(info.get("error_code")),
         message=as_str(info.get("error_message")) or as_str(payload.get("error_str")),
+        code=as_str(info.get("error_code")),
+        stack_trace=as_str(info.get("traceback")),
+        llm_provider=as_str(info.get("llm_provider")),
     )
 
 

@@ -4377,6 +4377,7 @@ class BedrockConverseMessagesProcessor:
                             _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
+                                model=model,
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
@@ -4384,7 +4385,7 @@ class BedrockConverseMessagesProcessor:
                 elif message_block["content"] and isinstance(message_block["content"], str):
                     _part = BedrockContentBlock(text=messages[msg_i]["content"])
                     _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                        message_block, block_type="content_block"
+                        message_block, block_type="content_block", model=model
                     )
                     user_content.append(_part)
                     if _cache_point_block is not None:
@@ -4509,6 +4510,7 @@ class BedrockConverseMessagesProcessor:
                         _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
+                            model=model,
                         )
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
@@ -4520,7 +4522,7 @@ class BedrockConverseMessagesProcessor:
                     # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
                     _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                        assistant_message_block, block_type="content_block"
+                        assistant_message_block, block_type="content_block", model=model
                     )
                     if _cache_point_block is not None:
                         assistant_content.append(_cache_point_block)
@@ -4745,6 +4747,7 @@ def _bedrock_converse_messages_pt(
                         _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
+                            model=model,
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
@@ -4752,7 +4755,7 @@ def _bedrock_converse_messages_pt(
             elif message_block["content"] and isinstance(message_block["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
                 _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                    message_block, block_type="content_block"
+                    message_block, block_type="content_block", model=model
                 )
                 user_content.append(_part)
                 if _cache_point_block is not None:
@@ -4882,6 +4885,7 @@ def _bedrock_converse_messages_pt(
                         _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
+                            model=model,
                         )
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
@@ -4892,7 +4896,7 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                    assistant_message_block, block_type="content_block"
+                    assistant_message_block, block_type="content_block", model=model
                 )
                 if _cache_point_block is not None:
                     assistant_content.append(_cache_point_block)
