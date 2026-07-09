@@ -7,6 +7,7 @@ middleware is a transparent pass-through when no recorder is injected.
 """
 
 import asyncio
+import threading
 from typing import List, Optional, Tuple
 
 import pytest
@@ -89,7 +90,9 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/images/edits", (BillableCategory.LLM, "/images/edits")),
         ("/openai/deployments/dall-e/images/edits", (BillableCategory.LLM, "/images/edits")),
         ("/v1/images/variations", (BillableCategory.LLM, "/images/variations")),
-        ("/v1/messages", (BillableCategory.LLM, "/messages")),
+        ("/v1/messages", (BillableCategory.LLM, "/v1/messages")),
+        ("/interactions", (BillableCategory.LLM, "/interactions")),
+        ("/v1beta/interactions", (BillableCategory.LLM, "/v1beta/interactions")),
         ("/v1/videos", (BillableCategory.LLM, "/videos")),
         ("/v1/videos/video_123/remix", (BillableCategory.LLM, "/remix")),
         ("/v1/ocr", (BillableCategory.LLM, "/ocr")),
@@ -104,8 +107,8 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/bedrock/model/anthropic.claude-v2/invoke", (BillableCategory.LLM, "/bedrock")),
         ("/vertex-ai/publishers/google/models/gemini:predict", (BillableCategory.LLM, "/vertex-ai")),
         ("/cohere/v2/chat", (BillableCategory.LLM, "/cohere")),
-        # Passthrough path ending in a known suffix keeps the finer-grained label
-        ("/anthropic/v1/messages", (BillableCategory.LLM, "/messages")),
+        # Passthrough inference bills under its provider prefix
+        ("/anthropic/v1/messages", (BillableCategory.LLM, "/anthropic")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
@@ -134,6 +137,14 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1/files",
         # tokenization helper, not an inference call
         "/v1/messages/count_tokens",
+        # OpenAI Assistants thread messages write no SpendLogs row
+        "/v1/threads/thread_abc123/messages",
+        "/threads/thread_abc123/messages",
+        # Google Interactions reads and cancel are not inference calls
+        "/interactions/int_123",
+        "/v1beta/interactions/int_123",
+        "/interactions/int_123/cancel",
+        "/v1beta/interactions/int_123/cancel",
         # observability passthrough writes no SpendLogs row
         "/langfuse/api/public/ingestion",
         # a bare provider prefix is not an inference call
@@ -276,6 +287,21 @@ def test_passthrough_when_recorder_is_none():
     assert response.status_code == 200
 
 
+def test_record_raising_does_not_fail_the_request():
+    """A broken exporter must never surface to the client: the response was
+    already served when record() runs, so exceptions are swallowed and logged."""
+
+    class ExplodingRecorder:
+        def record(self, *, category, route, status_code, model_id):
+            raise RuntimeError("exporter down")
+
+    app = _make_app(None, status_code=200)
+    app.user_middleware.clear()
+    app.add_middleware(BillableRequestMetricsMiddleware, recorder=ExplodingRecorder())
+    response = TestClient(app).post("/v1/chat/completions")
+    assert response.status_code == 200
+
+
 def test_non_http_scope_is_ignored():
     recorder = FakeRecorder()
 
@@ -334,6 +360,31 @@ def test_recorder_factory_returning_none_is_cached():
     client = TestClient(_make_app_with_factory(factory, status_code=200))
     assert client.post("/v1/chat/completions").status_code == 200
     assert client.post("/v1/chat/completions").status_code == 200
+    assert calls == [1]
+
+
+def test_recorder_factory_resolved_once_under_concurrency():
+    """Concurrent first requests must not each build a recorder: every extra
+    build leaks a MeterProvider and its background exporter thread."""
+    calls = []
+    release = threading.Event()
+
+    def slow_factory():
+        calls.append(1)
+        release.wait(timeout=2)
+        return FakeRecorder()
+
+    class _Inner:
+        async def __call__(self, scope, receive, send):
+            return None
+
+    mw = BillableRequestMetricsMiddleware(_Inner(), recorder_factory=slow_factory)
+    threads = [threading.Thread(target=mw._resolve_recorder) for _ in range(8)]
+    for t in threads:
+        t.start()
+    release.set()
+    for t in threads:
+        t.join(timeout=5)
     assert calls == [1]
 
 

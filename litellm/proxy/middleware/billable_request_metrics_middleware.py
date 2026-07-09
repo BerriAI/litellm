@@ -9,11 +9,13 @@ middleware is a transparent pass-through.
 """
 
 import re
+import threading
 from enum import Enum
 from typing import Callable, Optional, Protocol, Sequence, runtime_checkable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLMRoutes
 
 
@@ -50,7 +52,6 @@ _LLM_ROUTE_SUFFIXES: tuple[str, ...] = (
     "/audio/transcriptions",
     "/audio/translations",
     "/audio/speech",
-    "/messages",  # Anthropic /v1/messages (count_tokens does not end with /messages)
     "/videos",  # create; GET list is excluded by the POST gate
     "/remix",  # /v1/videos/{id}/remix
     "/ocr",
@@ -59,6 +60,15 @@ _LLM_ROUTE_SUFFIXES: tuple[str, ...] = (
     "/rag/ingest",
     ":generateContent",  # Gemini-native /v1beta/models/{model}:generateContent
     ":streamGenerateContent",
+)
+
+# Exact paths only: a suffix match would also catch non-inference resources that
+# share the ending, e.g. the OpenAI Assistants route /v1/threads/{id}/messages
+# writes no SpendLogs row and must not bill, unlike Anthropic /v1/messages.
+_LLM_ROUTE_EXACT: tuple[str, ...] = (
+    "/v1/messages",
+    "/interactions",  # Google Interactions create; /{id} reads and /cancel do not match
+    "/v1beta/interactions",
 )
 
 # Provider passthrough prefixes (e.g. /bedrock/..., /vertex-ai/...) carry real
@@ -75,6 +85,9 @@ _PASSTHROUGH_PREFIXES: tuple[str, ...] = tuple(
 
 
 def _classify_llm_route(path: str) -> Optional[str]:
+    exact_match = next((route for route in _LLM_ROUTE_EXACT if path == route), None)
+    if exact_match is not None:
+        return exact_match
     suffix_match = next((suffix for suffix in _LLM_ROUTE_SUFFIXES if path == suffix or path.endswith(suffix)), None)
     if suffix_match is not None:
         return suffix_match
@@ -158,12 +171,18 @@ class BillableRequestMetricsMiddleware:
         # (including None) is cached.
         self._recorder_factory = recorder_factory
         self._resolved = recorder_factory is None
+        self._resolve_lock = threading.Lock()
 
     def _resolve_recorder(self) -> Optional[BillingRecorder]:
-        if not self._resolved:
-            factory = self._recorder_factory
-            self.recorder = factory() if factory is not None else self.recorder
-            self._resolved = True
+        if self._resolved:
+            return self.recorder
+        # The lock keeps concurrent first requests from each building their own
+        # MeterProvider (and leaking its background exporter thread).
+        with self._resolve_lock:
+            if not self._resolved:
+                factory = self._recorder_factory
+                self.recorder = factory() if factory is not None else self.recorder
+                self._resolved = True
         return self.recorder
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -195,4 +214,7 @@ class BillableRequestMetricsMiddleware:
         await self.app(scope, receive, send_wrapper)
 
         if 200 <= status_code < 300:
-            recorder.record(category=category, route=route, status_code=status_code, model_id=model_id)
+            try:
+                recorder.record(category=category, route=route, status_code=status_code, model_id=model_id)
+            except Exception:  # noqa: BLE001 -- metering must never fail a request that was already served
+                verbose_proxy_logger.warning("billable request metering failed for %s", route, exc_info=True)

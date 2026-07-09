@@ -149,7 +149,7 @@ def load_billing_metrics_config(
         )
         if not value
     ]
-    if endpoint is None or client_cert is None or client_key is None:
+    if not endpoint or not client_cert or not client_key:
         verbose_proxy_logger.warning(
             "Enterprise billing metrics disabled: licensed deployment missing config (%s)",
             ", ".join(missing),

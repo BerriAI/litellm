@@ -95,6 +95,7 @@ def test_premium_with_full_config_builds_recorder(monkeypatch, tmp_path):
         premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
     )
     assert isinstance(recorder, bm.BillingMetricsRecorder)
+    recorder._provider.shutdown()
 
 
 # ── Config loading ────────────────────────────────────────────────────────────
@@ -104,6 +105,16 @@ def test_load_config_carries_license_id(monkeypatch, tmp_path):
     _set_full_env(monkeypatch, tmp_path)
     config = bm.load_billing_metrics_config(license_data={"user_id": "org-42"}, litellm_version="9.9")
     assert config is not None and config.license_id == "org-42" and config.litellm_version == "9.9"
+
+
+def test_load_config_with_empty_string_env_is_disabled(monkeypatch, tmp_path):
+    """An env var set to the empty string is as unusable as an unset one and
+    must disable metering rather than produce a config with a blank endpoint."""
+    paths = _write_certs(tmp_path)
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "")
+    monkeypatch.setenv(bm.CLIENT_CERT_ENV, paths[bm.CLIENT_CERT_ENV])
+    monkeypatch.setenv(bm.CLIENT_KEY_ENV, paths[bm.CLIENT_KEY_ENV])
+    assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
 
 
 def test_export_interval_default_and_override(monkeypatch):
