@@ -912,9 +912,8 @@ class LiteLLMCompletionResponsesConfig:
                 content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                     content
                 ),
+                **({"cache_control": cache_control} if cache_control is not None else {}),
             )
-            if cache_control is not None:
-                msg["cache_control"] = cache_control
             return [msg]
 
     @staticmethod
@@ -948,6 +947,11 @@ class LiteLLMCompletionResponsesConfig:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
+        if not isinstance(tool_call_output, dict):
+            tool_call_output = LiteLLMCompletionResponsesConfig._normalize_responses_api_object_to_dict(
+                tool_call_output
+            )
+
         call_id = tool_call_output.get("call_id")
         # If call_id is missing or empty, skip this message
         # Empty call_id means we can't create a valid tool message
@@ -1097,6 +1101,9 @@ class LiteLLMCompletionResponsesConfig:
         }
         ```
         """
+        if not isinstance(function_call, dict):
+            function_call = LiteLLMCompletionResponsesConfig._normalize_responses_api_object_to_dict(function_call)
+
         # Create a tool call for the function call. Custom tool calls
         # store their payload in "input" (raw string) rather than
         # "arguments" (JSON string), so normalize to arguments here.
@@ -1178,8 +1185,7 @@ class LiteLLMCompletionResponsesConfig:
         elif hasattr(item, "dict"):
             return item.dict()
 
-        item_dict = {}
-        for attr in [
+        target_attrs = (
             "type",
             "text",
             "cache_control",
@@ -1188,12 +1194,19 @@ class LiteLLMCompletionResponsesConfig:
             "file_url",
             "image_url",
             "detail",
-        ]:
-            if hasattr(item, attr):
-                val = getattr(item, attr)
-                if val is not None:
-                    item_dict[attr] = val
-        return item_dict
+            "call_id",
+            "arguments",
+            "input",
+            "name",
+            "id",
+            "output",
+            "status",
+        )
+        return {
+            attr: getattr(item, attr)
+            for attr in target_attrs
+            if hasattr(item, attr) and getattr(item, attr) is not None
+        }
 
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
@@ -1225,11 +1238,10 @@ class LiteLLMCompletionResponsesConfig:
                             LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
                         )
                     elif item.get("type") == "input_image":
-                        image_block = dict(
-                            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item)
-                        )
-                        if "cache_control" in item:
-                            image_block["cache_control"] = item["cache_control"]
+                        image_block = {
+                            **LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item),
+                            **({"cache_control": item["cache_control"]} if "cache_control" in item else {}),
+                        }
                         content_list.append(image_block)
                     else:
                         # Skip text blocks with None text to avoid downstream errors
@@ -1241,9 +1253,8 @@ class LiteLLMCompletionResponsesConfig:
                                 item.get("type") or "text"
                             ),
                             "text": text_value,
+                            **({"cache_control": item["cache_control"]} if "cache_control" in item else {}),
                         }
-                        if "cache_control" in item:
-                            content_block["cache_control"] = item["cache_control"]
                         content_list.append(content_block)
             return content_list
         else:

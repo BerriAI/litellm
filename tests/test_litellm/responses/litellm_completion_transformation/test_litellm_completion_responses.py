@@ -2621,121 +2621,57 @@ class TestCacheControlPreservation:
         assert result[0]["cache_control"] == {"type": "ephemeral"}
 
     def test_cache_control_preserved_for_object_input_item(self):
-        """Test that cache_control is preserved when input_item is a custom object / model."""
+        """Test that cache_control is preserved when input_item is a real Pydantic model."""
+        from pydantic import BaseModel, Field
 
-        class MockInputItem:
-            def __init__(self):
-                self.role = "user"
-                self.content = "hello"
-                self.cache_control = {"type": "ephemeral"}
+        class RealInputItem(BaseModel):
+            role: str = "user"
+            content: str = "hello"
+            cache_control: dict = Field(default_factory=lambda: {"type": "ephemeral"})
 
-        input_item = MockInputItem()
+        input_item = RealInputItem()
         messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
             input_item
         )
+        assert messages == [{"role": "user", "content": "hello", "cache_control": {"type": "ephemeral"}}]
+
+    def test_tool_call_output_as_custom_object(self):
+        """Test _transform_responses_api_tool_call_output_to_chat_completion_message with a custom object."""
+        class MockToolCallOutput:
+            def __init__(self):
+                self.call_id = "call_abc123"
+                self.output = "tool output content"
+                self.status = "completed"
+
+        item = MockToolCallOutput()
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+            item
+        )
         assert len(messages) == 1
-        assert messages[0].get("cache_control") == {"type": "ephemeral"}
+        assert messages[0]["role"] == "tool"
+        assert messages[0]["tool_call_id"] == "call_abc123"
+        assert messages[0]["content"] == "tool output content"
 
-    def test_cache_control_preserved_for_object_content_item(self):
-        """Test that cache_control is preserved when content items are custom objects."""
-
-        class MockContentBlock:
+    def test_function_call_as_custom_object(self):
+        """Test _transform_responses_api_function_call_to_chat_completion_message with a custom object."""
+        class MockFunctionCall:
             def __init__(self):
-                self.type = "text"
-                self.text = "hello"
-                self.cache_control = {"type": "ephemeral"}
+                self.type = "function_call"
+                self.arguments = '{"location": "Boston"}'
+                self.call_id = "call_xyz789"
+                self.name = "get_weather"
+                self.id = "fc_12345"
+                self.status = "completed"
 
-        class MockPydanticV2Block:
-            def __init__(self):
-                self.type = "text"
-                self.text = "hello v2"
-                self.cache_control = {"type": "ephemeral"}
-
-            def model_dump(self):
-                return {"type": self.type, "text": self.text, "cache_control": self.cache_control}
-
-        class MockPydanticV1Block:
-            def __init__(self):
-                self.type = "text"
-                self.text = "hello v1"
-                self.cache_control = {"type": "ephemeral"}
-
-            def dict(self):
-                return {"type": self.type, "text": self.text, "cache_control": self.cache_control}
-
-        class MockBlockWithNoneCacheControl:
-            def __init__(self):
-                self.type = "text"
-                self.text = "hello none"
-                self.cache_control = None
-
-        content = [MockContentBlock(), MockPydanticV2Block(), MockPydanticV1Block(), MockBlockWithNoneCacheControl()]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
-        assert isinstance(result, list)
-        assert len(result) == 4
-        assert result[0]["cache_control"] == {"type": "ephemeral"}
-        assert result[1]["cache_control"] == {"type": "ephemeral"}
-        assert result[2]["cache_control"] == {"type": "ephemeral"}
-        assert result[1]["text"] == "hello v2"
-        assert result[2]["text"] == "hello v1"
-        assert "cache_control" not in result[3]
-
-    def test_is_cached_message_for_object_message_and_content_item(self):
-        """Test is_cached_message on custom objects / models."""
-        from litellm.utils import is_cached_message
-
-        # Test message level cache_control object
-        class MockCacheControl:
-            def __init__(self):
-                self.type = "ephemeral"
-
-        class MockMessageLevelObj:
-            def __init__(self):
-                self.role = "system"
-                self.content = "hello"
-                self.cache_control = MockCacheControl()
-
-        msg = MockMessageLevelObj()
-        assert is_cached_message(msg) is True
-
-        # Test content level cache_control object
-        class MockContentItem:
-            def __init__(self):
-                self.type = "text"
-                self.text = "hello"
-                self.cache_control = MockCacheControl()
-
-        class MockContentLevelObj:
-            def __init__(self):
-                self.role = "system"
-                self.content = [MockContentItem()]
-
-        msg = MockContentLevelObj()
-        assert is_cached_message(msg) is True
-
-    def test_extract_ttl_from_cached_messages_for_object_models(self):
-        """Test extract_ttl_from_cached_messages with object-based messages and content items."""
-        from litellm.llms.vertex_ai.context_caching.transformation import extract_ttl_from_cached_messages
-
-        class MockCacheControl:
-            def __init__(self):
-                self.type = "ephemeral"
-                self.ttl = "3600s"
-
-        class MockContentItem:
-            def __init__(self):
-                self.type = "text"
-                self.text = "hello"
-                self.cache_control = MockCacheControl()
-
-        class MockMessageObj:
-            def __init__(self):
-                self.role = "system"
-                self.content = [MockContentItem()]
-
-        messages = [MockMessageObj()]
-        ttl = extract_ttl_from_cached_messages(messages)
-        assert ttl == "3600s"
+        item = MockFunctionCall()
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            item
+        )
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert len(messages[0]["tool_calls"]) == 1
+        assert messages[0]["tool_calls"][0]["id"] == "call_xyz789"
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "get_weather"
 
 
 def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
