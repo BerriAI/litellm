@@ -1360,7 +1360,7 @@ def _extract_models_from_managed_resource_id(
             )
             _append_model_candidates(
                 candidates=candidates,
-                value=get_model_id_from_unified_batch_id(unified_file_id),
+                value=_resolve_model_id_with_router(get_model_id_from_unified_batch_id(unified_file_id), llm_router),
             )
     except Exception as e:
         verbose_proxy_logger.debug("Unable to extract model from managed file/batch ID: %s", str(e))
@@ -1370,7 +1370,10 @@ def _extract_models_from_managed_resource_id(
 
         parsed_id = parse_unified_id(resource_id)
         if parsed_id:
-            _append_model_candidates(candidates=candidates, value=parsed_id.get("model_id"))
+            _append_model_candidates(
+                candidates=candidates,
+                value=_resolve_model_id_with_router(parsed_id.get("model_id"), llm_router),
+            )
             _append_model_candidates(candidates=candidates, value=parsed_id.get("target_model_names"))
     except Exception as e:
         verbose_proxy_logger.debug("Unable to extract model from unified managed resource ID: %s", str(e))
