@@ -23,6 +23,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         unreachable_fallback=getattr(
             litellm_params, "unreachable_fallback", "fail_closed"
         ),
+        streaming_end_of_stream_only=getattr(
+            litellm_params, "streaming_end_of_stream_only", True
+        ),
+        streaming_sampling_rate=getattr(litellm_params, "streaming_sampling_rate", 5),
         extra_headers=getattr(litellm_params, "extra_headers", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

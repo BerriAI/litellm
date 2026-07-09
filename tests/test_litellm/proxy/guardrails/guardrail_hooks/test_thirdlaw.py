@@ -57,7 +57,9 @@ def test_requires_api_base(monkeypatch):
 
 def test_appends_generic_guardrail_path():
     g = _make_guardrail(api_base="https://thirdlaw.test/evaluate")
-    assert g.api_base == "https://thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    assert (
+        g.api_base == "https://thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    )
 
 
 def test_env_fallback(monkeypatch):
@@ -68,12 +70,17 @@ def test_env_fallback(monkeypatch):
         event_hook="pre_call",
         default_on=True,
     )
-    assert g.api_base == "https://env.thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    assert (
+        g.api_base
+        == "https://env.thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    )
     assert g.headers["x-api-key"] == "env_key"
+
 
 def test_additional_headers():
     g = _make_guardrail(additional_headers="x-request-id ,x-correlation-id")
     assert g.extra_headers == ["x-request-id", "x-correlation-id"]
+
 
 async def test_none_action_passthrough():
     g = _make_guardrail()
@@ -128,7 +135,10 @@ async def test_posts_to_configured_endpoint_with_bearer_auth():
             input_type="request",
         )
     call_kwargs = mock_post.call_args.kwargs
-    assert call_kwargs["url"] == "https://thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    assert (
+        call_kwargs["url"]
+        == "https://thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    )
     assert "x-api-key" in call_kwargs["headers"]
     assert call_kwargs["headers"]["x-api-key"] == "secret"
     assert call_kwargs["json"]["texts"] == ["hello"]
@@ -165,4 +175,32 @@ def test_config_driven_initialization_creates_callback():
     cb = initialize_guardrail(lp, {"guardrail_name": "thirdlaw-guard"})
     assert isinstance(cb, ThirdlawGuardrail)
     assert cb.unreachable_fallback == "fail_closed"
-    assert cb.api_base == "https://thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    assert (
+        cb.api_base == "https://thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
+    )
+
+
+def test_streaming_defaults_to_end_of_stream_only():
+    g = _make_guardrail()
+    assert g.streaming_end_of_stream_only is True
+    assert g.streaming_sampling_rate == 5
+
+
+def test_config_model_streaming_defaults():
+    model = ThirdlawGuardrailConfigModel(api_base=_ENDPOINT)
+    assert model.streaming_end_of_stream_only is True
+    assert model.streaming_sampling_rate == 5
+
+
+def test_config_driven_initialization_propagates_streaming_overrides():
+    lp = LitellmParams(
+        guardrail="thirdlaw",
+        mode="pre_call",
+        api_base="https://thirdlaw.test/evaluate",
+        api_key="k",
+        streaming_end_of_stream_only=False,
+        streaming_sampling_rate=10,
+    )
+    cb = initialize_guardrail(lp, {"guardrail_name": "thirdlaw-guard"})
+    assert cb.streaming_end_of_stream_only is False
+    assert cb.streaming_sampling_rate == 10

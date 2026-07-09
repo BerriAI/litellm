@@ -34,6 +34,15 @@ class ThirdlawGuardrailConfigModel(GuardrailConfigModel):
         description="Timeout for the ThirdLaw API request. In seconds.",
     )
 
+    streaming_end_of_stream_only: Optional[bool] = Field(
+        default=True,
+        description="If true (default), ThirdLaw is only called once, when a streamed response finishes, instead of periodically during streaming. Set to false to enable interim checks via streaming_sampling_rate.",
+    )
+    streaming_sampling_rate: Optional[int] = Field(
+        default=5,
+        description="When streaming_end_of_stream_only is false, check every Nth streamed chunk (in addition to the final end-of-stream check). Ignored when streaming_end_of_stream_only is true.",
+    )
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "ThirdLaw"

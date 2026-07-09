@@ -30,6 +30,8 @@ class ThirdlawGuardrail(GenericGuardrailAPI):
         api_key: Optional[str] = None,
         additional_headers: Optional[str] = None,
         guardrail_timeout: Optional[int] = 60,
+        streaming_end_of_stream_only: bool = True,
+        streaming_sampling_rate: int = 5,
         **kwargs,
     ):
         resolved_base = api_base or get_secret_str("THIRDLAW_API_BASE")
@@ -49,6 +51,8 @@ class ThirdlawGuardrail(GenericGuardrailAPI):
             h for h in existing if h not in thirdlaw_headers
         ]
         self.guardrail_timeout = httpx.Timeout(timeout=guardrail_timeout, connect=5.0)
+        self.streaming_end_of_stream_only = streaming_end_of_stream_only
+        self.streaming_sampling_rate = streaming_sampling_rate
         super().__init__(
             api_base=resolved_base,
             api_key=resolved_key,
