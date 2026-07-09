@@ -2586,6 +2586,32 @@ jobs:
       - store_test_results:
           path: test-results
 
+  upload-coverage:
+    docker:
+      - *python312_image
+    steps:
+      - checkout
+      - skip_if_unrelated_changes
+      - attach_workspace:
+          at: .
+      # Check file locations
+      - run:
+          name: Check coverage file location
+          command: |
+            echo "Current directory:"
+            ls -la
+            echo "\nContents of tests/llm_translation:"
+            ls -la tests/llm_translation
+      - install_uv
+      - run:
+          name: Combine Coverage
+          command: |
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage xml
+      - codecov/upload:
+          file: ./coverage.xml
+          flags: circleci
+
   ui_build:
     docker:
       - image: cimg/node:20.19@sha256:35e64883e8d21bc345b0a7b04c35ee46442c127607ed1d8d7d37d8a1ed76db81
