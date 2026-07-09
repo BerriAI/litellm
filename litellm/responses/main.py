@@ -216,6 +216,35 @@ async def aresponses_api_with_mcp(
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
 
+    if (
+        litellm.reject_empty_mcp_resolved_tools
+        and mcp_tools_with_litellm_proxy
+        and not original_mcp_tools
+        and not other_tools
+    ):
+        # The request explicitly asked for MCP tools but none resolved, and
+        # there are no other tools to fall back on. This is almost always a
+        # misconfiguration: the API key/team has no access to the MCP server
+        # (allow_all_keys=false and no object-permission grant), the server
+        # name does not exist, or allowed_tools matches no tool on the server.
+        # Silently calling the model with no tools makes it hallucinate, and
+        # the only trace is a list_mcp_tools spend log with an empty response —
+        # so fail loudly instead.
+        requested_mcp_urls = [tool.get("server_url") for tool in mcp_tools_with_litellm_proxy if isinstance(tool, dict)]
+        raise litellm.BadRequestError(
+            message=(
+                "MCP gateway resolved 0 tools for the requested MCP tool(s) "
+                f"(server_url(s): {requested_mcp_urls}). Likely causes: the API "
+                "key/team does not have access to the MCP server (server has "
+                "allow_all_keys=false and no key/team object-permission grant), "
+                "the server name does not exist, or allowed_tools matches no "
+                "tool on the server. Set litellm.reject_empty_mcp_resolved_tools "
+                "= False to restore the previous silent behaviour."
+            ),
+            model=model,
+            llm_provider=custom_llm_provider or "openai",
+        )
+
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
 
@@ -261,7 +290,7 @@ async def aresponses_api_with_mcp(
             pre_processed_mcp_tools=original_mcp_tools,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+        mcp_streaming_response = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
@@ -272,6 +301,16 @@ async def aresponses_api_with_mcp(
             tool_server_map=tool_server_map,
             **kwargs,
         )
+        # Make the initial LLM call eagerly, before any SSE bytes are written,
+        # so a pre-stream failure (e.g. an invalid previous_response_id ->
+        # provider 400 "No tool output found for function call ...") surfaces
+        # as a normal HTTP error instead of an HTTP 200 whose stream emits
+        # mcp_list_tools events with no response.created (which crashes SDK
+        # stream accumulators).
+        await mcp_streaming_response._create_initial_response_iterator()
+        if mcp_streaming_response._initial_creation_error is not None:
+            raise mcp_streaming_response._initial_creation_error
+        return mcp_streaming_response
 
     # Determine if we should auto-execute tools
     should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
