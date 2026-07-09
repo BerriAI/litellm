@@ -86,6 +86,60 @@ def test_compliance_routes_open_to_non_admin_roles(role, route):
     )
 
 
+def test_collector_spend_logs_requires_explicit_allowed_route_for_non_admin_key():
+    """Collector ingestion is a write path and must not be open to every key."""
+    user_obj = LiteLLM_UserTable(
+        user_id="relay_user",
+        user_email="relay@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="relay_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/collector/spend-logs",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert "Only proxy admin" in str(exc_info.value)
+    assert "Route=/collector/spend-logs" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("allowed_route", ["/collector/spend-logs", "/collector/*"])
+def test_collector_spend_logs_allows_explicit_allowed_route(allowed_route):
+    """Relay keys can be scoped to only the collector ingest endpoint."""
+    user_obj = LiteLLM_UserTable(
+        user_id="relay_user",
+        user_email="relay@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="relay_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        allowed_routes=[allowed_route],
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/collector/spend-logs",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 def test_proxy_admin_viewer_config_update_route_rejected():
     """Test that proxy admin viewer users are rejected when trying to call /config/update"""
 

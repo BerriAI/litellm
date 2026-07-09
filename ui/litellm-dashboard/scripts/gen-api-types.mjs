@@ -26,6 +26,8 @@ const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
 // The dashboard calls internal UI routes that the public /openapi.json hides via
 // include_in_schema=False. Force them in so they get typed here; this mutates a
 // throwaway interpreter, so the spec the proxy actually serves is unchanged.
+// Collector ingestion routes are machine-to-machine write APIs and should stay
+// out of dashboard client types even though other hidden UI routes are included.
 // Python 3.13 strips a docstring's common leading indentation at compile time
 // while 3.12 keeps it, so the same model yields differently-indented descriptions
 // depending on the interpreter — enough to make this output non-reproducible
@@ -37,7 +39,7 @@ const dumpSpec = [
   "from fastapi.routing import APIRoute",
   "for route in app.routes:",
   "    if isinstance(route, APIRoute):",
-  "        route.include_in_schema = True",
+  "        route.include_in_schema = not route.path.startswith('/collector/')",
   "app.openapi_schema = None",
   "def normalize(node):",
   "    if isinstance(node, dict):",
