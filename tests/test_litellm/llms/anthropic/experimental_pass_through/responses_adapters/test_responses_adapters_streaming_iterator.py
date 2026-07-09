@@ -55,6 +55,26 @@ class TestMessageStartEmittedExactlyOnce:
         assert chunks[0]["type"] == "message_start"
 
 
+class TestProcessEventResponseCreatedGuard:
+    """``_process_event`` must emit ``message_start`` exactly once even if
+    ``response.created`` arrives more than once. The guard mirrors the
+    ``__anext__`` fallback's ``_sent_message_start`` flag, so a direct caller
+    and the async fallback can never double-emit. This also exercises the
+    guard's emit-branch, which the async path never reaches because the
+    fallback sets the flag before the upstream stream is consumed."""
+
+    def test_first_response_created_emits_message_start(self):
+        chunks = _process_all([{"type": "response.created"}])
+        assert len(chunks) == 1
+        assert chunks[0]["type"] == "message_start"
+        assert chunks[0]["message"]["model"] == "m"
+
+    def test_second_response_created_is_skipped(self):
+        chunks = _process_all([{"type": "response.created"}, {"type": "response.created"}])
+        message_starts = [c for c in chunks if c["type"] == "message_start"]
+        assert len(message_starts) == 1
+
+
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
     """Streams that skip response.output_item.added (e.g. LMStudio) must still
     open a text block before any delta and never emit index -1."""
