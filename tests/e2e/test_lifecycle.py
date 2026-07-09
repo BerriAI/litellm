@@ -12,6 +12,13 @@ import pytest
 
 from lifecycle import run_case
 
+pytestmark = pytest.mark.e2e_coverage(
+    module="reliability",
+    endpoint="e2e_harness",
+    provider="proxy",
+    params=["resource_cleanup"],
+)
+
 
 @dataclass
 class _PartialInitCase:

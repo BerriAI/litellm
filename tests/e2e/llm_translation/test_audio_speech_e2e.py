@@ -15,7 +15,15 @@ from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="non_core_llms",
+        endpoint="/v1/audio/speech",
+        provider="openai",
+        params=["audio_speech"],
+    ),
+]
 
 
 class TestAudioSpeech:
@@ -34,7 +42,7 @@ class TestAudioSpeech:
 
         result = endpoints_client.audio_speech(key, model, "Hello!")
         require_successful_call(result)
-        assert "audio" in (result.content_type or ""), (
-            f"/audio/speech content-type is not audio: {result.content_type!r}"
-        )
+        assert "audio" in (
+            result.content_type or ""
+        ), f"/audio/speech content-type is not audio: {result.content_type!r}"
         assert result.body, "/audio/speech returned an empty body"

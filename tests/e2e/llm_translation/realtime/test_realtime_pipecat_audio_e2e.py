@@ -27,14 +27,22 @@ from pathlib import Path
 
 import pytest
 
-from realtime_client import (
+from llm_translation.realtime.realtime_client import (
     PROVIDERS,
     RealtimeProvider,
     _ws_base_url,
     skip_if_unconfigured,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="non_core_llms",
+        endpoint="/v1/realtime",
+        provider="multiple",
+        params=["audio_session"],
+    ),
+]
 
 pytest.importorskip("pipecat", reason="pipecat-ai not installed")
 
@@ -64,7 +72,9 @@ from pipecat.services.llm_service import FunctionCallParams  # noqa: E402
 from pipecat.services.openai.realtime import events as rt_events  # noqa: E402
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService  # noqa: E402
 
-from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
+from llm_translation.realtime.pipecat_service import (  # noqa: E402
+    LiteLLMRealtimeLLMService,
+)
 
 PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
 

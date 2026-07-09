@@ -1,81 +1,90 @@
-# e2e coverage registry
+# e2e coverage metadata
 
-This directory is the **denominator** for e2e test coverage: the set of behaviors we
-want covered, one row per behavior, checked into the repo so coverage is a number we
-can track instead of a guess. It implements the plan in the "E2E Coverage Tracking"
-note; the naming grammar lives in `tests/e2e/CLAUDE.md`.
+E2E coverage is declared directly on pytest tests. There are no coverage YAML
+files.
 
-## The model
-
-A **cell** is one customer-noticeable behavior a single e2e test can assert pass/fail
-on, for example `llm.chat_completions.bedrock_converse.tool_use.stream.works`. Cells are
-grouped `module > feature > test`, with LLM cells split into `Core LLMs` and
-`Non-Core LLMs` for dashboarding. Each cell carries a tier (P0/P1/P2), a source, and a
-`fail_before_fix` flag.
-
-The rows live in per-prefix YAML files (`llm_*.yaml`, `mgmt.yaml`, `mcp.yaml`,
-`reliability.yaml`, `logging.yaml`, `guardrail.yaml`, `other.yaml`) and validate against
-the discriminated union in `schema.py`, so an LLM row cannot carry a guardrail field and
-vice versa. `llm` rows with `subject_endpoint` of `chat_completions`, `messages`, or
-`responses` roll up to `Core LLMs`; all other LLM endpoints roll up to `Non-Core LLMs`.
-LLM endpoint, route, and capability values are typed in `schema.py`, so new taxonomy
-values require an explicit schema change. `logging` and `guardrail` are two id-prefixes
-that roll up into the single `Logging & Guardrails` dashboard module.
-
-A test declares what it covers with a marker:
+Each collected pytest under `tests/e2e` must have:
 
 ```python
-@pytest.mark.covers("llm.chat_completions.openai.tool_use.stream.works")
-def test_openai_streaming_tool_calls(self) -> None:
-    ...
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="openai",
+        params=["tools", "streaming"],
+    ),
+]
 ```
 
-## The number
+Use a module-level `pytestmark` when every test in a file covers the same
+surface. Use a per-test marker when a file mixes endpoints, providers, or params.
 
-`collector.py` diffs the registry against those markers and reports coverage per module.
-It is static: a collect-only pass reads the markers, so it runs no test and needs no live
-proxy. Whether a covered cell currently passes or fails is a separate, live concern.
+## Required fields
 
-```
-cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
-```
+- `module`: one of the known dashboard modules in `schema.py`
+- `endpoint`: a known endpoint or surface, such as `/chat/completions`,
+  `/v1/messages`, `/v1/batches`, `/budget/*`, or `/spend/*`
+- `provider`: a known provider/integration, such as `proxy`, `openai`,
+  `anthropic`, `vertex_ai`, `prometheus`, or `multiple`
+- `params`: one or more explicit lowercase parameter/behavior names
 
-Use `--format loki` after the e2e pytest run in the same Kubernetes job/pod to print
-structured stdout lines for Loki:
+## How coverage is measured
 
-```
-cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector --format loki --strict
-```
+The collector runs pytest in collect-only mode, validates `e2e_coverage` markers,
+and expands each marker into unique:
 
-This emits exactly one `COVERAGE_TOTAL` line and one `COVERAGE_MODULE` line per module
-in `MODULE_ORDER`, in that order. Loki uses log-safe `module=` labels from
-`LOKI_MODULE_LABELS` (`core_llms`, `management_ui`, etc.) so existing JSON and
-Prometheus consumers keep their human-readable module names unchanged.
-
-The headline is overall coverage. The collector also lists markers that point at ids
-not in the registry, so a typo or an unenumerated behavior surfaces instead of being
-silently dropped.
-
-Use strict mode in CI once existing draft markers are reconciled:
-
-```
-cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector --strict
+```text
+module x endpoint x provider x param
 ```
 
-Strict mode exits non-zero on `@pytest.mark.covers(...)` ids that are not checked into
-the registry. Add `--fail-on-collection-errors` when the job should also fail on pytest
-collection errors.
+coverage units.
 
-## Status: this is a draft for review
+The report shows:
 
-The cells were enumerated from the codebase and the tiers are a first proposal. Known
-things to settle before treating the set as final:
+- unique coverage units by module
+- collected pytest test count by module
+- endpoint/provider/param breakdowns for Grafana tables
+- missing or invalid metadata counts for CI
 
-- tiers are proposed, not signed off; 125 P0 is a lot to prove fail-before-fix, so P0 may
-  want tightening
-- a few cells need a support check or a prune (for example `llm.embeddings.anthropic.*`
-  and `reliability.perf.throughput.under_slo`)
-- auth is covered in two places (`other.auth.*` and the mgmt authz assertions); the
-  boundary needs a decision, and the auth cluster may deserve promotion to its own module
-- the P2 "niche" cells each stand in for a large tail of integrations/providers by design,
-  so the denominator is deliberately P0-weighted rather than a full inventory
+This answers questions like:
+
+```text
+How many /chat/completions rate-limit params do we exercise?
+How many budget tests exist?
+Which modules gained or lost endpoint coverage over time?
+```
+
+## Commands
+
+Render the report:
+
+```bash
+cd tests/e2e
+PYTHONPATH=. python -m coverage_registry.collector
+```
+
+Emit Loki lines after the e2e job:
+
+```bash
+cd tests/e2e
+PYTHONPATH=. python -m coverage_registry.collector --format loki --strict
+```
+
+Validate every collected pytest has metadata:
+
+```bash
+cd tests/e2e
+PYTHONPATH=. python -m coverage_registry.check_coverage_sync
+```
+
+CI runs the sync check in `.github/workflows/test-code-quality.yml`.
+
+## Adding coverage
+
+1. Add the pytest.
+2. Add `@pytest.mark.e2e_coverage(...)` or module-level `pytestmark`.
+3. Pick the closest module, endpoint, provider, and params.
+4. If the endpoint or provider is real but rejected, add it to `schema.py`.
+5. Run `PYTHONPATH=. python -m coverage_registry.check_coverage_sync` from
+   `tests/e2e`.

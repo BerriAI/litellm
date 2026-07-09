@@ -23,7 +23,15 @@ import pytest
 from models import DateRangeParams
 from spend_e2e_client import SpendClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="spend_tracking",
+        endpoint="/spend/*",
+        provider="proxy",
+        params=["spend_routes"],
+    ),
+]
 
 # Verified present and responsive on a live proxy. One per row of the spend
 # surface: key / user / team / org / customer aggregation, model-cost, tags,

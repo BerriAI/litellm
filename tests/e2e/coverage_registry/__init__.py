@@ -1,8 +1,5 @@
-"""The e2e coverage registry: the denominator for e2e test coverage.
+"""Marker-based e2e coverage metadata.
 
-`schema.py` defines one validated row per customer-noticeable behavior (a "cell").
-The `*.yaml` files hold the rows, one file per id-prefix. `registry.py` loads and
-validates them; `collector.py` diffs the registry against the `@pytest.mark.covers`
-markers on the live tests and reports coverage per module. See tests/e2e/CLAUDE.md
-for the naming grammar.
+`schema.py` validates `@pytest.mark.e2e_coverage(...)` fields and `collector.py`
+turns collected pytest markers into module, endpoint, provider, and param counts.
 """

@@ -33,7 +33,15 @@ if TYPE_CHECKING:
     import redis
     from redis.cluster import RedisCluster
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["spend_counter_reseed"],
+    ),
+]
 
 MODEL = "claude-haiku-4-5"
 ACCUMULATE_CALLS = 24
@@ -51,7 +59,9 @@ def _redis() -> "redis.Redis[str] | RedisCluster[str]":
 
     host = os.getenv("REDIS_HOST")
     if not host:
-        return redis.Redis(host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2)
+        return redis.Redis(
+            host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2
+        )
 
     from redis.cluster import RedisCluster
 
@@ -64,7 +74,9 @@ def _redis() -> "redis.Redis[str] | RedisCluster[str]":
     )
 
 
-def _spend_counter(rds: "redis.Redis[str] | RedisCluster[str]", key: str) -> float | None:
+def _spend_counter(
+    rds: "redis.Redis[str] | RedisCluster[str]", key: str
+) -> float | None:
     """The shared spend counter for `key`, or None if it is cold. A cluster client
     can't run a keyspace SCAN that spans shards, so read the key directly - the stage
     gateway sets no cache namespace, so the key is the bare ``spend:key:{sha256(key)}``.

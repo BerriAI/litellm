@@ -48,7 +48,7 @@ Start a proxy with the gateway config and the provider keys set in its
 environment, then
 
 ```
-uv run pytest tests/e2e/realtime/ -v
+uv run pytest tests/e2e/llm_translation/realtime/ -v
 ```
 
 Tests skip when no proxy answers `GET /health/liveliness` at `LITELLM_PROXY_URL`

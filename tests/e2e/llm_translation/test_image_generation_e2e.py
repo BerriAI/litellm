@@ -15,7 +15,15 @@ from endpoints_client import EndpointsClient, ImagesResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="non_core_llms",
+        endpoint="/v1/images/generations",
+        provider="openai",
+        params=["image_generation"],
+    ),
+]
 
 
 class TestImageGeneration:
@@ -37,6 +45,6 @@ class TestImageGeneration:
         parsed = ImagesResult.model_validate_json(result.body)
         assert parsed.data, f"/images/generations returned no data: {result.body[:300]}"
         first = parsed.data[0]
-        assert first.b64_json or first.url, (
-            f"generated image has neither b64_json nor url: {result.body[:300]}"
-        )
+        assert (
+            first.b64_json or first.url
+        ), f"generated image has neither b64_json nor url: {result.body[:300]}"

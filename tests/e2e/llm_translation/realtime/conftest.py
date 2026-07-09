@@ -7,7 +7,7 @@ Gateway, so the `resources` fixture cleans up keys this suite creates.
 
 import pytest
 
-from realtime_client import RealtimeClient, build_client
+from llm_translation.realtime.realtime_client import RealtimeClient, build_client
 
 
 @pytest.fixture(scope="session")

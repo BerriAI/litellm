@@ -18,13 +18,23 @@ from __future__ import annotations
 import time
 
 import pytest
-from prometheus_client.parser import text_string_to_metric_families
 
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="logging",
+        endpoint="logging",
+        provider="prometheus",
+        params=["prometheus_cardinality"],
+    ),
+]
+
+prometheus_parser = pytest.importorskip("prometheus_client.parser")
+text_string_to_metric_families = prometheus_parser.text_string_to_metric_families
 
 DRIVER_MODEL = "gemini-2.5-flash"
 REQUESTS_METRIC = "litellm_requests_metric_total"
@@ -43,7 +53,6 @@ def _aliases_in_metric(exposition: str, metric: str, label: str) -> frozenset[st
 
 
 class TestPrometheusPerKeyCardinality:
-    @pytest.mark.covers("logging.prometheus.success.exports_metric", exercised_on=[])
     def test_distinct_key_aliases_produce_distinct_series(
         self, client: LoggingClient, resources: ResourceManager
     ) -> None:
@@ -52,13 +61,17 @@ class TestPrometheusPerKeyCardinality:
             key = client.key_with_alias(alias, models=[DRIVER_MODEL])
             resources.defer(lambda k=key: client.delete_key(k))
             response = client.chat(key, DRIVER_MODEL, f"reply with one word {alias}")
-            assert response.model, f"driver call for {alias} returned no model: {response}"
+            assert (
+                response.model
+            ), f"driver call for {alias} returned no model: {response}"
 
         wanted = frozenset(aliases)
         deadline = time.monotonic() + client.gateway.poll_timeout
         seen: frozenset[str] = frozenset()
         while time.monotonic() < deadline:
-            seen = _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
+            seen = _aliases_in_metric(
+                client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL
+            )
             if wanted <= seen:
                 break
             time.sleep(client.gateway.poll_interval)

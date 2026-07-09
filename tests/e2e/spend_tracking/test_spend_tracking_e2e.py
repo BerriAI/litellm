@@ -26,7 +26,15 @@ from lifecycle import ResourceManager
 from models import ChatResponse, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="spend_tracking",
+        endpoint="/spend/*",
+        provider="proxy",
+        params=["spend_logging", "spend_filters"],
+    ),
+]
 
 
 def _approx_equal(actual: float, expected: float) -> bool:
@@ -237,9 +245,9 @@ def test_burst_of_concurrent_calls_loses_no_spend(
         f"rows lost under concurrency: {_summarize(rows)}"
     )
     request_ids = [r.request_id for r in costed]
-    assert len(set(request_ids)) == len(request_ids), (
-        f"concurrent rows collapsed onto shared request_ids: {_summarize(rows)}"
-    )
+    assert len(set(request_ids)) == len(
+        request_ids
+    ), f"concurrent rows collapsed onto shared request_ids: {_summarize(rows)}"
 
     logs_total = sum((r.spend or 0) for r in rows)
     key_spend = client.poll_key_spend(scoped_key, minimum=logs_total * 0.999)
@@ -288,9 +296,9 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
         api_key=hashed_key, page=first.total_pages + 7, page_size=1
     )
     assert beyond.data == [], f"out-of-range page returned rows: {beyond.data}"
-    assert beyond.total == first.total, (
-        f"out-of-range page changed the total: {beyond.total} != {first.total}"
-    )
+    assert (
+        beyond.total == first.total
+    ), f"out-of-range page changed the total: {beyond.total} != {first.total}"
 
     nomatch = client.spend_logs_page(
         api_key=f"sk-no-such-key-{unique_marker()}", page=1, page_size=1
@@ -346,12 +354,12 @@ def test_tag_spend_matches_sum_of_tagged_logs(
 
     entry = client.poll_tag_spend(tag, minimum=logs_total * 0.999)
     assert entry is not None, f"tag {tag!r} never appeared in /spend/tags"
-    assert _approx_equal(entry.total_spend or 0, logs_total), (
-        f"/spend/tags total_spend {entry} != sum of tagged rows {logs_total}"
-    )
-    assert (entry.log_count or 0) == len(tagged), (
-        f"/spend/tags log_count {entry.log_count} != tagged rows {len(tagged)}"
-    )
+    assert _approx_equal(
+        entry.total_spend or 0, logs_total
+    ), f"/spend/tags total_spend {entry} != sum of tagged rows {logs_total}"
+    assert (entry.log_count or 0) == len(
+        tagged
+    ), f"/spend/tags log_count {entry.log_count} != tagged rows {len(tagged)}"
 
 
 def test_end_user_spend_attributed_on_row(
@@ -396,7 +404,9 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
             "claude-haiku-4-5" in m for m in costed
         )
 
-    rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=both_models_costed)
+    rows = client.poll_logs_for_key(
+        scoped_key, min_rows=2, predicate=both_models_costed
+    )
     gemini_row = _require_row(
         rows, lambda r: "gemini-2.5-flash" in (r.model or ""), "for the gemini call"
     )
@@ -404,8 +414,12 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         rows, lambda r: "claude-haiku-4-5" in (r.model or ""), "for the claude call"
     )
 
-    assert (gemini_row.spend or 0) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
-    assert (claude_row.spend or 0) > 0, f"claude row should cost > 0: {_summarize(rows)}"
+    assert (
+        gemini_row.spend or 0
+    ) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
+    assert (
+        claude_row.spend or 0
+    ) > 0, f"claude row should cost > 0: {_summarize(rows)}"
     assert (
         gemini_row.request_id != claude_row.request_id
     ), f"two distinct calls collapsed onto one request_id: {_summarize(rows)}"
@@ -458,7 +472,10 @@ def test_spend_logs_endpoint_returns_spend(
     call's nonzero spend must surface before the deadline."""
     unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", f"spend logs {unique_marker()}", max_tokens=16
+            scoped_key,
+            "gemini-2.5-flash",
+            f"spend logs {unique_marker()}",
+            max_tokens=16,
         )
     )
 
@@ -471,7 +488,9 @@ def test_spend_logs_endpoint_returns_spend(
             params=SpendLogsParams(api_key=scoped_key),
             response_type=SpendLogs,
         )
-        assert isinstance(result, Success), f"/spend/logs did not return 200 OK: {result}"
+        assert isinstance(
+            result, Success
+        ), f"/spend/logs did not return 200 OK: {result}"
         rows = result.data.root
         if sum((r.spend or 0) for r in rows) > 0:
             return

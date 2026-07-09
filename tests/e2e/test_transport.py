@@ -3,7 +3,7 @@
 Model-management calls (/model/new, /model/delete, /model/info) must go to the
 control plane: the data-plane gateway does not serve management routes, so a
 misrouted /model/new 404s and takes down every suite that registers deployments
-at runtime (llm_translation, batches, access_control). /models must stay on the
+at runtime (llm_translation, access_control). /models must stay on the
 data plane; it is the OpenAI-compatible list-models route, not a management
 route.
 """
@@ -11,6 +11,13 @@ route.
 import pytest
 
 from transport import is_control_plane_path
+
+pytestmark = pytest.mark.e2e_coverage(
+    module="other",
+    endpoint="e2e_harness",
+    provider="proxy",
+    params=["split_transport_routing"],
+)
 
 
 @pytest.mark.parametrize(
@@ -30,9 +37,9 @@ from transport import is_control_plane_path
     ],
 )
 def test_management_routes_go_to_the_control_plane(path: str) -> None:
-    assert is_control_plane_path(path), (
-        f"{path} is a management route; sending it to the data plane 404s"
-    )
+    assert is_control_plane_path(
+        path
+    ), f"{path} is a management route; sending it to the data plane 404s"
 
 
 @pytest.mark.parametrize(
@@ -47,6 +54,6 @@ def test_management_routes_go_to_the_control_plane(path: str) -> None:
     ],
 )
 def test_llm_routes_stay_on_the_data_plane(path: str) -> None:
-    assert not is_control_plane_path(path), (
-        f"{path} is an LLM route; it must go to the data plane"
-    )
+    assert not is_control_plane_path(
+        path
+    ), f"{path} is an LLM route; it must go to the data plane"

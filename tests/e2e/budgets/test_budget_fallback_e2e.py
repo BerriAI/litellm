@@ -13,7 +13,15 @@ from budget_client import BudgetClient, model_budget
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/v1/messages",
+        provider="proxy",
+        params=["budget_fallback"],
+    ),
+]
 
 PRIMARY_MODEL = "claude-haiku-4-5"
 FALLBACK_MODEL = "gpt-5.5"
@@ -46,15 +54,15 @@ def test_budget_fallback_reroutes_anthropic_messages_to_openai(
         if FALLBACK_MODEL in served_by:
             break
         time.sleep(1)
-    assert served_by is not None and FALLBACK_MODEL in served_by, (
-        f"{PRIMARY_MODEL}'s budget_fallbacks never rerouted to {FALLBACK_MODEL}"
-    )
+    assert (
+        served_by is not None and FALLBACK_MODEL in served_by
+    ), f"{PRIMARY_MODEL}'s budget_fallbacks never rerouted to {FALLBACK_MODEL}"
 
     # The rerouted call must be recorded under the fallback model, not the
     # exhausted primary - proving spend tracking followed the reroute.
     rows = client.gateway.poll_logs_for_key(
         key, predicate=lambda rows: any(FALLBACK_MODEL in (r.model or "") for r in rows)
     )
-    assert any(FALLBACK_MODEL in (r.model or "") for r in rows), (
-        f"no spend log recorded against {FALLBACK_MODEL} after the reroute"
-    )
+    assert any(
+        FALLBACK_MODEL in (r.model or "") for r in rows
+    ), f"no spend log recorded against {FALLBACK_MODEL} after the reroute"

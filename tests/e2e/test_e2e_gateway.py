@@ -1,7 +1,7 @@
 """Unit coverage for the Gateway model-management surface (create_model /
 delete_model).
 
-The batches conftest and several llm_translation tests register deployments at
+The llm_translation batches conftest and several llm_translation tests register deployments at
 runtime through gateway.create_model; when that method went missing, every batch
 test errored at fixture setup (AttributeError) before a single request reached
 the proxy. This pins the surface with a typed fake Transport so a rename or
@@ -10,9 +10,9 @@ signature drift fails here instead of in a live stage run.
 
 from dataclasses import dataclass, field
 
+import pytest
 from pydantic import BaseModel
 
-from batches.batch_client import BatchClient
 from e2e_gateway import Gateway
 from e2e_http import (
     AuthHeaders,
@@ -22,11 +22,19 @@ from e2e_http import (
     StreamingResponse,
     Success,
 )
+from llm_translation.batches.batch_client import BatchClient
 from models import (
     LiteLLMParamsBody,
     ModelDeleteBody,
     ModelNewBody,
     ModelNewResponse,
+)
+
+pytestmark = pytest.mark.e2e_coverage(
+    module="other",
+    endpoint="e2e_harness",
+    provider="proxy",
+    params=["gateway_model_management"],
 )
 
 

@@ -24,7 +24,15 @@ from e2e_http import Success, require_successful_call
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["team_member_budget"],
+    ),
+]
 
 MODEL = "claude-haiku-4-5"
 TEAM_BUDGET = 100.0
@@ -49,7 +57,9 @@ def member(client: BudgetClient) -> Iterator[_Member]:
     resources = ResourceManager(client=client.gateway)
     try:
         marker = unique_marker()
-        team_id = client.create_team(alias=f"e2e-team-member-{marker}", max_budget=TEAM_BUDGET)
+        team_id = client.create_team(
+            alias=f"e2e-team-member-{marker}", max_budget=TEAM_BUDGET
+        )
         resources.defer(lambda: client.delete_team(team_id))
         user_id = client.create_user(max_budget=TEAM_BUDGET)
         resources.defer(lambda: client.delete_user(user_id))
@@ -79,8 +89,12 @@ def _send(client: BudgetClient, key: str) -> str | None:
 
 
 class TestTeamMemberBudget:
-    def test_member_spend_attributed_to_team_and_user(self, client: BudgetClient, member: _Member) -> None:
-        sent = frozenset(rid for rid in (_send(client, member.key) for _ in range(BURST)) if rid)
+    def test_member_spend_attributed_to_team_and_user(
+        self, client: BudgetClient, member: _Member
+    ) -> None:
+        sent = frozenset(
+            rid for rid in (_send(client, member.key) for _ in range(BURST)) if rid
+        )
         assert sent, "no member call went through; cannot check attribution"
 
         rows = client.gateway.poll_logs_for_key(
@@ -90,16 +104,20 @@ class TestTeamMemberBudget:
         assert logged, f"none of the member's {len(sent)} calls reached the spend logs"
 
         for row in logged:
-            assert row.team_id == member.team_id, (
-                f"call {row.request_id} logged under team {row.team_id}, not the member's team {member.team_id}"
-            )
-            assert row.user == member.user_id, (
-                f"call {row.request_id} logged under user {row.user}, not member {member.user_id}"
-            )
+            assert (
+                row.team_id == member.team_id
+            ), f"call {row.request_id} logged under team {row.team_id}, not the member's team {member.team_id}"
+            assert (
+                row.user == member.user_id
+            ), f"call {row.request_id} logged under user {row.user}, not member {member.user_id}"
 
-    def test_member_spend_over_budget_is_blocked(self, client: BudgetClient, member: _Member) -> None:
+    def test_member_spend_over_budget_is_blocked(
+        self, client: BudgetClient, member: _Member
+    ) -> None:
         for _ in range(40):
-            result = client.chat(member.key, MODEL, f"spend {unique_marker()}", max_tokens=16)
+            result = client.chat(
+                member.key, MODEL, f"spend {unique_marker()}", max_tokens=16
+            )
             if is_budget_block(result):
                 return
             require_successful_call(result)

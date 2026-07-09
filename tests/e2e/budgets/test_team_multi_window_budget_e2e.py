@@ -23,16 +23,28 @@ from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="budgets",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["team_multi_window_budget"],
+    ),
+]
 
 WINDOW_SECONDS = 30
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
+    return client.chat(
+        key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16
+    )
 
 
-def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
+def test_team_short_window_blocks_then_resets(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     team_id = client.create_team(
         alias=f"e2e-team-window-{unique_marker()}",
         budget_limits=[
@@ -66,7 +78,11 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
         result = _call(client, key)
         if result.ok:
             elapsed = time.monotonic() - start
-            assert elapsed < WINDOW_SECONDS + 90, f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
+            assert (
+                elapsed < WINDOW_SECONDS + 90
+            ), f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
             return
-        assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
+        assert is_budget_block(
+            result
+        ), f"non-budget error during reset wait: {result.body[:200]}"
     pytest.fail(f"team {WINDOW_SECONDS}s window never reset within 150s")

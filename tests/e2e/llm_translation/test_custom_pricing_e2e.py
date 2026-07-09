@@ -35,7 +35,15 @@ from models import (
     SpendLogsParams,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.e2e_coverage(
+        module="core_llms",
+        endpoint="/chat/completions",
+        provider="proxy",
+        params=["custom_pricing", "model_info"],
+    ),
+]
 
 BACKEND_MODEL = "gemini/gemini-2.5-flash"
 GEMINI_API_KEY = "os.environ/GEMINI_API_KEY"
@@ -116,7 +124,9 @@ def _model_info_entry(entries: list[ModelInfoEntry], model_name: str) -> ModelIn
     pytest.fail(f"{model_name} absent from /model/info; the override did not load")
 
 
-def _poll_breakdown_row(gateway: Gateway, key: str, response_id: str | None) -> _SpendRow:
+def _poll_breakdown_row(
+    gateway: Gateway, key: str, response_id: str | None
+) -> _SpendRow:
     """Poll /spend/logs until the call's row lands with a cost breakdown (rows
     flush ~60s behind the call via proxy_batch_write_at)."""
     deadline = time.monotonic() + gateway.poll_timeout
@@ -164,7 +174,8 @@ class TestCustomPricing:
                     model=model,
                     messages=[
                         ChatMessage(
-                            role="user", content=f"reply with one word {unique_marker()}"
+                            role="user",
+                            content=f"reply with one word {unique_marker()}",
                         )
                     ],
                     max_tokens=16,
@@ -178,13 +189,15 @@ class TestCustomPricing:
 
         prompt = row.prompt_tokens or 0
         completion = row.completion_tokens or 0
-        assert prompt > 0 and completion > 0, f"call tokens not logged on the row: {row}"
+        assert (
+            prompt > 0 and completion > 0
+        ), f"call tokens not logged on the row: {row}"
 
         input_cost = breakdown.input_cost
         output_cost = breakdown.output_cost
-        assert input_cost is not None and output_cost is not None, (
-            f"row cost breakdown missing input/output cost: {breakdown}"
-        )
+        assert (
+            input_cost is not None and output_cost is not None
+        ), f"row cost breakdown missing input/output cost: {breakdown}"
         assert _approx_equal(input_cost, prompt * CUSTOM_INPUT_RATE), (
             f"input_cost {input_cost} != {prompt} tokens * {CUSTOM_INPUT_RATE} "
             f"= {prompt * CUSTOM_INPUT_RATE}"
@@ -223,7 +236,9 @@ class TestCustomPricing:
             output_cost_per_token=None,
         )
 
-        entries = {entry.model_name: entry for entry in endpoints_client.gateway.model_info()}
+        entries = {
+            entry.model_name: entry for entry in endpoints_client.gateway.model_info()
+        }
         custom_entry = entries.get(custom)
         sibling_entry = entries.get(sibling)
         assert custom_entry is not None, f"{custom} absent from /model/info"
