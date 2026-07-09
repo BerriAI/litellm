@@ -7596,8 +7596,12 @@ class ProxyStartupEvent:
         # but YAML config has False.
         if store_model_in_db is not True and prisma_client is not None:
             try:
-                _db_gs_record = await ConfigRepository(prisma_client).table.find_first(
-                    where={"param_name": "general_settings"}
+                _db_gs_record = await call_with_db_reconnect_retry(
+                    prisma_client,
+                    lambda: ConfigRepository(prisma_client).table.find_first(
+                        where={"param_name": "general_settings"}
+                    ),
+                    reason="startup_store_model_in_db_general_settings_lookup_failure",
                 )
                 if _db_gs_record is not None and isinstance(_db_gs_record.param_value, dict):
                     _db_val = _db_gs_record.param_value.get("store_model_in_db")
