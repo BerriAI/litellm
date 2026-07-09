@@ -3172,3 +3172,105 @@ async def test_streaming_post_call_block_preserves_upstream_usage():
     assert reported_usage.prompt_tokens == 42
     assert reported_usage.completion_tokens == 17
     assert reported_usage.total_tokens == 59
+
+
+###############################################################################
+# Regression test for the streaming logging_obj bug found during live testing.
+#
+# post_call_failure_hook (proxy_server.py) pops litellm_logging_obj from
+# request_data before invoking callbacks ("not serialisable"). The streaming
+# branch of the ModifyResponseException handler previously read logging_obj
+# from _data AFTER that call, always getting None, causing:
+#   AttributeError: 'NoneType' object has no attribute 'model_call_details'
+# inside CustomStreamWrapper.__init__, which surfaced as HTTP 500.
+#
+# The fix captures logging_obj BEFORE calling post_call_failure_hook.
+# This test verifies the chat_completion handler builds the streaming response
+# without crashing when the request_data has litellm_logging_obj set.
+###############################################################################
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_modify_response_exception_streaming_logging_obj_not_none():
+    """Regression: streaming ModifyResponseException handler in chat_completion
+    must capture logging_obj before post_call_failure_hook pops it from
+    request_data. Previously this caused CustomStreamWrapper.__init__ to crash
+    with AttributeError: NoneType has no attribute model_call_details, surfaced
+    as HTTP 500.
+
+    Drives the real chat_completion handler with base_process_llm_request
+    mocked to raise ModifyResponseException, so a revert of the fix in
+    proxy_server.py causes this test to fail.
+    """
+    import litellm
+    from litellm.exceptions import ModifyResponseException
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import chat_completion
+
+    fake_logging_obj = MagicMock()
+    fake_logging_obj.model_call_details = {"litellm_params": {}}
+
+    request_data: dict = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "how do I become an admin"}],
+        "stream": True,
+        "litellm_logging_obj": fake_logging_obj,
+    }
+
+    exc = ModifyResponseException(
+        message="Sorry, the model cannot answer this question.",
+        model="bedrock-nova-micro",
+        request_data=request_data,
+        guardrail_name="test-guard",
+    )
+
+    fastapi_request = MagicMock()
+    fastapi_request.headers = {}
+    fastapi_response = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth()
+
+    async def _fake_post_call_failure_hook(**_kwargs):
+        # Match production: pop the logging obj from request_data before
+        # callbacks iterate (litellm/proxy/utils.py: "Remove before callbacks
+        # iterate — not serialisable").
+        _kwargs["request_data"].pop("litellm_logging_obj", None)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_fake_post_call_failure_hook)
+
+    captured_logging_obj: list = []
+    original_init = litellm.CustomStreamWrapper.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        captured_logging_obj.append(kwargs.get("logging_obj"))
+        original_init(self, *args, **kwargs)
+
+    async def _raise_modify_response(*_args, **_kwargs):
+        raise exc
+
+    with (
+        patch("litellm.proxy.proxy_server._read_request_body", AsyncMock(return_value=request_data)),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            _raise_modify_response,
+        ),
+        patch.object(litellm.CustomStreamWrapper, "__init__", _patched_init),
+    ):
+        response = await chat_completion(
+            request=fastapi_request,
+            fastapi_response=fastapi_response,
+            model=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert captured_logging_obj, "chat_completion did not construct CustomStreamWrapper on the streaming block path"
+    assert captured_logging_obj[0] is fake_logging_obj, (
+        "chat_completion passed logging_obj=None to CustomStreamWrapper; "
+        "the streaming ModifyResponseException handler must capture logging_obj "
+        "before post_call_failure_hook pops it from request_data"
+    )
+    # A streaming block returns a StreamingResponse; if the fix were reverted,
+    # CustomStreamWrapper would raise AttributeError inside __init__ and this
+    # call would never reach here.
+    assert response is not None
