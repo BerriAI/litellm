@@ -17,6 +17,8 @@ from models import (
     KeyGenerateBody,
     KeyListParams,
     KeyListResponse,
+    KeyRegenerateBody,
+    KeyRegenerateResponse,
     KeyUpdateBody,
     OrgDeleteBody,
     OrgInfoParams,
@@ -71,6 +73,20 @@ class ManagementClient:
                 headers=self.gateway.transport.master,
                 json=KeyDeleteBody(keys=[key]),
                 response_type=NoBody,
+            )
+        )
+
+    def rotate_master_key(self, current_master_key: str, new_master_key: str) -> None:
+        """Rotate the proxy master key via /key/regenerate, re-encrypting every
+        at-rest secret (including team/key callback_vars) under new_master_key.
+        Authenticated with the current master key, which stays valid in-memory
+        until the proxy is restarted with the new value."""
+        _ = unwrap(
+            self.gateway.transport.post(
+                "/key/regenerate",
+                headers=self.gateway.transport.bearer(current_master_key),
+                json=KeyRegenerateBody(key=current_master_key, new_master_key=new_master_key),
+                response_type=KeyRegenerateResponse,
             )
         )
 

@@ -18,6 +18,22 @@ class ModelBudgetEntry(BaseModel):
     time_period: str
 
 
+class CallbackVars(BaseModel):
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = None
+
+
+class LoggingCallbackEntry(BaseModel):
+    callback_name: str
+    callback_type: str
+    callback_vars: CallbackVars
+
+
+class CallbackMetadata(BaseModel):
+    logging: list[LoggingCallbackEntry] = []
+
+
 class BudgetWindow(BaseModel):
     budget_duration: str
     max_budget: float
@@ -39,9 +55,19 @@ class KeyGenerateBody(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
+    metadata: CallbackMetadata | None = None
 
 
 class KeyGenerateResponse(BaseModel):
+    key: str
+
+
+class KeyRegenerateBody(BaseModel):
+    key: str
+    new_master_key: str
+
+
+class KeyRegenerateResponse(BaseModel):
     key: str
 
 
@@ -70,6 +96,7 @@ class KeyInfo(BaseModel):
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
+    metadata: CallbackMetadata | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -439,6 +466,7 @@ class TeamNewBody(BaseModel):
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
+    metadata: CallbackMetadata | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -453,6 +481,7 @@ class TeamData(BaseModel):
     team_alias: str | None = None
     models: list[str] = []
     members_with_roles: list[TeamMemberEntry] = []
+    metadata: CallbackMetadata | None = None
 
 
 class TeamInfoResponse(BaseModel):

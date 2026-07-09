@@ -4263,6 +4263,19 @@ async def _rotate_master_key(
                 continue
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
 
+    # 6. process team + verification-token callback_vars metadata
+    from litellm.proxy.common_utils.callback_utils import (
+        rotate_callback_vars_master_key,
+    )
+
+    try:
+        await rotate_callback_vars_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:  # noqa: BLE001  # log-and-continue so a callback_vars failure never aborts a full master key rotation, matching the credential step above
+        verbose_proxy_logger.warning("Failed to rotate callback_vars: %s", str(e))
+
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     from litellm.proxy._types import CommonProxyErrors

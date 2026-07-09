@@ -1,7 +1,9 @@
 import copy
+import json
 import sys
 import os
 from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -17,9 +19,11 @@ from litellm.proxy.common_utils.callback_utils import (
     initialize_callbacks_on_proxy,
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
+    rotate_callback_vars_master_key,
     sanitize_openai_provider_metadata,
 )
 import litellm
+from litellm.proxy import proxy_server
 
 from unittest.mock import patch
 from litellm.proxy.common_utils.callback_utils import process_callback
@@ -406,3 +410,134 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
         )
     finally:
         litellm.callbacks = original_callbacks
+
+
+# ---------------------------------------------------------------------------
+# master key rotation of callback_vars (LIT-1531)
+# ---------------------------------------------------------------------------
+
+
+def test_encrypt_callback_vars_uses_new_encryption_key(monkeypatch):
+    """new_encryption_key must sign with the override, not the active salt key.
+
+    This is the primitive master key rotation relies on: values are re-encrypted
+    under the incoming key while the old key is still the active one.
+    """
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setenv("LITELLM_SALT_KEY", "old-key-aaaaaaaaaaaaaaaaaaaaaaaa")
+    original = _sample_metadata()
+
+    encrypted = encrypt_callback_vars(
+        original, new_encryption_key="new-key-bbbbbbbbbbbbbbbbbbbbbbbb"
+    )
+
+    # The active (old) key cannot decrypt a value written under the new key, so
+    # the ciphertext falls through unchanged. If the override were ignored the
+    # old key would decrypt it and this assertion would fail.
+    stuck = decrypt_callback_vars(encrypted)["logging"][0]["callback_vars"]
+    assert stuck["langfuse_secret_key"].startswith("litellm_enc::")
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "new-key-bbbbbbbbbbbbbbbbbbbbbbbb")
+    recovered = decrypt_callback_vars(encrypted)
+    assert (
+        recovered["logging"][0]["callback_vars"]
+        == original["logging"][0]["callback_vars"]
+    )
+    assert (
+        recovered["callback_settings"]["callback_vars"]
+        == original["callback_settings"]["callback_vars"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_rotate_callback_vars_master_key_reencrypts_under_new_key(monkeypatch):
+    """Regression for LIT-1531: master key rotation must re-encrypt team and
+    verification-token callback_vars so they decrypt under the new key.
+
+    Rows without encrypted callback vars are left untouched.
+    """
+    old_key = "old-key-aaaaaaaaaaaaaaaaaaaaaaaa"
+    new_key = "new-key-bbbbbbbbbbbbbbbbbbbbbbbb"
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setenv("LITELLM_SALT_KEY", old_key)
+
+    # Team row: real encrypted callback vars (under the current/old key).
+    team_meta = encrypt_callback_vars(_sample_metadata())
+    team_row = SimpleNamespace(team_id="team-1", metadata=team_meta)
+
+    # Token row: only a routing field (never encrypted) -> must be skipped.
+    token_row = SimpleNamespace(
+        token="tok-1",
+        metadata={"logging": [{"callback_vars": {"langfuse_host": "https://h"}}]},
+    )
+
+    client = MagicMock()
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    client.db.litellm_teamtable.update = AsyncMock()
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[token_row])
+    client.db.litellm_verificationtoken.update = AsyncMock()
+
+    await rotate_callback_vars_master_key(client, new_master_key=new_key)
+
+    client.db.litellm_teamtable.update.assert_awaited_once()
+    client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+    written = json.loads(
+        client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
+    )
+
+    # Still on the old key: the rewritten value no longer decrypts here.
+    stuck = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
+    assert stuck["langfuse_secret_key"].startswith("litellm_enc::")
+
+    # New key recovers the plaintext for both metadata shapes.
+    monkeypatch.setenv("LITELLM_SALT_KEY", new_key)
+    recovered = decrypt_callback_vars(written)
+    assert (
+        recovered["logging"][0]["callback_vars"]["langfuse_secret_key"]
+        == "sk-lf-secret"
+    )
+    assert (
+        recovered["callback_settings"]["callback_vars"]["langsmith_api_key"]
+        == "ls-api-key"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rotate_callback_vars_master_key_warns_on_undecryptable_value(monkeypatch):
+    """A value that fails to decrypt under the current key stays under the old key
+    instead of being silently reported as rotated, so rotation logs a warning.
+    """
+    old_key = "old-key-aaaaaaaaaaaaaaaaaaaaaaaa"
+    new_key = "new-key-bbbbbbbbbbbbbbbbbbbbbbbb"
+    foreign_key = "foreign-key-cccccccccccccccccccccccc"
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setenv("LITELLM_SALT_KEY", old_key)
+
+    team_meta = encrypt_callback_vars(_sample_metadata(), new_encryption_key=foreign_key)
+    team_row = SimpleNamespace(team_id="team-1", metadata=team_meta)
+
+    client = MagicMock()
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    client.db.litellm_teamtable.update = AsyncMock()
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.update = AsyncMock()
+
+    warn = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.callback_utils.verbose_proxy_logger.warning", warn
+    )
+
+    await rotate_callback_vars_master_key(client, new_master_key=new_key)
+
+    warn.assert_called_once()
+    assert "team-1" in warn.call_args.args
+
+    written = json.loads(
+        client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", new_key)
+    still_stuck = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
+    assert still_stuck["langfuse_secret_key"].startswith("litellm_enc::")

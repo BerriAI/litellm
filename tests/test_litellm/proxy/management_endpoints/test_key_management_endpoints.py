@@ -7711,10 +7711,15 @@ async def test_key_does_not_override_explicit_budget_duration():
 
 @pytest.mark.asyncio
 @patch(
+    "litellm.proxy.common_utils.callback_utils.rotate_callback_vars_master_key",
+    new_callable=AsyncMock,
+)
+@patch(
     "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
 )
 async def test_rotate_master_key_model_data_valid_for_prisma(
     mock_rotate_mcp,
+    mock_rotate_callback_vars,
 ):
     """
     Test that _rotate_master_key produces valid data for Prisma create_many().
@@ -7831,6 +7836,58 @@ async def test_rotate_master_key_model_data_valid_for_prisma(
 
     # Verify delete_many was called inside the transaction (before create_many)
     mock_tx.litellm_proxymodeltable.delete_many.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.common_utils.callback_utils.rotate_callback_vars_master_key",
+    new_callable=AsyncMock,
+)
+@patch(
+    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
+)
+async def test_rotate_master_key_rotates_callback_vars(
+    mock_rotate_mcp,
+    mock_rotate_callback_vars,
+):
+    """Regression for LIT-1531: _rotate_master_key must re-encrypt team and
+    verification-token callback_vars under the new master key.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_rotate_mcp.return_value = None
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    mock_rotate_callback_vars.assert_awaited_once()
+    assert (
+        mock_rotate_callback_vars.await_args.kwargs["new_master_key"]
+        == "sk-new-master-key"
+    )
 
 
 async def test_default_key_generate_params_duration(monkeypatch):
