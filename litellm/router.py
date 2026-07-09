@@ -4363,17 +4363,8 @@ class Router:
 
     def _model_group_has_max_input_tokens(self, model: str) -> bool:
         """
-        Return True if any deployment in the model group resolves to a
-        max_input_tokens value via get_router_model_info().
-
-        Used to decide whether it's worth paying the cost of converting Responses
-        API `input` into `messages` just so `_pre_call_checks` can run context
-        window checks - if no deployment resolves a max_input_tokens, there's
-        nothing to check.
-
-        Mirrors _pre_call_checks' own resolution: max_input_tokens is not only a
-        user-set model_info override, it's also commonly derived from litellm's
-        model cost map, which get_router_model_info() takes into account.
+        True if any deployment resolves a max_input_tokens via get_router_model_info()
+        (not just a static model_info override - also derived from litellm's cost map).
         """
         deployments = self.get_model_list(model_name=model) or []
         for deployment in deployments:
@@ -4387,15 +4378,8 @@ class Router:
 
     def _get_messages_for_pre_call_check(self, model: str, kwargs: Dict[str, Any]) -> Optional[List[Any]]:
         """
-        Resolve the messages to use for `_pre_call_checks` context window checks.
-
-        Chat Completions style calls already pass `messages` directly. Responses
-        API calls pass `input` instead, which `_pre_call_checks` doesn't understand
-        natively - so this converts `input` to `messages` for that call path.
-
-        The conversion is skipped (returns None) unless the model group actually
-        has a deployment with `max_input_tokens` configured, since that's the only
-        check in `_pre_call_checks` that needs `messages`.
+        Converts Responses API `input` to `messages` for `_pre_call_checks`, skipping
+        the conversion unless a deployment actually has max_input_tokens configured.
         """
         messages = kwargs.get("messages")
         is_responses_api_call = kwargs.pop("_responses_api_pre_call_check", False)
@@ -9921,13 +9905,8 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
-        # The RPM cache read is only useful when at least one deployment in the model
-        # group actually declares `rpm` in litellm_params - that's set directly by the
-        # user, so it's safe to check statically. max_input_tokens has no equivalent
-        # static check: get_router_model_info() also derives it from litellm's model
-        # cost map (the common case for models without a manual model_info override),
-        # so we can't know whether a deployment needs the context-window check without
-        # actually calling it.
+        # Safe to check statically since `rpm` is a direct litellm_params setting, unlike
+        # max_input_tokens which get_router_model_info() can also derive from the cost map.
         _any_deployment_has_rpm = self.routing_strategy != "usage-based-routing-v2" and any(
             (d.get("litellm_params") or {}).get("rpm") is not None for d in _returned_deployments
         )
