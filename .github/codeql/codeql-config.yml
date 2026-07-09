@@ -37,6 +37,16 @@ query-filters:
   # py/incomplete-url-substring-sanitization: security-critical URL validation uses urlparse() tuple comparison; flagged startswith/endswith are non-security normalization (JWT heuristic, trailing-slash strip)
   - exclude:
       id: py/incomplete-url-substring-sanitization  # CWE-184
+  # py/request-without-cert-validation: every httpx client in the codebase resolves
+  # `verify` through get_ssl_verify()/get_ssl_configuration() (litellm/llms/custom_httpx/http_handler.py),
+  # which defaults to True (litellm.ssl_verify's module default) and only turns
+  # False via an explicit operator opt-in (SSL_VERIFY env var, litellm.ssl_verify,
+  # or an explicit ssl_verify=False param) for enterprise self-signed/internal-CA
+  # deployments. CodeQL cannot follow the dynamic default through that resolution
+  # chain, so it flags every call site as if verification were unconditionally
+  # disabled. Same FP class as the py/weak-sensitive-data-hashing exclude above.
+  - exclude:
+      id: py/request-without-cert-validation        # CWE-295
 
 paths-ignore:
   - tests
