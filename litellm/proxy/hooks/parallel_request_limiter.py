@@ -567,8 +567,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             values_to_update_in_cache = []
 
             if user_api_key is not None and self._entity_has_any_limit(
-                full_user_api_key_dict,
-                ["rpm_limit", "tpm_limit", "max_parallel_requests"],
+                full_user_api_key_dict, ["rpm_limit", "tpm_limit", "max_parallel_requests"]
             ):
                 request_count_api_key = f"{user_api_key}::{precise_minute}::request_count"
 
@@ -645,8 +644,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # pre-call effective limit is sys.maxsize in that case (no false
             # rate-limit), but noting for completeness per review feedback.
             if user_api_key_user_id is not None and self._entity_has_any_limit(
-                full_user_api_key_dict,
-                ["user_rpm_limit", "user_tpm_limit"],
+                full_user_api_key_dict, ["user_rpm_limit", "user_tpm_limit"]
             ):
                 total_tokens = 0
 
@@ -680,8 +678,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None and self._entity_has_any_limit(
-                full_user_api_key_dict,
-                ["team_rpm_limit", "team_tpm_limit"],
+                full_user_api_key_dict, ["team_rpm_limit", "team_tpm_limit"]
             ):
                 total_tokens = 0
 
@@ -714,9 +711,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
             # Update usage - End User
             # ------------
+            _end_user_limit_fields = ["end_user_rpm_limit", "end_user_tpm_limit"]
             if user_api_key_end_user_id is not None and self._entity_has_any_limit(
-                full_user_api_key_dict,
-                ["end_user_rpm_limit", "end_user_tpm_limit"],
+                full_user_api_key_dict, _end_user_limit_fields
             ):
                 total_tokens = 0
 
@@ -803,8 +800,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # Update usage
                 # ------------
                 if self._entity_has_any_limit(
-                    full_user_api_key_dict,
-                    ["rpm_limit", "tpm_limit", "max_parallel_requests"],
+                    full_user_api_key_dict, ["rpm_limit", "tpm_limit", "max_parallel_requests"]
                 ):
                     current = await self.internal_usage_cache.async_get_cache(
                         key=request_count_api_key,
