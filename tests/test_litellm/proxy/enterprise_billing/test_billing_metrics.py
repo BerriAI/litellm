@@ -8,8 +8,9 @@ collectors), the metric attribute mapping, and that recording produces the
 expected OTLP counter via an in-memory reader.
 """
 
+import socket
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
@@ -92,12 +93,29 @@ def test_premium_with_missing_cert_files_returns_none(monkeypatch, tmp_path):
 
 
 def test_premium_with_full_config_builds_recorder(monkeypatch, tmp_path):
+    """Builds a real MeterProvider, so the exporter is stubbed: the live one
+    resolves the collector and opens a TLS connection during the shutdown flush.
+    The getaddrinfo spy keeps that stub from being quietly dropped later."""
     _set_full_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(bm, "OTLPMetricExporter", _fake_exporter_class({}))
+
+    resolved: List[str] = []
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _spy_getaddrinfo(host, port, *args, **kwargs):
+        resolved.append(str(host))
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _spy_getaddrinfo)
+
     recorder = bm.build_billing_metrics_recorder(
         premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
     )
     assert isinstance(recorder, bm.BillingMetricsRecorder)
+    recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200, model_id=None)
     bm.shutdown_billing_metrics_recorder()
+
+    assert [host for host in resolved if "collector.example" in host] == []
 
 
 def test_shutdown_flushes_active_recorder_once(monkeypatch, tmp_path):
@@ -162,9 +180,11 @@ def test_metrics_endpoint_appends_signal_path():
     assert bm._metrics_endpoint("https://telemetry.example.com/v1/metrics") == "https://telemetry.example.com/v1/metrics"
 
 
-def test_meter_provider_wires_client_cert_into_http_exporter(tmp_path, monkeypatch):
-    """Client cert+key authenticate us at the collector's mTLS front end; CA override rides certificate_file."""
-    captured = {}
+def _fake_exporter_class(captured: Dict[str, object]) -> type:
+    """A no-network stand-in for OTLPMetricExporter. Tests that build a real
+    MeterProvider must install this: the real exporter resolves the collector
+    host and opens a TLS connection on the reader's first export and on the
+    shutdown flush."""
 
     class _FakeExporter:
         # PeriodicExportingMetricReader probes these on the exporter it wraps.
@@ -183,7 +203,14 @@ def test_meter_provider_wires_client_cert_into_http_exporter(tmp_path, monkeypat
         def force_flush(self, *args, **kwargs):
             return True
 
-    monkeypatch.setattr(bm, "OTLPMetricExporter", _FakeExporter)
+    return _FakeExporter
+
+
+def test_meter_provider_wires_client_cert_into_http_exporter(tmp_path, monkeypatch):
+    """Client cert+key authenticate us at the collector's mTLS front end; CA override rides certificate_file."""
+    captured: Dict[str, object] = {}
+
+    monkeypatch.setattr(bm, "OTLPMetricExporter", _fake_exporter_class(captured))
     config = _config(tmp_path)
     provider = bm.build_mtls_meter_provider(config)
     provider.shutdown()
