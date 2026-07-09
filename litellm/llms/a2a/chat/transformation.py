@@ -54,12 +54,12 @@ class A2AConfig(BaseConfig):
         # Extract agent name from model (e.g., "a2a/my-agent" -> "my-agent")
         agent_name = model.split("/", 1)[1] if "/" in model else None
 
-        # Only lookup if agent name exists and some config is missing
-        if not agent_name or (api_base is not None and api_key is not None and headers is not None):
+        if not agent_name:
             return api_base, api_key, headers
 
         # Try registry lookup (only available in proxy context)
         try:
+            from litellm.interactions.agents.utils import merge_agent_headers
             from litellm.proxy.agent_endpoints.agent_registry import (
                 global_agent_registry,
             )
@@ -84,6 +84,12 @@ class A2AConfig(BaseConfig):
                     for key, value in agent.litellm_params.items():
                         if key not in ["api_key", "api_base", "headers", "model"] and key not in optional_params:
                             optional_params[key] = value
+
+                if agent.static_headers:
+                    headers = merge_agent_headers(
+                        dynamic_headers=headers,
+                        static_headers=agent.static_headers,
+                    )
         except ImportError:
             pass  # Registry not available (not running in proxy context)
 

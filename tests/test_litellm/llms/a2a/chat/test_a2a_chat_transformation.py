@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.types.utils import ModelResponse
 
@@ -40,3 +42,71 @@ def test_transform_response_sets_usage():
     assert result.usage.prompt_tokens > 0
     assert result.usage.completion_tokens > 0
     assert result.usage.total_tokens == (result.usage.prompt_tokens + result.usage.completion_tokens)
+
+
+@pytest.fixture
+def registered_agent():
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.types.agents import AgentResponse
+
+    def _register(**kwargs) -> AgentResponse:
+        agent = AgentResponse(
+            agent_id="static-headers-agent-id",
+            agent_name="static-headers-agent",
+            agent_card_params={"url": "http://agent.example.com:9999"},
+            **kwargs,
+        )
+        global_agent_registry.register_agent(agent)
+        return agent
+
+    original = list(global_agent_registry.agent_list)
+    try:
+        yield _register
+    finally:
+        global_agent_registry.agent_list = original
+
+
+def test_resolve_agent_config_applies_static_headers(registered_agent):
+    """Regression for #32608: the /chat/completions bridge must forward an agent's
+    static_headers, consistent with the native /a2a/{agent_id} route."""
+    registered_agent(static_headers={"x-api-key": "secret-value"})
+
+    _, _, headers = A2AConfig.resolve_agent_config_from_registry(
+        model="a2a/static-headers-agent",
+        api_base=None,
+        api_key=None,
+        headers=None,
+        optional_params={},
+    )
+
+    assert headers == {"x-api-key": "secret-value"}
+
+
+def test_static_headers_win_over_request_headers_case_insensitive(registered_agent):
+    """static_headers must override a request-supplied header of the same name
+    (case-insensitively), mirroring merge_agent_headers on the native route."""
+    registered_agent(static_headers={"X-Api-Key": "admin-secret"})
+
+    _, _, headers = A2AConfig.resolve_agent_config_from_registry(
+        model="a2a/static-headers-agent",
+        api_base=None,
+        api_key=None,
+        headers={"x-api-key": "caller-supplied", "x-other": "keep-me"},
+        optional_params={},
+    )
+
+    assert headers == {"X-Api-Key": "admin-secret", "x-other": "keep-me"}
+
+
+def test_no_static_headers_leaves_request_headers_untouched(registered_agent):
+    registered_agent(litellm_params=None)
+
+    _, _, headers = A2AConfig.resolve_agent_config_from_registry(
+        model="a2a/static-headers-agent",
+        api_base=None,
+        api_key=None,
+        headers={"x-caller": "value"},
+        optional_params={},
+    )
+
+    assert headers == {"x-caller": "value"}
