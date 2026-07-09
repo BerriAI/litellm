@@ -23,9 +23,16 @@ from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthErr
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
+from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    add_server_prefix_to_name,
+    get_server_prefix,
+    is_short_mcp_tool_prefix_enabled,
     merge_mcp_headers,
+    strip_known_server_prefix,
+    tool_name_length_disabled_reason,
+    tool_name_length_warnings,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -268,14 +275,24 @@ if MCP_AVAILABLE:
             "server_id": server.server_id,
             "alias": server.alias,
         }
+        server_prefix = get_server_prefix(server)
+        disabled_reasons = [
+            tool_name_length_disabled_reason(
+                add_server_prefix_to_name(strip_known_server_prefix(tool.name, server), server_prefix),
+                MCP_MAX_TOOL_NAME_LENGTH,
+            )
+            for tool in tools
+        ]
         return [
             ListMCPToolsRestAPIResponseObject(
                 name=tool.name,
                 description=tool.description,
                 inputSchema=tool.inputSchema,
                 mcp_info=enriched_mcp_info,
+                disabled=reason is not None,
+                disabled_reason=reason,
             )
-            for tool in tools
+            for tool, reason in zip(tools, disabled_reasons)
         ]
 
     def _extract_mcp_headers_from_request(
@@ -418,6 +435,7 @@ if MCP_AVAILABLE:
             add_prefix=False,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
+            drop_overlong_names=False,
         )
 
         if not apply_tool_filters:
@@ -1300,9 +1318,25 @@ if MCP_AVAILABLE:
 
         new_mcp_server_request = _inherit_credentials_from_existing_server(new_mcp_server_request)
 
+        def _preview_warnings(tool_names: List[str]) -> List[str]:
+            # In short-prefix mode the 3-char prefix derives from the server_id
+            # assigned at create time, so without one the final length is
+            # unknowable; skip speculative warnings (runtime exclusion still warns).
+            if is_short_mcp_tool_prefix_enabled() and not new_mcp_server_request.server_id:
+                return []
+            return tool_name_length_warnings(
+                tool_names,
+                get_server_prefix(new_mcp_server_request),
+                MCP_MAX_TOOL_NAME_LENGTH,
+            )
+
         # For OpenAPI spec servers, generate tools from the spec directly
         if new_mcp_server_request.spec_path:
-            return await _preview_openapi_tools(new_mcp_server_request.spec_path)
+            openapi_preview = await _preview_openapi_tools(new_mcp_server_request.spec_path)
+            return {
+                **openapi_preview,
+                "warnings": _preview_warnings([tool["name"] for tool in openapi_preview.get("tools") or []]),
+            }
 
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
@@ -1336,6 +1370,7 @@ if MCP_AVAILABLE:
                 "tools": model_dumped_tools,
                 "error": None,
                 "message": "Successfully retrieved tools",
+                "warnings": _preview_warnings([tool.name for tool in list_tools_result]),
             }
 
         return await _execute_with_mcp_client(

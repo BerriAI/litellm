@@ -1958,6 +1958,8 @@ async def test_get_tools_for_single_server():
     mock_server.mcp_info = {"server_name": "zapier"}
     mock_server.server_id = "zapier_id"
     mock_server.alias = "zapier_alias"
+    mock_server.server_name = "zapier"
+    mock_server.short_prefix = None
     mock_server.allowed_tools = None
     mock_server.disallowed_tools = None
 
@@ -1986,6 +1988,7 @@ async def test_get_tools_for_single_server():
             add_prefix=False,
             raw_headers=None,
             user_api_key_auth=None,
+            drop_overlong_names=False,
         )
 
         # Verify the result
@@ -2010,6 +2013,9 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
     mock_server.mcp_info = {"server_name": "zapier"}
     mock_server.name = "zapier"
     mock_server.server_id = "zapier"
+    mock_server.alias = "zapier"
+    mock_server.server_name = "zapier"
+    mock_server.short_prefix = None
     mock_server.allowed_tools = None
     mock_server.disallowed_tools = ["send_email"]
 

@@ -13,7 +13,7 @@ import { setSecureItem } from "@/utils/secureStorage";
 
 import { Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
-import { Input, Button as AntdButton } from "antd";
+import { Input, Button as AntdButton, Tooltip } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
@@ -487,9 +487,11 @@ const MCPToolsViewer = ({
                               <div
                                 key={tool.name}
                                 className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-xs ${
-                                  selectedTool?.name === tool.name
-                                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
-                                    : "border-gray-200 bg-white hover:border-gray-300"
+                                  tool.disabled
+                                    ? "border-gray-200 bg-gray-50 opacity-60"
+                                    : selectedTool?.name === tool.name
+                                      ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
+                                      : "border-gray-200 bg-white hover:border-gray-300"
                                 }`}
                                 onClick={() => {
                                   setSelectedTool(tool);
@@ -506,9 +508,22 @@ const MCPToolsViewer = ({
                                     />
                                   )}
                                   <div className="flex-1 min-w-0">
-                                    <h4 className="font-mono text-xs font-medium text-gray-900 truncate">
-                                      {tool.name}
-                                    </h4>
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <h4
+                                        className={`font-mono text-xs font-medium truncate ${
+                                          tool.disabled ? "text-gray-500" : "text-gray-900"
+                                        }`}
+                                      >
+                                        {tool.name}
+                                      </h4>
+                                      {tool.disabled && (
+                                        <Tooltip title={tool.disabled_reason}>
+                                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 shrink-0">
+                                            Disabled
+                                          </span>
+                                        </Tooltip>
+                                      )}
+                                    </div>
                                     <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
                                     <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
                                       {tool.description}

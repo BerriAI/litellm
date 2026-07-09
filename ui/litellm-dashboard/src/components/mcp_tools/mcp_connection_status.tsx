@@ -6,6 +6,7 @@ import { Card, Title, Text } from "@tremor/react";
 interface MCPConnectionStatusProps {
   formValues: Record<string, any>;
   tools: any[];
+  toolsWarnings?: string[];
   isLoadingTools: boolean;
   toolsError: string | null;
   toolsErrorStatus?: number | null;
@@ -17,6 +18,7 @@ interface MCPConnectionStatusProps {
 const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
   formValues,
   tools,
+  toolsWarnings = [],
   isLoadingTools,
   toolsError,
   toolsErrorStatus = null,
@@ -93,6 +95,21 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
                 <Spin size="large" />
                 <Text className="ml-3">Testing connection and loading tools...</Text>
               </div>
+            )}
+
+            {toolsWarnings.length > 0 && !toolsError && (
+              <Alert
+                message="Some tool names exceed the provider limit"
+                description={
+                  <ul style={{ margin: 0, paddingLeft: "16px" }}>
+                    {toolsWarnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                }
+                type="warning"
+                showIcon
+              />
             )}
 
             {toolsError && isPreviewForbidden && (

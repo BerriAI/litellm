@@ -366,9 +366,16 @@ if MCP_AVAILABLE:
     class ListMCPToolsRestAPIResponseObject(MCPTool):
         """
         Object returned by the /tools/list REST API route.
+
+        ``disabled`` is True when the tool's prefixed name exceeds the
+        ``MCP_MAX_TOOL_NAME_LENGTH`` provider limit: the tool is excluded from
+        LLM-facing listings and direct calls are rejected, with the
+        explanation in ``disabled_reason``.
         """
 
         mcp_info: Optional[MCPInfo] = None
+        disabled: bool = False
+        disabled_reason: Optional[str] = None
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _normalize_resource_contents(contents: list) -> List[ReadResourceContents]:

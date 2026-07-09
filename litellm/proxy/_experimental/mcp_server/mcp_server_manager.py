@@ -38,6 +38,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
+    MCP_MAX_TOOL_NAME_LENGTH,
     MCP_METADATA_TIMEOUT,
     MCP_NPM_CACHE_DIR,
     MCP_STDIO_ALLOWED_COMMANDS,
@@ -101,7 +102,9 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     parse_admin_env_vars,
     split_server_prefix_from_name,
+    split_tools_by_name_length,
     strip_known_server_prefix,
+    tool_name_length_disabled_reason,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -2473,6 +2476,7 @@ class MCPServerManager:
         raw_headers: Optional[dict[str, str]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         oauth2_headers: Optional[dict[str, str]] = None,
+        drop_overlong_names: bool = True,
     ) -> list[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -2480,6 +2484,10 @@ class MCPServerManager:
         Args:
             server (MCPServer): The server to query tools from
             mcp_auth_header: Optional auth header for MCP server
+            drop_overlong_names: When True (every LLM-facing path), tools whose
+                final listed name exceeds ``MCP_MAX_TOOL_NAME_LENGTH`` are
+                excluded. The admin UI listing passes False so those tools stay
+                visible and can be rendered as disabled.
 
         Returns:
             List[MCPTool]: List of tools available on the server with prefixed names
@@ -2585,14 +2593,16 @@ class MCPServerManager:
                         )
                         for t in tools
                     ]
-                return tools
+                return self._drop_tools_exceeding_name_length(tools, server) if drop_overlong_names else tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
 
-            return prefixed_or_original_tools
+            if not drop_overlong_names:
+                return prefixed_or_original_tools
+            return self._drop_tools_exceeding_name_length(prefixed_or_original_tools, server)
 
         except MCPUpstreamAuthError:
             # Pass-through 401 must surface to single-server routes so the
@@ -3304,6 +3314,36 @@ class MCPServerManager:
             f"{server.server_id} after {self._SHORT_PREFIX_MAX_REHASH_ATTEMPTS} "
             "attempts; the 3-character prefix space is too crowded."
         )
+
+    def _drop_tools_exceeding_name_length(self, tools: list[MCPTool], server: MCPServer) -> list[MCPTool]:
+        """Exclude tools whose final listed name exceeds ``MCP_MAX_TOOL_NAME_LENGTH``.
+
+        Providers such as AWS Bedrock, OpenAI, and Gemini reject tool names longer
+        than 64 characters, so listing them would make every downstream LLM request
+        carrying the full tool list fail. The admin UI listing keeps these tools
+        visible (rendered as disabled) via ``drop_overlong_names=False``, and
+        ``call_tool`` rejects direct calls to them with the same reason.
+        """
+        kept, dropped = split_tools_by_name_length(tools, MCP_MAX_TOOL_NAME_LENGTH)
+        if dropped:
+            dropped_names = ", ".join(f"{tool.name} ({len(tool.name)} chars)" for tool in dropped)
+            server_label = (
+                server.name
+                if not server.alias or server.alias == server.name
+                else f"{server.name} (alias {server.alias})"
+            )
+            verbose_logger.warning(
+                "MCP server %s has %d tool(s) whose name exceeds %d characters, which providers such as "
+                "AWS Bedrock, OpenAI, and Gemini reject. Disabling them: excluded from tool listings "
+                "sent to LLMs and direct calls are rejected: %s. "
+                "Use a shorter server alias, rename the tools on the MCP server, or set "
+                "LITELLM_MCP_MAX_TOOL_NAME_LENGTH to change the limit.",
+                server_label,
+                len(dropped),
+                MCP_MAX_TOOL_NAME_LENGTH,
+                dropped_names,
+            )
+        return kept
 
     def _create_prefixed_tools(self, tools: list[MCPTool], server: MCPServer, add_prefix: bool = True) -> list[MCPTool]:
         """
@@ -4144,6 +4184,18 @@ class MCPServerManager:
         """
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
+
+        # Callers may pass the name prefixed or unprefixed; normalize to the
+        # canonical listed form before measuring against the provider limit.
+        canonical_name = add_server_prefix_to_name(
+            strip_known_server_prefix(name, mcp_server), get_server_prefix(mcp_server)
+        )
+        disabled_reason = tool_name_length_disabled_reason(canonical_name, MCP_MAX_TOOL_NAME_LENGTH)
+        if disabled_reason is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "tool_name_too_long", "message": disabled_reason},
+            )
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
         # leaves during-hook side effects (audit logging, rate-limit bookkeeping)

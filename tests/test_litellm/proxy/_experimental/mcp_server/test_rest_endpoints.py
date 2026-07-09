@@ -593,6 +593,135 @@ class TestTestToolsList:
         assert captured["oauth2_headers"] == oauth_headers
         assert oauth_call_counter["count"] == 1
 
+    async def test_flags_tool_names_exceeding_provider_limit(self, monkeypatch):
+        """LIT-4216: the add-time preview must warn when a tool's prefixed name will exceed
+        the 64-char tool name limit providers such as Bedrock/OpenAI/Gemini enforce."""
+        from types import SimpleNamespace
+
+        from mcp.types import Tool as MCPTool
+
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.proxy._types import LitellmUserRoles
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+
+        class FakeClient:
+            async def run_with_session(self, operation):
+                return SimpleNamespace(
+                    tools=[
+                        MCPTool(name=fitting, inputSchema={}),
+                        MCPTool(name=too_long, inputSchema={}),
+                    ]
+                )
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(FakeClient())
+
+        monkeypatch.setattr(
+            rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            _build_request(),
+            NewMCPServerRequest(
+                server_name="example",
+                alias=alias,
+                url="https://example.com",
+                auth_type=MCPAuth.none,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert len(result["tools"]) == 2
+        assert len(result["warnings"]) == 1
+        assert f"{alias}-{too_long}" in result["warnings"][0]
+
+    async def test_no_speculative_warnings_in_short_prefix_mode(self, monkeypatch):
+        """In short-prefix mode without a server_id the 3-char runtime prefix is not
+        knowable yet, so the preview must not warn based on the full alias."""
+        from types import SimpleNamespace
+
+        from mcp.types import Tool as MCPTool
+
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.proxy._types import LitellmUserRoles
+
+        alias = "network_config_audit"
+        fits_short_prefix_only = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+
+        class FakeClient:
+            async def run_with_session(self, operation):
+                return SimpleNamespace(tools=[MCPTool(name=fits_short_prefix_only, inputSchema={})])
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(FakeClient())
+
+        monkeypatch.setattr(
+            rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False
+        )
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "1")
+
+        result = await rest_endpoints.test_tools_list(
+            _build_request(),
+            NewMCPServerRequest(
+                server_name="example",
+                alias=alias,
+                url="https://example.com",
+                auth_type=MCPAuth.none,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["warnings"] == []
+
+    async def test_openapi_preview_flags_tool_names_exceeding_provider_limit(self, monkeypatch):
+        """The OpenAPI spec preview must carry the same length warnings as the MCP
+        preview, since registered OpenAPI tools get the server prefix too."""
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.proxy._types import LitellmUserRoles
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+
+        async def fake_preview(spec_path):
+            return {
+                "tools": [{"name": fitting}, {"name": too_long}],
+                "error": None,
+                "message": "Found 2 tools from OpenAPI spec",
+            }
+
+        monkeypatch.setattr(rest_endpoints, "_preview_openapi_tools", fake_preview, raising=False)
+
+        result = await rest_endpoints.test_tools_list(
+            _build_request(),
+            NewMCPServerRequest(
+                server_name="example",
+                alias=alias,
+                spec_path="/tmp/spec.json",
+                auth_type=MCPAuth.none,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert len(result["tools"]) == 2
+        assert len(result["warnings"]) == 1
+        assert f"{alias}-{too_long}" in result["warnings"][0]
+
 
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
@@ -2401,3 +2530,35 @@ class TestToolResponseMcpInfoEnrichment:
             "server_id": "server-uuid",
             "alias": None,
         }
+
+
+class TestToolResponseDisabledAnnotation:
+    """LIT-4216: the UI listing keeps over-limit tools visible but flags them disabled."""
+
+    def test_marks_overlong_tool_disabled_with_reason(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.constants import MCP_MAX_TOOL_NAME_LENGTH
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        alias = "network_config_audit"
+        fitting = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias) - 1)
+        too_long = "t" * (MCP_MAX_TOOL_NAME_LENGTH - len(alias))
+        server = MCPServer(
+            server_id="len-limit",
+            name="len-limit-server",
+            alias=alias,
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+        )
+
+        objects = rest_endpoints._create_tool_response_objects(
+            [MCPTool(name=fitting, inputSchema={}), MCPTool(name=too_long, inputSchema={})],
+            server,
+        )
+
+        assert [o.disabled for o in objects] == [False, True]
+        assert objects[0].disabled_reason is None
+        assert f"{alias}-{too_long}" in objects[1].disabled_reason
+        assert "direct calls" in objects[1].disabled_reason

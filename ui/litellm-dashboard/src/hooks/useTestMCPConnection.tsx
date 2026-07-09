@@ -5,6 +5,7 @@ import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT } from "@/components/mcp_tools/types";
 interface MCPServerConfig {
   server_id?: string;
   server_name?: string;
+  alias?: string;
   url?: string;
   spec_path?: string;
   transport?: string;
@@ -31,6 +32,7 @@ interface UseTestMCPConnectionProps {
 
 interface UseTestMCPConnectionReturn {
   tools: any[];
+  toolsWarnings: string[];
   isLoadingTools: boolean;
   toolsError: string | null;
   toolsErrorStatus: number | null;
@@ -48,6 +50,7 @@ export const useTestMCPConnection = ({
   enabled = true,
 }: UseTestMCPConnectionProps): UseTestMCPConnectionReturn => {
   const [tools, setTools] = useState<any[]>([]);
+  const [toolsWarnings, setToolsWarnings] = useState<string[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [toolsErrorStatus, setToolsErrorStatus] = useState<number | null>(null);
@@ -138,6 +141,7 @@ export const useTestMCPConnection = ({
       const mcpServerConfig: MCPServerConfig = {
         server_id: formValues.server_id || "",
         server_name: formValues.server_name || "",
+        alias: formValues.alias,
         url: formValues.url,
         spec_path: formValues.spec_path,
         transport: effectiveTransport,
@@ -157,6 +161,7 @@ export const useTestMCPConnection = ({
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
+        setToolsWarnings(Array.isArray(toolsResponse.warnings) ? toolsResponse.warnings : []);
         setToolsError(null);
         setToolsErrorStatus(null);
         setToolsErrorStackTrace(null);
@@ -169,6 +174,7 @@ export const useTestMCPConnection = ({
         setToolsErrorStatus(typeof toolsResponse.status === "number" ? toolsResponse.status : null);
         setToolsErrorStackTrace(toolsResponse.status === 403 ? null : toolsResponse.stack_trace || null);
         setTools([]);
+        setToolsWarnings([]);
         setHasShownSuccessMessage(false);
       }
     } catch (error) {
@@ -177,6 +183,7 @@ export const useTestMCPConnection = ({
       setToolsErrorStatus(null);
       setToolsErrorStackTrace(null);
       setTools([]);
+      setToolsWarnings([]);
       setHasShownSuccessMessage(false);
     } finally {
       setIsLoadingTools(false);
@@ -185,6 +192,7 @@ export const useTestMCPConnection = ({
 
   const clearTools = useCallback(() => {
     setTools([]);
+    setToolsWarnings([]);
     setToolsError(null);
     setToolsErrorStatus(null);
     setToolsErrorStackTrace(null);
@@ -208,6 +216,7 @@ export const useTestMCPConnection = ({
     formValues.spec_path,
     formValues.transport,
     formValues.auth_type,
+    formValues.alias,
     accessToken,
     enabled,
     oauthAccessToken,
@@ -218,6 +227,7 @@ export const useTestMCPConnection = ({
 
   return {
     tools,
+    toolsWarnings,
     isLoadingTools,
     toolsError,
     toolsErrorStatus,
