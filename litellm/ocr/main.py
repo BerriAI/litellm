@@ -95,9 +95,12 @@ def _prepare_ocr_request(
         api_key=api_key,
     )
 
+    _is_doc_intelligence = custom_llm_provider == "azure_ai" and (
+        "doc-intelligence" in model.lower() or "documentintelligence" in model.lower()
+    )
     if dynamic_api_key:
         api_key = dynamic_api_key
-    if dynamic_api_base:
+    if dynamic_api_base and not _is_doc_intelligence:
         api_base = dynamic_api_base
 
     ocr_provider_config = ProviderConfigManager.get_provider_ocr_config(
@@ -188,13 +191,12 @@ def _rust_bridge_api_base(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
 ) -> str | None:
-    if prepared_request.custom_llm_provider == "azure_ai":
-        model = prepared_request.model.lower()
-        if "doc-intelligence" in model or "documentintelligence" in model:
-            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") or prepared_request.api_base
     if prepared_request.api_base is not None:
         return prepared_request.api_base
     if prepared_request.custom_llm_provider == "azure_ai":
+        model = prepared_request.model.lower()
+        if "doc-intelligence" in model or "documentintelligence" in model:
+            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
         return resolve_secret("AZURE_AI_API_BASE")
     return None
 
