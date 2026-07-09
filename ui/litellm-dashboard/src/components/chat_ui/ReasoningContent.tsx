@@ -27,7 +27,10 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
       </Button>
 
       {isExpanded && (
-        <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md text-sm text-gray-700">
+        <div
+          className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md text-sm text-gray-700 max-w-full overflow-x-auto whitespace-pre-wrap break-words"
+          style={{ wordBreak: "break-word", overflowWrap: "break-word" }}
+        >
           <ReactMarkdown
             components={{
               code({
@@ -47,16 +50,23 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                     language={match[1]}
                     PreTag="div"
                     className="rounded-md my-2"
+                    wrapLines={true}
+                    wrapLongLines={true}
                     {...props}
                   >
                     {String(children).replace(/\n$/, "")}
                   </SyntaxHighlighter>
                 ) : (
-                  <code className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`} {...props}>
+                  <code
+                    className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`}
+                    style={{ wordBreak: "break-word" }}
+                    {...props}
+                  >
                     {children}
                   </code>
                 );
               },
+              pre: ({ node, ...props }) => <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />,
             }}
           >
             {reasoningContent}
