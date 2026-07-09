@@ -68,14 +68,14 @@ describe("buildCachePayload", () => {
     expect(payload).not.toHaveProperty("redis_startup_nodes");
   });
 
-  it("should send type redis-semantic when saving a semantic cache", () => {
-    const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: false });
+  it("should send type redis-semantic when saving with semantic caching enabled", () => {
+    const payload = buildCachePayload("node", { similarity_threshold: 0.9 }, { forTesting: false, semanticEnabled: true });
     expect(payload.type).toBe("redis-semantic");
     expect(payload.similarity_threshold).toBe(0.9);
   });
 
-  it("should keep type redis when testing a semantic cache so the test endpoint accepts it", () => {
-    const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: true });
+  it("should keep type redis when testing with semantic caching enabled so the test endpoint accepts it", () => {
+    const payload = buildCachePayload("node", { similarity_threshold: 0.9 }, { forTesting: true, semanticEnabled: true });
     expect(payload.type).toBe("redis");
   });
 

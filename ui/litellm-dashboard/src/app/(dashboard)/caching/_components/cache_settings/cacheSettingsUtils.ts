@@ -68,11 +68,20 @@ const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePay
 export const buildCachePayload = (
   redisType: RedisType,
   values: CacheFormValues,
-  { forTesting }: { forTesting: boolean },
+  { forTesting, semanticEnabled = false }: { forTesting: boolean; semanticEnabled?: boolean },
 ): CacheSavePayload => {
-  const type = !forTesting && redisType === "semantic" ? "redis-semantic" : "redis";
+  const type = !forTesting && semanticEnabled ? "redis-semantic" : "redis";
 
-  const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
+  const entries = CACHE_FIELDS.filter((field) => {
+    if (!isFieldVisible(field, redisType)) {
+      return false;
+    }
+    // Exclude semantic section fields when semantic caching is disabled
+    if (field.section === "semantic" && !semanticEnabled) {
+      return false;
+    }
+    return true;
+  }).flatMap((field) => {
     const value = saveValueForField(field, values[field.name]);
     return value === undefined ? [] : [[field.name, value] as const];
   });

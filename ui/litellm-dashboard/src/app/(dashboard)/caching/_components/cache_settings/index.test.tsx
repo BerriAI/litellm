@@ -63,9 +63,9 @@ describe("CacheSettings", () => {
     });
   });
 
-  describe("when the redis type is semantic", () => {
-    it("should reveal the semantic fields", async () => {
-      getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "semantic" } });
+  describe("when semantic caching is detected from existing config", () => {
+    it("should reveal the semantic fields when similarity_threshold is present", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { similarity_threshold: 0.8 } });
       renderSettings();
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
