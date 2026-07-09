@@ -51,25 +51,21 @@ _MANAGED_DB_ENV_VARS = (
 
 
 @pytest.fixture(autouse=True)
-def _scrub_db_env():
+def _scrub_db_env(monkeypatch):
     """Start each test from a clean slate and restore the original env afterward.
 
-    ``apply_to_env`` writes ``DATABASE_URL`` straight into ``os.environ``, which
-    ``monkeypatch`` cannot undo. Snapshotting and restoring here keeps a
-    synthesized URL (e.g. ``writer.example.com``) from leaking into later tests
-    that read ``DATABASE_URL`` to decide whether to hit a real database.
+    ``apply_to_env`` writes ``DATABASE_URL`` straight into ``os.environ``.
+    Registering a setenv+delenv pair per var gives ``monkeypatch`` a restore
+    record even for previously unset keys, so a synthesized URL (e.g.
+    ``writer.example.com``) cannot leak into later tests that read
+    ``DATABASE_URL`` to decide whether to hit a real database. Restoring via
+    the same ``monkeypatch`` instance the tests use also keeps undo ordering
+    consistent (a hand-rolled snapshot/restore runs before ``monkeypatch``'s
+    own undo and gets clobbered by it).
     """
-    saved = {var: os.environ.get(var) for var in _MANAGED_DB_ENV_VARS}
     for var in _MANAGED_DB_ENV_VARS:
-        os.environ.pop(var, None)
-    try:
-        yield
-    finally:
-        for var, value in saved.items():
-            if value is None:
-                os.environ.pop(var, None)
-            else:
-                os.environ[var] = value
+        monkeypatch.setenv(var, "scrubbed")
+        monkeypatch.delenv(var)
 
 
 def _stub_iam_token(token: str = "FAKE_TOKEN"):
