@@ -33,6 +33,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _is_master_key,
     _redact_prompt_leaks_in_error_string,
     _sanitize_error_information_for_spend_logs,
+    _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
@@ -1263,6 +1264,146 @@ def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
     assert result["guardrail_information"] is None
 
 
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
+    mock_should_store,
+):
+    """
+    LIT-4314 Issue A regression: with store_prompts_in_spend_logs=False,
+    guardrail_request and guardrail_response must be redacted before they
+    land in LiteLLM_SpendLogs.metadata, while every other field on the
+    entry is preserved bit-for-bit.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "claude-code-access-guard",
+            "guardrail_provider": "custom",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "success",
+            "guardrail_request": {
+                "messages": [{"role": "user", "content": "Say hi in 3 words"}],
+            },
+            "guardrail_response": {
+                "evaluated_input": "Say hi in 3 words",
+                "verdict": "allow",
+            },
+            "start_time": 1_700_000_000.0,
+            "end_time": 1_700_000_000.5,
+            "duration": 0.5,
+            "guardrail_id": "gd-42",
+            "masked_entity_count": {"EMAIL": 1},
+            "violation_categories": ["prompt_injection"],
+            "risk_score": 3.5,
+            "guardrail_action": "NONE",
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "claude-code-access-guard"
+    assert entry["guardrail_provider"] == "custom"
+    assert entry["guardrail_mode"] == "pre_call"
+    assert entry["guardrail_status"] == "success"
+    assert entry["start_time"] == 1_700_000_000.0
+    assert entry["end_time"] == 1_700_000_000.5
+    assert entry["duration"] == 0.5
+    assert entry["guardrail_id"] == "gd-42"
+    assert entry["masked_entity_count"] == {"EMAIL": 1}
+    assert entry["violation_categories"] == ["prompt_injection"]
+    assert entry["risk_score"] == 3.5
+    assert entry["guardrail_action"] == "NONE"
+
+    assert guardrail_info[0]["guardrail_request"] == {
+        "messages": [{"role": "user", "content": "Say hi in 3 words"}],
+    }
+    assert guardrail_info[0]["guardrail_response"] == {
+        "evaluated_input": "Say hi in 3 words",
+        "verdict": "allow",
+    }
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_passthrough_when_flag_true(
+    mock_should_store,
+):
+    """
+    When store_prompts_in_spend_logs=True the sanitizer must be a no-op so
+    operators who explicitly opted in still see full guardrail payloads.
+    """
+    mock_should_store.return_value = True
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "success",
+            "guardrail_request": {"messages": [{"role": "user", "content": "hi"}]},
+            "guardrail_response": {"verdict": "allow"},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result == guardrail_info
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_none_passthrough(mock_should_store):
+    mock_should_store.return_value = False
+    assert _sanitize_guardrail_information_for_spend_logs(None) is None
+
+
+@patch("litellm.proxy.proxy_server.master_key", "sk-master")
+@patch(
+    "litellm.proxy.proxy_server.general_settings",
+    {"store_prompts_in_spend_logs": False},
+)
+def test_get_logging_payload_redacts_guardrail_prompt_fields_when_flag_false():
+    """
+    End-to-end wire-in check: get_logging_payload -> _get_spend_logs_metadata
+    -> sanitizer. Without the wire-in at line 139, the raw guardrail_response
+    lands in payload["metadata"] verbatim.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "claude-code-access-guard",
+            "guardrail_provider": "custom",
+            "guardrail_status": "success",
+            "guardrail_request": {"messages": [{"role": "user", "content": "secret"}]},
+            "guardrail_response": {"evaluated_input": "secret"},
+        }
+    ]
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": guardrail_info,
+            },
+            "proxy_server_request": {},
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=datetime.datetime.now(tz=timezone.utc),
+        end_time=datetime.datetime.now(tz=timezone.utc),
+    )
+
+    metadata_result = json.loads(payload["metadata"])
+    stored = metadata_result["guardrail_information"][0]
+    assert stored["guardrail_request"] == REDACTED_BY_LITELM_STRING
+    assert stored["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert stored["guardrail_name"] == "claude-code-access-guard"
+    assert stored["guardrail_status"] == "success"
+
+
 def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
     """
     When a guardrail blocks a request before the LLM call, the standard_logging_object
@@ -1295,7 +1436,10 @@ def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
     }
 
     with patch("litellm.proxy.proxy_server.master_key", "sk-master"):
-        with patch("litellm.proxy.proxy_server.general_settings", {}):
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_prompts_in_spend_logs": True},
+        ):
             payload = get_logging_payload(
                 kwargs=kwargs,
                 response_obj={},

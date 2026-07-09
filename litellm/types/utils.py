@@ -2698,7 +2698,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]]
-    guardrail_request: Optional[dict]
+    guardrail_request: Optional[Union[dict, str]]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: GuardrailStatus
     start_time: Optional[float]

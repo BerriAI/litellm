@@ -136,7 +136,7 @@ def _get_spend_logs_metadata(
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
     )
-    clean_metadata["guardrail_information"] = guardrail_information
+    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -866,6 +866,34 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
             # carrier, leave intact and resume after the key match.
             pos = v_start
     return "".join(out)
+
+
+def _sanitize_guardrail_information_for_spend_logs(
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]],
+) -> Optional[List[StandardLoggingGuardrailInformation]]:
+    """
+    When ``store_prompts_in_spend_logs`` is False, redact ``guardrail_request``
+    and ``guardrail_response`` before they land in ``LiteLLM_SpendLogs.metadata``.
+
+    Guardrail hooks may echo the LLM request payload back into
+    ``guardrail_response``, which would otherwise leak the raw prompt/response
+    into the metadata JSON column regardless of the flag. Every other typed
+    field on the entry (name, provider, mode, status, timings, action,
+    violation_categories, risk_score, masked_entity_count, ...) is preserved
+    so guardrail dashboards keep working.
+    """
+    if guardrail_information is None or _should_store_prompts_and_responses_in_spend_logs():
+        return guardrail_information
+    return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in guardrail_information]
+
+
+def _redact_prompt_fields_in_guardrail_entry(
+    entry: StandardLoggingGuardrailInformation,
+) -> StandardLoggingGuardrailInformation:
+    redacted: StandardLoggingGuardrailInformation = {**entry}
+    redacted["guardrail_request"] = REDACTED_BY_LITELM_STRING
+    redacted["guardrail_response"] = REDACTED_BY_LITELM_STRING
+    return redacted
 
 
 def _sanitize_error_information_for_spend_logs(
