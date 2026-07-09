@@ -286,6 +286,9 @@ def build_billing_metrics_recorder(
 ) -> Optional[BillingMetricsRecorder]:
     """Build the recorder, or None when the deployment is not licensed or metering is unconfigured."""
     if not premium:
+        # Debug, not warning: unlicensed is the common case and a warning here
+        # would be noise on every OSS proxy. Every other disable path warns.
+        verbose_proxy_logger.debug("Enterprise billing metrics disabled: deployment is not licensed")
         return None
 
     config = load_billing_metrics_config(license_data=license_data, litellm_version=litellm_version)
@@ -298,6 +301,14 @@ def build_billing_metrics_recorder(
         verbose_proxy_logger.warning("Enterprise billing metrics disabled: failed to initialize exporter: %s", exc)
         return None
     _ACTIVE_RECORDER.set(recorder)
+    # The only positive signal that this component meters. Without it, a silent
+    # return above is indistinguishable from a working exporter in the logs, and
+    # a component that carries the cert but no license would look healthy.
+    verbose_proxy_logger.info(
+        "Enterprise billing metrics enabled: exporting to %s every %d ms",
+        config.endpoint,
+        config.export_interval_ms,
+    )
     return recorder
 
 

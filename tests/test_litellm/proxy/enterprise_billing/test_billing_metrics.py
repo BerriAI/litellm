@@ -120,6 +120,39 @@ def test_premium_with_full_config_builds_recorder(monkeypatch, tmp_path):
     assert [host for host in resolved if "collector.example" in host] == []
 
 
+def test_building_the_recorder_logs_an_affirmative_line(monkeypatch, tmp_path):
+    """
+    Every disable path logs; a successful build must log too. Otherwise an
+    operator cannot tell a metering component from one that silently returned
+    None, which is how an unlicensed component looks healthy while exporting
+    nothing.
+    """
+    _set_full_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(bm.EXPORT_INTERVAL_ENV, "5000")
+    monkeypatch.setattr(bm, "OTLPMetricExporter", _fake_exporter_class({}))
+
+    infos: List[str] = []
+    monkeypatch.setattr(bm.verbose_proxy_logger, "info", lambda msg, *args: infos.append(msg % args if args else msg))
+
+    recorder = bm.build_billing_metrics_recorder(premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0")
+
+    assert recorder is not None
+    joined = "\n".join(infos)
+    assert "https://collector.example:4317" in joined
+    assert "5000" in joined
+
+
+def test_unlicensed_build_does_not_warn(monkeypatch, tmp_path):
+    """Unlicensed is the common OSS case; warning there would be pure noise."""
+    _set_full_env(monkeypatch, tmp_path)
+
+    warnings: List[str] = []
+    monkeypatch.setattr(bm.verbose_proxy_logger, "warning", lambda msg, *args: warnings.append(str(msg)))
+
+    assert bm.build_billing_metrics_recorder(premium=False, license_data=None, litellm_version="1.0") is None
+    assert warnings == []
+
+
 def test_shutdown_flushes_active_recorder_once(monkeypatch, tmp_path):
     """The shutdown hook must flush the recorder the factory built (buffered
     counts are lost on restart otherwise) and be idempotent for repeat calls."""
