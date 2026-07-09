@@ -714,73 +714,43 @@ async def get_otel_spans():
     }
 
 
+def _worker_config_debug_flags() -> Tuple[Optional[bool], Optional[bool]]:
+    """Read the ``debug``/``detailed_debug`` CLI flags out of ``WORKER_CONFIG``.
+
+    Those flags only exist when the CLI serialized its arguments into a JSON
+    blob. The file-path shape (``WORKER_CONFIG`` pointing at a config yaml) and
+    the missing shape carry no such flags, so both yield ``(None, None)`` and
+    logging falls back to the ``LITELLM_LOG`` env var.
+    """
+    worker_config = get_secret_str("WORKER_CONFIG")
+    if worker_config is None or os.path.isfile(worker_config):
+        return None, None
+    settings = json.loads(worker_config)
+    if not isinstance(settings, dict):
+        return None, None
+    return settings.get("debug"), settings.get("detailed_debug")
+
+
 # Helper functions for debugging
 def init_verbose_loggers():
+    import logging
+
+    from litellm._logging import set_verbose_loggers_level
+
     try:
-        worker_config = get_secret_str("WORKER_CONFIG")
-        # if not, assume it's a json string
-        if worker_config is None:
-            return
-        if os.path.isfile(worker_config):
-            return
-        _settings = json.loads(worker_config)
-        if not isinstance(_settings, dict):
-            return
-
-        debug = _settings.get("debug", None)
-        detailed_debug = _settings.get("detailed_debug", None)
-        if debug is True:  # this needs to be first, so users can see Router init debugg
-            import logging
-
-            from litellm._logging import (
-                verbose_logger,
-                verbose_proxy_logger,
-                verbose_router_logger,
-            )
-
-            # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
-            verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
-            verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
-            verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
+        debug, detailed_debug = _worker_config_debug_flags()
         if detailed_debug is True:
-            import logging
-
-            from litellm._logging import (
-                verbose_logger,
-                verbose_proxy_logger,
-                verbose_router_logger,
-            )
-
-            verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
-            verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
-            verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
-        elif debug is False and detailed_debug is False:
+            set_verbose_loggers_level(logging.DEBUG)
+        elif debug is True:
+            # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+            set_verbose_loggers_level(logging.INFO)
+        else:
             # users can control proxy debugging using env variable = 'LITELLM_LOG'
-            litellm_log_setting = os.environ.get("LITELLM_LOG", "")
-            if litellm_log_setting is not None:
-                if litellm_log_setting.upper() == "INFO":
-                    import logging
-
-                    from litellm._logging import (
-                        verbose_proxy_logger,
-                        verbose_router_logger,
-                    )
-
-                    # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
-
-                    verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
-                    verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
-                elif litellm_log_setting.upper() == "DEBUG":
-                    import logging
-
-                    from litellm._logging import (
-                        verbose_proxy_logger,
-                        verbose_router_logger,
-                    )
-
-                    verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
-                    verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
+            litellm_log_setting = os.environ.get("LITELLM_LOG", "").upper()
+            if litellm_log_setting == "DEBUG":
+                set_verbose_loggers_level(logging.DEBUG)
+            elif litellm_log_setting == "INFO":
+                # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+                set_verbose_loggers_level(logging.INFO)
     except Exception as e:
-        import logging
-
         logging.warning(f"Failed to init verbose loggers: {str(e)}")

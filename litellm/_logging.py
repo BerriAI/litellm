@@ -391,10 +391,21 @@ def _turn_on_json():
     _setup_json_exception_handlers(JsonFormatter())
 
 
+def set_verbose_loggers_level(level: int) -> None:
+    """Set the package, router, and proxy verbose loggers to the same level.
+
+    Keeping all three in lockstep is intentional: skipping ``verbose_logger``
+    (the core "LiteLLM" package logger) silently drops the bulk of debug output
+    (raw request/response, cost tracking, provider calls) even when the router
+    and proxy loggers are turned up.
+    """
+    verbose_logger.setLevel(level=level)  # set package log level
+    verbose_router_logger.setLevel(level=level)  # set router log level
+    verbose_proxy_logger.setLevel(level=level)  # set proxy log level
+
+
 def _turn_on_debug():
-    verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
-    verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
-    verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
+    set_verbose_loggers_level(logging.DEBUG)
 
 
 def _disable_debugging():
