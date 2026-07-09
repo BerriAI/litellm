@@ -4,10 +4,10 @@ import { Form } from "antd";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import RedisTypeSelector from "./RedisTypeSelector";
+import CacheTypeSelector from "./CacheTypeSelector";
 import CacheFieldSection from "./CacheFieldSection";
 import { EmbeddingModelOption } from "./CacheFormField";
-import { REDIS_TYPES, REDIS_TYPE_DESCRIPTIONS, RedisType } from "./cacheSettingsFields";
+import { CacheMode, REDIS_DEPLOYMENT_TYPES, RedisDeploymentType, RedisType } from "./cacheSettingsFields";
 import { buildCachePayload, buildInitialValues, CacheFormValues } from "./cacheSettingsUtils";
 
 interface CacheSettingsProps {
@@ -16,12 +16,26 @@ interface CacheSettingsProps {
   userID: string | null;
 }
 
-const toRedisType = (value: unknown): RedisType =>
-  REDIS_TYPES.includes(value as RedisType) ? (value as RedisType) : "node";
+interface CacheSelection {
+  cacheMode: CacheMode;
+  deploymentType: RedisDeploymentType;
+}
+
+const toCacheSelection = (value: unknown): CacheSelection => {
+  if (value === "semantic") {
+    return { cacheMode: "semantic", deploymentType: "node" };
+  }
+  const deploymentType = REDIS_DEPLOYMENT_TYPES.includes(value as RedisDeploymentType)
+    ? (value as RedisDeploymentType)
+    : "node";
+  return { cacheMode: "standard", deploymentType };
+};
 
 const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const [form] = Form.useForm<CacheFormValues>();
-  const [redisType, setRedisType] = useState<RedisType>("node");
+  const [cacheMode, setCacheMode] = useState<CacheMode>("standard");
+  const [deploymentType, setDeploymentType] = useState<RedisDeploymentType>("node");
+  const redisType: RedisType = cacheMode === "semantic" ? "semantic" : deploymentType;
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -34,7 +48,9 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       const data = (await getCacheSettingsCall(accessToken)) as { current_values?: Record<string, unknown> };
       const currentValues = data.current_values ?? {};
       form.setFieldsValue(buildInitialValues(currentValues));
-      setRedisType(toRedisType(currentValues.redis_type));
+      const selection = toCacheSelection(currentValues.redis_type);
+      setCacheMode(selection.cacheMode);
+      setDeploymentType(selection.deploymentType);
     } catch (error) {
       console.error("Failed to load cache settings:", error);
       NotificationsManager.fromBackend("Failed to load cache settings");
@@ -132,10 +148,11 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
           <p className="text-xs text-gray-500 mt-1">Configure Redis cache for LiteLLM</p>
         </div>
 
-        <RedisTypeSelector
-          redisType={redisType}
-          redisTypeDescriptions={REDIS_TYPE_DESCRIPTIONS}
-          onTypeChange={(type) => setRedisType(toRedisType(type))}
+        <CacheTypeSelector
+          cacheMode={cacheMode}
+          deploymentType={deploymentType}
+          onCacheModeChange={setCacheMode}
+          onDeploymentTypeChange={setDeploymentType}
         />
 
         <div className="pt-4 border-t border-gray-200">

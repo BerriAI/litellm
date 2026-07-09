@@ -4,6 +4,10 @@ export type CacheFieldType = "string" | "password" | "integer" | "float" | "bool
 
 export type RedisType = "node" | "cluster" | "sentinel" | "semantic";
 
+export type CacheMode = "standard" | "semantic";
+
+export type RedisDeploymentType = "node" | "cluster" | "sentinel";
+
 export type CacheSection = "connection" | "cluster" | "sentinel" | "semantic" | "ssl" | "cacheManagement" | "gcp";
 
 export type CacheFieldRule = NonNullable<FormItemProps["rules"]>[number];
@@ -19,13 +23,30 @@ export interface CacheField {
   readonly rules?: CacheFieldRule[];
 }
 
-export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel", "semantic"];
+export const CACHE_MODES: readonly CacheMode[] = ["standard", "semantic"];
 
-export const REDIS_TYPE_DESCRIPTIONS: Readonly<Record<RedisType, string>> = {
+export const REDIS_DEPLOYMENT_TYPES: readonly RedisDeploymentType[] = ["node", "cluster", "sentinel"];
+
+export const CACHE_MODE_LABELS: Readonly<Record<CacheMode, string>> = {
+  standard: "Standard (exact match)",
+  semantic: "Semantic (similarity-based)",
+};
+
+export const CACHE_MODE_DESCRIPTIONS: Readonly<Record<CacheMode, string>> = {
+  standard: "Exact-match caching that reuses a response only when a request matches a cached one exactly",
+  semantic: "Embedding-based caching that reuses responses for semantically similar prompts (single-node Redis only)",
+};
+
+export const REDIS_DEPLOYMENT_LABELS: Readonly<Record<RedisDeploymentType, string>> = {
+  node: "Node (Single Instance)",
+  cluster: "Cluster",
+  sentinel: "Sentinel",
+};
+
+export const REDIS_DEPLOYMENT_DESCRIPTIONS: Readonly<Record<RedisDeploymentType, string>> = {
   node: "Standard Redis node/single instance",
   cluster: "Redis Cluster mode for high availability and horizontal scaling",
   sentinel: "Redis Sentinel mode for high availability with automatic failover",
-  semantic: "Semantic caching that reuses responses for similar prompts",
 };
 
 const portRule: CacheFieldRule = {
