@@ -277,3 +277,70 @@ async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
         )
         mock_alist.assert_not_called()
         mock_acompletion.assert_called_once_with(**model_params)
+
+
+class _FakeWebsocketConnect:
+    def __init__(self, calls, url, **kwargs):
+        calls.append({"url": url, **kwargs})
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_realtime_health_check_uses_model_level_vertex_params():
+    """Regression test: realtime health checks must resolve vertex_credentials,
+    vertex_project, and vertex_location from the model row's params instead of
+    falling back to process-global VERTEXAI_* settings."""
+    import litellm
+    from litellm.realtime_api import main as realtime_main
+
+    fake_vertex_base = MagicMock()
+    fake_vertex_base.get_vertex_region = MagicMock(return_value="us-central1")
+    fake_vertex_base._ensure_access_token_async = AsyncMock(
+        return_value=("model-level-token", "model-level-project")
+    )
+    connect_calls = []
+
+    with (
+        patch.object(realtime_main, "vertex_llm_base", fake_vertex_base),
+        patch(
+            "websockets.connect",
+            lambda url, **kwargs: _FakeWebsocketConnect(connect_calls, url, **kwargs),
+        ),
+        patch.object(
+            HealthCheckHelpers,
+            "_update_model_params_with_health_check_tracking_information",
+            staticmethod(lambda model_params: model_params),
+        ),
+    ):
+        result = await litellm.ahealth_check(
+            model_params={
+                "model": "vertex_ai/gemini-live-2.5-flash-native-audio",
+                "vertex_credentials": '{"type":"service_account"}',
+                "vertex_project": "model-level-project",
+                "vertex_location": "us-central1",
+            },
+            mode="realtime",
+        )
+
+    assert result == {}
+    fake_vertex_base.get_vertex_region.assert_called_once_with(
+        vertex_region="us-central1", model="gemini-live-2.5-flash-native-audio"
+    )
+    fake_vertex_base._ensure_access_token_async.assert_called_once_with(
+        credentials='{"type":"service_account"}',
+        project_id="model-level-project",
+        custom_llm_provider="vertex_ai",
+    )
+    assert connect_calls[0]["url"] == (
+        "wss://us-central1-aiplatform.googleapis.com/ws/"
+        "google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+    assert connect_calls[0]["additional_headers"] == {
+        "Authorization": "Bearer model-level-token",
+        "x-goog-user-project": "model-level-project",
+    }
