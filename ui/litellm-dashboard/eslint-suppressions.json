@@ -9,22 +9,22 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/budgets/components/budget_modal.tsx": {
+  "src/app/(dashboard)/budgets/_components/budget_modal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/budgets/components/budget_panel.test.tsx": {
+  "src/app/(dashboard)/budgets/_components/budget_panel.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 2
     }
   },
-  "src/app/(dashboard)/budgets/components/budget_panel.tsx": {
+  "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/budgets/components/edit_budget_modal.tsx": {
+  "src/app/(dashboard)/budgets/_components/edit_budget_modal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -326,7 +326,7 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/memory/components/MemoryView.tsx": {
+  "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
