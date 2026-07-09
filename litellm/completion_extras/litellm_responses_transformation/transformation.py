@@ -1074,6 +1074,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self._chat_completion_id: Optional[str] = None
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1381,4 +1382,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug(f"Chat provider: transform_streaming_response called with chunk: {chunk}")
-        return OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
+        parsed_chunk = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
+        if self._chat_completion_id is None and parsed_chunk.id:
+            self._chat_completion_id = parsed_chunk.id
+        elif self._chat_completion_id is not None:
+            parsed_chunk.id = self._chat_completion_id
+        return parsed_chunk
