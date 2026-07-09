@@ -3,6 +3,7 @@ Test Vertex AI files handler functionality
 """
 
 import asyncio
+import json
 from types import MappingProxyType
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -300,6 +301,94 @@ class TestVertexAIFilesHandler:
             final_result = await result
             assert isinstance(final_result, HttpxBinaryResponseContent)
             assert final_result.response.content == expected_content
+
+    def test_get_read_gcs_dynamic_params_honors_per_model_bucket(self):
+        params = self.handler._get_read_gcs_dynamic_params(
+            litellm_params={"gcs_bucket_name": "per-model-bucket"},
+            vertex_credentials=None,
+        )
+        assert params["gcs_bucket_name"] == "per-model-bucket"
+
+    def test_get_read_gcs_dynamic_params_falls_back_to_bucket_name_key(self):
+        params = self.handler._get_read_gcs_dynamic_params(
+            litellm_params={"bucket_name": "legacy-key-bucket"},
+            vertex_credentials=None,
+        )
+        assert params["gcs_bucket_name"] == "legacy-key-bucket"
+
+    def test_get_read_gcs_dynamic_params_uses_vertex_credentials_for_service_account(self):
+        params = self.handler._get_read_gcs_dynamic_params(
+            litellm_params={"gcs_bucket_name": "per-model-bucket"},
+            vertex_credentials="/path/to/sa.json",
+        )
+        assert params["gcs_path_service_account"] == "/path/to/sa.json"
+
+    def test_get_read_gcs_dynamic_params_serializes_dict_credentials(self):
+        creds = {"type": "service_account", "project_id": "proj"}
+        params = self.handler._get_read_gcs_dynamic_params(
+            litellm_params={},
+            vertex_credentials=creds,
+        )
+        assert params["gcs_path_service_account"] == json.dumps(creds)
+
+    def test_get_read_gcs_dynamic_params_prefers_explicit_service_account(self):
+        params = self.handler._get_read_gcs_dynamic_params(
+            litellm_params={"gcs_path_service_account": "/explicit/sa.json"},
+            vertex_credentials="/vertex/creds.json",
+        )
+        assert params["gcs_path_service_account"] == "/explicit/sa.json"
+
+    @pytest.mark.asyncio
+    async def test_afile_content_uses_per_model_bucket_without_global_env(self):
+        """
+        Regression for #32640: the read path must resolve the GCS bucket and
+        credentials from the per-model litellm_params / vertex_credentials, not
+        from the global GCS_BUCKET_NAME / GCS_PATH_SERVICE_ACCOUNT env vars.
+
+        Runs the real get_gcs_logging_config with no global bucket configured, so
+        before the fix (kwargs={}) it raised "GCS_BUCKET_NAME is not set".
+        """
+        handler = VertexAIFilesHandler()
+        handler.BUCKET_NAME = None
+        handler.path_service_account_json = None
+
+        file_id = "gs://per-model-bucket/litellm-vertex-files/uploads/abc-file.jsonl"
+        file_content_request = FileContentRequest(
+            file_id=file_id, extra_headers=None, extra_body=None
+        )
+
+        with (
+            patch.object(
+                handler,
+                "get_or_create_vertex_instance",
+                new_callable=AsyncMock,
+                return_value=object(),
+            ),
+            patch.object(
+                handler, "download_gcs_object", new_callable=AsyncMock
+            ) as mock_download,
+        ):
+            mock_download.return_value = b"file content"
+
+            result = await handler.afile_content(
+                file_content_request=file_content_request,
+                vertex_credentials="/vertex/sa.json",
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                timeout=60.0,
+                max_retries=3,
+                litellm_params={"gcs_bucket_name": "per-model-bucket"},
+            )
+
+        assert isinstance(result, HttpxBinaryResponseContent)
+        mock_download.assert_called_once()
+        dynamic_params = mock_download.call_args.kwargs["standard_callback_dynamic_params"]
+        assert dynamic_params["gcs_bucket_name"] == "per-model-bucket"
+        assert dynamic_params["gcs_path_service_account"] == "/vertex/sa.json"
+        assert (
+            mock_download.call_args.kwargs["object_name"]
+            == "litellm-vertex-files/uploads/abc-file.jsonl"
+        )
 
     def test_httpx_response_compatibility(self):
         """Test that the created HttpxBinaryResponseContent is compatible with expected interface"""
