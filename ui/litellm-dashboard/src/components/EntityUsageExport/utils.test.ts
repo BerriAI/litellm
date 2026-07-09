@@ -1205,6 +1205,10 @@ describe("EntityUsageExport utils", () => {
                         successful_requests: 10,
                         failed_requests: 0,
                         total_tokens: 700,
+                        prompt_tokens: 500,
+                        completion_tokens: 200,
+                        cache_read_input_tokens: 300,
+                        cache_creation_input_tokens: 120,
                       },
                       metadata: { team_id: "team-1" },
                     },
@@ -1215,6 +1219,10 @@ describe("EntityUsageExport utils", () => {
                         successful_requests: 15,
                         failed_requests: 0,
                         total_tokens: 350,
+                        prompt_tokens: 250,
+                        completion_tokens: 100,
+                        cache_read_input_tokens: 150,
+                        cache_creation_input_tokens: 80,
                       },
                       metadata: { team_id: "team-1" },
                     },
@@ -1644,6 +1652,132 @@ describe("EntityUsageExport utils", () => {
       const result = generateDailyWithModelsData(spendDataWithoutModels, "Team");
 
       expect(result).toHaveLength(0);
+    });
+
+    it("should not overcount when a key is shared across entities (regression for #32581)", () => {
+      const data: EntitySpendData = {
+        results: [
+          {
+            date: "2025-04-01",
+            breakdown: {
+              entities: {
+                tagA: {
+                  metrics: {
+                    spend: 10.0,
+                    api_requests: 100,
+                    successful_requests: 100,
+                    failed_requests: 0,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.0,
+                        api_requests: 100,
+                        successful_requests: 100,
+                        failed_requests: 0,
+                        total_tokens: 1000,
+                        prompt_tokens: 600,
+                        completion_tokens: 400,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+                tagB: {
+                  metrics: {
+                    spend: 10.0,
+                    api_requests: 100,
+                    successful_requests: 100,
+                    failed_requests: 0,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.0,
+                        api_requests: 100,
+                        successful_requests: 100,
+                        failed_requests: 0,
+                        total_tokens: 1000,
+                        prompt_tokens: 600,
+                        completion_tokens: 400,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+              models: {
+                "gpt-4": {
+                  metrics: {
+                    spend: 20.0,
+                    api_requests: 200,
+                    successful_requests: 200,
+                    failed_requests: 0,
+                    total_tokens: 2000,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 20.0,
+                        api_requests: 200,
+                        successful_requests: 200,
+                        failed_requests: 0,
+                        total_tokens: 2000,
+                        prompt_tokens: 1200,
+                        completion_tokens: 800,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: {
+          total_spend: 20.0,
+          total_api_requests: 200,
+          total_successful_requests: 200,
+          total_failed_requests: 0,
+          total_tokens: 2000,
+        },
+      };
+
+      const result = generateDailyWithModelsData(data, "Tag");
+
+      const tagA = result.find((r) => r["Tag ID"] === "tagA");
+      const tagB = result.find((r) => r["Tag ID"] === "tagB");
+
+      expect(tagA?.["Spend ($)"]).toBe("10.0000");
+      expect(tagA?.["Total Tokens"]).toBe(1000);
+      expect(tagA?.["Prompt Tokens"]).toBe(600);
+      expect(tagA?.Requests).toBe(100);
+      expect(tagB?.["Spend ($)"]).toBe("10.0000");
+      expect(tagB?.["Total Tokens"]).toBe(1000);
+
+      const totalSpend = result.reduce((sum, r) => sum + parseFloat(r["Spend ($)"].replace(/,/g, "")), 0);
+      const totalTokens = result.reduce((sum, r) => sum + r["Total Tokens"], 0);
+      const totalRequests = result.reduce((sum, r) => sum + r.Requests, 0);
+
+      expect(totalSpend).toBeCloseTo(20.0, 4);
+      expect(totalTokens).toBe(2000);
+      expect(totalRequests).toBe(200);
     });
   });
 
