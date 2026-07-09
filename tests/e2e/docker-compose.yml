@@ -1,10 +1,10 @@
-# local setup to run e2e tests, do not commit when you make a PR
+# local setup to run e2e tests
 configs:
   litellm_config:
     content: |
       general_settings:
-        master_key: sk-1234
-        database_url: postgres://litellm@litellm:5432/litellm
+        master_key: os.environ/LITELLM_MASTER_KEY
+        database_url: os.environ/DATABASE_URL
         store_prompts_in_spend_logs: true
 
       litellm_settings:
@@ -48,7 +48,7 @@ configs:
 
 services:
   litellm:
-    image: docker.litellm.ai/berriai/litellm:1.92.0-rc.1 
+    image: ghcr.io/berriai/litellm:main-latest
     depends_on:
       db:
         condition: service_healthy
@@ -60,8 +60,6 @@ services:
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       UI_USERNAME: admin
       UI_PASSWORD: sk-1234
-      LITELLM_USE_RUST_OCR: 1
-      # TEMP override to verify the azure-ai Mistral OCR Foundry base; remove before commit.
     ports:
       - "4000:4000"
     configs:

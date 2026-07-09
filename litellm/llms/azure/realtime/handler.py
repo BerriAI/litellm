@@ -57,8 +57,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             beta/default: "wss://.../openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
             GA/v1:        "wss://.../openai/v1/realtime?model=gpt-realtime-deployment"
         """
-        from urllib.parse import urlencode
+        from urllib.parse import urlencode, urlsplit, urlunsplit
 
+        split_base = urlsplit(api_base)
+        if split_base.netloc:
+            api_base = urlunsplit((split_base.scheme, split_base.netloc, "", "", ""))
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
