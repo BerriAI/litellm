@@ -1175,8 +1175,8 @@ async def purge_user_oauth_credentials_for_server(
     oauth_rows = [row for row in rows if _decode_oauth_payload(row.credential_b64) is not None]
     if not oauth_rows:
         return 0
-    deleted_count = sum(
-        [await repo.table.delete_many(where={"user_id": row.user_id, "server_id": server_id}) for row in oauth_rows]
+    deleted_count = await repo.table.delete_many(
+        where={"server_id": server_id, "user_id": {"in": [row.user_id for row in oauth_rows]}}
     )
     if invalidate_token_cache is None:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
