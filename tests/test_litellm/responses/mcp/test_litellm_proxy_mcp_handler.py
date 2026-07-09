@@ -605,3 +605,42 @@ def test_completion_with_function_tools_works_without_fastapi_installed():
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+async def test_process_mcp_tools_to_openai_format_forwards_target_format(monkeypatch):
+    """_process_mcp_tools_to_openai_format must forward target_format to
+    _transform_mcp_tools_to_openai, so callers like the semantic tool
+    filter can request the Chat Completions shape. Regression test for #32281.
+    """
+    captured = {}
+
+    async def fake_process_without_transform(*args, **kwargs):
+        return (["tool"], {"tool": "server"})
+
+    def fake_transform(tools, target_format="responses"):
+        captured["target_format"] = target_format
+        return [{"format": target_format}]
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        fake_process_without_transform,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(fake_transform),
+    )
+
+    chat_tools, tool_server_map = (
+        await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
+            user_api_key_auth=None,
+            mcp_tools_with_litellm_proxy=[],
+            target_format="chat",
+        )
+    )
+
+    assert captured["target_format"] == "chat"
+    assert chat_tools == [{"format": "chat"}]
+    assert tool_server_map == {"tool": "server"}
