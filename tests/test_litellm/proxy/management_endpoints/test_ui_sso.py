@@ -37,6 +37,21 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 
+def _make_ui_sso_cache_mock() -> MagicMock:
+    """Build a cache mock whose async flow methods are awaitable.
+
+    The CLI SSO flow persists/reads/deletes its session via the async cache
+    interface (async_get_cache / async_set_cache / async_delete_cache) so the
+    login works across proxy instances. Tests configure return values on these
+    the same way they would on a real async cache.
+    """
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    cache.async_delete_cache = AsyncMock()
+    return cache
+
+
 def test_microsoft_sso_handler_openid_from_response_user_principal_name():
     # Arrange
     # Create a mock response similar to what Microsoft SSO would return
@@ -2151,7 +2166,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock(spec=Request)
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.increment_cache.return_value = 1
 
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
@@ -2163,8 +2178,8 @@ class TestCLIKeyRegenerationFlow:
 
         mock_cache.increment_cache.assert_called_once()
         assert mock_cache.increment_cache.call_args.kwargs["ttl"] == 60
-        mock_cache.set_cache.assert_called_once()
-        flow_data = mock_cache.set_cache.call_args.kwargs["value"]
+        mock_cache.async_set_cache.assert_called_once()
+        flow_data = mock_cache.async_set_cache.call_args.kwargs["value"]
         assert flow_data["poll_secret_hash"] == _hash_cli_sso_secret(
             result["poll_secret"]
         )
@@ -2182,7 +2197,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock(spec=Request)
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.increment_cache.return_value = 31
 
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
@@ -2190,7 +2205,7 @@ class TestCLIKeyRegenerationFlow:
                 await cli_sso_start(request=mock_request)
 
         assert exc_info.value.status_code == 429
-        mock_cache.set_cache.assert_not_called()
+        mock_cache.async_set_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_sso_start_returns_verification_uri_complete_when_enabled(self):
@@ -2204,7 +2219,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
         mock_request.base_url = "https://proxy.example.com/"
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.increment_cache.return_value = 1
 
         with (
@@ -2238,7 +2253,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
         mock_request.base_url = "https://proxy.example.com/"
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.increment_cache.return_value = 1
 
         with (
@@ -2272,8 +2287,8 @@ class TestCLIKeyRegenerationFlow:
 
         mock_request = MagicMock(spec=Request)
         mock_request.base_url = "https://proxy.example.com/"
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {"poll_secret_hash": "h"}
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {"poll_secret_hash": "h"}
 
         async def drive(enabled: bool):
             with (
@@ -2448,8 +2463,8 @@ class TestCLIKeyRegenerationFlow:
         )
         mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
 
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
             "sso_complete": False,
@@ -2491,8 +2506,8 @@ class TestCLIKeyRegenerationFlow:
         mock_request.body = AsyncMock(
             return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
         )
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "user_code_hash": _hash_cli_sso_secret(
                 _normalize_cli_sso_user_code("ABCD-EFGH")
@@ -2515,7 +2530,7 @@ class TestCLIKeyRegenerationFlow:
             )
 
         assert result.status_code == 200
-        flow_data = mock_cache.set_cache.call_args.kwargs["value"]
+        flow_data = mock_cache.async_set_cache.call_args.kwargs["value"]
         assert flow_data["user_code_verified"] is True
 
     @pytest.mark.asyncio
@@ -2529,8 +2544,8 @@ class TestCLIKeyRegenerationFlow:
 
         mock_request = MagicMock(spec=Request)
         mock_request.body = AsyncMock(return_value=b"user_code=ABCD-EFGH")
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "user_code_hash": _hash_cli_sso_secret(
                 _normalize_cli_sso_user_code("ABCD-EFGH")
@@ -2548,7 +2563,7 @@ class TestCLIKeyRegenerationFlow:
                 )
 
         assert exc_info.value.status_code == 400
-        mock_cache.set_cache.assert_not_called()
+        mock_cache.async_set_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_sso_complete_waits_for_callback_before_token_checks(self):
@@ -2563,8 +2578,8 @@ class TestCLIKeyRegenerationFlow:
         mock_request.body = AsyncMock(
             return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
         )
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "user_code_hash": _hash_cli_sso_secret(
                 _normalize_cli_sso_user_code("ABCD-EFGH")
@@ -2583,7 +2598,7 @@ class TestCLIKeyRegenerationFlow:
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail == "CLI login is not ready"
         mock_request.body.assert_not_awaited()
-        mock_cache.set_cache.assert_not_called()
+        mock_cache.async_set_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_sso_callback_stores_session(self):
@@ -2610,8 +2625,8 @@ class TestCLIKeyRegenerationFlow:
         mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
 
         # Mock cache
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
             "sso_complete": False,
@@ -2645,8 +2660,8 @@ class TestCLIKeyRegenerationFlow:
             )
 
             # Assert - verify session was stored in cache
-            mock_cache.set_cache.assert_called_once()
-            call_args = mock_cache.set_cache.call_args
+            mock_cache.async_set_cache.assert_called_once()
+            call_args = mock_cache.async_set_cache.call_args
 
             # Verify cache key format
             assert "cli_sso_session:" in call_args.kwargs["key"]
@@ -2692,8 +2707,8 @@ class TestCLIKeyRegenerationFlow:
         }
 
         # Mock cache
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": True,
@@ -2716,7 +2731,7 @@ class TestCLIKeyRegenerationFlow:
             assert "key" not in result  # JWT should not be generated yet
 
             # Verify session was NOT deleted
-            mock_cache.delete_cache.assert_not_called()
+            mock_cache.async_delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_requires_poll_secret(self):
@@ -2726,8 +2741,8 @@ class TestCLIKeyRegenerationFlow:
             cli_poll_key,
         )
 
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": True,
@@ -2753,8 +2768,8 @@ class TestCLIKeyRegenerationFlow:
             cli_poll_key,
         )
 
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": False,
@@ -2932,8 +2947,8 @@ class TestCLIKeyRegenerationFlow:
         )
 
         # Mock cache
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": True,
@@ -2981,7 +2996,7 @@ class TestCLIKeyRegenerationFlow:
             assert jwt_call_args.kwargs["max_budget"] is None
 
             # Verify session was deleted after JWT generation
-            mock_cache.delete_cache.assert_called_once()
+            mock_cache.async_delete_cache.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_does_not_cap_session_when_user_has_budget(self):
@@ -3007,8 +3022,8 @@ class TestCLIKeyRegenerationFlow:
             models=["gpt-4"],
             max_budget=100.0,
         )
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": True,
@@ -3069,8 +3084,8 @@ class TestCLIKeyRegenerationFlow:
             max_budget=None,
         )
         mock_team = LiteLLM_TeamTableCachedObj(team_id="team-x", max_budget=None)
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": True,
@@ -3105,6 +3120,113 @@ class TestCLIKeyRegenerationFlow:
         assert (
             mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
         )
+
+
+class TestCLISSOMultiInstanceCache:
+    """The CLI login is a multi-request flow whose intermediate session must be
+    visible to every proxy instance. These regressions pin the flow to the shared
+    Redis cache when configured (instead of the per-worker in-memory cache), which
+    is what breaks `lite login` when the gateway runs multiple instances."""
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_persists_flow_to_shared_redis_cache(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_cache_key,
+            cli_sso_start,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+
+        user_api_key_cache = _make_ui_sso_cache_mock()
+        user_api_key_cache.increment_cache.return_value = 1
+        shared_redis_cache = _make_ui_sso_cache_mock()
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.redis_usage_cache", shared_redis_cache),
+        ):
+            result = await cli_sso_start(request=mock_request)
+
+        shared_redis_cache.async_set_cache.assert_called_once()
+        user_api_key_cache.async_set_cache.assert_not_called()
+        assert shared_redis_cache.async_set_cache.call_args.kwargs[
+            "key"
+        ] == _get_cli_sso_flow_cache_key(result["login_id"])
+
+    @pytest.mark.asyncio
+    async def test_cli_poll_reads_flow_from_shared_redis_cache(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_cache_key,
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        poll_secret = "poll-secret"
+        session_key = "cli-shared-cache-session"
+        flow = {
+            "poll_secret_hash": _hash_cli_sso_secret(poll_secret),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": {
+                "user_id": "cli-user",
+                "user_role": "internal_user",
+                "teams": [],
+                "models": ["gpt-4"],
+            },
+        }
+
+        user_api_key_cache = _make_ui_sso_cache_mock()
+        shared_redis_cache = _make_ui_sso_cache_mock()
+        shared_redis_cache.async_get_cache.return_value = flow
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.redis_usage_cache", shared_redis_cache),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(side_effect=ValueError("User doesn't exist in db")),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value="cli-jwt-token",
+            ),
+        ):
+            result = await cli_poll_key(
+                key_id=session_key, x_litellm_cli_poll_secret=poll_secret
+            )
+
+        assert result["status"] == "ready"
+        assert result["key"] == "cli-jwt-token"
+        shared_redis_cache.async_get_cache.assert_called_with(
+            key=_get_cli_sso_flow_cache_key(session_key)
+        )
+        user_api_key_cache.async_get_cache.assert_not_called()
+        shared_redis_cache.async_delete_cache.assert_called_once_with(
+            key=_get_cli_sso_flow_cache_key(session_key)
+        )
+        user_api_key_cache.async_delete_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_flow_falls_back_to_user_api_key_cache_without_redis(self):
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_start
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+
+        user_api_key_cache = _make_ui_sso_cache_mock()
+        user_api_key_cache.increment_cache.return_value = 1
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+        ):
+            await cli_sso_start(request=mock_request)
+
+        user_api_key_cache.async_set_cache.assert_called_once()
 
 
 class TestGetAppRolesFromIdToken:
@@ -4020,7 +4142,7 @@ class TestPKCEFunctionality:
         mock_request.query_params = {"state": test_state}
 
         # Mock cache with async methods — use dict format (primary path)
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         test_code_verifier = "test_code_verifier_abc123xyz"
         mock_cache.async_get_cache = AsyncMock(
             return_value={"code_verifier": test_code_verifier}
@@ -4071,7 +4193,7 @@ class TestPKCEFunctionality:
         mock_sso.__exit__ = MagicMock(return_value=False)
 
         test_state = "test456"
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
 
         mock_cache.async_set_cache = AsyncMock()
 
@@ -4595,7 +4717,7 @@ class TestPKCEFunctionality:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)  # verifier not found
 
         mock_request = MagicMock(spec=Request)
@@ -4721,7 +4843,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.async_get_cache = AsyncMock(return_value=12345)
         mock_cache.async_delete_cache = AsyncMock()
 
@@ -4763,7 +4885,7 @@ class TestPKCEFunctionality:
 
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)  # verifier not found
 
         mock_request = MagicMock(spec=Request)
@@ -4851,7 +4973,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.async_get_cache = AsyncMock(return_value=12345)
         mock_cache.async_delete_cache = AsyncMock()
 
@@ -4903,7 +5025,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         legacy_verifier = "legacy_plain_string_verifier_abc123"
-        mock_cache = MagicMock()
+        mock_cache = _make_ui_sso_cache_mock()
         mock_cache.async_get_cache = AsyncMock(return_value=legacy_verifier)
 
         mock_request = MagicMock(spec=Request)
@@ -6187,8 +6309,8 @@ class TestCliSsoAttributionMetadata:
             provider="generic",
             team_ids=[],
         )
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
             "sso_complete": False,
@@ -6228,8 +6350,8 @@ class TestCliSsoAttributionMetadata:
 
         mock_request = MagicMock(spec=Request)
         mock_request.base_url = "http://internal-proxy.local/"
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
             "sso_complete": False,
@@ -6297,8 +6419,8 @@ class TestCliSsoAttributionMetadata:
             "user_id": "test-user-123",
             "employment_type": "contractor",
         }
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
             "sso_complete": False,
@@ -6337,7 +6459,7 @@ class TestCliSsoAttributionMetadata:
                 result=mock_sso_result,
             )
 
-        flow_data = mock_cache.set_cache.call_args.kwargs["value"]
+        flow_data = mock_cache.async_set_cache.call_args.kwargs["value"]
         assert flow_data["session_data"]["attribution_metadata"] == {
             "acme_employment_type": "contractor"
         }
@@ -6366,8 +6488,8 @@ class TestCliSsoAttributionMetadata:
                 "org": {"cost_center": "CC-42"},
             },
         }
-        mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = {
+        mock_cache = _make_ui_sso_cache_mock()
+        mock_cache.async_get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
             "user_code_verified": True,
@@ -7225,8 +7347,8 @@ async def test_cli_poll_key_tolerates_missing_user_row():
         "models": ["gpt-4"],
     }
 
-    mock_cache = MagicMock()
-    mock_cache.get_cache.return_value = {
+    mock_cache = _make_ui_sso_cache_mock()
+    mock_cache.async_get_cache.return_value = {
         "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
         "sso_complete": True,
         "user_code_verified": True,

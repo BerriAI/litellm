@@ -339,6 +339,55 @@ class TestLoginCommand:
             # Verify commands were shown
             mock_show_commands.assert_called_once()
 
+    def test_login_normalizes_trailing_slash_base_url(self):
+        """A trailing slash on --base-url must not produce double-slash URLs.
+
+        Regression: `lite --base-url https://host/ login` used to hit
+        https://host//sso/cli/start and open https://host//sso/key/generate,
+        which breaks gateways that 404 on the doubled slash.
+        """
+        from litellm.proxy.client.cli.main import cli
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"],
+        }
+
+        with (
+            patch("webbrowser.open") as mock_browser,
+            patch(
+                "requests.post",
+                return_value=_mock_cli_sso_start_response(login_id="cli-test-uuid-123"),
+            ) as mock_post,
+            patch("requests.get", return_value=mock_response) as mock_get,
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
+            patch("litellm.proxy.client.cli.commands.auth.get_stored_api_key", return_value=None),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(
+                cli, ["--base-url", "https://test.example.com/", "login"]
+            )
+
+        assert result.exit_code == 0, result.output
+
+        start_url = mock_post.call_args[0][0]
+        assert start_url == "https://test.example.com/sso/cli/start"
+
+        poll_url = mock_get.call_args[0][0]
+        assert poll_url.startswith("https://test.example.com/sso/cli/poll/")
+        assert "//sso" not in poll_url.replace("https://", "")
+
+        browser_url = mock_browser.call_args[0][0]
+        assert browser_url.startswith("https://test.example.com/sso/key/generate?")
+
+        saved_data = mock_save.call_args[0][0]
+        assert saved_data["base_url"] == "https://test.example.com"
+
     def test_login_timeout(self):
         """Test login timeout scenario"""
         mock_context = Mock()

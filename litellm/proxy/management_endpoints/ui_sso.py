@@ -42,6 +42,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLI_SSO_CLAIM_MAP,
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
@@ -240,19 +241,33 @@ def _check_cli_sso_start_rate_limit(
         )
 
 
-def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
+def _get_cli_sso_flow_cache(user_api_key_cache: DualCache) -> Union[DualCache, RedisCache]:
+    """Resolve the cache backing CLI SSO login sessions.
+
+    The multi-request login flow must be visible to every proxy instance, so it
+    prefers the shared redis_usage_cache (like the PKCE verifiers) and only falls
+    back to the per-worker in-memory user_api_key_cache when Redis is not configured.
+    """
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    if redis_usage_cache is not None:
+        return redis_usage_cache
+    return user_api_key_cache
+
+
+async def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: Union[DualCache, RedisCache]) -> dict:
     if not _is_valid_cli_sso_login_id(login_id):
         raise HTTPException(status_code=400, detail="Invalid CLI login session")
 
     cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
-    flow = cache.get_cache(key=cache_key)
+    flow = await cache.async_get_cache(key=cache_key)
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
         raise HTTPException(status_code=400, detail="Invalid CLI login session")
     return flow
 
 
-def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
-    cache.set_cache(
+async def _set_cli_sso_flow(login_id: str, cache: Union[DualCache, RedisCache], flow: dict) -> None:
+    await cache.async_set_cache(
         key=_get_cli_sso_flow_cache_key(login_id),
         value=flow,
         ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -586,7 +601,7 @@ async def cli_sso_start(request: Request):
         "user_code_verified": False,
         "session_data": None,
     }
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    await _set_cli_sso_flow(login_id=login_id, cache=_get_cli_sso_flow_cache(user_api_key_cache), flow=flow)
 
     verification_uri_complete: str | None = (
         (
@@ -620,7 +635,8 @@ async def cli_sso_complete(request: Request, login_id: str):
     )
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    flow_cache = _get_cli_sso_flow_cache(user_api_key_cache)
+    flow = await _get_cli_sso_flow_or_raise(login_id=login_id, cache=flow_cache)
     if not flow.get("sso_complete") or not flow.get("session_data"):
         raise HTTPException(status_code=400, detail="CLI login is not ready")
 
@@ -644,7 +660,7 @@ async def cli_sso_complete(request: Request, login_id: str):
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
     flow["user_code_verified"] = True
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    await _set_cli_sso_flow(login_id=login_id, cache=flow_cache, flow=flow)
 
     html_content = render_cli_sso_success_page()
     return HTMLResponse(content=html_content, status_code=200)
@@ -886,7 +902,7 @@ async def google_login(
     )
 
     if source == LITELLM_CLI_SOURCE_IDENTIFIER:
-        _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+        await _get_cli_sso_flow_or_raise(login_id=key, cache=_get_cli_sso_flow_cache(user_api_key_cache))
 
     # Store CLI login handle in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
@@ -1966,7 +1982,7 @@ async def _complete_cli_sso_callback_session(
     flow["sso_complete"] = True
     browser_complete_token = secrets.token_urlsafe(32)
     flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
-    _set_cli_sso_flow(login_id=key, cache=user_api_key_cache, flow=flow)
+    await _set_cli_sso_flow(login_id=key, cache=_get_cli_sso_flow_cache(user_api_key_cache), flow=flow)
 
     verbose_proxy_logger.info(
         f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
@@ -2002,7 +2018,7 @@ async def cli_sso_callback(
         user_api_key_cache,
     )
 
-    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+    flow = await _get_cli_sso_flow_or_raise(login_id=key, cache=_get_cli_sso_flow_cache(user_api_key_cache))
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -2078,8 +2094,9 @@ async def cli_poll_key(
     )
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
+    flow_cache = _get_cli_sso_flow_cache(user_api_key_cache)
     try:
-        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
+        flow = await _get_cli_sso_flow_or_raise(login_id=key_id, cache=flow_cache)
         if not _verify_cli_sso_poll_secret(flow=flow, poll_secret=x_litellm_cli_poll_secret):
             raise HTTPException(status_code=403, detail="Invalid CLI polling secret")
 
@@ -2186,7 +2203,7 @@ async def cli_poll_key(
             )
 
             # Delete cache entry (single-use)
-            user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
+            await flow_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
             verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
             poll_response = {
