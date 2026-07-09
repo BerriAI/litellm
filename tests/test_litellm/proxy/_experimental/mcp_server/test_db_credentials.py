@@ -171,7 +171,7 @@ async def test_purge_user_oauth_credentials_for_server_invalidates_each_user():
 
     prisma = MagicMock()
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[_oauth_row("alice"), _oauth_row("bob")])
-    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=1)
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=2)
 
     invalidations = []
 
@@ -181,15 +181,17 @@ async def test_purge_user_oauth_credentials_for_server_invalidates_each_user():
     purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1", invalidate_token_cache=record_invalidation)
 
     assert purged == 2
-    assert prisma.db.litellm_mcpusercredentials.delete_many.await_count == 2
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once_with(
+        where={"server_id": "srv-1", "user_id": {"in": ["alice", "bob"]}}
+    )
     assert set(invalidations) == {("alice", "srv-1"), ("bob", "srv-1")}
 
 
 @pytest.mark.asyncio
 async def test_purge_user_oauth_credentials_for_server_spares_byok_rows():
     """Regression: the purge used to delete_many on server_id alone, wiping BYOK API keys that share
-    the LiteLLM_MCPUserCredentials table. Only rows holding an OAuth2 payload may be deleted, each by
-    its (user_id, server_id) pair, and only their users' token caches invalidated."""
+    the LiteLLM_MCPUserCredentials table. Only rows holding an OAuth2 payload may be deleted (one
+    batched query filtered to their user_ids), and only their users' token caches invalidated."""
     from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
 
     prisma = MagicMock()
@@ -205,7 +207,7 @@ async def test_purge_user_oauth_credentials_for_server_spares_byok_rows():
 
     assert purged == 1
     prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once_with(
-        where={"user_id": "alice", "server_id": "srv-1"}
+        where={"server_id": "srv-1", "user_id": {"in": ["alice"]}}
     )
     assert invalidations == [("alice", "srv-1")]
 
