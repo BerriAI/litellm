@@ -1170,6 +1170,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     max_tool_calls: Optional[int]
     prompt_cache_key: Optional[str]
     prompt_cache_retention: Optional[str]
+    prompt_cache_breakpoint: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
     partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
