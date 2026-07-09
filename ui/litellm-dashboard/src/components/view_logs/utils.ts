@@ -1,4 +1,4 @@
-import { MCP_CALL_TYPES } from "./constants";
+import { MCP_CALL_TYPES, RELAY_CALL_TYPES } from "./constants";
 
 /**
  * Derive a short, human-readable display name for a log entry.
@@ -7,6 +7,7 @@ import { MCP_CALL_TYPES } from "./constants";
 export function getEventDisplayName(callType: string, model: string): string {
   const raw = (model || "").trim();
   const isMcp = MCP_CALL_TYPES.includes(callType);
+  const isRelay = RELAY_CALL_TYPES.includes(callType);
 
   if (isMcp) {
     return (
@@ -17,6 +18,10 @@ export function getEventDisplayName(callType: string, model: string): string {
       raw ||
       "mcp_tool"
     );
+  }
+
+  if (isRelay) {
+    return raw || "litellm-relay";
   }
 
   const lastSegment = raw.split("/").pop() || raw;

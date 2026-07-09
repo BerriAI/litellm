@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Drawer, Segmented } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
-import { Bot, Sparkles, Wrench } from "lucide-react";
+import { Bot, Cable, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES, RELAY_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
@@ -49,6 +49,7 @@ interface TraceEventRowProps {
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
   const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+  const isRelay = RELAY_CALL_TYPES.includes(row.call_type);
   const durationValue =
     row.request_duration_ms != null
       ? (row.request_duration_ms / 1000).toFixed(3)
@@ -69,6 +70,8 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
           <Wrench size={12} className="text-slate-500 shrink-0" />
         ) : isAgent ? (
           <Bot size={12} className="text-slate-500 shrink-0" />
+        ) : isRelay ? (
+          <Cable size={12} className="text-slate-500 shrink-0" />
         ) : (
           <Sparkles size={12} className="text-slate-500 shrink-0" />
         )}
