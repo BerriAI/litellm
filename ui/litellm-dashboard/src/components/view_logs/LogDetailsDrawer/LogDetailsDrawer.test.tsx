@@ -13,6 +13,14 @@ vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
   useLogDetails: () => ({ data: null, isLoading: false }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig")>();
+  return {
+    ...actual,
+    getProxyConfigCall: vi.fn().mockResolvedValue([]),
+  };
+});
+
 vi.mock("./LogDetailContent", () => ({
   LogDetailContent: () => null,
   GuardrailJumpLink: () => null,
