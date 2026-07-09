@@ -207,6 +207,25 @@ locals {
 
 # ---------- Gateway ----------
 resource "aws_ecs_task_definition" "gateway" {
+  # Metering needs a client certificate AND its key. Each secret is created only
+  # when its own PEM is supplied, so an endpoint set with a missing key would
+  # otherwise apply cleanly and leave the proxy logging "missing config" and
+  # never exporting. ca_cert_pem stays optional: empty means fall back to the
+  # system trust store.
+  #
+  #   endpoint  cert  key  -> result
+  #   ""        any   any  -> metering off, no secrets created
+  #   set       set   set  -> metering on
+  #   set       any-missing -> plan fails here
+  lifecycle {
+    precondition {
+      condition = var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
+    }
+  }
+
   family                   = "${local.name}-gateway"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
