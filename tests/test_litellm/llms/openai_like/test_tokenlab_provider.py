@@ -147,9 +147,15 @@ class TestTokenLabCostMap:
             assert info["litellm_provider"] == "tokenlab"
             assert info["mode"] in {"chat", "embedding"}
 
-    def test_claude_models_advertise_messages_endpoint(self):
+    def test_claude_model_cost_map_keeps_schema_supported_endpoints(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
         endpoints = litellm.model_cost["tokenlab/claude-opus-4-8"]["supported_endpoints"]
-        assert "/v1/messages" in endpoints
+        assert endpoints == ["/v1/chat/completions", "/v1/responses"]
+
+        provider_config = JSONProviderRegistry.get("tokenlab")
+        assert provider_config is not None
+        assert "/v1/messages" in provider_config.supported_endpoints
 
     def test_chat_cost_is_wired(self):
         prompt_cost, completion_cost = litellm.cost_per_token(

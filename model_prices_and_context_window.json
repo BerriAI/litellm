@@ -45258,8 +45258,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45271,8 +45270,10 @@
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_prompt_caching": true,
+        "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -45290,8 +45291,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45322,8 +45322,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45354,8 +45353,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45367,8 +45365,10 @@
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_prompt_caching": true,
+        "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -45386,8 +45386,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45399,8 +45398,10 @@
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_prompt_caching": true,
+        "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -45418,8 +45419,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45450,8 +45450,7 @@
         "source": "https://api.tokenlab.sh/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses",
-            "/v1/messages"
+            "/v1/responses"
         ],
         "supported_modalities": [
             "text",
@@ -45463,8 +45462,10 @@
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_prompt_caching": true,
+        "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
