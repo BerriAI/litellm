@@ -5,7 +5,6 @@ import { DataTable, DataTablePagination, DataTableSortHeader } from "@/component
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { ColumnDef, PaginationState, SortingState } from "@tanstack/react-table";
 import { Badge, Icon, Text } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { Popover, Tooltip, Typography } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -193,7 +192,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         id: "token",
         accessorKey: "token",
         header: ({ column }) => <DataTableSortHeader column={column} title="Key ID" variant="header-cycle" />,
-        size: 100,
+        size: 120,
         enableSorting: true,
         cell: (info) => (
           <IdCell value={info.getValue() as string | null} onClick={() => setSelectedKey(info.row.original)} />
@@ -283,7 +282,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         id: "created_by",
         accessorKey: "created_by",
         header: "Created By",
-        size: 70,
+        size: 130,
         enableSorting: false,
         cell: (info) => {
           const userId = info.getValue() as string | null;
@@ -349,17 +348,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "last_active",
         accessorKey: "last_active",
-        header: () => (
-          <span className="flex items-center gap-1">
-            Last Active
-            <Popover
-              content="This is a new field and is not backfilled. Only new key usage will update this value."
-              trigger="hover"
-            >
-              <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
-            </Popover>
-          </span>
-        ),
+        header: "Last Active",
         size: 130,
         enableSorting: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
