@@ -4398,10 +4398,10 @@ class Router:
         check in `_pre_call_checks` that needs `messages`.
         """
         messages = kwargs.get("messages")
+        is_responses_api_call = kwargs.pop("_responses_api_pre_call_check", False)
         if messages is not None:
             return messages
 
-        is_responses_api_call = kwargs.pop("_responses_api_pre_call_check", False)
         if (
             not is_responses_api_call
             or not self.enable_pre_call_checks

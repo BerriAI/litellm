@@ -51,6 +51,18 @@ class TestRouterGetMessagesForPreCallCheck:
         result = router._get_messages_for_pre_call_check(model="gpt-5-mini", kwargs={"messages": messages})
         assert result is messages
 
+    def test_pops_responses_api_sentinel_even_when_messages_present(self):
+        """
+        _responses_api_pre_call_check must be popped from kwargs regardless of
+        which branch returns, since it's an internal signal that must never
+        reach the underlying LLM API as an unexpected kwarg.
+        """
+        router = _make_router(max_input_tokens=100)
+        messages = [{"role": "user", "content": "hi"}]
+        kwargs = {"messages": messages, "_responses_api_pre_call_check": True}
+        router._get_messages_for_pre_call_check(model="gpt-5-mini", kwargs=kwargs)
+        assert "_responses_api_pre_call_check" not in kwargs
+
     def test_returns_none_when_not_a_responses_api_call(self):
         router = _make_router(max_input_tokens=100)
         result = router._get_messages_for_pre_call_check(
