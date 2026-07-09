@@ -1,7 +1,7 @@
 import { TextInput } from "@tremor/react";
 import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { CredentialItem } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
@@ -29,7 +29,19 @@ export default function CredentialModal({
 }: CredentialModalProps) {
   const isEdit = mode === "edit";
   const [form] = Form.useForm();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(isEdit ? Providers.Anthropic : Providers.OpenAI);
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(
+    (existingCredential?.credential_info.custom_llm_provider as Providers) ?? Providers.OpenAI,
+  );
+
+  const initialValues = existingCredential
+    ? {
+        credential_name: existingCredential.credential_name,
+        custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
+        ...Object.fromEntries(
+          Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
+        ),
+      }
+    : undefined;
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -41,23 +53,6 @@ export default function CredentialModal({
     onSubmit(filteredValues);
     form.resetFields();
   };
-
-  useEffect(() => {
-    if (!existingCredential) return;
-    const credentialValues = Object.entries(existingCredential.credential_values || {}).reduce(
-      (acc, [key, value]) => {
-        acc[key] = value ?? null;
-        return acc;
-      },
-      {} as Record<string, any>,
-    );
-    form.setFieldsValue({
-      credential_name: existingCredential.credential_name,
-      custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
-      ...credentialValues,
-    });
-    setSelectedProvider(existingCredential.credential_info.custom_llm_provider as Providers);
-  }, [existingCredential]);
 
   const closeAndReset = () => {
     onCancel();
@@ -73,12 +68,11 @@ export default function CredentialModal({
       width={600}
       destroyOnHidden={isEdit}
     >
-      <Form form={form} onFinish={handleSubmit} layout="vertical">
+      <Form form={form} onFinish={handleSubmit} layout="vertical" initialValues={initialValues}>
         <Form.Item
           label="Credential Name:"
           name="credential_name"
           rules={[{ required: true, message: "Credential name is required" }]}
-          initialValue={existingCredential?.credential_name}
         >
           <TextInput placeholder="Enter a friendly name for these credentials" disabled={isEdit} />
         </Form.Item>

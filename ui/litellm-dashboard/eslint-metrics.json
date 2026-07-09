@@ -1,5 +1,5 @@
 {
-  "@typescript-eslint/no-explicit-any": 1979,
+  "@typescript-eslint/no-explicit-any": 1978,
   "complexity": 128,
   "local/no-large-inline-object-arg": 519,
   "local/no-long-condition-chain": 233,
