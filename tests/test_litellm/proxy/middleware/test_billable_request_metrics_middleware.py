@@ -116,8 +116,13 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/github/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/toolset/my-tools/mcp", (BillableCategory.MCP, "/mcp")),
         ("/github,slack/mcp", (BillableCategory.MCP, "/mcp")),
+        # REST wrapper tool execution fires the same MCP spend logging as /mcp
+        ("/mcp-rest/tools/call", (BillableCategory.MCP, "/mcp")),
         ("/a2a/agent-1/message/send", (BillableCategory.A2A, "/a2a")),
         ("/v1/a2a/agent-9/message/send", (BillableCategory.A2A, "/a2a")),
+        # bare invoke route: the JSON-RPC method (message/send or message/stream)
+        # travels in the body, not the path
+        ("/a2a/agent-1", (BillableCategory.A2A, "/a2a")),
     ],
 )
 def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
@@ -160,7 +165,8 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1/a2a/discover",
         "/.well-known/oauth-protected-resource/github/mcp",
         "/mcp-rest/tools/list",
-        "/mcp-rest/tools/call",
+        "/mcp-rest/test/connection",
+        "/mcp-rest/test/tools/list",
     ],
 )
 def test_classify_non_billable_returns_none(path: str):
