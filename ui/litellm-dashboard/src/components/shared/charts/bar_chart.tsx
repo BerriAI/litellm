@@ -91,7 +91,12 @@ export function BarChart<TDatum extends Record<string, unknown>>({
             )}
           />
         )}
-        {showLegend && <ChartLegend verticalAlign="top" content={<ChartLegendContent className="justify-end" />} />}
+        {showLegend && (
+          <ChartLegend
+            verticalAlign="top"
+            content={<ChartLegendContent className="justify-end text-muted-foreground" />}
+          />
+        )}
         {categories.map((category, i) => (
           <Bar
             key={category}

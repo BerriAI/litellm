@@ -14,7 +14,7 @@ export function ScoreChart({ data }: ScoreChartProps) {
   const chartData = data && data.length > 0 ? data : [];
 
   return (
-    <Card size="sm">
+    <Card>
       <CardHeader>
         <CardTitle className="text-base font-semibold">Request Outcomes Over Time</CardTitle>
       </CardHeader>
