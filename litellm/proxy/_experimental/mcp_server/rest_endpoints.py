@@ -1321,12 +1321,15 @@ if MCP_AVAILABLE:
             if isinstance(credentials, dict):
                 mcp_auth_header = credentials.get("auth_value")
 
+        # Authorization doubles as the admission fallback (LITELLM_API_KEY_HEADER_NAME_SECONDARY):
+        # when the primary x-litellm-api-key header is absent, the Authorization value is the
+        # caller's LiteLLM key, not an upstream token, and must never be forwarded upstream.
         oauth2_headers: Optional[Dict[str, str]] = None
         if new_mcp_server_request.auth_type in {
             MCPAuth.oauth2,
             MCPAuth.true_passthrough,
             MCPAuth.oauth_delegate,
-        }:
+        } and headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY):
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
