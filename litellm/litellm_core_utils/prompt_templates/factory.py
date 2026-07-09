@@ -3626,6 +3626,7 @@ class BedrockImageProcessor:
 
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
+    model: Optional[str] = None,
 ) -> List[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -3701,7 +3702,13 @@ def _convert_to_bedrock_tool_call_invoke(
                             # cache_control applies to the whole original
                             # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
-                                _parts_list.append(BedrockContentBlock(cachePoint=CachePointBlock(type="default")))
+                                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    {"cache_control": tool["cache_control"]},
+                                    block_type="content_block",
+                                    model=model,
+                                )
+                                if _cache_point_block is not None:
+                                    _parts_list.append(_cache_point_block)
                             continue
                         # Fallback: no objects extracted — use empty dict.
                         arguments_dict = {}
@@ -3712,8 +3719,13 @@ def _convert_to_bedrock_tool_call_invoke(
 
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                    _parts_list.append(cache_point_block)
+                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        {"cache_control": tool["cache_control"]},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if cache_point_block is not None:
+                        _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -4417,22 +4429,27 @@ class BedrockConverseMessagesProcessor:
                 tool_content.append(tool_call_result)
 
                 # Check if we need to add a separate cachePoint block
-                has_cache_control = False
+                tool_msg_cache_control = None
 
                 # Check for message-level cache_control
                 if current_message.get("cache_control", None) is not None:
-                    has_cache_control = True
+                    tool_msg_cache_control = current_message["cache_control"]
                 # Check for content-level cache_control in list content
                 elif isinstance(current_message.get("content"), list):
                     for content_element in current_message["content"]:
                         if isinstance(content_element, dict) and content_element.get("cache_control", None) is not None:
-                            has_cache_control = True
+                            tool_msg_cache_control = content_element["cache_control"]
                             break
 
                 # Add a separate cachePoint block if cache_control is present
-                if has_cache_control:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                    tool_content.append(cache_point_block)
+                if tool_msg_cache_control is not None:
+                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        {"cache_control": tool_msg_cache_control},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if cache_point_block is not None:
+                        tool_content.append(cache_point_block)
 
                 msg_i += 1
             # Deduplicate toolResult blocks with the same toolUseId
@@ -4529,7 +4546,7 @@ class BedrockConverseMessagesProcessor:
 
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
-                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls))
+                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
 
                 msg_i += 1
 
@@ -4789,22 +4806,27 @@ def _bedrock_converse_messages_pt(
             tool_content.append(tool_call_result)
 
             # Check if we need to add a separate cachePoint block
-            has_cache_control = False
+            tool_msg_cache_control = None
 
             # Check for message-level cache_control
             if current_message.get("cache_control", None) is not None:
-                has_cache_control = True
+                tool_msg_cache_control = current_message["cache_control"]
             # Check for content-level cache_control in list content
             elif isinstance(current_message.get("content"), list):
                 for content_element in current_message["content"]:
                     if isinstance(content_element, dict) and content_element.get("cache_control", None) is not None:
-                        has_cache_control = True
+                        tool_msg_cache_control = content_element["cache_control"]
                         break
 
             # Add a separate cachePoint block if cache_control is present
-            if has_cache_control:
-                cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                tool_content.append(cache_point_block)
+            if tool_msg_cache_control is not None:
+                cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    {"cache_control": tool_msg_cache_control},
+                    block_type="content_block",
+                    model=model,
+                )
+                if cache_point_block is not None:
+                    tool_content.append(cache_point_block)
 
             msg_i += 1
         # Deduplicate toolResult blocks with the same toolUseId
@@ -4902,7 +4924,7 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
-                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls))
+                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
 
             msg_i += 1
 
