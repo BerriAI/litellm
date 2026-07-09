@@ -153,6 +153,18 @@ class MCPServer(BaseModel):
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
 
     @property
+    def is_true_passthrough(self) -> bool:
+        """True for the transparent-proxy mode: LiteLLM performs no admission auth and forwards the
+        client's ``Authorization`` to the upstream unchanged."""
+        return self.auth_type == MCPAuth.true_passthrough
+
+    @property
+    def is_oauth_delegate(self) -> bool:
+        """True for the delegated-upstream-OAuth mode: LiteLLM still admits the caller (API key / SSO /
+        JWT) but forwards the caller's separate upstream ``Authorization`` unchanged, minting nothing."""
+        return self.auth_type == MCPAuth.oauth_delegate
+
+    @property
     def requires_per_user_auth(self) -> bool:
         """
         True if this server requires per-user/per-request authentication.
@@ -165,6 +177,9 @@ class MCPServer(BaseModel):
         """
         # OAuth2 without client credentials
         if self.needs_user_oauth_token:
+            return True
+
+        if self.is_true_passthrough or self.is_oauth_delegate:
             return True
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers

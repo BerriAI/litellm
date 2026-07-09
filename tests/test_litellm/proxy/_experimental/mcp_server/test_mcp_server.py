@@ -71,9 +71,7 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     # Mock the add_litellm_data_to_request function to capture the data
     captured_data = {}
 
-    async def mock_add_litellm_data_to_request(
-        data, request, user_api_key_dict, proxy_config
-    ):
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
         captured_data.update(data)
         # Simulate the proxy_server_request creation
         captured_data["proxy_server_request"] = {
@@ -357,6 +355,122 @@ def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_heade
     assert extra_headers.get("X-Custom") == "trace"
 
 
+def _client_forwarded_mode_server(server_id: str, auth_type) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=server_id,
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+
+
+def _prepare_headers_in_scope(server: MCPServer, scope_servers):
+    from litellm.proxy._experimental.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+
+    return _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer upstream-token"},
+        raw_headers={
+            "x-litellm-api-key": "Bearer sk-litellm-key",
+            "authorization": "Bearer upstream-token",
+        },
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        scope_servers=scope_servers,
+    )
+
+
+def test_prepare_mcp_server_headers_withholds_global_authorization_when_scope_fans_out():
+    """One caller bearer must not be replayed against multiple upstreams (RFC 9700
+    cross-resource replay): in a fan-out scope with a second Authorization-consuming
+    server, the client-forwarded modes get no global Authorization."""
+    delegate = _client_forwarded_mode_server("od-fanout", MCPAuth.oauth_delegate)
+    second_consumer = _client_forwarded_mode_server("tp-fanout", MCPAuth.true_passthrough)
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, second_consumer])
+
+    assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
+
+def test_prepare_mcp_server_headers_forwards_global_authorization_to_sole_consumer():
+    """Non-consuming servers (static api_key) in scope do not make the forward ambiguous."""
+    delegate = _client_forwarded_mode_server("od-sole", MCPAuth.oauth_delegate)
+    static_server = MCPServer(
+        server_id="static-api-key",
+        name="static-api-key",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="static-key",
+    )
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, static_server])
+
+    assert extra_headers == {"Authorization": "Bearer upstream-token"}
+
+
+def test_prepare_mcp_server_headers_scope_counts_legacy_delegate_as_consumer():
+    """Legacy upstream-delegated oauth2 servers still receive the caller's Authorization on the
+    v1 path, so their presence in scope must suppress the new modes' forward too."""
+    delegate = _client_forwarded_mode_server("od-vs-legacy", MCPAuth.oauth_delegate)
+    legacy_delegate = MCPServer(
+        server_id="legacy-delegate",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, legacy_delegate])
+
+    assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
+
+def test_prepare_mcp_server_headers_fanout_withhold_survives_extra_headers_loop():
+    """Regression: when fan-out withholds the request-wide Authorization from a client-forwarded
+    server, the later server.extra_headers copy loop must not re-add it from raw_headers even if
+    the server lists Authorization in extra_headers. Otherwise one bearer is replayed across every
+    consuming upstream in the scope (the exact cross-resource replay the withholding prevents)."""
+    delegate = MCPServer(
+        server_id="od-extra-hdr",
+        name="od-extra-hdr",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+        extra_headers=["Authorization"],
+    )
+    second_consumer = _client_forwarded_mode_server("tp-peer", MCPAuth.true_passthrough)
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, second_consumer])
+
+    assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
+
+def test_prepare_mcp_server_headers_sole_consumer_still_forwards_via_extra_headers():
+    """Guard the fix does not over-withhold: with no second consumer in scope, a client-forwarded
+    server that lists Authorization in extra_headers still forwards the caller's bearer."""
+    delegate = MCPServer(
+        server_id="od-extra-sole",
+        name="od-extra-sole",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+        extra_headers=["Authorization"],
+    )
+    static_server = MCPServer(
+        server_id="static-peer",
+        name="static-peer",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="static-key",
+    )
+
+    _, extra_headers = _prepare_headers_in_scope(delegate, [delegate, static_server])
+
+    assert extra_headers is not None
+    assert extra_headers.get("Authorization") == "Bearer upstream-token"
+
+
 @pytest.mark.asyncio
 async def test_call_tool_m2m_skips_authorization_headers():
     """M2M call_tool must not forward caller Authorization in oauth2/raw headers."""
@@ -384,9 +498,7 @@ async def test_call_tool_m2m_skips_authorization_headers():
     mock_client = MagicMock()
     mock_client.call_tool = AsyncMock(return_value=MagicMock())
 
-    with patch.object(
-        manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)
-    ) as create_client_mock:
+    with patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)) as create_client_mock:
         await manager._call_regular_mcp_tool(
             mcp_server=server,
             original_tool_name="echo",
@@ -881,9 +993,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
-    mock_manager.get_allowed_mcp_servers = AsyncMock(
-        return_value=["working_server", "failing_server"]
-    )
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["working_server", "failing_server"])
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
@@ -944,9 +1054,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             )
 
             # Verify success logging
-            mock_logger.info.assert_any_call(
-                "Successfully fetched 1 tools total from all MCP servers"
-            )
+            mock_logger.info.assert_any_call("Successfully fetched 1 tools total from all MCP servers")
 
 
 @pytest.mark.asyncio
@@ -987,9 +1095,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
-    mock_manager.get_allowed_mcp_servers = AsyncMock(
-        return_value=["failing_server1", "failing_server2"]
-    )
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["failing_server1", "failing_server2"])
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
@@ -1044,9 +1150,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
             )
 
             # Verify total logging
-            mock_logger.info.assert_any_call(
-                "Successfully fetched 0 tools total from all MCP servers"
-            )
+            mock_logger.info.assert_any_call("Successfully fetched 0 tools total from all MCP servers")
 
 
 @pytest.mark.asyncio
@@ -1071,9 +1175,7 @@ async def test_mcp_server_tool_call_body_with_none_arguments():
     # Mock the add_litellm_data_to_request function to capture the data
     captured_data = {}
 
-    async def mock_add_litellm_data_to_request(
-        data, request, user_api_key_dict, proxy_config
-    ):
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
         captured_data.update(data)
         captured_data["proxy_server_request"] = {
             "url": str(request.url),
@@ -1178,31 +1280,29 @@ async def test_concurrent_initialize_session_managers():
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # All tasks should complete successfully (no exceptions)
-            assert all(
-                result == "success" for result in results
-            ), f"Some tasks failed: {results}"
+            assert all(result == "success" for result in results), f"Some tasks failed: {results}"
 
             # Each session manager.run() should only be called once due to the lock
-            assert (
-                mock_stateless_run.call_count == 1
-            ), f"Expected 1 call to session_manager_stateless.run(), got {mock_stateless_run.call_count}"
-            assert (
-                mock_stateful_run.call_count == 1
-            ), f"Expected 1 call to session_manager_stateful.run(), got {mock_stateful_run.call_count}"
-            assert (
-                mock_sse_run.call_count == 1
-            ), f"Expected 1 call to sse_session_manager.run(), got {mock_sse_run.call_count}"
+            assert mock_stateless_run.call_count == 1, (
+                f"Expected 1 call to session_manager_stateless.run(), got {mock_stateless_run.call_count}"
+            )
+            assert mock_stateful_run.call_count == 1, (
+                f"Expected 1 call to session_manager_stateful.run(), got {mock_stateful_run.call_count}"
+            )
+            assert mock_sse_run.call_count == 1, (
+                f"Expected 1 call to sse_session_manager.run(), got {mock_sse_run.call_count}"
+            )
 
             # The context managers should only be entered once each
-            assert (
-                mock_cm_stateless.__aenter__.call_count == 1
-            ), f"Expected 1 call to stateless __aenter__, got {mock_cm_stateless.__aenter__.call_count}"
-            assert (
-                mock_cm_stateful.__aenter__.call_count == 1
-            ), f"Expected 1 call to stateful __aenter__, got {mock_cm_stateful.__aenter__.call_count}"
-            assert (
-                mock_cm_sse.__aenter__.call_count == 1
-            ), f"Expected 1 call to sse __aenter__, got {mock_cm_sse.__aenter__.call_count}"
+            assert mock_cm_stateless.__aenter__.call_count == 1, (
+                f"Expected 1 call to stateless __aenter__, got {mock_cm_stateless.__aenter__.call_count}"
+            )
+            assert mock_cm_stateful.__aenter__.call_count == 1, (
+                f"Expected 1 call to stateful __aenter__, got {mock_cm_stateful.__aenter__.call_count}"
+            )
+            assert mock_cm_sse.__aenter__.call_count == 1, (
+                f"Expected 1 call to sse __aenter__, got {mock_cm_sse.__aenter__.call_count}"
+            )
 
             # State should be properly set
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
@@ -1345,16 +1445,12 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
     # initialize → stateful
     init_body = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
     stateless_called, stateful_called = await make_request(init_body)
-    assert (
-        stateful_called and not stateless_called
-    ), "initialize (no session) should route to stateful, not stateless"
+    assert stateful_called and not stateless_called, "initialize (no session) should route to stateful, not stateless"
 
     # tools/list → stateless
     tools_body = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
     stateless_called, stateful_called = await make_request(tools_body)
-    assert (
-        stateless_called and not stateful_called
-    ), "tools/list (no session) should route to stateless, not stateful"
+    assert stateless_called and not stateful_called, "tools/list (no session) should route to stateless, not stateful"
 
 
 @pytest.mark.asyncio
@@ -1439,9 +1535,9 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert (
-        stateful_called and not stateless_called
-    ), "chunked initialize (no session) should route to stateful, not stateless"
+    assert stateful_called and not stateless_called, (
+        "chunked initialize (no session) should route to stateful, not stateless"
+    )
 
 
 @pytest.mark.asyncio
@@ -1470,10 +1566,7 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
 
     messages = [
         {"type": "http.request", "body": first_chunk, "more_body": True},
-        *[
-            {"type": "http.request", "body": chunk, "more_body": True}
-            for chunk in oversized_tail
-        ],
+        *[{"type": "http.request", "body": chunk, "more_body": True} for chunk in oversized_tail],
         {"type": "http.request", "body": b"", "more_body": False},
     ]
     receive_calls = {"count": 0}
@@ -1524,12 +1617,8 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
         ),
-        patch.object(
-            session_manager_stateless, "handle_request", side_effect=stateless_handle
-        ),
-        patch.object(
-            session_manager_stateful, "handle_request", side_effect=stateful_handle
-        ),
+        patch.object(session_manager_stateless, "handle_request", side_effect=stateless_handle),
+        patch.object(session_manager_stateful, "handle_request", side_effect=stateful_handle),
         patch.object(session_manager_stateless, "_server_instances", {}),
         patch.object(session_manager_stateful, "_server_instances", {}),
     ):
@@ -1580,9 +1669,7 @@ async def test_enforce_stateful_session_cap_evicts_oldest_idle_then_rejects():
         patch.object(session_manager_stateful, "_server_instances", instances),
         patch.object(mcp_server, "_MAX_STATEFUL_SESSIONS_PER_OWNER", 3),
         patch.dict(mcp_server._stateful_session_owners, owners, clear=True),
-        patch.dict(
-            mcp_server._stateful_session_auth_context_last_seen, last_seen, clear=True
-        ),
+        patch.dict(mcp_server._stateful_session_auth_context_last_seen, last_seen, clear=True),
         patch.dict(mcp_server._stateful_session_auth_contexts, contexts, clear=True),
         patch.dict(mcp_server._stateful_session_active_request_counts, {}, clear=True),
     ):
@@ -1595,9 +1682,7 @@ async def test_enforce_stateful_session_cap_evicts_oldest_idle_then_rejects():
 
         # A different owner at the cap is unaffected by owner-A's sessions.
         terminated.clear()
-        allowed_other = await mcp_server._enforce_stateful_session_cap_for_owner(
-            "owner-B"
-        )
+        allowed_other = await mcp_server._enforce_stateful_session_cap_for_owner("owner-B")
         assert allowed_other is True
         assert terminated == []
 
@@ -1616,9 +1701,7 @@ async def test_enforce_stateful_session_cap_evicts_oldest_idle_then_rejects():
             {f"s{i}": float(i) for i in range(3)},
             clear=True,
         ),
-        patch.dict(
-            mcp_server._stateful_session_active_request_counts, active, clear=True
-        ),
+        patch.dict(mcp_server._stateful_session_active_request_counts, active, clear=True),
     ):
         rejected = await mcp_server._enforce_stateful_session_cap_for_owner("owner-A")
         assert rejected is False
@@ -1664,9 +1747,7 @@ async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
             (b"authorization", b"Bearer test-key"),
         ],
     }
-    receive = AsyncMock(
-        return_value={"type": "http.request", "body": init_body, "more_body": False}
-    )
+    receive = AsyncMock(return_value={"type": "http.request", "body": init_body, "more_body": False})
     send = AsyncMock()
 
     stateful_called = []
@@ -1687,9 +1768,7 @@ async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
         ),
         patch.object(mcp_server, "_owner_fingerprint_for", return_value="owner-X"),
         patch.object(mcp_server, "_MAX_STATEFUL_SESSIONS_PER_OWNER", cap),
-        patch.object(
-            session_manager_stateful, "handle_request", side_effect=stateful_handle
-        ),
+        patch.object(session_manager_stateful, "handle_request", side_effect=stateful_handle),
         patch.object(session_manager_stateful, "_server_instances", instances),
         patch.object(session_manager_stateless, "_server_instances", {}),
         patch.dict(mcp_server._stateful_session_owners, owners, clear=True),
@@ -1698,18 +1777,14 @@ async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
             {f"s{i}": float(i) for i in range(cap)},
             clear=True,
         ),
-        patch.dict(
-            mcp_server._stateful_session_active_request_counts, active, clear=True
-        ),
+        patch.dict(mcp_server._stateful_session_active_request_counts, active, clear=True),
         patch.dict(mcp_server._stateful_session_auth_contexts, contexts, clear=True),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     assert not stateful_called, "initialize at session cap must not reach the manager"
     start_messages = [
-        call.args[0]
-        for call in send.call_args_list
-        if call.args and call.args[0].get("type") == "http.response.start"
+        call.args[0] for call in send.call_args_list if call.args and call.args[0].get("type") == "http.response.start"
     ]
     assert start_messages, "a response should have been sent"
     assert start_messages[0]["status"] == 429
@@ -1745,9 +1820,7 @@ async def test_stateful_mcp_requests_refresh_session_auth_context():
         None,
         "1.1.1.1",
     )
-    mcp_server._stateful_session_auth_contexts[session_id] = callback_context.run(
-        mcp_server.auth_context_var.get
-    )
+    mcp_server._stateful_session_auth_contexts[session_id] = callback_context.run(mcp_server.auth_context_var.get)
 
     scope = {
         "type": "http",
@@ -2008,24 +2081,14 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
         )
         await mcp_server._purge_expired_stateful_session_auth_contexts(now=now)
         assert new_session_id in mcp_server._stateful_session_auth_contexts
-        assert (
-            mcp_server._stateful_session_auth_contexts[new_session_id]
-            is not existing_auth_user
-        )
-        assert (
-            mcp_server._stateful_session_auth_contexts[new_session_id].mcp_auth_header
-            == "new-mcp-auth"
-        )
+        assert mcp_server._stateful_session_auth_contexts[new_session_id] is not existing_auth_user
+        assert mcp_server._stateful_session_auth_contexts[new_session_id].mcp_auth_header == "new-mcp-auth"
 
     async def stateless_handle(s, r, se):
-        raise AssertionError(
-            "initialize request with session should use stateful manager"
-        )
+        raise AssertionError("initialize request with session should use stateful manager")
 
     try:
-        mcp_server._stateful_session_auth_contexts[existing_session_id] = (
-            existing_auth_user
-        )
+        mcp_server._stateful_session_auth_contexts[existing_session_id] = existing_auth_user
         mcp_server._stateful_session_auth_context_last_seen[existing_session_id] = 1.0
         mcp_server._stateful_session_owners[existing_session_id] = owner_fingerprint
 
@@ -2067,10 +2130,7 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
         assert stateful_called
         assert new_session_id not in mcp_server._stateful_session_active_request_counts
         assert new_session_id in mcp_server._stateful_session_auth_contexts
-        assert (
-            mcp_server._stateful_session_auth_contexts[existing_session_id]
-            is existing_auth_user
-        )
+        assert mcp_server._stateful_session_auth_contexts[existing_session_id] is existing_auth_user
         assert existing_auth_user.mcp_auth_header == "old-mcp-auth"
         assert existing_auth_user.mcp_servers == ["old-server"]
     finally:
@@ -2193,15 +2253,11 @@ async def test_stateful_mcp_cleanup_loop_survives_purge_errors():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    purge = AsyncMock(
-        side_effect=[RuntimeError("terminate failed"), asyncio.CancelledError()]
-    )
+    purge = AsyncMock(side_effect=[RuntimeError("terminate failed"), asyncio.CancelledError()])
 
     with (
         patch.object(mcp_server.asyncio, "sleep", AsyncMock(return_value=None)),
-        patch.object(
-            mcp_server, "_purge_expired_stateful_session_auth_contexts", purge
-        ),
+        patch.object(mcp_server, "_purge_expired_stateful_session_auth_contexts", purge),
     ):
         with pytest.raises(asyncio.CancelledError):
             await mcp_server._cleanup_expired_stateful_session_auth_contexts()
@@ -2291,9 +2347,7 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
     intruder_auth = UserAPIKeyAuth(api_key="intruder-key", user_id="intruder")
 
     mcp_server._stateful_session_auth_contexts[session_id] = MagicMock()
-    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
-        owner_auth
-    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
 
     scope = {
         "type": "http",
@@ -2343,9 +2397,7 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
         await handle_streamable_http_mcp(scope, receive, capture_send)
 
     handle_request_mock.assert_not_awaited()
-    statuses = [
-        m["status"] for m in sent_messages if m.get("type") == "http.response.start"
-    ]
+    statuses = [m["status"] for m in sent_messages if m.get("type") == "http.response.start"]
     assert statuses == [403]
 
     mcp_server._stateful_session_auth_contexts.pop(session_id, None)
@@ -2370,12 +2422,10 @@ async def test_stateful_mcp_session_serializes_concurrent_requests():
 
     session_id = "serialized-session-1"
     owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
-    mcp_server._stateful_session_auth_contexts[session_id] = (
-        mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner_auth)
+    mcp_server._stateful_session_auth_contexts[session_id] = mcp_server.MCPAuthenticatedUser(
+        user_api_key_auth=owner_auth
     )
-    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
-        owner_auth
-    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
 
     inside = 0
     max_inside = 0
@@ -2416,9 +2466,7 @@ async def test_stateful_mcp_session_serializes_concurrent_requests():
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
             ),
-            patch.object(
-                session_manager_stateful, "handle_request", side_effect=slow_handle
-            ),
+            patch.object(session_manager_stateful, "handle_request", side_effect=slow_handle),
             patch.object(
                 session_manager_stateful,
                 "_server_instances",
@@ -2434,9 +2482,7 @@ async def test_stateful_mcp_session_serializes_concurrent_requests():
         mcp_server._stateful_session_owners.pop(session_id, None)
         mcp_server._stateful_session_locks.pop(session_id, None)
 
-    assert (
-        max_inside == 1
-    ), "concurrent requests on same stateful session must be serialized"
+    assert max_inside == 1, "concurrent requests on same stateful session must be serialized"
 
 
 @pytest.mark.asyncio
@@ -2488,9 +2534,7 @@ async def test_stateful_mcp_lock_does_not_leak_when_auth_context_missing():
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
             ),
-            patch.object(
-                session_manager_stateful, "handle_request", side_effect=handle
-            ),
+            patch.object(session_manager_stateful, "handle_request", side_effect=handle),
             patch.object(
                 session_manager_stateful,
                 "_server_instances",
@@ -2500,9 +2544,9 @@ async def test_stateful_mcp_lock_does_not_leak_when_auth_context_missing():
             assert session_id not in mcp_server._stateful_session_auth_contexts
             await handle_streamable_http_mcp(scope, receive, AsyncMock())
 
-        assert (
-            session_id not in mcp_server._stateful_session_locks
-        ), "lock entry must be cleaned up for untracked stateful session"
+        assert session_id not in mcp_server._stateful_session_locks, (
+            "lock entry must be cleaned up for untracked stateful session"
+        )
     finally:
         mcp_server._stateful_session_auth_contexts.pop(session_id, None)
         mcp_server._stateful_session_owners.pop(session_id, None)
@@ -2528,12 +2572,10 @@ async def test_stateful_mcp_get_stream_does_not_block_post():
 
     session_id = "stream-session-1"
     owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
-    mcp_server._stateful_session_auth_contexts[session_id] = (
-        mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner_auth)
+    mcp_server._stateful_session_auth_contexts[session_id] = mcp_server.MCPAuthenticatedUser(
+        user_api_key_auth=owner_auth
     )
-    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
-        owner_auth
-    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
 
     stream_release = asyncio.Event()
     post_finished = asyncio.Event()
@@ -2571,9 +2613,7 @@ async def test_stateful_mcp_get_stream_does_not_block_post():
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
             ),
-            patch.object(
-                session_manager_stateful, "handle_request", side_effect=handle
-            ),
+            patch.object(session_manager_stateful, "handle_request", side_effect=handle),
             patch.object(
                 session_manager_stateful,
                 "_server_instances",
@@ -2617,10 +2657,7 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
     assert _jsonrpc_text_has_top_level_method(reordered) is True
 
     # response whose result nests a "method" key (and arrays of them)
-    response = (
-        '{"jsonrpc":"2.0","id":1,"result":{"toolResult":{"method":"GET"},'
-        '"steps":[{"method":"x"}]}}'
-    )
+    response = '{"jsonrpc":"2.0","id":1,"result":{"toolResult":{"method":"GET"},"steps":[{"method":"x"}]}}'
     assert _jsonrpc_text_has_top_level_method(response) is False
 
     # truncated response: result value never closes, no top-level method seen
@@ -2645,12 +2682,10 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
 
     session_id = "nested-method-response-session"
     owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
-    mcp_server._stateful_session_auth_contexts[session_id] = (
-        mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner_auth)
+    mcp_server._stateful_session_auth_contexts[session_id] = mcp_server.MCPAuthenticatedUser(
+        user_api_key_auth=owner_auth
     )
-    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
-        owner_auth
-    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
 
     gate = asyncio.Event()
     request_in_handle = asyncio.Event()
@@ -2687,8 +2722,7 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
     # parsed, with a nested "method" key in the first bytes to trip a flat
     # substring heuristic.
     response_body = (
-        '{"jsonrpc":"2.0","id":99,"result":{"toolResult":'
-        '{"method":"GET","payload":"' + ("x" * 5000) + '"}}}'
+        '{"jsonrpc":"2.0","id":99,"result":{"toolResult":{"method":"GET","payload":"' + ("x" * 5000) + '"}}}'
     ).encode()
 
     try:
@@ -2702,9 +2736,7 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
             ),
-            patch.object(
-                session_manager_stateful, "handle_request", side_effect=handle
-            ),
+            patch.object(session_manager_stateful, "handle_request", side_effect=handle),
             patch.object(
                 session_manager_stateful,
                 "_server_instances",
@@ -2776,13 +2808,9 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
     mock_get_tools_spy = AsyncMock(return_value=[])
 
     # Mock the function that checks DB for an access group named "custom_solutions"
-    mock_db_lookup = AsyncMock(
-        return_value=[specific_server.server_id, other_server.server_id]
-    )
+    mock_db_lookup = AsyncMock(return_value=[specific_server.server_id, other_server.server_id])
 
-    mock_get_allowed = AsyncMock(
-        return_value=[specific_server.server_id, other_server.server_id]
-    )
+    mock_get_allowed = AsyncMock(return_value=[specific_server.server_id, other_server.server_id])
 
     with (
         patch(
@@ -2807,14 +2835,12 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
         )
 
     # Get the list of actual server objects that the orchestrator tried to contact
-    called_servers = [
-        call.kwargs["server"] for call in mock_get_tools_spy.call_args_list
-    ]
+    called_servers = [call.kwargs["server"] for call in mock_get_tools_spy.call_args_list]
 
     assert len(called_servers) == 1, "Should have resolved to exactly one server."
-    assert (
-        called_servers[0].server_id == specific_server.server_id
-    ), "Should have contacted the specific server alias, not the group."
+    assert called_servers[0].server_id == specific_server.server_id, (
+        "Should have contacted the specific server alias, not the group."
+    )
 
 
 @pytest.mark.asyncio
@@ -2928,9 +2954,7 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
         )
 
     # Verify that _create_mcp_client was called
-    assert (
-        mock_create_client.call_count == 1
-    ), "Expected _create_mcp_client to be called once"
+    assert mock_create_client.call_count == 1, "Expected _create_mcp_client to be called once"
 
     # Verify the server passed to _create_mcp_client is the OAuth2 server
     assert captured_client_args["server"].server_id == oauth2_server.server_id
@@ -2940,9 +2964,9 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
     # oauth2 Authorization upstream. The v2 resolver injects the stored per-user token,
     # so a caller-supplied bearer cannot override another user's stored credential.
     extra_headers = captured_client_args["extra_headers"]
-    assert extra_headers is None or "Authorization" not in {
-        k.lower() for k in extra_headers
-    }, f"Caller Authorization must not be forwarded, got {extra_headers}"
+    assert extra_headers is None or "Authorization" not in {k.lower() for k in extra_headers}, (
+        f"Caller Authorization must not be forwarded, got {extra_headers}"
+    )
 
 
 @pytest.mark.asyncio
@@ -3051,12 +3075,8 @@ async def test_list_tools_multiple_servers_prefixed_names():
 
     # Mock manager
     mock_manager = MagicMock()
-    mock_manager.get_allowed_mcp_servers = AsyncMock(
-        return_value=["server1", "server2"]
-    )
-    mock_manager.get_mcp_server_by_id = lambda server_id: (
-        server1 if server_id == "server1" else server2
-    )
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1", "server2"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: server1 if server_id == "server1" else server2
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
         server_ids,
@@ -3655,9 +3675,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         tool1.inputSchema = {}
 
         tool2 = MagicMock()
-        tool2.name = (
-            "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
-        )
+        tool2.name = "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
         tool2.description = "Search docs"
         tool2.inputSchema = {}
 
@@ -3878,17 +3896,13 @@ class TestMCPServerManagerReload:
         db_row = _make_db_mcp_server("server-1", timestamp)
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
-            return_value=[db_row]
-        )
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
                 return_value=mock_prisma,
             ),
-            patch.object(
-                manager, "build_mcp_server_from_table", AsyncMock()
-            ) as mock_build,
+            patch.object(manager, "build_mcp_server_from_table", AsyncMock()) as mock_build,
         ):
             await manager.reload_servers_from_database()
 
@@ -3924,9 +3938,7 @@ class TestMCPServerManagerReload:
         )
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
-            return_value=[db_row]
-        )
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -4051,9 +4063,7 @@ class TestMCPServerManagerReload:
                 raise RuntimeError("blocked address")
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
-            return_value=[healthy_row, bad_openapi_row]
-        )
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[healthy_row, bad_openapi_row])
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -4149,10 +4159,7 @@ async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
             )
 
     proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
-    assert (
-        proxy_logging_mock.post_call_failure_hook.await_args.kwargs.get("route")
-        == "/mcp/call_tool"
-    )
+    assert proxy_logging_mock.post_call_failure_hook.await_args.kwargs.get("route") == "/mcp/call_tool"
 
 
 @pytest.mark.asyncio
@@ -4234,9 +4241,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
 
     assert tools == [tool_1]
     dummy_logging_obj.async_success_handler.assert_awaited_once()
-    assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [
-        tool_1.model_dump(mode="json")
-    ]
+    assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [tool_1.model_dump(mode="json")]
     assert function_setup_kwargs["metadata"]["tags"] == ["team-a"]
 
     spend_meta = dummy_logging_obj.model_call_details["metadata"]["spend_logs_metadata"]
@@ -4582,9 +4587,7 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     oauth2_server.extra_headers = None
 
     # Simulate the DB returning a valid credential for this user+server
-    prefetched_creds = {
-        SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}
-    }
+    prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}
 
     tool_1 = MagicMock()
     tool_1.name = "atlassian_test-search"
@@ -4691,16 +4694,12 @@ class TestMergeGatewayInitializeInstructions:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
-            "s1"
-        ] = "upstream"
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["s1"] = "upstream"
         try:
             s = _make_instruction_server(instructions="yaml wins")
             assert self._merge([s]) == "yaml wins"
         finally:
-            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
-                "s1", None
-            )
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("s1", None)
 
     def test_upstream_cache_used_when_no_yaml(self):
         """Upstream cached instructions are used when no YAML override is set."""
@@ -4708,16 +4707,12 @@ class TestMergeGatewayInitializeInstructions:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
-            "s1"
-        ] = "from upstream"
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["s1"] = "from upstream"
         try:
             s = _make_instruction_server(instructions=None)
             assert self._merge([s]) == "from upstream"
         finally:
-            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
-                "s1", None
-            )
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("s1", None)
 
     def test_spec_path_servers_skipped(self):
         """OpenAPI (spec_path) servers do not contribute instructions."""
@@ -4731,12 +4726,8 @@ class TestMergeGatewayInitializeInstructions:
 
     def test_multiple_servers_merged_with_labels(self):
         """Multiple servers get label-prefixed and separator-joined."""
-        s1 = _make_instruction_server(
-            server_id="a", name="a", alias="Alpha", instructions="instr A"
-        )
-        s2 = _make_instruction_server(
-            server_id="b", name="b", alias="Beta", instructions="instr B"
-        )
+        s1 = _make_instruction_server(server_id="a", name="a", alias="Alpha", instructions="instr A")
+        s2 = _make_instruction_server(server_id="b", name="b", alias="Beta", instructions="instr B")
         result = self._merge([s1, s2])
         assert result is not None
         assert "[Alpha]" in result and "[Beta]" in result
@@ -4756,25 +4747,17 @@ class TestMergeGatewayInitializeInstructions:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
-            "c"
-        ] = "cached C"
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["c"] = "cached C"
         try:
-            s_yaml = _make_instruction_server(
-                server_id="a", name="a", alias="A", instructions="yaml A"
-            )
-            s_spec = _make_instruction_server(
-                server_id="b", name="b", alias="B", spec_path="/spec.json", url=None
-            )
+            s_yaml = _make_instruction_server(server_id="a", name="a", alias="A", instructions="yaml A")
+            s_spec = _make_instruction_server(server_id="b", name="b", alias="B", spec_path="/spec.json", url=None)
             s_cached = _make_instruction_server(server_id="c", name="c", alias="C")
             result = self._merge([s_yaml, s_spec, s_cached])
             assert "yaml A" in result
             assert "cached C" in result
             assert "[B]" not in result
         finally:
-            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
-                "c", None
-            )
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("c", None)
 
 
 class TestEnsureUpstreamInitializeInstructionsCached:
@@ -4786,15 +4769,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
             global_mcp_server_manager,
         )
 
-        server = _make_instruction_server(
-            server_id="yaml-only", instructions="from yaml"
-        )
-        with patch.object(
-            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
-        ) as mock_create:
-            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                server
-            )
+        server = _make_instruction_server(server_id="yaml-only", instructions="from yaml")
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
         mock_create.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -4806,21 +4783,13 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         )
 
         server = _make_instruction_server(server_id="cached-only", instructions=None)
-        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
-            "cached-only"
-        ] = "warm"
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["cached-only"] = "warm"
         try:
-            with patch.object(
-                global_mcp_server_manager, "_create_mcp_client", AsyncMock()
-            ) as mock_create:
-                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                    server
-                )
+            with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
             mock_create.assert_not_awaited()
         finally:
-            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
-                "cached-only", None
-            )
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("cached-only", None)
 
     @pytest.mark.asyncio
     async def test_skips_when_spec_path_set(self):
@@ -4830,15 +4799,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
             global_mcp_server_manager,
         )
 
-        server = _make_instruction_server(
-            server_id="openapi-spec", spec_path="/openapi.json", url=None
-        )
-        with patch.object(
-            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
-        ) as mock_create:
-            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                server
-            )
+        server = _make_instruction_server(server_id="openapi-spec", spec_path="/openapi.json", url=None)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
         mock_create.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -4860,22 +4823,14 @@ class TestEnsureUpstreamInitializeInstructionsCached:
             AsyncMock(return_value=fake_client),
         ):
             try:
-                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                    server
-                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
                 assert (
-                    global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
-                        "cold-server"
-                    ]
+                    global_mcp_server_manager._upstream_initialize_instructions_by_server_id["cold-server"]
                     == "upstream says hi"
                 )
             finally:
-                global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
-                    "cold-server", None
-                )
-                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
-                    "cold-server", None
-                )
+                global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("cold-server", None)
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("cold-server", None)
 
     @pytest.mark.asyncio
     async def test_cooldown_after_empty_upstream_response(self):
@@ -4894,27 +4849,13 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         create = AsyncMock(return_value=fake_client)
         with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
             try:
-                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                    server
-                )
-                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                    server
-                )
-                assert (
-                    create.await_count == 1
-                ), "Second probe within cooldown must not reconnect to upstream"
-                assert (
-                    "empty-server"
-                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
-                )
-                assert (
-                    "empty-server"
-                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
-                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
+                assert create.await_count == 1, "Second probe within cooldown must not reconnect to upstream"
+                assert "empty-server" not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                assert "empty-server" in global_mcp_server_manager._upstream_initialize_instructions_probed_at
             finally:
-                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
-                    "empty-server", None
-                )
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("empty-server", None)
 
     @pytest.mark.asyncio
     async def test_cooldown_after_upstream_failure(self):
@@ -4927,35 +4868,19 @@ class TestEnsureUpstreamInitializeInstructionsCached:
 
         server = _make_instruction_server(server_id="boom-server", instructions=None)
         fake_client = MagicMock()
-        fake_client.run_with_session = AsyncMock(
-            side_effect=RuntimeError("upstream down")
-        )
+        fake_client.run_with_session = AsyncMock(side_effect=RuntimeError("upstream down"))
         fake_client._last_initialize_instructions = None
 
         create = AsyncMock(return_value=fake_client)
         with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
             try:
-                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                    server
-                )
-                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
-                    server
-                )
-                assert (
-                    create.await_count == 1
-                ), "Second probe within cooldown must not reconnect after failure"
-                assert (
-                    "boom-server"
-                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
-                )
-                assert (
-                    "boom-server"
-                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
-                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
+                assert create.await_count == 1, "Second probe within cooldown must not reconnect after failure"
+                assert "boom-server" not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                assert "boom-server" in global_mcp_server_manager._upstream_initialize_instructions_probed_at
             finally:
-                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
-                    "boom-server", None
-                )
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("boom-server", None)
 
     @pytest.mark.asyncio
     async def test_reload_resets_probe_cooldown(self):
@@ -4964,19 +4889,12 @@ class TestEnsureUpstreamInitializeInstructionsCached:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager._upstream_initialize_instructions_probed_at[
-            "reload-target"
-        ] = 1.0
+        global_mcp_server_manager._upstream_initialize_instructions_probed_at["reload-target"] = 1.0
         try:
             await global_mcp_server_manager.load_servers_from_config({})
-            assert (
-                "reload-target"
-                not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
-            )
+            assert "reload-target" not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
         finally:
-            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
-                "reload-target", None
-            )
+            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("reload-target", None)
 
 
 class TestGatewayCreateInitializationOptions:
@@ -5042,9 +4960,7 @@ class TestGatewayCreateInitializationOptions:
             ):
                 assert server.create_initialization_options().server_name == "grafana"
 
-        assert (
-            server.create_initialization_options().server_name == "litellm-mcp-server"
-        )
+        assert server.create_initialization_options().server_name == "litellm-mcp-server"
 
     @pytest.mark.asyncio
     async def test_sse_handler_scopes_server_name_from_single_server_path(self):
@@ -5121,9 +5037,7 @@ class TestGatewayCreateInitializationOptions:
             await handle_sse_mcp(scope, AsyncMock(), AsyncMock())
 
         assert captured["server_name"] == "grafana"
-        assert (
-            server.create_initialization_options().server_name == "litellm-mcp-server"
-        )
+        assert server.create_initialization_options().server_name == "litellm-mcp-server"
 
     def test_contextvar_set_injects_instructions(self):
         """When ContextVar has a value, it appears in InitializationOptions."""
@@ -5241,12 +5155,8 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
-        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
-            return_value=(["legacy-m2m-id"], 0)
-        )
-        mock_manager._get_tools_from_server = AsyncMock(
-            side_effect=capture_extra_headers
-        )
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
+        mock_manager._get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
 
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -5338,10 +5248,8 @@ async def test_call_tool_empty_extra_headers_returns_none():
             pass  # We only care about the captured headers
 
     # With P2 fix: extra_headers should be None (not {}) when all headers filtered
-    assert (
-        captured_extra_headers is None
-    ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
-        captured_extra_headers
+    assert captured_extra_headers is None, (
+        "P2 API consistency issue: expected None for empty extra_headers, got: " + str(captured_extra_headers)
     )
 
 
@@ -5366,9 +5274,7 @@ async def test_probe_upstream_auth_returns_upstream_status():
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
         return_value=mock_client,
     ):
-        status, www_auth = await _probe_upstream_auth(
-            "http://upstream/mcp", "Bearer some-token"
-        )
+        status, www_auth = await _probe_upstream_auth("http://upstream/mcp", "Bearer some-token")
 
     assert status == 401
     assert www_auth == 'Bearer realm="test"'
@@ -5395,9 +5301,7 @@ async def test_probe_upstream_auth_surfaces_httpx_status_error():
     mock_response.status_code = 401
     mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
     request = httpx.Request("POST", "http://upstream/mcp")
-    error = httpx.HTTPStatusError(
-        message="401 Unauthorized", request=request, response=mock_response
-    )
+    error = httpx.HTTPStatusError(message="401 Unauthorized", request=request, response=mock_response)
 
     mock_client = MagicMock()
     mock_client.post = AsyncMock(side_effect=error)
@@ -5406,9 +5310,7 @@ async def test_probe_upstream_auth_surfaces_httpx_status_error():
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
         return_value=mock_client,
     ):
-        status, www_auth = await _probe_upstream_auth(
-            "http://upstream/mcp", "Bearer some-token"
-        )
+        status, www_auth = await _probe_upstream_auth("http://upstream/mcp", "Bearer some-token")
 
     assert status == 401
     assert www_auth == 'Bearer realm="test"'
@@ -5426,9 +5328,7 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
         return_value=mock_client,
     ):
-        status, www_auth = await _probe_upstream_auth(
-            "http://upstream/mcp", "Bearer some-token"
-        )
+        status, www_auth = await _probe_upstream_auth("http://upstream/mcp", "Bearer some-token")
 
     assert status == 200
     assert www_auth is None
@@ -6351,9 +6251,7 @@ class TestProxyExceptionToHttpException:
         from litellm.proxy._types import ProxyException
 
         http_exc = _proxy_exception_to_http_exception(
-            ProxyException(
-                message="Forbidden", type="auth_error", param="key", code=403
-            )
+            ProxyException(message="Forbidden", type="auth_error", param="key", code=403)
         )
 
         assert http_exc.status_code == 403
@@ -6417,10 +6315,7 @@ class TestStreamableHttpAuthErrorMapping:
         assert exc_info.value.status_code == 401
         assert exc_info.value.headers["WWW-Authenticate"] == "Bearer"
         # Must not have emitted a 500 body via the generic catch-all.
-        assert not any(
-            m.get("type") == "http.response.start" and m.get("status") == 500
-            for m in sent
-        )
+        assert not any(m.get("type") == "http.response.start" and m.get("status") == 500 for m in sent)
 
     @pytest.mark.asyncio
     async def test_sse_propagates_proxy_exception_as_401(self):
@@ -6460,10 +6355,7 @@ class TestStreamableHttpAuthErrorMapping:
 
         assert exc_info.value.status_code == 401
         assert exc_info.value.headers["WWW-Authenticate"] == "Bearer"
-        assert not any(
-            m.get("type") == "http.response.start" and m.get("status") == 500
-            for m in sent
-        )
+        assert not any(m.get("type") == "http.response.start" and m.get("status") == 500 for m in sent)
 
 
 class TestMCPMetaTraceCarrier:
