@@ -2092,7 +2092,20 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     assert "output_config" not in request
 
 
-def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(monkeypatch):
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    reload_beta_headers_config()
+
+
+def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(
+    local_beta_headers_config,
+):
     """
     LIT-3393: Bedrock InvokeModel supports automatic tool-call clearing via
     ``clear_tool_uses_20250919`` under the ``context-management-2025-06-27``
@@ -2108,12 +2121,6 @@ def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_
     https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
     """
     from litellm.types.router import GenericLiteLLMParams
-    from litellm.anthropic_beta_headers_manager import (
-        reload_beta_headers_config,
-    )
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    reload_beta_headers_config()
-
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
@@ -2141,19 +2148,15 @@ def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_
     )
 
 
-def test_bedrock_messages_preserves_mixed_compact_and_clear_tool_uses_edits(monkeypatch):
+def test_bedrock_messages_preserves_mixed_compact_and_clear_tool_uses_edits(
+    local_beta_headers_config,
+):
     """
     LIT-3393: a request mixing ``compact_20260112`` and
     ``clear_tool_uses_20250919`` must keep BOTH edits and emit BOTH
     anthropic-beta values (``compact-2026-01-12`` + ``context-management-2025-06-27``).
     """
     from litellm.types.router import GenericLiteLLMParams
-    from litellm.anthropic_beta_headers_manager import (
-        reload_beta_headers_config,
-    )
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    reload_beta_headers_config()
-
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
@@ -2185,7 +2188,9 @@ def test_bedrock_messages_preserves_mixed_compact_and_clear_tool_uses_edits(monk
     assert "context-management-2025-06-27" in betas
 
 
-def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(monkeypatch):
+def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(
+    local_beta_headers_config,
+):
     """
     LIT-3393: ``clear_thinking_20251015`` remains LiteLLM-internal (consumed via
     thinking-injection) and MUST be stripped from the body, while
@@ -2193,12 +2198,6 @@ def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(monkeypat
     survives in the same request.
     """
     from litellm.types.router import GenericLiteLLMParams
-    from litellm.anthropic_beta_headers_manager import (
-        reload_beta_headers_config,
-    )
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    reload_beta_headers_config()
-
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
@@ -2233,7 +2232,7 @@ def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(monkeypat
 
 
 def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock(
-    monkeypatch,
+    local_beta_headers_config,
 ):
     """
     LIT-3393: ``anthropic_beta_headers_config.json`` previously mapped
@@ -2246,28 +2245,19 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     so the assertion is not subject to whatever the upstream remote currently
     serves or what previous tests left in the module cache.
     """
-    from litellm.anthropic_beta_headers_manager import (
-        filter_and_transform_beta_headers,
-        reload_beta_headers_config,
+    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+
+    out = filter_and_transform_beta_headers(
+        ["context-management-2025-06-27"],
+        provider="bedrock",
     )
+    assert out == ["context-management-2025-06-27"]
 
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    reload_beta_headers_config()
-    try:
-        out = filter_and_transform_beta_headers(
-            ["context-management-2025-06-27"],
-            provider="bedrock",
-        )
-        assert out == ["context-management-2025-06-27"]
-
-        # Bedrock_converse genuinely lacks it per AWS docs; this guard prevents
-        # an accidental flip there.
-        out_converse = filter_and_transform_beta_headers(
-            ["context-management-2025-06-27"],
-            provider="bedrock_converse",
-        )
-        assert out_converse == []
-    finally:
-        monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
-        reload_beta_headers_config()
+    # Bedrock_converse genuinely lacks it per AWS docs; this guard prevents
+    # an accidental flip there.
+    out_converse = filter_and_transform_beta_headers(
+        ["context-management-2025-06-27"],
+        provider="bedrock_converse",
+    )
+    assert out_converse == []
 
