@@ -1659,6 +1659,43 @@ class TestTemporaryMCPSessionEndpoints:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_resolves_real_server_by_server_id(self):
+        """Regression for LIT-4169: the user-side OAuth flow (authorize/register/token)
+        calls these endpoints with the real server_id, a stable hash the UI puts in the
+        path that the name resolver cannot match. When the temp-session cache misses,
+        resolution must fall back to get_mcp_server_by_id so the flow finds the server
+        instead of 404ing with the OAuth server unresolved"""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        server_id = "dcc61bddefd721c993ff57291cac2b98"
+        registry_server = generate_mock_mcp_server_config_record(server_id=server_id)
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.side_effect = lambda sid: registry_server if sid == server_id else None
+        mock_manager.get_mcp_server_by_name.side_effect = lambda name, client_ip=None: None
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ) as get_cached,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await _get_cached_temporary_mcp_server_or_404(server_id, admin_auth)
+
+        assert result is registry_server
+        get_cached.assert_awaited_once_with(server_id)
+        mock_manager.get_mcp_server_by_id.assert_called_once_with(server_id)
+
+    @pytest.mark.asyncio
     async def test_add_session_mcp_server_caches_and_redacts_credentials(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             TEMPORARY_MCP_SERVER_TTL_SECONDS,
