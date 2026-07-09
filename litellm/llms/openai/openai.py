@@ -50,6 +50,8 @@ from litellm.utils import (
     ProviderConfigManager,
     convert_to_model_response_object,
 )
+from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
+
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
@@ -424,7 +426,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time = time.time()
         try:
-            raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = await openai_aclient.chat.completions.with_raw_response.create(
+                **cleaned_data, timeout=timeout
+            )
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):
@@ -461,7 +466,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         raw_response = None
         try:
-            raw_response = openai_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = openai_client.chat.completions.with_raw_response.create(**cleaned_data, timeout=timeout)
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)
@@ -1153,7 +1159,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call embeddings.create by default
         """
         try:
-            raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = await openai_aclient.embeddings.with_raw_response.create(**cleaned_data, timeout=timeout)  # type: ignore
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             return headers, response
@@ -1174,7 +1181,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call embeddings.create by default
         """
         try:
-            raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = openai_client.embeddings.with_raw_response.create(**cleaned_data, timeout=timeout)  # type: ignore
 
             headers = dict(raw_response.headers)
             response = raw_response.parse()

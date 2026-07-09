@@ -60,7 +60,7 @@ class CustomLoggerRegistry:
     Registry mapping the callback class string to the class type.
     """
 
-    CALLBACK_CLASS_STR_TO_CLASS_TYPE = {
+    CALLBACK_CLASS_STR_TO_CLASS_TYPE: dict[str, type[object]] = {
         "lago": LagoLogger,
         "openmeter": OpenMeterLogger,
         "braintrust": BraintrustLogger,
