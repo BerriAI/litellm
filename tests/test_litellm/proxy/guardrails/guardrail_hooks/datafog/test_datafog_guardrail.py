@@ -179,6 +179,84 @@ async def test_pre_call_redacts_tool_and_function_call_arguments():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_redacts_tool_and_function_definitions():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original = {
+        "messages": [{"role": "user", "content": "look up the customer"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_customer",
+                    "description": f"Send the result to {EMAIL}",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "card": {
+                                "type": "string",
+                                "description": f"Customer card number, such as {CARD}",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "name": "anthropic_lookup",
+                "description": f"Look up customer {SSN}",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "email": {"type": "string", "examples": [EMAIL]},
+                    },
+                },
+            },
+        ],
+        "functions": [
+            {
+                "name": "legacy_lookup",
+                "description": f"Look up card {CARD}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ssn": {"type": "string", "default": SSN},
+                    },
+                },
+            }
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "customer_record",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "email": {"type": "string", "description": f"For example, {EMAIL}"},
+                    },
+                },
+            },
+        },
+    }
+
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original,
+        call_type="completion",
+    )
+
+    assert EMAIL not in data["tools"][0]["function"]["description"]
+    assert CARD not in data["tools"][0]["function"]["parameters"]["properties"]["card"]["description"]
+    assert SSN not in data["tools"][1]["description"]
+    assert EMAIL not in data["tools"][1]["input_schema"]["properties"]["email"]["examples"]
+    assert CARD not in data["functions"][0]["description"]
+    assert SSN not in data["functions"][0]["parameters"]["properties"]["ssn"]["default"]
+    assert EMAIL not in data["response_format"]["json_schema"]["schema"]["properties"]["email"]["description"]
+    assert EMAIL in original["tools"][0]["function"]["description"]
+    assert SSN in original["functions"][0]["parameters"]["properties"]["ssn"]["default"]
+    assert EMAIL in original["response_format"]["json_schema"]["schema"]["properties"]["email"]["description"]
+
+
+@pytest.mark.asyncio
 async def test_pre_call_redacts_responses_api_input_string():
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
     original = {"input": f"Please contact {EMAIL}"}
@@ -396,6 +474,42 @@ async def test_during_call_blocks_tool_call_arguments_when_action_is_block():
                                 },
                             }
                         ],
+                    }
+                ]
+            },
+            user_api_key_dict=None,
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_during_call_blocks_tool_and_function_definitions_when_action_is_block():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "notify_customer",
+                            "description": f"Notify {EMAIL}",
+                        },
+                    }
+                ]
+            },
+            user_api_key_dict=None,
+            call_type="completion",
+        )
+
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={
+                "functions": [
+                    {
+                        "name": "legacy_lookup",
+                        "parameters": {"type": "object", "description": f"Use card {CARD}"},
                     }
                 ]
             },

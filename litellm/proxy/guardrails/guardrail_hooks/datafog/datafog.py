@@ -310,6 +310,21 @@ class DataFogGuardrail(CustomGuardrail):
                 _merge_counts(counts, field_counts)
         return new_data, counts
 
+    def _scan_schema_fields(self, data: dict) -> tuple[dict, dict[str, int]]:
+        counts: dict[str, int] = {}
+        new_data = data
+        for field_name in ("tools", "functions", "response_format"):
+            schema = data.get(field_name)
+            if not isinstance(schema, (list, dict)):
+                continue
+            new_schema, field_counts = self._process_tool_payload(schema)
+            if field_counts:
+                if new_data is data:
+                    new_data = dict(data)
+                new_data[field_name] = new_schema
+                _merge_counts(counts, field_counts)
+        return new_data, counts
+
     def _process_completion_prompt(self, prompt: Any) -> tuple[Any, dict[str, int]]:
         if isinstance(prompt, str):
             return _redact_text(prompt, self.entity_types, self.locales)
@@ -387,6 +402,11 @@ class DataFogGuardrail(CustomGuardrail):
             if completion_prompt_counts:
                 new_data = {**new_data, "prompt": new_prompt}
                 _merge_counts(total_counts, completion_prompt_counts)
+
+        new_schema_data, schema_counts = self._scan_schema_fields(new_data)
+        if schema_counts:
+            new_data = new_schema_data
+            _merge_counts(total_counts, schema_counts)
 
         if not total_counts:
             return data, {}
