@@ -376,6 +376,7 @@ class LiteLLMParamsBody(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    realtime_protocol: str | None = None
     aws_region_name: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None

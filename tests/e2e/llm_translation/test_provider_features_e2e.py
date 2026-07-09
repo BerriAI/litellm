@@ -3,11 +3,13 @@
 Each case asserts the feature took effect, not just a 200.
 
 service_tier is an OpenAI concept. The proxy forwards it and the provider echoes
-the tier back on the response, so sending a non-default tier ("flex") and reading
-it back off ``service_tier`` proves the param was honored end to end; litellm's own
-default injection would report "default", so a "flex" echo can only come from the
-request being forwarded. Bedrock and Vertex do not accept service_tier, so that
-cell is OpenAI-only by design.
+the tier back on the response, so sending a non-default tier ("priority") and
+reading it back off ``service_tier`` proves the param was honored end to end;
+litellm's own default injection (and service_tier="auto") both report "default",
+so a "priority" echo can only come from the request being forwarded. "flex" is
+avoided here because it is capacity-constrained and returns a transient 429 when
+flex resources are unavailable. Bedrock and Vertex do not accept service_tier, so
+that cell is OpenAI-only by design.
 
 Prompt caching is asserted through provider prompt-cache usage tokens. The
 deterministic path is explicit ``cache_control`` on an Anthropic-family model
@@ -22,7 +24,7 @@ scope here and covered only by the explicit-cache-control Bedrock case.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import unique_marker
 from e2e_http import unwrap
@@ -32,7 +34,7 @@ from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-SERVICE_TIER = "flex"
+SERVICE_TIER = "priority"
 CACHE_MIN_READ_TOKENS = 1
 
 
@@ -51,10 +53,21 @@ class RichMessage(BaseModel):
     content: list[CacheTextBlock]
 
 
+class CacheDirective(BaseModel):
+    """litellm per-request cache control. ``no-cache`` forces the proxy to skip its
+    own response cache and make a fresh provider call, so the second identical
+    request actually reaches Bedrock and reads the provider prompt cache instead of
+    being served the first response verbatim (which would report cache_read=0)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    no_cache: bool = Field(default=True, alias="no-cache")
+
+
 class CacheChatBody(BaseModel):
     model: str
     messages: list[RichMessage]
     max_tokens: int
+    cache: CacheDirective = CacheDirective()
 
 
 def cacheable_prefix() -> str:
