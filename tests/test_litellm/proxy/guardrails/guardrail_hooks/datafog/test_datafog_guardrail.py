@@ -6,14 +6,14 @@ domains, test card numbers, invalid SSN ranges).
 """
 
 import os
+import re
 import sys
+from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../"))  # Adds the parent directory to the system path
-
-pytest.importorskip("datafog")
 
 from fastapi import HTTPException
 
@@ -23,6 +23,53 @@ EMAIL = "jane.doe@example.com"
 CARD = "4242 4242 4242 4242"
 SSN = "856-45-6789"
 DE_TAX_ID = "12345678901"
+
+
+def _fake_datafog_module() -> ModuleType:
+    fake_datafog = ModuleType("datafog")
+    patterns = {
+        "EMAIL": re.compile(r"\bjane\.doe@example\.com\b"),
+        "PHONE": re.compile(r"\b555-0100\b"),
+        "CREDIT_CARD": re.compile(r"\b4242 4242 4242 4242\b"),
+        "SSN": re.compile(r"\b856-45-6789\b"),
+        "IP_ADDRESS": re.compile(r"\b192\.168\.1\.1\b"),
+        "DE_TAX_ID": re.compile(r"\b12345678901\b"),
+    }
+
+    def redact(text: str, engine: str, entity_types: list[str], locales: list[str] | None):
+        matches = []
+        for entity_type in entity_types:
+            if entity_type.startswith("DE_") and (not locales or "de" not in locales):
+                continue
+            pattern = patterns.get(entity_type)
+            if pattern is None:
+                continue
+            for match in pattern.finditer(text):
+                matches.append((match.start(), match.end(), entity_type))
+        matches.sort(key=lambda item: item[0])
+
+        redacted_parts = []
+        entities = []
+        cursor = 0
+        counts: dict[str, int] = {}
+        for start, end, entity_type in matches:
+            if start < cursor:
+                continue
+            counts[entity_type] = counts.get(entity_type, 0) + 1
+            redacted_parts.append(text[cursor:start])
+            redacted_parts.append(f"[{entity_type}_{counts[entity_type]}]")
+            entities.append(SimpleNamespace(type=entity_type))
+            cursor = end
+        redacted_parts.append(text[cursor:])
+        return SimpleNamespace(redacted_text="".join(redacted_parts), entities=entities)
+
+    fake_datafog.redact = redact
+    return fake_datafog
+
+
+@pytest.fixture(autouse=True)
+def fake_datafog(monkeypatch):
+    monkeypatch.setitem(sys.modules, "datafog", _fake_datafog_module())
 
 
 def _chat_data(content) -> dict:
