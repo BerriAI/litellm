@@ -5136,7 +5136,7 @@ def test_stamp_oauth2_flow_ignores_non_oauth2():
     assert payload.oauth2_flow is None
 
 
-async def _run_edit(old_record, updated_record):
+async def _run_edit(old_record, updated_record, purge_mock=None):
     from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
 
     server_id = updated_record.server_id
@@ -5163,7 +5163,7 @@ async def _run_edit(old_record, updated_record):
         patch("litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager") as mock_manager,
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.purge_user_oauth_credentials_for_server",
-            AsyncMock(return_value=1),
+            purge_mock if purge_mock is not None else AsyncMock(return_value=1),
         ) as mock_purge,
     ):
         mock_manager.update_server = AsyncMock()
@@ -5197,6 +5197,20 @@ async def test_edit_mcp_server_skips_purge_when_identity_unchanged():
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_server_purge_failure_does_not_fail_the_edit():
+    """The purge is best-effort: a purge exception after a successful update must be swallowed and
+    logged, never turned into an error response for an edit whose primary job already succeeded."""
+    server_id = str(uuid.uuid4())
+    old = generate_mock_mcp_server_db_record(server_id=server_id, url="https://old.example.com/mcp")
+    updated = generate_mock_mcp_server_db_record(server_id=server_id, url="https://new.example.com/mcp")
+
+    result, mock_purge = await _run_edit(old, updated, purge_mock=AsyncMock(side_effect=RuntimeError("db down")))
+
+    assert result.server_id == server_id
+    mock_purge.assert_awaited_once()
 
 
 @pytest.mark.asyncio

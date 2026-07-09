@@ -4073,7 +4073,12 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
-        await self._per_user_token_cache.delete(user_id, server_id)
+        try:
+            await self._per_user_token_cache.delete(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to drop legacy cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,
