@@ -2,7 +2,7 @@ import { CACHE_FIELDS, CacheField, CacheSection, RedisType } from "./cacheSettin
 
 export type CacheFormValue = string | number | boolean | undefined;
 export type CacheFormValues = Record<string, CacheFormValue>;
-export type CacheSavePayloadValue = string | number | boolean | unknown[];
+export type CacheSavePayloadValue = string | number | boolean | unknown[] | null;
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
 
 export const isFieldVisible = (field: CacheField, redisType: RedisType): boolean =>
@@ -80,10 +80,10 @@ export const buildCachePayload = (
   }).flatMap((field) => {
     // Send explicit null to clear semantic fields when semantic caching is disabled
     if (field.section === "semantic" && !semanticEnabled) {
-      return [[field.name, null] as const];
+      return [[field.name, null] as [string, CacheSavePayloadValue]];
     }
     const value = saveValueForField(field, values[field.name]);
-    return value === undefined ? [] : [[field.name, value] as const];
+    return value === undefined ? [] : [[field.name, value] as [string, CacheSavePayloadValue]];
   });
 
   return { type, ...Object.fromEntries(entries) };
