@@ -1,5 +1,5 @@
 {
-  "@typescript-eslint/no-explicit-any": 2018,
+  "@typescript-eslint/no-explicit-any": 2017,
   "complexity": 127,
   "max-depth": 61
 }
