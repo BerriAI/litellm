@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Drawer, Segmented } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
-import { Bot, Sparkles, Wrench } from "lucide-react";
+import { Bot, Cable, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES, RELAY_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
@@ -49,12 +49,22 @@ interface TraceEventRowProps {
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
   const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
-  const durationValue =
-    row.request_duration_ms != null
-      ? (row.request_duration_ms / 1000).toFixed(3)
-      : row.startTime && row.endTime
-        ? ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3)
-        : "-";
+  const isRelay = RELAY_CALL_TYPES.includes(row.call_type);
+  let durationValue = "-";
+  if (row.request_duration_ms != null) {
+    durationValue = (row.request_duration_ms / 1000).toFixed(3);
+  } else if (row.startTime && row.endTime) {
+    durationValue = ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3);
+  }
+
+  let eventIcon = <Sparkles size={12} className="text-slate-500 shrink-0" />;
+  if (isMcp) {
+    eventIcon = <Wrench size={12} className="text-slate-500 shrink-0" />;
+  } else if (isAgent) {
+    eventIcon = <Bot size={12} className="text-slate-500 shrink-0" />;
+  } else if (isRelay) {
+    eventIcon = <Cable size={12} className="text-slate-500 shrink-0" />;
+  }
 
   return (
     <button
@@ -65,13 +75,7 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
-        {isMcp ? (
-          <Wrench size={12} className="text-slate-500 shrink-0" />
-        ) : isAgent ? (
-          <Bot size={12} className="text-slate-500 shrink-0" />
-        ) : (
-          <Sparkles size={12} className="text-slate-500 shrink-0" />
-        )}
+        {eventIcon}
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
@@ -274,7 +278,12 @@ export function LogDetailsDrawer({
   ).length;
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
-  const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
+  let logsForList: LogEntry[] = [];
+  if (isSessionMode) {
+    logsForList = sessionLogs;
+  } else if (currentLog) {
+    logsForList = [currentLog];
+  }
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
 
