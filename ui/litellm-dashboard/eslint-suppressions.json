@@ -1858,12 +1858,7 @@
       "count": 2
     }
   },
-  "src/components/model_add/AddCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/EditCredentialModal.tsx": {
+  "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
