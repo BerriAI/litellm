@@ -563,16 +563,21 @@ class UnifiedLLMGuardrails(CustomLogger):
                 is_final=is_final,
             )
 
+        saw_tool_calls = False
+
         try:
             async for item in response:
                 # v1 transforms only text. A chunk carrying tool_calls is passed
                 # through raw so function-calling turns are not dropped by the
-                # withhold-and-diff path; it is not accumulated (its content, if
-                # any, would otherwise be re-emitted as a synthetic text delta).
-                # Its finish_reason is deliberately NOT recorded here: it rides on
-                # the raw chunk, and recording it would make the final flush emit a
-                # spurious empty delta for an already-finished choice.
+                # withhold-and-diff path, and it is not text-accumulated (its
+                # content, if any, would otherwise be re-emitted as a synthetic
+                # delta). Its finish_reason is deliberately NOT recorded (it rides
+                # on the raw chunk). It IS kept in responses_so_far so the guardrail
+                # still inspects the assembled tool calls at end of stream (see the
+                # block inspection below), matching block_only.
                 if self._chunk_has_tool_calls(item):
+                    saw_tool_calls = True
+                    responses_so_far.append(item)
                     responses_yielded.append(item)
                     yield item
                     continue
@@ -592,11 +597,67 @@ class UnifiedLLMGuardrails(CustomLogger):
                     async for out in _round(item, is_final=False):
                         yield out
 
+            # v1 does not transform streamed tool calls, but they must still go
+            # through the guardrail's block decision. Run the block_only inspection
+            # over the full assembled response so tool calls cannot bypass it.
+            if saw_tool_calls:
+                async for out in self._inspect_full_response_for_block(
+                    endpoint_translation=endpoint_translation,
+                    guardrail_to_apply=guardrail_to_apply,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    responses_so_far=responses_so_far,
+                    responses_yielded=responses_yielded,
+                ):
+                    yield out
+
             if last_chunk is not None:
                 async for out in _round(last_chunk, is_final=True):
                     yield out
         except _StreamTerminated:
             return
+
+    async def _inspect_full_response_for_block(
+        self,
+        *,
+        endpoint_translation: Any,
+        guardrail_to_apply: CustomGuardrail,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        responses_so_far: list[Any],
+        responses_yielded: list[Any],
+    ) -> AsyncGenerator[Any, None]:
+        """Run the block-only guardrail inspection over the full assembled
+        response (text + tool calls) so nothing bypasses the block decision.
+
+        The guardrail's returned transforms are discarded here (v1 does not
+        transform tool calls); only its block decision matters. A block is
+        surfaced the same way as elsewhere: ModifyResponseException terminates the
+        stream via the shared block handler; a GenericGuardrailAPI block raises and
+        propagates, matching block_only.
+        """
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        try:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                stream_transform_sink=None,
+            )
+        except ModifyResponseException as e:
+            if e.original_response is None:
+                e.original_response = responses_so_far
+            async for block_chunk in self._handle_streaming_block(
+                e,
+                endpoint_translation,
+                stream_started=bool(responses_yielded),
+                responses_so_far=responses_yielded,
+            ):
+                yield block_chunk
+            raise _StreamTerminated()
 
     @staticmethod
     def _chunk_has_tool_calls(item: Any) -> bool:

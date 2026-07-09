@@ -669,6 +669,7 @@ class _StreamingTextGuardrail(CustomGuardrail):
         self._shrink_after = shrink_after
         self.response_calls = 0
         self.received_texts = []
+        self.received_tool_calls = []
 
     def should_run_guardrail(self, data, event_type):  # type: ignore[override]
         return True
@@ -678,6 +679,8 @@ class _StreamingTextGuardrail(CustomGuardrail):
         if input_type != "response":
             return {"texts": [t.upper() for t in texts]}
 
+        if inputs.get("tool_calls"):
+            self.received_tool_calls.append(inputs.get("tool_calls"))
         self.received_texts.append(list(texts))
         idx = self.response_calls
         self.response_calls += 1
@@ -995,8 +998,9 @@ class TestStreamingTransform:
         assert len(out) == 1
         assert out[0].choices[0].delta.tool_calls
         assert out[0].choices[0].finish_reason == "tool_calls"
-        # No text content was sent, so the guardrail's response path never ran.
-        assert guardrail.received_texts == []
+        # The tool call is delivered raw but still inspected by the guardrail at
+        # end of stream (it can block), matching block_only.
+        assert guardrail.received_tool_calls
 
     @pytest.mark.asyncio
     async def test_per_choice_finish_reason_when_choices_finish_in_different_chunks(self):
@@ -1088,6 +1092,45 @@ class TestStreamingTransform:
         assert _delta_text(out[0]) == "LET ME CHECK "
         assert out[1].choices[0].delta.tool_calls
         assert out[1].choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_blocking_guardrail_is_enforced(self):
+        """A guardrail that blocks on tool calls must terminate the incremental_diff
+        stream: tool calls go through the block decision, not bypass it."""
+        from litellm.exceptions import GuardrailRaisedException
+
+        class _ToolCallBlocker(_StreamingTextGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                if input_type == "response" and inputs.get("tool_calls"):
+                    raise GuardrailRaisedException(
+                        guardrail_name="tc-block",
+                        message="blocked tool call",
+                        should_wrap_with_default_message=False,
+                    )
+                return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+        tool_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "exfiltrate", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+
+        with pytest.raises(GuardrailRaisedException):
+            await _drive_stream(UnifiedLLMGuardrails(), _ToolCallBlocker(), [tool_chunk])
 
     @pytest.mark.asyncio
     async def test_guardrail_always_sees_raw_accumulated_text(self):
