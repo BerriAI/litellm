@@ -550,3 +550,87 @@ async def test_async_log_failure_event_decrements_global_max_parallel_requests()
         litellm_parent_otel_span=None,
     )
     assert val == 99, f"global_max_parallel_requests should be 99 after failure decrement, got {val}"
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_writes_when_user_limit_configured():
+    _api_key = hash_token("sk-with-user-rpm")
+    user_id = "user-with-limit"
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    kwargs = _build_kwargs(
+        api_key=_api_key,
+        user_id=user_id,
+        auth_object=UserAPIKeyAuth(api_key=_api_key, user_rpm_limit=100),
+    )
+    await handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=_make_response(10),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current = await handler.internal_usage_cache.async_get_cache(
+        key=f"{user_id}::{precise_minute}::request_count",
+        litellm_parent_otel_span=None,
+    )
+    assert current is not None, "cache write should happen when user_rpm_limit is configured"
+    assert current["current_tpm"] == 20
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_writes_when_team_limit_configured():
+    _api_key = hash_token("sk-with-team-rpm")
+    team_id = "team-with-limit"
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    kwargs = _build_kwargs(
+        api_key=_api_key,
+        team_id=team_id,
+        auth_object=UserAPIKeyAuth(api_key=_api_key, team_rpm_limit=100),
+    )
+    await handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=_make_response(10),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current = await handler.internal_usage_cache.async_get_cache(
+        key=f"{team_id}::{precise_minute}::request_count",
+        litellm_parent_otel_span=None,
+    )
+    assert current is not None, "cache write should happen when team_rpm_limit is configured"
+    assert current["current_tpm"] == 20
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_writes_when_end_user_limit_configured():
+    _api_key = hash_token("sk-with-enduser-rpm")
+    end_user_id = "enduser-with-limit"
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    kwargs = _build_kwargs(
+        api_key=_api_key,
+        end_user_id=end_user_id,
+        auth_object=UserAPIKeyAuth(api_key=_api_key, end_user_rpm_limit=100),
+    )
+    await handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=_make_response(10),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current = await handler.internal_usage_cache.async_get_cache(
+        key=f"{end_user_id}::{precise_minute}::request_count",
+        litellm_parent_otel_span=None,
+    )
+    assert current is not None, "cache write should happen when end_user_rpm_limit is configured"
+    assert current["current_tpm"] == 20
