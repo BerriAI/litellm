@@ -2,7 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
-import { getProviderLogoAndName } from "./provider_info_helpers";
+import { StatusBadge } from "@/components/shared/table_cells";
 
 interface ModelHubData {
   model_group: string;
@@ -219,13 +219,9 @@ export const modelHubColumns = (
         const model = row.original;
 
         return model.is_public_model_group === true ? (
-          <Badge color="green" size="xs">
-            Yes
-          </Badge>
+          <StatusBadge tone="success" label="Yes" />
         ) : (
-          <Badge color="gray" size="xs">
-            No
-          </Badge>
+          <StatusBadge tone="neutral" label="No" />
         );
       },
       meta: {

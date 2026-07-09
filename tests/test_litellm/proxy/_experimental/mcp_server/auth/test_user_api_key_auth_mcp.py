@@ -1,14 +1,13 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, call as mock_call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from starlette.datastructures import Headers
 
@@ -78,20 +77,14 @@ class TestMCPRequestHandler:
         )
 
         # Mock the helper methods instead of database calls
-        with patch.object(
-            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
-        ) as mock_key_servers:
-            with patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
-            ) as mock_team_servers:
+        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key_servers:
+            with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team_servers:
                 # Set up return values
                 mock_key_servers.return_value = key_servers
                 mock_team_servers.return_value = team_servers
 
                 # Call the method
-                result = await MCPRequestHandler.get_allowed_mcp_servers(
-                    user_api_key_auth=mock_user_auth
-                )
+                result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=mock_user_auth)
 
                 # Assert the result (order-independent comparison)
                 assert sorted(result) == sorted(expected_result)
@@ -148,20 +141,14 @@ class TestMCPRequestHandler:
         )
 
         # Mock the helper functions
-        with patch.object(
-            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
-        ) as mock_key_servers:
-            with patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
-            ) as mock_team_servers:
+        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key_servers:
+            with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team_servers:
                 # Configure mocks to return the test data
                 mock_key_servers.return_value = key_servers
                 mock_team_servers.return_value = team_servers
 
                 # Call the method
-                result = await MCPRequestHandler.get_allowed_mcp_servers(
-                    user_api_key_auth
-                )
+                result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
 
                 # Assert the result (order-independent comparison)
                 assert sorted(result) == sorted(expected_servers)
@@ -186,9 +173,7 @@ class TestMCPRequestHandler:
     ):
         """The require_key_mcp_access_defined general setting flips an empty key
         from inheriting its team's MCP servers (default) to inheriting none."""
-        auth = UserAPIKeyAuth(
-            api_key="test-key", user_id="test-user", team_id="test-team"
-        )
+        auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
         with (
             patch.object(
                 MCPRequestHandler,
@@ -272,23 +257,22 @@ class TestMCPRequestHandler:
     async def test_no_mcp_servers_sentinel_returns_empty(self, team_servers):
         """A key scoped to the no-mcp-servers sentinel resolves to zero servers,
         overriding team inheritance and never leaking the sentinel marker."""
-        user_api_key_auth = UserAPIKeyAuth(
-            api_key="test-key", user_id="test-user", team_id="test-team"
-        )
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
         key_object_permission = MagicMock()
-        key_object_permission.mcp_servers = [
-            SpecialMCPServerNames.no_mcp_servers.value
-        ]
+        key_object_permission.mcp_servers = [SpecialMCPServerNames.no_mcp_servers.value]
 
-        with patch.object(
-            MCPRequestHandler,
-            "_get_key_object_permission",
-            return_value=key_object_permission,
-        ), patch.object(
-            MCPRequestHandler,
-            "_get_allowed_mcp_servers_for_team",
-            new_callable=AsyncMock,
-            return_value=team_servers,
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_object_permission",
+                return_value=key_object_permission,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=team_servers,
+            ),
         ):
             result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
 
@@ -309,9 +293,7 @@ class TestMCPRequestHandler:
             "_get_key_object_permission",
             return_value=key_object_permission,
         ):
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-                user_api_key_auth
-            )
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
         assert result == [SpecialMCPServerNames.no_mcp_servers.value]
 
@@ -320,9 +302,7 @@ class TestMCPRequestHandler:
 
         # Test case: None values in database
         mock_prisma_client = MagicMock()
-        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.return_value = (
-            None
-        )
+        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.return_value = None
         mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
 
         user_api_key_auth = UserAPIKeyAuth(
@@ -337,9 +317,7 @@ class TestMCPRequestHandler:
             assert result == []
 
         # Test case: Exception handling
-        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.side_effect = (
-            Exception("DB Error")
-        )
+        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.side_effect = Exception("DB Error")
 
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
             result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
@@ -384,15 +362,9 @@ class TestMCPRequestHandler:
             access_group_ids=["grp-mcp"],
         )
         with (
-            patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
-            ) as mock_key,
-            patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
-            ) as mock_team,
-            patch.object(
-                MCPRequestHandler, "_get_key_access_group_mcp_server_extras"
-            ) as mock_grants,
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key,
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team,
+            patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras") as mock_grants,
         ):
             mock_key.return_value = key_servers
             mock_team.return_value = team_servers
@@ -414,13 +386,9 @@ class TestMCPRequestHandler:
                 "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
                 new=AsyncMock(return_value=[]),
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-                auth
-            )
+            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(auth)
         assert result == []
         # expand_permission_list must not be reached when there are no raw ids.
         mock_mgr.expand_permission_list.assert_not_called()
@@ -433,14 +401,10 @@ class TestMCPRequestHandler:
                 "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
                 new=AsyncMock(return_value=["alias-a", "srv-b"]),
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.expand_permission_list.return_value = ["srv-a", "srv-b"]
-            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-                auth
-            )
+            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(auth)
         assert sorted(result) == ["srv-a", "srv-b"]
         mock_mgr.expand_permission_list.assert_called_once_with(["alias-a", "srv-b"])
 
@@ -451,9 +415,7 @@ class TestMCPRequestHandler:
             "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
             new=AsyncMock(side_effect=Exception("db down")),
         ):
-            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-                auth
-            )
+            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(auth)
         assert result == []
 
     @pytest.mark.parametrize(
@@ -743,9 +705,7 @@ class TestMCPRequestHandler:
         # Verify MCP servers
         mcp_servers_header = extracted_headers.get(SpecialHeaders.mcp_servers.value)
         mcp_servers = None
-        if (
-            mcp_servers_header is not None
-        ):  # Changed from 'if mcp_servers_header:' to handle empty strings
+        if mcp_servers_header is not None:  # Changed from 'if mcp_servers_header:' to handle empty strings
             try:
                 # First try to parse as JSON array for backward compatibility
                 try:
@@ -754,16 +714,12 @@ class TestMCPRequestHandler:
                         mcp_servers = None
                 except (json.JSONDecodeError, TypeError, ValueError):
                     # If JSON parsing fails, treat as comma-separated list
-                    mcp_servers = [
-                        s.strip() for s in mcp_servers_header.split(",") if s.strip()
-                    ]
+                    mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
             except Exception:
                 mcp_servers = None
 
             # If we got an empty string or parsing resulted in no servers, return empty list
-            if mcp_servers_header == "" or (
-                mcp_servers is not None and len(mcp_servers) == 0
-            ):
+            if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
                 mcp_servers = []
 
         assert mcp_servers == expected_result["mcp_servers"]
@@ -794,6 +750,40 @@ class TestMCPRequestHandler:
             assert mcp_servers_result == expected_result["mcp_servers"]
             # For these tests, mcp_server_auth_headers should be empty
             assert mcp_server_auth_headers == {}
+
+    def test_duplicate_authorization_header_is_rejected(self):
+        """A request carrying more than one Authorization header is malformed for bearer auth and,
+        for the client-forwarded token modes, would make which upstream token is forwarded ambiguous.
+        The ingress header converter must reject it with a 400 rather than silently keeping one."""
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/tp_server",
+            "headers": [
+                (b"authorization", b"Bearer upstream-token-a"),
+                (b"authorization", b"Bearer upstream-token-b"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            MCPRequestHandler._safe_get_headers_from_scope(scope)
+        assert exc_info.value.status_code == 400
+        assert "Authorization" in str(exc_info.value.detail)
+
+    def test_single_authorization_header_is_forwarded_verbatim(self):
+        """The rejection must not disturb the normal single-Authorization case: the value passes
+        through unchanged (guards against the duplicate check over-matching)."""
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/tp_server",
+            "headers": [
+                (b"authorization", b"Bearer upstream-token"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        assert headers.get("authorization") == "Bearer upstream-token"
 
 
 @pytest.mark.asyncio
@@ -833,9 +823,7 @@ class TestMCPOAuth2AuthFlow:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
             (
@@ -851,10 +839,7 @@ class TestMCPOAuth2AuthFlow:
             # The upstream token is never validated as a LiteLLM key ...
             mock_auth.assert_not_called()
             # ... and is preserved for upstream forwarding.
-            assert (
-                oauth2_headers.get("Authorization")
-                == "Bearer atlassian-oauth2-access-token-xyz"
-            )
+            assert oauth2_headers.get("Authorization") == "Bearer atlassian-oauth2-access-token-xyz"
 
     async def test_explicit_litellm_key_with_oauth2_authorization(self):
         """
@@ -893,9 +878,7 @@ class TestMCPOAuth2AuthFlow:
             assert call_args.kwargs["api_key"] == "sk-litellm-valid-key"
 
             # OAuth2 headers should still contain the Authorization token
-            assert (
-                oauth2_headers.get("Authorization") == "Bearer atlassian-oauth2-token"
-            )
+            assert oauth2_headers.get("Authorization") == "Bearer atlassian-oauth2-token"
 
     async def test_litellm_key_in_authorization_backward_compat(self):
         """
@@ -997,9 +980,7 @@ class TestMCPOAuth2AuthFlow:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_proxy_exception,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
             with pytest.raises(ProxyException) as exc_info:
@@ -1068,9 +1049,7 @@ class TestMCPPublicRouteGuard:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             # Explicit unresolvable target — proves auth still fails even
             # when the registry has no info to fall back to.
@@ -1101,9 +1080,7 @@ class TestMCPPublicRouteGuard:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
@@ -1157,9 +1134,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._is_mcp_passthrough_cold_start"
             ) as mock_cold_start,
@@ -1199,9 +1174,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -1229,9 +1202,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -1263,18 +1234,14 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
                 return_value="203.0.113.10",
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
 
             assert exc_info.value.status_code == 401
-            mock_mgr.get_mcp_server_by_name.assert_any_call(
-                "passthrough_server", client_ip="203.0.113.10"
-            )
+            mock_mgr.get_mcp_server_by_name.assert_any_call("passthrough_server", client_ip="203.0.113.10")
 
     async def test_cold_start_propagates_non_401_http_error(self):
         from fastapi import HTTPException
@@ -1294,9 +1261,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_forbidden,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -1329,9 +1294,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_server_error,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -1357,9 +1320,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -1367,9 +1328,7 @@ class TestMCPPassthroughColdStartAdmission:
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
 
             assert isinstance(auth_result, UserAPIKeyAuth)
-            mock_mgr.get_mcp_server_by_name.assert_any_call(
-                "passthrough_server", client_ip=""
-            )
+            mock_mgr.get_mcp_server_by_name.assert_any_call("passthrough_server", client_ip="")
 
     async def test_cold_start_allows_proxy_exception_401_for_path_target(self):
         from litellm.proxy._types import ProxyException
@@ -1394,9 +1353,7 @@ class TestMCPPassthroughColdStartAdmission:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -1404,9 +1361,7 @@ class TestMCPPassthroughColdStartAdmission:
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
 
             assert isinstance(auth_result, UserAPIKeyAuth)
-            mock_mgr.get_mcp_server_by_name.assert_any_call(
-                "passthrough_server", client_ip=""
-            )
+            mock_mgr.get_mcp_server_by_name.assert_any_call("passthrough_server", client_ip="")
 
 
 @pytest.mark.asyncio
@@ -1450,12 +1405,10 @@ class TestMCPOAuth2FallbackTargetGating:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.api_key)
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPOAuth2FallbackTargetGating._make_server(
+                MCPAuth.api_key
             )
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
@@ -1483,9 +1436,7 @@ class TestMCPOAuth2FallbackTargetGating:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
@@ -1523,12 +1474,10 @@ class TestMCPOAuth2FallbackTargetGating:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPOAuth2FallbackTargetGating._make_server(
+                MCPAuth.oauth2
             )
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
@@ -1562,15 +1511,11 @@ class TestMCPOAuth2FallbackTargetGating:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPOAuth2FallbackTargetGating._make_server(
-                    auth_type=MCPAuth.none,
-                    is_oauth_passthrough=True,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPOAuth2FallbackTargetGating._make_server(
+                auth_type=MCPAuth.none,
+                is_oauth_passthrough=True,
             )
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
@@ -1598,9 +1543,7 @@ class TestMCPOAuth2FallbackTargetGating:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
                 return_value="203.0.113.10",
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
@@ -1612,9 +1555,7 @@ class TestMCPOAuth2FallbackTargetGating:
             # resolve to ``None`` (hidden by client IP) so neither bypass
             # opens. Use ``assert_any_call`` to assert the IP-scoped lookup
             # happened without locking the count.
-            mock_mgr.get_mcp_server_by_name.assert_any_call(
-                "hidden_oauth2_server", client_ip="203.0.113.10"
-            )
+            mock_mgr.get_mcp_server_by_name.assert_any_call("hidden_oauth2_server", client_ip="203.0.113.10")
 
     async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
         """
@@ -1649,9 +1590,7 @@ class TestMCPOAuth2FallbackTargetGating:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.side_effect = mock_lookup
             with pytest.raises(HTTPException) as exc_info:
@@ -1732,17 +1671,10 @@ class TestMCPDelegateAuthToUpstream:
             delegate_auth_to_upstream=True,
             available_on_public_internet=True,
         )
-        assert (
-            manager._build_mcp_server_table(delegated).delegate_auth_to_upstream is True
-        )
+        assert manager._build_mcp_server_table(delegated).delegate_auth_to_upstream is True
 
-        not_delegated = delegated.model_copy(
-            update={"delegate_auth_to_upstream": False}
-        )
-        assert (
-            manager._build_mcp_server_table(not_delegated).delegate_auth_to_upstream
-            is False
-        )
+        not_delegated = delegated.model_copy(update={"delegate_auth_to_upstream": False})
+        assert manager._build_mcp_server_table(not_delegated).delegate_auth_to_upstream is False
 
     def test_build_mcp_server_table_preserves_oauth_passthrough(self):
         """Registry → API list rows must expose oauth_passthrough for the UI.
@@ -1773,9 +1705,7 @@ class TestMCPDelegateAuthToUpstream:
         assert row.delegate_auth_to_upstream is False
 
         not_passthrough = passthrough.model_copy(update={"oauth_passthrough": False})
-        assert (
-            manager._build_mcp_server_table(not_passthrough).oauth_passthrough is False
-        )
+        assert manager._build_mcp_server_table(not_passthrough).oauth_passthrough is False
 
     async def test_delegate_skips_litellm_auth_with_no_authorization(self):
         """
@@ -1796,15 +1726,11 @@ class TestMCPDelegateAuthToUpstream:
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPDelegateAuthToUpstream._make_server(
-                    auth_type=MCPAuth.oauth2,
-                    delegate_auth_to_upstream=True,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2,
+                delegate_auth_to_upstream=True,
             )
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
@@ -1834,15 +1760,11 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPDelegateAuthToUpstream._make_server(
-                    auth_type=MCPAuth.oauth2,
-                    delegate_auth_to_upstream=True,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2,
+                delegate_auth_to_upstream=True,
             )
             (
                 auth_result,
@@ -1880,15 +1802,11 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPDelegateAuthToUpstream._make_server(
-                    auth_type=MCPAuth.oauth2,
-                    delegate_auth_to_upstream=False,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2,
+                delegate_auth_to_upstream=False,
             )
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
@@ -1919,15 +1837,11 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPDelegateAuthToUpstream._make_server(
-                    auth_type=MCPAuth.api_key,
-                    delegate_auth_to_upstream=True,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.api_key,
+                delegate_auth_to_upstream=True,
             )
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
@@ -1971,9 +1885,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.side_effect = mock_lookup
             with pytest.raises(HTTPException) as exc_info:
@@ -2003,9 +1915,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_user_api_key_auth_fails,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
@@ -2034,15 +1944,11 @@ class TestMCPDelegateAuthToUpstream:
                 new_callable=AsyncMock,
                 return_value=UserAPIKeyAuth(user_id="real-user"),
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPDelegateAuthToUpstream._make_server(
-                    auth_type=MCPAuth.oauth2,
-                    delegate_auth_to_upstream=True,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2,
+                delegate_auth_to_upstream=True,
             )
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
@@ -2074,15 +1980,11 @@ class TestMCPDelegateAuthToUpstream:
                 new_callable=AsyncMock,
                 return_value=UserAPIKeyAuth(user_id="real-user"),
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = (
-                TestMCPDelegateAuthToUpstream._make_server(
-                    auth_type=MCPAuth.oauth2,
-                    delegate_auth_to_upstream=True,
-                )
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2,
+                delegate_auth_to_upstream=True,
             )
             (
                 auth_result,
@@ -2135,9 +2037,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_auth_raises,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = m2m_server
             # No delegate bypass → normal auth is attempted → 401 raised
@@ -2188,9 +2088,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_auth_raises,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = legacy_m2m_server
             with pytest.raises(HTTPException) as exc_info:
@@ -2235,9 +2133,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_auth_raises,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = pkce_server
             auth, *_rest = await MCPRequestHandler.process_mcp_request(scope)
@@ -2278,9 +2174,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_auth_raises,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = internal_server
             auth, *_rest = await MCPRequestHandler.process_mcp_request(scope)
@@ -2426,6 +2320,104 @@ class TestMCPDelegateAuthToUpstream:
         assert "public-server" in result
         assert "internal-server" in result
 
+    async def test_true_passthrough_skips_litellm_auth_anonymously(self):
+        """auth_type=true_passthrough performs no admission auth: the caller's Authorization is an
+        upstream token forwarded unchanged and user_api_key_auth is never called."""
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/true_passthrough_server",
+            "headers": [(b"authorization", b"Bearer upstream-token")],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.true_passthrough,
+            )
+            (
+                auth_result,
+                _,
+                _,
+                _,
+                oauth2_headers,
+                _,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            assert auth_result.api_key is None
+            assert oauth2_headers.get("Authorization") == "Bearer upstream-token"
+            mock_auth.assert_not_called()
+
+    async def test_true_passthrough_mixed_targets_fail_closed(self):
+        """One true_passthrough target mixed with a non-passthrough target must NOT skip admission."""
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"x-mcp-servers", b"tp_server,plain_server")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        def mock_lookup(name, client_ip=None):
+            if name == "tp_server":
+                return TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.true_passthrough,
+                )
+            return TestMCPDelegateAuthToUpstream._make_server(auth_type=MCPAuth.api_key)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.side_effect = mock_lookup
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_get_allowed_servers_includes_true_passthrough(self):
+        """Anonymous callers can reach true_passthrough servers; admission is delegated upstream."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        tp_server = MCPServer(
+            server_id="tp-server",
+            name="tp_server",
+            transport="http",
+            auth_type=MCPAuth.true_passthrough,
+            available_on_public_internet=True,
+        )
+        manager.registry = {tp_server.server_id: tp_server}
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert "tp-server" in result
+
     def test_extract_target_server_names_matches_routing_parser(self):
         """
         Regression: _extract_target_server_names_from_path must match the
@@ -2464,13 +2456,12 @@ class TestMCPDelegateAuthToUpstream:
             ("/", []),
         ]
         for path_input, expected in cases:
-            assert (
-                MCPRequestHandler._extract_target_server_names_from_path(path_input)
-                == expected
-            ), f"path={path_input!r} → expected {expected!r}"
-            assert (
-                _get_mcp_servers_in_path(path_input) or []
-            ) == expected, f"path={path_input!r} → routing expected {expected!r}"
+            assert MCPRequestHandler._extract_target_server_names_from_path(path_input) == expected, (
+                f"path={path_input!r} → expected {expected!r}"
+            )
+            assert (_get_mcp_servers_in_path(path_input) or []) == expected, (
+                f"path={path_input!r} → routing expected {expected!r}"
+            )
 
     async def test_delegate_does_not_bypass_on_extra_path_segment(self):
         """
@@ -2514,9 +2505,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_auth_raises,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.side_effect = lookup_by_name
             with pytest.raises(HTTPException) as exc_info:
@@ -2579,9 +2568,7 @@ class TestMCPDelegateAuthToUpstream:
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 side_effect=mock_auth_raises,
             ) as mock_auth,
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.side_effect = lookup_by_name
             # Bypass MUST NOT fire — path-derived target is the non-delegate
@@ -2601,15 +2588,12 @@ class TestMCPDelegateAuthToUpstream:
           empty-list case, which fails closed).
         """
         # Path matches /mcp/... — header is ignored.
-        assert MCPRequestHandler._resolve_target_server_names(
-            path="/mcp/foo", mcp_servers_header=["evil"]
-        ) == ["foo"]
-        assert MCPRequestHandler._resolve_target_server_names(
-            path="/mcp/foo,bar", mcp_servers_header=["evil"]
-        ) == ["foo", "bar"]
-        assert MCPRequestHandler._resolve_target_server_names(
-            path="/foo/mcp", mcp_servers_header=["evil"]
-        ) == ["foo"]
+        assert MCPRequestHandler._resolve_target_server_names(path="/mcp/foo", mcp_servers_header=["evil"]) == ["foo"]
+        assert MCPRequestHandler._resolve_target_server_names(path="/mcp/foo,bar", mcp_servers_header=["evil"]) == [
+            "foo",
+            "bar",
+        ]
+        assert MCPRequestHandler._resolve_target_server_names(path="/foo/mcp", mcp_servers_header=["evil"]) == ["foo"]
         # Path does not match — header is trusted.
         assert MCPRequestHandler._resolve_target_server_names(
             path="/.well-known/oauth-authorization-server",
@@ -2653,16 +2637,12 @@ class TestMCPCustomHeaderName:
             (None, "", "x-mcp-auth"),
         ],
     )
-    def test_get_mcp_client_side_auth_header_name(
-        self, env_var, general_setting, expected_header_name
-    ):
+    def test_get_mcp_client_side_auth_header_name(self, env_var, general_setting, expected_header_name):
         """Test that custom header name configuration works correctly"""
 
         # Mock the secret manager and general settings
         with patch("litellm.secret_managers.main.get_secret_str") as mock_get_secret:
-            with patch(
-                "litellm.proxy.proxy_server.general_settings"
-            ) as mock_general_settings:
+            with patch("litellm.proxy.proxy_server.general_settings") as mock_general_settings:
                 # Configure mocks
                 mock_get_secret.return_value = env_var
                 mock_general_settings.get.return_value = general_setting
@@ -2685,9 +2665,7 @@ class TestMCPCustomHeaderName:
                 if env_var is None:
                     # When env var is None, general settings should be checked (twice if not None)
                     expected_general_calls = 2 if general_setting is not None else 1
-                    assert (
-                        mock_general_settings.get.call_count == expected_general_calls
-                    )
+                    assert mock_general_settings.get.call_count == expected_general_calls
                     for call in mock_general_settings.get.call_args_list:
                         assert call.args == ("mcp_client_side_auth_header_name",)
                 else:
@@ -2728,9 +2706,7 @@ class TestMCPCustomHeaderName:
             ),
         ],
     )
-    def test_get_mcp_auth_header_from_headers_with_custom_name(
-        self, custom_header_name, headers, expected_auth_header
-    ):
+    def test_get_mcp_auth_header_from_headers_with_custom_name(self, custom_header_name, headers, expected_auth_header):
         """Test that MCP auth header extraction uses custom header name"""
 
         # Mock the header name method
@@ -2749,9 +2725,7 @@ class TestMCPCustomHeaderName:
             extracted_headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
 
             # Call the method
-            result = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                extracted_headers
-            )
+            result = MCPRequestHandler._get_mcp_auth_header_from_headers(extracted_headers)
 
             # Assert the result
             assert result == expected_auth_header
@@ -2818,9 +2792,7 @@ class TestMCPCustomHeaderName:
         from starlette.datastructures import Headers
 
         # Test case 1: No server-specific headers
-        headers = Headers(
-            {"x-litellm-api-key": "test-key", "content-type": "application/json"}
-        )
+        headers = Headers({"x-litellm-api-key": "test-key", "content-type": "application/json"})
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         assert result == {}
 
@@ -2904,17 +2876,13 @@ class TestMCPCustomHeaderName:
         assert result == {"github_mcp": {"Authorization": "Bearer github-mcp-token"}}
 
         # Test case 8: Edge case - empty header value
-        headers = Headers(
-            {"x-litellm-api-key": "test-key", "x-mcp-github-authorization": ""}
-        )
+        headers = Headers({"x-litellm-api-key": "test-key", "x-mcp-github-authorization": ""})
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         assert result == {"github": {"Authorization": ""}}
 
         # Test case 9: Edge case - very long header value
         long_token = "Bearer " + "x" * 1000
-        headers = Headers(
-            {"x-litellm-api-key": "test-key", "x-mcp-github-authorization": long_token}
-        )
+        headers = Headers({"x-litellm-api-key": "test-key", "x-mcp-github-authorization": long_token})
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         assert result == {"github": {"Authorization": long_token}}
 
@@ -2980,9 +2948,7 @@ class TestMCPAccessGroupsE2E:
             # Assert the results
             assert auth_result.api_key == "test-api-key"
             assert mcp_auth_header is None
-            assert (
-                mcp_servers is None
-            )  # x-mcp-access-groups is not parsed as mcp_servers
+            assert mcp_servers is None  # x-mcp-access-groups is not parsed as mcp_servers
             assert mcp_server_auth_headers == {}
 
             # Verify the mock was called
@@ -3097,9 +3063,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
 
     # Use TestClient to make a request to /mcp/zapier,group1/tools
     client = TestClient(app)
-    response = client.get(
-        "/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"}
-    )
+    response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
@@ -3177,15 +3141,11 @@ async def test_get_team_object_permission_with_already_loaded_permission():
         mock_prisma,
     ):
         with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
-            with patch(
-                "litellm.proxy.auth.auth_checks.get_object_permission"
-            ) as mock_get_perm:
+            with patch("litellm.proxy.auth.auth_checks.get_object_permission") as mock_get_perm:
                 mock_get_team.return_value = mock_team_obj
 
                 # Call the method
-                result = await MCPRequestHandler._get_team_object_permission(
-                    mock_user_auth
-                )
+                result = await MCPRequestHandler._get_team_object_permission(mock_user_auth)
 
                 # Assert we got the object permission
                 assert result == mock_object_permission
@@ -3272,9 +3232,7 @@ async def test_get_team_object_permission_ui_session_team_skips_db_lookup():
     mock_prisma = MagicMock()
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
-            result = await MCPRequestHandler._get_team_object_permission(
-                mock_user_auth
-            )
+            result = await MCPRequestHandler._get_team_object_permission(mock_user_auth)
 
             assert result is None
             mock_get_team.assert_not_called()
@@ -3342,9 +3300,7 @@ async def test_get_allowed_tools_for_server_ui_session_team_keeps_key_restrictio
                 detail={"error": "Team doesn't exist in db. Team=litellm-dashboard."},
             ),
         ):
-            with patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
-            ):
+            with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
                 result = await MCPRequestHandler.get_allowed_tools_for_server(
                     server_id="server_1",
                     user_api_key_auth=user_api_key_auth,
@@ -3410,9 +3366,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
                 return_value=["group-server1", "group-server2"],
             ) as mock_get_access_group_servers,
         ):
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
-                mock_user_auth
-            )
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(mock_user_auth)
 
             assert set(result) == {
                 "direct-server1",
@@ -3455,9 +3409,7 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
             return_value=mock_team,
         ),
     ):
-        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
-            mock_user_auth
-        )
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(mock_user_auth)
 
         assert result == []
 
@@ -3507,9 +3459,7 @@ async def test_get_allowed_mcp_servers_for_team_without_team_id_returns_empty():
         ),
     ],
 )
-async def test_get_allowed_mcp_servers_for_key_guard_conditions(
-    user_api_key_auth, prisma_client_value, scenario
-):
+async def test_get_allowed_mcp_servers_for_key_guard_conditions(user_api_key_auth, prisma_client_value, scenario):
     """Ensure guard clauses return [] before hitting get_object_permission."""
 
     with patch(
@@ -3517,9 +3467,7 @@ async def test_get_allowed_mcp_servers_for_key_guard_conditions(
         new_callable=AsyncMock,
     ) as mock_get_perm:
         with patch("litellm.proxy.proxy_server.prisma_client", prisma_client_value):
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-                user_api_key_auth
-            )
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
     assert result == []
     mock_get_perm.assert_not_called()
@@ -3546,9 +3494,7 @@ async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_non
     ):
         mock_get_perm.return_value = None
 
-        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-            user_api_key_auth
-        )
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
     assert result == []
     mock_get_perm.assert_awaited_once()
@@ -3591,14 +3537,10 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
             "litellm.proxy.auth.auth_checks.get_object_permission",
             new_callable=AsyncMock,
         ) as mock_get_perm:
-            with patch.object(
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups"
-            ) as mock_access_groups:
+            with patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups") as mock_access_groups:
                 mock_access_groups.return_value = ["group-server"]
 
-                result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-                    user_api_key_auth
-                )
+                result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
         assert set(result) == {"direct-server", "group-server"}
         mock_get_perm.assert_not_called()
@@ -3619,21 +3561,13 @@ class TestAgentMCPPermissions:
             team_id="test-team",
             agent_id="agent-123",
         )
-        with patch.object(
-            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
-        ) as mock_key:
-            with patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
-            ) as mock_team:
-                with patch.object(
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_agent"
-                ) as mock_agent:
+        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
+            with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
+                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_1"]
-                    result = await MCPRequestHandler.get_allowed_mcp_servers(
-                        user_api_key_auth=user_api_key_auth
-                    )
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=user_api_key_auth)
                     assert sorted(result) == ["server_1"]
                     mock_agent.assert_called_once_with(user_api_key_auth)
 
@@ -3644,21 +3578,13 @@ class TestAgentMCPPermissions:
             user_id="test-user",
             agent_id="agent-456",
         )
-        with patch.object(
-            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
-        ) as mock_key:
-            with patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
-            ) as mock_team:
-                with patch.object(
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_agent"
-                ) as mock_agent:
+        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
+            with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
+                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = []  # no agent-level restriction
-                    result = await MCPRequestHandler.get_allowed_mcp_servers(
-                        user_api_key_auth=user_api_key_auth
-                    )
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=user_api_key_auth)
                     assert sorted(result) == ["server_1", "server_2"]
                     mock_agent.assert_called_once_with(user_api_key_auth)
 
@@ -3669,21 +3595,13 @@ class TestAgentMCPPermissions:
             user_id="test-user",
             agent_id="agent-789",
         )
-        with patch.object(
-            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
-        ) as mock_key:
-            with patch.object(
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
-            ) as mock_team:
-                with patch.object(
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_agent"
-                ) as mock_agent:
+        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
+            with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
+                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_2", "server_3"]
-                    result = await MCPRequestHandler.get_allowed_mcp_servers(
-                        user_api_key_auth=user_api_key_auth
-                    )
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=user_api_key_auth)
                     assert sorted(result) == ["server_2"]
 
     async def test_get_allowed_tools_for_server_agent_intersection(self):
@@ -3696,9 +3614,7 @@ class TestAgentMCPPermissions:
         key_perm = MagicMock()
         key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
         team_perm = None
-        with patch.object(
-            MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
-        ):
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
             with patch.object(
                 MCPRequestHandler,
                 "_get_team_object_permission",
@@ -3730,9 +3646,7 @@ class TestAgentMCPPermissions:
         )
         key_perm = MagicMock()
         key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
-        with patch.object(
-            MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
-        ):
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
             with patch.object(
                 MCPRequestHandler,
                 "_get_team_object_permission",
@@ -3762,9 +3676,7 @@ class TestAgentMCPPermissions:
         agent_row = MagicMock()
         agent_row.object_permission_id = "perm-xyz"
         prisma_client = MagicMock()
-        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
-            return_value=agent_row
-        )
+        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=agent_row)
         user_api_key_auth = UserAPIKeyAuth(
             api_key="test-key",
             user_id="test-user",
@@ -3782,9 +3694,7 @@ class TestAgentMCPPermissions:
                 return_value=expected_perm,
             ) as mock_get_perm,
         ):
-            result = await MCPRequestHandler._get_agent_object_permission(
-                user_api_key_auth
-            )
+            result = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
             assert result is expected_perm
             mock_get_perm.assert_awaited_once()
             assert mock_get_perm.await_args.kwargs["object_permission_id"] == "perm-xyz"
@@ -3804,9 +3714,7 @@ class TestAgentMCPPermissions:
         agent_row = MagicMock()
         agent_row.object_permission_id = None
         prisma_client = MagicMock()
-        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
-            return_value=agent_row
-        )
+        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=agent_row)
         user_api_key_auth = UserAPIKeyAuth(
             api_key="test-key",
             user_id="test-user",
@@ -3822,14 +3730,8 @@ class TestAgentMCPPermissions:
                 new_callable=AsyncMock,
             ) as mock_get_perm,
         ):
-            assert (
-                await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-                is None
-            )
-            assert (
-                await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-                is None
-            )
+            assert await MCPRequestHandler._get_agent_object_permission(user_api_key_auth) is None
+            assert await MCPRequestHandler._get_agent_object_permission(user_api_key_auth) is None
 
             mock_get_perm.assert_not_awaited()
             prisma_client.db.litellm_agentstable.find_unique.assert_awaited_once()
@@ -3870,9 +3772,7 @@ async def test_tool_permission_servers_included_in_allowed_servers():
         )
 
         with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=perm
-            ),
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=perm),
             patch.object(
                 MCPRequestHandler,
                 "_get_mcp_servers_from_access_groups",
@@ -4105,9 +4005,7 @@ class TestOrgMCPPermissions:
         org_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
 
         with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
-            ),
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm),
             patch.object(
                 MCPRequestHandler,
                 "_get_team_object_permission",
@@ -4137,9 +4035,7 @@ class TestOrgMCPPermissions:
         org_perm.mcp_tool_permissions = {}
 
         with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
-            ),
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm),
             patch.object(
                 MCPRequestHandler,
                 "_get_team_object_permission",
@@ -4231,9 +4127,7 @@ async def test_mcp_key_access_group_extras_when_team_authorized():
     ]
     _start_patches(patches)
     try:
-        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-            valid_token
-        )
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(valid_token)
         assert result == ["srv-stripe"]
     finally:
         _stop_patches(patches)
@@ -4270,9 +4164,7 @@ async def test_mcp_key_access_group_extras_when_key_directly_authorized():
     ]
     _start_patches(patches)
     try:
-        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-            valid_token
-        )
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(valid_token)
         assert result == ["srv-stripe"]
     finally:
         _stop_patches(patches)
@@ -4286,9 +4178,7 @@ async def test_mcp_key_access_group_extras_when_key_has_no_groups():
         access_group_ids=[],
         team_id="team-a",
     )
-    result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-        valid_token
-    )
+    result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(valid_token)
     assert result == []
 
 
@@ -4315,9 +4205,7 @@ async def test_mcp_key_access_group_extras_when_group_has_no_servers():
     ]
     _start_patches(patches)
     try:
-        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-            valid_token
-        )
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(valid_token)
         assert result == []
     finally:
         _stop_patches(patches)
@@ -4351,9 +4239,7 @@ async def test_mcp_key_access_group_extras_granted_even_when_group_authorizes_ne
     ]
     _start_patches(patches)
     try:
-        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-            valid_token
-        )
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(valid_token)
         assert result == ["srv-finance-only"]
     finally:
         _stop_patches(patches)
@@ -4376,9 +4262,7 @@ async def test_mcp_key_access_group_extras_when_get_access_object_raises():
     ]
     _start_patches(patches)
     try:
-        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
-            valid_token
-        )
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(valid_token)
         assert result == []
     finally:
         _stop_patches(patches)

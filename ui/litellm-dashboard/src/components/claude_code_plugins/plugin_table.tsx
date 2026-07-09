@@ -11,6 +11,7 @@ import {
 import { Badge, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
+import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getCategoryBadgeColor } from "./helpers";
 import { Plugin } from "./types";
@@ -34,12 +35,6 @@ const PluginTable: React.FC<PluginTableProps> = ({
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
 
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
-
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     NotificationsManager.success("Copied to clipboard!");
@@ -51,19 +46,9 @@ const PluginTable: React.FC<PluginTableProps> = ({
       accessorKey: "name",
       cell: ({ row }) => {
         const plugin = row.original;
-        const name = plugin.name || "";
         return (
           <div className="flex items-center gap-2">
-            <Tooltip title={name}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[150px] justify-start"
-                onClick={() => onPluginClick(plugin.id)}
-              >
-                {name}
-              </Button>
-            </Tooltip>
+            <IdCell value={plugin.name} onClick={() => onPluginClick(plugin.id)} />
             <Tooltip title="Copy Plugin ID">
               <CopyOutlined
                 onClick={(e) => {
@@ -122,24 +107,13 @@ const PluginTable: React.FC<PluginTableProps> = ({
       accessorKey: "enabled",
       cell: ({ row }) => {
         const plugin = row.original;
-        return (
-          <Badge color={plugin.enabled ? "green" : "gray"} className="text-xs font-normal" size="xs">
-            {plugin.enabled ? "Yes" : "No"}
-          </Badge>
-        );
+        return <StatusBadge tone={plugin.enabled ? "success" : "neutral"} label={plugin.enabled ? "Yes" : "No"} />;
       },
     },
     {
       header: "Created At",
       accessorKey: "created_at",
-      cell: ({ row }) => {
-        const plugin = row.original;
-        return (
-          <Tooltip title={plugin.created_at}>
-            <span className="text-xs">{formatDate(plugin.created_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.created_at} />,
     },
     ...(isAdmin
       ? [

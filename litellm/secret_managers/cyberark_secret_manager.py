@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Union
 from urllib.parse import quote
 
 import httpx
+import yaml
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,7 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
-from .base_secret_manager import BaseSecretManager
+from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool
 
 
@@ -125,8 +126,11 @@ class CyberArkSecretManager(BaseSecretManager):
         """
         # In production, we'd check if the variable exists first
         # For now, we'll attempt to create it and ignore if it already exists
+        raise_if_unsafe_secret_name(secret_name)
         policy_url = f"{self.conjur_addr}/policies/{self.conjur_account}/policy/root"
-        policy_yaml = f"- !variable {secret_name}\n"
+        # Use a real YAML serializer to build the scalar safely.
+        quoted_name = yaml.safe_dump(secret_name, default_style='"').strip()
+        policy_yaml = f"- !variable {quoted_name}\n"
 
         try:
             client = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
