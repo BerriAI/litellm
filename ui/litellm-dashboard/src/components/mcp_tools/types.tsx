@@ -57,6 +57,33 @@ export const OAUTH_FLOW = {
   M2M: "m2m",
 };
 
+// The fields that determine which upstream OAuth token "Authorize & Fetch" mints: the resource/audience
+// (url), the OAuth mode/grant (auth_type, oauth_flow_type), the OAuth client and requested scope
+// (credentials.client_id / client_secret / scopes), and the authorization-server endpoints
+// (authorization_url / token_url / registration_url). Grounded in RFC 8707 / RFC 8693 and the MCP auth
+// spec: an access token is bound to exactly this tuple (resource/audience + scope + client + issuer), so
+// a previously authorized token is stale if and only if this identity changes and must be re-minted.
+// Deliberately EXCLUDES: transport (http<->sse on the same url is the same audience; a transport switch
+// only matters when it changes the target url, which `target` already captures), delegate_auth_to_upstream
+// (a downstream-usage toggle that is never sent to the authorize request), and all metadata/RBAC/routing
+// fields. Shared by the create and edit forms so their invalidation logic cannot drift.
+export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): string => {
+  const credentials = (values.credentials ?? {}) as Record<string, unknown>;
+  const target = values.transport === TRANSPORT.OPENAPI ? values.spec_path : values.url;
+  const identity = {
+    target: typeof target === "string" ? target : null,
+    auth_type: values.auth_type ?? null,
+    oauth_flow_type: values.oauth_flow_type ?? null,
+    client_id: credentials.client_id ?? null,
+    client_secret: credentials.client_secret ?? null,
+    scopes: credentials.scopes ?? null,
+    authorization_url: values.authorization_url ?? null,
+    token_url: values.token_url ?? null,
+    registration_url: values.registration_url ?? null,
+  };
+  return JSON.stringify(identity);
+};
+
 // Backend value of `oauth2_flow` that marks a machine-to-machine server. Distinct
 // from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
 export const MCP_OAUTH2_FLOW_M2M = "client_credentials";

@@ -125,7 +125,9 @@ if MCP_AVAILABLE:
         get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
+        mcp_oauth_token_identity,
         merge_user_env_vars,
+        purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         store_user_credential,
         store_user_oauth_credential,
@@ -2318,6 +2320,9 @@ if MCP_AVAILABLE:
                 },
             )
 
+        # Snapshot the pre-update identity so we can detect a mint-relevant change below.
+        old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
             prisma_client,
@@ -2335,6 +2340,30 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
+        # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user
+        # token was minted for the old configuration and is stale. Purge them (DB + cache) so the next
+        # tool call re-authorizes instead of forwarding a token for a resource/AS/client that no longer
+        # matches. Best-effort: a purge failure must not fail the update, whose primary job already
+        # succeeded.
+        if old_server_record is not None and mcp_oauth_token_identity(old_server_record) != mcp_oauth_token_identity(
+            mcp_server_record_updated
+        ):
+            try:
+                purged = await purge_user_oauth_credentials_for_server(prisma_client, payload.server_id)
+                if purged:
+                    verbose_logger.info(
+                        "MCP server %s: purged %d stale per-user OAuth token(s) after a mint-relevant config change",
+                        payload.server_id,
+                        purged,
+                    )
+            except Exception as exc:  # noqa: BLE001 - purge is best-effort; the server update already succeeded
+                verbose_logger.warning(
+                    "MCP server %s: failed to purge stale per-user OAuth tokens after config change: %s",
+                    payload.server_id,
+                    exc,
+                )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:

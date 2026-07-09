@@ -681,6 +681,44 @@ describe("CreateMCPServer", () => {
       // Asserted in setupOAuthInteractive
     });
 
+    it("invalidates the held token when the auth mode changes after Authorize & Fetch", async () => {
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      // Switching the Authentication mode changes the OAuth identity, so the held token is discarded.
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await waitFor(() => expect(oauthHook.reset).toHaveBeenCalled());
+    });
+
+    it("does NOT invalidate the held token when a non-mint field (server name) changes", async () => {
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Renamed_Server" } });
+      });
+
+      // server_name is not part of the OAuth identity, so the held token must survive the edit.
+      await waitFor(() => expect(screen.getAllByRole("button", { name: "Add MCP Server" }).length).toBeGreaterThan(0));
+      expect(oauthHook.reset).not.toHaveBeenCalled();
+    });
+
     it("includes token_validation in payload when token_validation_json is filled with valid JSON", async () => {
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-oauth",
