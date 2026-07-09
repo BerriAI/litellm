@@ -473,7 +473,11 @@ def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
     token is upstream-audienced and held by the caller; the gateway persists nothing for these
     modes (DCR persistence is opt-in and never enabled on this path).
     """
-    if mcp_server.auth_type in (MCPAuth.oauth2, MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
+        _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+    )
+
+    if mcp_server.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
         return
     raise HTTPException(
         status_code=400,
