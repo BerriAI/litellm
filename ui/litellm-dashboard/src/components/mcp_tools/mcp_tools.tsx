@@ -2,7 +2,14 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import { AUTH_TYPE, MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
+import {
+  isClientForwardedTokenMode,
+  MCPTool,
+  MCPToolsViewerProps,
+  MCPContent,
+  CallMCPToolResponse,
+  getMcpOAuthMode,
+} from "./types";
 import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
@@ -45,8 +52,7 @@ const MCPToolsViewer = ({
   // The client-forwarded token modes gate the same way as PKCE passthrough: the
   // browser session token (established via the browser-only Authorize in the
   // create/edit forms, or right here) is the upstream credential.
-  const usesBrowserHeldToken =
-    isPassthrough || auth_type === AUTH_TYPE.TRUE_PASSTHROUGH || auth_type === AUTH_TYPE.OAUTH_DELEGATE;
+  const usesBrowserHeldToken = isPassthrough || isClientForwardedTokenMode(auth_type);
   const isAuthorizationCode = oauthMode === "authorization_code";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
     usesBrowserHeldToken && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,

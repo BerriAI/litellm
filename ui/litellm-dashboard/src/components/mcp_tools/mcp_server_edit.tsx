@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import {
   AUTH_TYPE,
+  isClientForwardedTokenMode,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -163,10 +164,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         description: values.description || mcpServer.description,
         url,
         transport,
-        auth_type:
-          values.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH || values.auth_type === AUTH_TYPE.OAUTH_DELEGATE
-            ? values.auth_type
-            : AUTH_TYPE.OAUTH2,
+        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
@@ -181,7 +179,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       const effectiveAuthType = form.getFieldValue("auth_type") ?? mcpServer.auth_type;
-      if (effectiveAuthType === AUTH_TYPE.TRUE_PASSTHROUGH || effectiveAuthType === AUTH_TYPE.OAUTH_DELEGATE) {
+      if (isClientForwardedTokenMode(effectiveAuthType)) {
         setToken(
           mcpServer.server_id,
           {
@@ -393,8 +391,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         oauth2_flow: mcpServer.oauth2_flow,
         delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
       }) === "passthrough";
-    const isBrowserHeldTokenMode =
-      mcpServer.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH || mcpServer.auth_type === AUTH_TYPE.OAUTH_DELEGATE;
+    const isBrowserHeldTokenMode = isClientForwardedTokenMode(mcpServer.auth_type);
     if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
