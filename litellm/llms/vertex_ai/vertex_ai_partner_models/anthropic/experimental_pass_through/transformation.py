@@ -17,6 +17,9 @@ from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
+    def should_normalize_system_role_messages(self) -> bool:
+        return True
+
     def should_strip_billing_metadata(self) -> bool:
         return True
 
