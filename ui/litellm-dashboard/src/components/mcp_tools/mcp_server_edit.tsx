@@ -180,16 +180,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
       const effectiveAuthType = form.getFieldValue("auth_type") ?? mcpServer.auth_type;
       if (isClientForwardedTokenMode(effectiveAuthType)) {
-        setToken(
-          mcpServer.server_id,
-          {
-            access_token: token.access_token,
-            expires_in: token.expires_in,
-            refresh_token: token.refresh_token,
-            token_type: token.token_type,
-          },
-          userID,
-        );
+        const browserHeldToken = {
+          access_token: token.access_token,
+          expires_in: token.expires_in,
+          refresh_token: token.refresh_token,
+          token_type: token.token_type,
+        };
+        setToken(mcpServer.server_id, browserHeldToken, userID);
         NotificationsManager.success(
           "Token held for this browser session. Tools can now be loaded and configured; nothing was saved to LiteLLM.",
         );
@@ -467,7 +464,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const handleTransportChange = (value: string) => {
     // Clear fields that are not relevant for the selected transport.
     if (value === "stdio") {
-      form.setFieldsValue({
+      const clearedForStdio = {
         url: undefined,
         spec_path: undefined,
         auth_type: undefined,
@@ -475,15 +472,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         authorization_url: undefined,
         token_url: undefined,
         registration_url: undefined,
-      });
+      };
+      form.setFieldsValue(clearedForStdio);
     } else if (value === TRANSPORT.OPENAPI) {
-      form.setFieldsValue({
+      const clearedForOpenapi = {
         url: undefined,
         command: undefined,
         args: undefined,
         env_json: undefined,
         stdio_config: undefined,
-      });
+      };
+      form.setFieldsValue(clearedForOpenapi);
     } else {
       form.setFieldsValue({
         spec_path: undefined,
@@ -761,23 +760,21 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         try {
           if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
-            await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, {
+            const oauthCredentialPayload = {
               access_token: oauthTokenResponse.access_token,
               refresh_token: oauthTokenResponse.refresh_token,
               expires_in: oauthTokenResponse.expires_in,
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
-            });
+            };
+            await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, oauthCredentialPayload);
           } else if (oauthMode === "passthrough") {
-            setToken(
-              mcpServer.server_id,
-              {
-                access_token: oauthTokenResponse.access_token,
-                expires_in: oauthTokenResponse.expires_in,
-                refresh_token: oauthTokenResponse.refresh_token,
-                token_type: oauthTokenResponse.token_type,
-              },
-              userID,
-            );
+            const browserHeldToken = {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            };
+            setToken(mcpServer.server_id, browserHeldToken, userID);
           }
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : "";
