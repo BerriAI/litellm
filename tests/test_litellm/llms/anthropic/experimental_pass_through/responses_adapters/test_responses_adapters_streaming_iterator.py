@@ -10,9 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
@@ -119,16 +117,12 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
         assert chunks[0]["error"]["message"]
 
     def test_top_level_error_event_emits_error_event(self):
-        chunks = _process_all(
-            [{"type": "error", "code": "rate_limit_exceeded", "message": "Rate limit reached."}]
-        )
+        chunks = _process_all([{"type": "error", "code": "rate_limit_exceeded", "message": "Rate limit reached."}])
         assert [c["type"] for c in chunks] == ["error"]
         assert chunks[0]["error"]["message"] == "Rate limit reached."
 
     def test_response_completed_still_emits_message_delta_and_stop(self):
-        chunks = _process_all(
-            [{"type": "response.completed", "response": {"status": "completed"}}]
-        )
+        chunks = _process_all([{"type": "response.completed", "response": {"status": "completed"}}])
         assert [c["type"] for c in chunks] == ["message_delta", "message_stop"]
         assert chunks[0]["delta"]["stop_reason"] == "end_turn"
 
@@ -147,9 +141,7 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
             yield {"type": "response.created"}
             raise RuntimeError("connection reset by upstream")
 
-        wrapper = AnthropicResponsesStreamWrapper(
-            responses_stream=exploding_stream(), model="m"
-        )
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=exploding_stream(), model="m")
         chunks = []
         async for chunk in wrapper:
             chunks.append(chunk)
@@ -170,9 +162,7 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
                 },
             }
 
-        wrapper = AnthropicResponsesStreamWrapper(
-            responses_stream=failing_stream(), model="m"
-        )
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=failing_stream(), model="m")
         payloads = []
         async for raw in wrapper.async_anthropic_sse_wrapper():
             payloads.append(raw.decode())

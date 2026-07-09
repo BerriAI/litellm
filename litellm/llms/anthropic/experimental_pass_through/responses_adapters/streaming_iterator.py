@@ -351,9 +351,7 @@ class AnthropicResponsesStreamWrapper:
             verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
             # Surface the failure to the client as an Anthropic `error` SSE
             # event instead of silently ending the stream.
-            self._chunk_queue.append(
-                self._make_error_chunk(f"Upstream provider error while streaming: {str(e)}")
-            )
+            self._chunk_queue.append(self._make_error_chunk(f"Upstream provider error while streaming: {str(e)}"))
 
         # Drain any remaining queued chunks
         if self._chunk_queue:
