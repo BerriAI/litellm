@@ -1000,6 +1000,60 @@ def test_per_request_custom_pricing_with_router():
     assert "gpt-3.5-turbo" in selected
 
 
+def test_region_name_applied_with_custom_pricing():
+    """region_name from _hidden_params must be embedded in the cost-calc key
+    even when custom_pricing selects the router_model_id. This covers the
+    branch that the standalone region_name `if` now reaches into.
+
+    Regression test for Greptile review on #32518.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from types import SimpleNamespace
+
+    custom_model_id = "claude-sonnet-4-region-test"
+    custom_pricing_info = {
+        "input_cost_per_token": 0.0003,
+        "output_cost_per_token": 0.0015,
+        "max_tokens": 8192,
+        "litellm_provider": "anthropic",
+    }
+    litellm.register_model(model_cost={custom_model_id: custom_pricing_info})
+
+    completion_response = SimpleNamespace(
+        _hidden_params={"region_name": "us-east-1"}
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="anthropic/claude-sonnet-4-20250514",
+        completion_response=completion_response,
+        custom_pricing=True,
+        custom_llm_provider="anthropic",
+        router_model_id=custom_model_id,
+    )
+    assert selected == f"anthropic/us-east-1/{custom_model_id}"
+
+
+def test_region_name_applied_with_base_model():
+    """region_name from _hidden_params must be embedded in the cost-calc key
+    when base_model (e.g. azure) selects the return model.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from types import SimpleNamespace
+
+    completion_response = SimpleNamespace(
+        _hidden_params={"region_name": "us-east-1"}
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="azure/my-deployment",
+        completion_response=completion_response,
+        custom_pricing=False,
+        custom_llm_provider="azure",
+        base_model="gpt-4",
+    )
+    assert selected == "azure/us-east-1/gpt-4"
+
+
 def test_azure_realtime_cost_calculator():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
