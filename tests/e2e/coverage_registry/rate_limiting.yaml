@@ -1,0 +1,3 @@
+# Rate limiting behaviors. Grounded in litellm/proxy/hooks/parallel_request_limiter.py.
+- {id: rate_limiting.key.tpm.under_limit_allows, module: rate_limiting, tier: P0, scope: key, limit: tpm, behavior: allows_under_limit, assertions: [persists_limit, allows_request], source: "parallel_request_limiter.py:145-260", rationale: "A virtual key below its TPM quota can call the data plane"}
+- {id: rate_limiting.key.tpm.over_limit_blocks, module: rate_limiting, tier: P0, scope: key, limit: tpm, behavior: blocks_over_limit, assertions: [persists_limit, returns_usage, blocks_next_request], source: "parallel_request_limiter.py:145-260", rationale: "A virtual key above its TPM quota is rejected with 429"}
