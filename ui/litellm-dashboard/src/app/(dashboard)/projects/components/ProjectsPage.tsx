@@ -1,5 +1,6 @@
 import { useProjects, ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { LoadingOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Button,
@@ -72,18 +73,7 @@ export function ProjectsPage() {
       dataIndex: "project_id",
       key: "project_id",
       width: 170,
-      render: (id: string) => (
-        <Tooltip title={id}>
-          <Text
-            ellipsis
-            className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-            style={{ fontSize: 14, padding: "1px 8px" }}
-            onClick={() => setSelectedProjectId(id)}
-          >
-            {id}
-          </Text>
-        </Tooltip>
-      ),
+      render: (id: string) => <IdCell value={id} onClick={setSelectedProjectId} />,
     },
     {
       title: "Name",
@@ -137,14 +127,14 @@ export function ProjectsPage() {
       key: "created_at",
       sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
       responsive: ["lg"],
-      render: (date: string) => new Date(date).toLocaleDateString(),
+      render: (date: string) => <DateCell value={date} precision="date" />,
     },
     {
       title: "Updated",
       dataIndex: "updated_at",
       key: "updated_at",
       responsive: ["xl"],
-      render: (date: string) => new Date(date).toLocaleDateString(),
+      render: (date: string) => <DateCell value={date} precision="date" />,
     },
   ];
 

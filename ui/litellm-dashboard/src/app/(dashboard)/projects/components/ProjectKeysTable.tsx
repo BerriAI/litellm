@@ -3,6 +3,7 @@ import { Empty, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { SpinProps } from "antd";
 import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
+import { DateCell } from "@/components/shared/table_cells";
 
 interface ProjectKeysTableProps {
   keys: KeyResponse[];
@@ -33,13 +34,13 @@ const columns: ColumnsType<KeyResponse> = [
     title: "Created",
     dataIndex: "created_at",
     key: "created_at",
-    render: (date: string) => (date ? new Date(date).toLocaleDateString() : "—"),
+    render: (date: string) => <DateCell value={date} precision="date" />,
   },
   {
     title: "Last Active",
     dataIndex: "last_active",
     key: "last_active",
-    render: (date: string | null) => (date ? new Date(date).toLocaleDateString() : "Never"),
+    render: (date: string | null) => <DateCell value={date} precision="date" fallback="Never" />,
   },
 ];
 

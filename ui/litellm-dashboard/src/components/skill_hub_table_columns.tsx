@@ -3,6 +3,7 @@ import { Badge, Text } from "@tremor/react";
 import { Tooltip } from "antd";
 import { CopyOutlined, LinkOutlined } from "@ant-design/icons";
 import { Plugin } from "./claude_code_plugins/types";
+import { StatusBadge } from "@/components/shared/table_cells";
 
 export const skillHubColumns = (
   showModal: (skill: Plugin) => void,
@@ -104,9 +105,10 @@ export const skillHubColumns = (
     accessorKey: "enabled",
     enableSorting: true,
     cell: ({ row }) => (
-      <Badge color={row.original.enabled ? "green" : "gray"} size="xs">
-        {row.original.enabled ? "Public" : "Draft"}
-      </Badge>
+      <StatusBadge
+        tone={row.original.enabled ? "success" : "neutral"}
+        label={row.original.enabled ? "Public" : "Draft"}
+      />
     ),
   },
 ];

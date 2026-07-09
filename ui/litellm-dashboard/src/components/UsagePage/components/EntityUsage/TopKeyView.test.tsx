@@ -171,7 +171,9 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/sk-1234\.\.\./)).toBeInTheDocument();
+    const keyId = screen.getByText("sk-1234567890abcdef");
+    expect(keyId).toBeInTheDocument();
+    expect(keyId).toHaveClass("truncate");
   });
 
   it("should display dash for missing key alias", () => {
@@ -206,7 +208,7 @@ describe("TopKeyView", () => {
     expect(screen.getByText("$123.46")).toBeInTheDocument();
   });
 
-  it("should display less than 0.01 spend as <$0.01", () => {
+  it("should display sub-cent spend as < $0.01", () => {
     render(
       <TopKeyView
         {...baseProps}
@@ -214,15 +216,15 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            spend: 0.005,
+            spend: 0.004,
           },
         ]}
       />,
     );
-    expect(screen.getByText("<$0.01")).toBeInTheDocument();
+    expect(screen.getByText("< $0.01")).toBeInTheDocument();
   });
 
-  it("should display zero spend correctly", () => {
+  it("should display zero spend as a dash", () => {
     render(
       <TopKeyView
         {...baseProps}
@@ -235,7 +237,8 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText("$0.00")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   it("should display dash for empty tags", () => {
@@ -376,7 +379,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -410,7 +413,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -447,7 +450,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -483,7 +486,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -522,7 +525,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -552,7 +555,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }

@@ -13,7 +13,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `budgets/` - budget definition, enforcement, and reset windows (key, team, tag, soft, multi-window)
 - `spend_tracking/` - spend logging and cost attribution on `/spend/*`
-- `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials
+- `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (rate limits, fallbacks, cooldowns)
@@ -63,23 +63,26 @@ The harness is fully typed and new code must not add `Any` or widen the basedpyr
 
 The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
 
-Coverage is organized as module > feature > test. There are six modules: LLMs, MCPs, Management/UI, Reliability & Performance, Logging & Guardrails, and Other. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
+Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
 
 The metric is coverage: the share of registry rows that have a passing covering test, reported to Grafana per module so a gap surfaces as an uncovered row rather than a silent absence
 
+Tests do not declare a dashboard module directly. They only declare the registry cell id with `@pytest.mark.covers("...")`; the registry row decides the module, tier, endpoint, and dashboard rollup. Run `python -m coverage_registry.collector --strict` when you want CI to reject unknown marker ids. Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
+
 ### Naming grammar per module
 
-LLMs - endpoint features (subject = the route), seeded from the Claude Code compat matrix
+LLMs - endpoint features (subject = the route), seeded from the Claude Code compat matrix. `chat_completions`, `messages`, and `responses` roll up to `Core LLMs`. Other LLM endpoints, including `batches` and `realtime`, roll up to `Non-Core LLMs`.
 
 ```
 llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
   endpoint   : chat_completions | messages | responses | embeddings | batches | files
                | rerank | images_generations | audio_speech | audio_transcriptions | moderations
-  route      : openai | azure_openai | anthropic | bedrock_invoke | bedrock_converse | vertex | azure_foundry
+               | realtime
+  route      : openai | azure_openai | anthropic | bedrock_converse | vertex | azure_foundry
+               | cohere | together_ai
                (vocab varies per endpoint; messages is anthropic-format only)
-  capability : basic | tool_use | prompt_cache_5m | prompt_cache_1h | vision | thinking
-               | thinking_tool_use | pdf_input | web_search | structured_output | count_tokens
-               | tool_search | long_context_1m
+  capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
+               | service_tier
   streaming  : stream | nonstream   (omit where n/a)
   assertion  : works | cost_logged
   label (not in id): model = haiku-4.5 | sonnet-4.6 | opus-4.7 | gpt-*

@@ -19,6 +19,7 @@ import {
   SortState,
   TableHeaderSortDropdown,
 } from "@/components/common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
 import { AccessGroup } from "./types";
@@ -143,21 +144,7 @@ export function AccessGroupsPage() {
         header: () => <span>ID</span>,
         enableSorting: false,
         size: 170,
-        cell: ({ row }) => {
-          const record = row.original;
-          return (
-            <Tooltip title={record.id}>
-              <Text
-                ellipsis
-                className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-                style={{ fontSize: 14, padding: "1px 8px" }}
-                onClick={() => setSelectedGroupId(record.id)}
-              >
-                {record.id}
-              </Text>
-            </Tooltip>
-          );
-        },
+        cell: ({ row }) => <IdCell value={row.original.id} onClick={setSelectedGroupId} />,
       },
       {
         id: "name",
@@ -211,7 +198,7 @@ export function AccessGroupsPage() {
         header: () => <span>Created</span>,
         enableSorting: true,
         sortingFn: "datetime",
-        cell: ({ getValue }) => new Date(getValue() as string).toLocaleDateString(),
+        cell: ({ getValue }) => <DateCell value={getValue() as string} precision="date" />,
         meta: { responsive: ["lg"] },
       },
       {
@@ -219,7 +206,7 @@ export function AccessGroupsPage() {
         accessorKey: "updatedAt",
         header: () => <span>Updated</span>,
         enableSorting: false,
-        cell: ({ getValue }) => new Date(getValue() as string).toLocaleDateString(),
+        cell: ({ getValue }) => <DateCell value={getValue() as string} precision="date" />,
         meta: { responsive: ["xl"] },
       },
       ...(canModify

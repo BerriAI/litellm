@@ -4,7 +4,6 @@ import {
   Table,
   TableHead,
   TableRow,
-  Badge,
   TableHeaderCell,
   TableCell,
   TableBody,
@@ -16,7 +15,8 @@ import {
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
 import { InputNumber } from "antd";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
+import { TrashIcon } from "@heroicons/react/outline";
+import { StatusBadge } from "@/components/shared/table_cells";
 
 import RouterSettings from "./router_settings";
 import Fallbacks from "./Settings/RouterSettings/Fallbacks/Fallbacks";
@@ -161,17 +161,23 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               checked={value.field_value === true || value.field_value === "true"}
                               onChange={(checked) => handleInputChange(value.field_name, checked)}
                             />
+                          ) : value.field_type == "Float" ? (
+                            <InputNumber
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={value.field_value}
+                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
+                            />
                           ) : null}
                         </TableCell>
                         <TableCell>
                           {value.stored_in_db == true ? (
-                            <Badge icon={CheckCircleIcon} className="text-white">
-                              In DB
-                            </Badge>
+                            <StatusBadge tone="success" label="In DB" />
                           ) : value.stored_in_db == false ? (
-                            <Badge className="text-gray bg-white outline-solid">In Config</Badge>
+                            <StatusBadge tone="neutral" label="In Config" />
                           ) : (
-                            <Badge className="text-gray bg-white outline-solid">Not Set</Badge>
+                            <StatusBadge tone="neutral" label="Not Set" />
                           )}
                         </TableCell>
                         <TableCell>

@@ -141,6 +141,9 @@ class LLMCost:
 class SpanError:
     error_type: str | None = None
     message: str | None = None
+    code: str | None = None
+    stack_trace: str | None = None
+    llm_provider: str | None = None
 
 
 @dataclass(frozen=True)
@@ -305,10 +308,14 @@ class LLMCallSpanData:
     messages_in: tuple[Mapping[str, object], ...] = ()
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
+    time_to_first_chunk_seconds: float | None = None
 
     @classmethod
     def from_standard_logging_payload(
-        cls, payload: "StandardLoggingPayload", capture_content: bool = False
+        cls,
+        payload: "StandardLoggingPayload",
+        capture_content: bool = False,
+        time_to_first_chunk_seconds: float | None = None,
     ) -> "LLMCallSpanData":
         params = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -349,6 +356,7 @@ class LLMCallSpanData:
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
+            time_to_first_chunk_seconds=time_to_first_chunk_seconds,
         )
 
 
@@ -566,6 +574,9 @@ def _parse_error(payload: "StandardLoggingPayload") -> SpanError | None:
     return SpanError(
         error_type=as_str(info.get("error_class")) or as_str(info.get("error_code")),
         message=as_str(info.get("error_message")) or as_str(payload.get("error_str")),
+        code=as_str(info.get("error_code")),
+        stack_trace=as_str(info.get("traceback")),
+        llm_provider=as_str(info.get("llm_provider")),
     )
 
 

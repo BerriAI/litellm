@@ -3,6 +3,7 @@ import type { TableProps } from "antd";
 import { Table } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
+import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { AlertingObject } from "./types";
 
@@ -61,17 +62,8 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
         // and server-fetched rows both render correctly.
         const mode = record.type || record.mode || "success";
         const label = CALLBACK_MODES.find((m) => m.value === mode)?.label || mode;
-        const badgeClass =
-          mode === "success"
-            ? "bg-green-100 text-green-800"
-            : mode === "failure"
-              ? "bg-red-100 text-red-800"
-              : "bg-blue-100 text-blue-800";
-        return (
-          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
-            {label}
-          </span>
-        );
+        const tone: StatusTone = mode === "success" ? "success" : mode === "failure" ? "error" : "info";
+        return <StatusBadge tone={tone} label={label} />;
       },
       width: 240,
     },
