@@ -3190,3 +3190,143 @@ def test_map_system_message_pt_does_not_mutate_input():
     map_system_message_pt(messages)
 
     assert messages == original_messages
+
+
+@pytest.mark.parametrize("next_role", ["tool", "function", "developer", "custom"])
+def test_map_system_message_pt_preserves_system_before_incompatible_role(next_role):
+    messages = [
+        {"role": "system", "content": "System"},
+        {"role": next_role, "content": "Next"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": "System"},
+        {"role": next_role, "content": "Next"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": "lookup", "arguments": "{}"},
+        },
+    ],
+)
+def test_map_system_message_pt_does_not_merge_into_tool_call_assistant(
+    assistant_message,
+):
+    messages = [
+        {"role": "system", "content": "System"},
+        assistant_message,
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [{"role": "user", "content": "System"}, assistant_message]
+
+
+def test_map_system_message_pt_preserves_system_message_metadata():
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "System"}],
+            "name": "policy",
+            "cache_control": {"type": "ephemeral"},
+            "provider_extension": {"value": 1},
+        },
+        {"role": "user", "content": "User"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "System"}],
+            "name": "policy",
+            "cache_control": {"type": "ephemeral"},
+            "provider_extension": {"value": 1},
+        },
+        {"role": "user", "content": "User"},
+    ]
+
+
+def test_map_system_message_pt_preserves_block_metadata_without_mutation():
+    system_block = {
+        "type": "text",
+        "text": "System",
+        "cache_control": {"type": "ephemeral"},
+    }
+    messages = [
+        {"role": "system", "content": [system_block]},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result[0]["content"] == [
+        {
+            "type": "text",
+            "text": "System ",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "text", "text": "User"},
+    ]
+    assert system_block["text"] == "System"
+
+
+def test_map_system_message_pt_supports_tuple_content():
+    messages = [
+        {"role": "system", "content": ({"type": "text", "text": "System"},)},
+        {"role": "user", "content": ({"type": "text", "text": "User"},)},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "System "},
+                {"type": "text", "text": "User"},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_empty_structured_system_content():
+    messages = [
+        {"role": "system", "content": []},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": [{"type": "text", "text": "User"}]}
+    ]
+
+
+def test_map_system_message_pt_keeps_unmodified_message_identity():
+    unaffected = {"role": "tool", "content": "result", "tool_call_id": "call_1"}
+    messages = [{"role": "system", "content": "System"}, unaffected]
+
+    result = map_system_message_pt(messages)
+
+    assert result[1] is unaffected
