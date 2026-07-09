@@ -3,7 +3,7 @@ import binascii
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -1070,7 +1070,7 @@ async def list_user_oauth_credentials(
     return results
 
 
-def _decrypted_credential_field(creds: Dict[str, Any], field: str) -> Any:
+def _decrypted_credential_field(creds: Dict[str, object], field: str) -> object:
     """Return one credential field decrypted with the global salt key; non-string and legacy
     plaintext values come back unchanged (decrypt_value_helper returns the original on failure)."""
     value = creds.get(field)
@@ -1084,7 +1084,7 @@ def _decrypted_credential_field(creds: Dict[str, Any], field: str) -> Any:
     )
 
 
-def mcp_oauth_token_identity(server: Any) -> tuple[Any, ...]:
+def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
     """The upstream-OAuth-token-determining fields of an MCP server: the resource/audience (url, or
     spec_path for OpenAPI servers), the OAuth mode/grant (auth_type, oauth2_flow), the
     authorization-server endpoints, and the OAuth client + scopes. Mirrors the dashboard's
@@ -1098,12 +1098,12 @@ def mcp_oauth_token_identity(server: Any) -> tuple[Any, ...]:
     creds = getattr(server, "credentials", None)
     if isinstance(creds, str):
         try:
-            parsed: Any = json.loads(creds)
+            parsed: object = json.loads(creds)
         except ValueError:
             parsed = None
     else:
         parsed = creds
-    creds_dict: Dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+    creds_dict: Dict[str, object] = parsed if isinstance(parsed, dict) else {}
     return (
         getattr(server, "url", None),
         getattr(server, "spec_path", None),
@@ -1118,25 +1118,35 @@ def mcp_oauth_token_identity(server: Any) -> tuple[Any, ...]:
     )
 
 
-async def purge_user_oauth_credentials_for_server(prisma_client: PrismaClient, server_id: str) -> int:
+async def purge_user_oauth_credentials_for_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    invalidate_token_cache: Optional[Callable[[str, str], Awaitable[None]]] = None,
+) -> int:
     """Delete every stored per-user OAuth credential for a server and invalidate each user's cached
     token everywhere it can be served from (the legacy per-user token cache and the v2 per-user OAuth
     token store), so no user keeps a token minted for a superseded configuration. Called when a server
     update changes a mint-relevant field (see mcp_oauth_token_identity). Returns the number of rows
     removed. A row inserted between the find and the delete is removed from the DB but cannot be
     evicted from the caches (its user_id was never seen); that case is detected, logged, and bounded
-    by the cache TTL."""
+    by the cache TTL.
+
+    invalidate_token_cache is injectable for tests; it defaults to the manager's shared
+    invalidate_user_oauth_token_cache, the single invalidation point for per-user tokens."""
     repo = MCPUserCredentialsRepository(prisma_client)
     rows = await repo.table.find_many(where={"server_id": server_id})
     if not rows:
         return 0
     deleted_count = await repo.table.delete_many(where={"server_id": server_id})
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
+    if invalidate_token_cache is None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        invalidate_token_cache = global_mcp_server_manager.invalidate_user_oauth_token_cache
 
     for row in rows:
-        await global_mcp_server_manager.invalidate_user_oauth_token_cache(row.user_id, server_id)
+        await invalidate_token_cache(row.user_id, server_id)
     if deleted_count != len(rows):
         verbose_proxy_logger.warning(
             "MCP server %s: purge removed %d credential row(s) but %d were enumerated; "

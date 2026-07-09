@@ -58,6 +58,7 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+    MCPPerUserTokenCache,
     mcp_per_user_token_cache,
     resolve_mcp_auth,
 )
@@ -802,10 +803,12 @@ class MCPServerManager:
         self,
         cred_provider: Optional[UpstreamCredentialProvider] = None,
         per_user_oauth_token_store: Optional[InvalidatableOAuthTokenStore] = None,
+        per_user_token_cache: Optional[MCPPerUserTokenCache] = None,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
+        self._per_user_token_cache = per_user_token_cache or mcp_per_user_token_cache
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
@@ -4070,7 +4073,7 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
-        await mcp_per_user_token_cache.delete(user_id, server_id)
+        await self._per_user_token_cache.delete(user_id, server_id)
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,
