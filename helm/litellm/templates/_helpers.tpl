@@ -27,20 +27,11 @@ Common naming + label helpers shared by gateway, backend, and ui templates.
 {{- printf "%s-ui" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/*
-Chart label. Kubernetes caps a label value at 63 bytes, and .Chart.Version is
-unbounded: CI branch builds version charts as 0.0.0-branch-<branch>-<sha>, which
-overflows and makes the API server reject every labeled resource.
-*/}}
-{{- define "litellm.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
 {{- define "litellm.commonLabels" -}}
 app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-helm.sh/chart: {{ include "litellm.chart" . }}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{/*
