@@ -91,9 +91,7 @@ class TestTTLExtraction:
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "Regular message without cache control"}
-                ],
+                "content": [{"type": "text", "text": "Regular message without cache control"}],
             }
         ]
 
@@ -175,9 +173,7 @@ class TestTTLExtraction:
 class TestTransformationWithTTL:
     """Test the complete transformation with TTL support"""
 
-    @pytest.mark.parametrize(
-        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
-    )
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
     def test_transform_with_valid_ttl(self, custom_llm_provider):
         """Test transformation includes TTL when provided"""
         messages = [
@@ -218,9 +214,7 @@ class TestTransformationWithTTL:
 
         assert result["displayName"] == "test-cache-key"
 
-    @pytest.mark.parametrize(
-        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
-    )
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
     def test_transform_without_ttl(self, custom_llm_provider):
         """Test transformation without TTL"""
         messages = [
@@ -260,9 +254,7 @@ class TestTransformationWithTTL:
 
         assert result["displayName"] == "test-cache-key"
 
-    @pytest.mark.parametrize(
-        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
-    )
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
     def test_transform_with_invalid_ttl(self, custom_llm_provider):
         """Test transformation with invalid TTL (should be ignored)"""
         messages = [
@@ -301,9 +293,7 @@ class TestTransformationWithTTL:
 
         assert result["displayName"] == "test-cache-key"
 
-    @pytest.mark.parametrize(
-        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
-    )
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
     def test_transform_with_system_message_and_ttl(self, custom_llm_provider):
         """Test transformation with system message and TTL"""
         messages = [
@@ -387,6 +377,143 @@ class TestEdgeCases:
         ttl = extract_ttl_from_cached_messages(messages)
         assert isinstance(ttl, str)
         assert ttl == "3600s"
+
+    def test_cache_control_preserved_for_object_content_items(self):
+        """Test that cache_control is preserved when content items are real Pydantic models."""
+        from pydantic import BaseModel, Field
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        class MockContentBlock:
+            def __init__(self):
+                self.type = "text"
+                self.text = "hello"
+                self.cache_control = {"type": "ephemeral"}
+
+        class RealPydanticV2Block(BaseModel):
+            type: str = "text"
+            text: str = "hello v2"
+            cache_control: dict = Field(default_factory=lambda: {"type": "ephemeral"})
+
+        class MockBlockWithNoneCacheControl:
+            def __init__(self):
+                self.type = "text"
+                self.text = "hello none"
+                self.cache_control = None
+
+        content = [
+            MockContentBlock(),
+            RealPydanticV2Block(),
+            MockBlockWithNoneCacheControl(),
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        assert result == [
+            {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "hello v2", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "hello none"},
+        ]
+
+    def test_is_cached_message_for_object_message_and_content_item(self):
+        """Test is_cached_message on custom objects / models."""
+        from litellm.utils import is_cached_message
+
+        # Test message level cache_control object
+        class MockCacheControl:
+            def __init__(self):
+                self.type = "ephemeral"
+
+        class MockMessageLevelObj:
+            def __init__(self):
+                self.role = "system"
+                self.content = "hello"
+                self.cache_control = MockCacheControl()
+
+        msg = MockMessageLevelObj()
+        assert is_cached_message(msg) is True
+
+        # Test content level cache_control object
+        class MockContentItem:
+            def __init__(self):
+                self.type = "text"
+                self.text = "hello"
+                self.cache_control = MockCacheControl()
+
+        class MockContentLevelObj:
+            def __init__(self):
+                self.role = "system"
+                self.content = [MockContentItem()]
+
+        msg = MockContentLevelObj()
+        assert is_cached_message(msg) is True
+
+    def test_extract_ttl_from_cached_messages_for_object_models(self):
+        """Test extract_ttl_from_cached_messages with object-based messages and content items."""
+
+        class MockCacheControl:
+            def __init__(self):
+                self.type = "ephemeral"
+                self.ttl = "3600s"
+
+        class MockContentItem:
+            def __init__(self):
+                self.type = "text"
+                self.text = "hello"
+                self.cache_control = MockCacheControl()
+
+        class MockMessageObj:
+            def __init__(self):
+                self.role = "system"
+                self.content = [MockContentItem()]
+
+        messages = [MockMessageObj()]
+        ttl = extract_ttl_from_cached_messages(messages)
+        assert ttl == "3600s"
+
+    def test_extract_ttl_from_cached_messages_with_message_level_object_cache_control(self):
+        """Test extract_ttl_from_cached_messages with message-level object cache_control."""
+
+        class MockCacheControl:
+            def __init__(self):
+                self.type = "ephemeral"
+                self.ttl = "7200s"
+
+        class MockMessageObj:
+            def __init__(self):
+                self.role = "system"
+                self.content = "hello"
+                self.cache_control = MockCacheControl()
+
+        messages = [MockMessageObj()]
+        ttl = extract_ttl_from_cached_messages(messages)
+        assert ttl == "7200s"
+
+    def test_is_cached_message_for_dict_message_with_dict_content_items(self):
+        """Test is_cached_message with dict message and dict content list items."""
+        from litellm.utils import is_cached_message
+
+        # Dictionary message without content should return False
+        assert is_cached_message({"role": "user"}) is False
+
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
+            ],
+        }
+        assert is_cached_message(msg) is True
+
+    def test_normalize_responses_api_object_to_dict_pydantic_v1(self):
+        """Test _normalize_responses_api_object_to_dict with Pydantic v1 dict fallback."""
+        from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+        class MockPydanticV1Model:
+            def dict(self):
+                return {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
+
+        item = MockPydanticV1Model()
+        res = LiteLLMCompletionResponsesConfig._normalize_responses_api_object_to_dict(item)
+        assert res == {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
 
 
 if __name__ == "__main__":

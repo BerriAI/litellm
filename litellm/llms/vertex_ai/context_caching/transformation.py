@@ -59,32 +59,52 @@ def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Option
         Optional[str]: TTL string in format "3600s" or None if not found/invalid
     """
     for message in messages:
-        if not is_cached_message(message):
-            continue
+        # Check message-level cache_control first
+        msg_cache_control = (
+            message.get("cache_control") if isinstance(message, dict) else getattr(message, "cache_control", None)
+        )
+        if msg_cache_control is not None:
+            cc_type = (
+                msg_cache_control.get("type")
+                if isinstance(msg_cache_control, dict)
+                else getattr(msg_cache_control, "type", None)
+            )
+            if cc_type == "ephemeral":
+                ttl = (
+                    msg_cache_control.get("ttl")
+                    if isinstance(msg_cache_control, dict)
+                    else getattr(msg_cache_control, "ttl", None)
+                )
+                if ttl and _is_valid_ttl_format(ttl):
+                    return str(ttl)
 
         content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
-        if not content or isinstance(content, str):
+        if not isinstance(content, list):
             continue
 
         for content_item in content:
             # Check if content_item is dict or object model
             if isinstance(content_item, dict):
                 cache_control = content_item.get("cache_control")
+                item_type = content_item.get("type")
             else:
                 cache_control = getattr(content_item, "cache_control", None)
+                item_type = getattr(content_item, "type", None)
 
-            if not cache_control:
-                continue
-
-            cc_type = (
-                cache_control.get("type") if isinstance(cache_control, dict) else getattr(cache_control, "type", None)
-            )
-            if cc_type != "ephemeral":
-                continue
-
-            ttl = cache_control.get("ttl") if isinstance(cache_control, dict) else getattr(cache_control, "ttl", None)
-            if ttl and _is_valid_ttl_format(ttl):
-                return str(ttl)
+            if item_type == "text" and cache_control is not None:
+                cc_type = (
+                    cache_control.get("type")
+                    if isinstance(cache_control, dict)
+                    else getattr(cache_control, "type", None)
+                )
+                if cc_type == "ephemeral":
+                    ttl = (
+                        cache_control.get("ttl")
+                        if isinstance(cache_control, dict)
+                        else getattr(cache_control, "ttl", None)
+                    )
+                    if ttl and _is_valid_ttl_format(ttl):
+                        return str(ttl)
 
     return None
 
