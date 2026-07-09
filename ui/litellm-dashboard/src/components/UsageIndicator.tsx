@@ -12,9 +12,11 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
+import { getRemainingUsers } from "./networking";
 
 import { cn } from "@/lib/cva.config";
+import { getDaysUntilExpiration } from "@/utils/licenseUtils";
+import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 
 interface UsageIndicatorProps {
   accessToken: string | null;
@@ -29,17 +31,6 @@ interface UsageData {
   total_teams_used: number;
   total_teams_remaining: number | null;
 }
-
-// Calculate days until expiration
-const getDaysUntilExpiration = (expirationDate: string | null): number | null => {
-  if (!expirationDate) return null;
-  const expDate = new Date(expirationDate + "T00:00:00Z"); // Force UTC midnight
-  const now = new Date();
-  now.setHours(0, 0, 0, 0); // Normalize to local midnight
-  const diffTime = expDate.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays;
-};
 
 // Format expiration for display
 const formatExpirationDisplay = (daysRemaining: number | null): string => {
@@ -58,9 +49,10 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [data, setData] = useState<UsageData | null>(null);
-  const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const licenseInfo = useLicenseInfo(accessToken).data ?? null;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -70,12 +62,8 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
       setError(null);
 
       try {
-        const [usageResult, licenseResult] = await Promise.all([
-          getRemainingUsers(accessToken),
-          getLicenseInfo(accessToken).catch(() => null), // Don't fail if license endpoint unavailable
-        ]);
+        const usageResult = await getRemainingUsers(accessToken);
         setData(usageResult);
-        setLicenseInfo(licenseResult);
       } catch (err) {
         console.error("Failed to fetch usage data:", err);
         setError("Failed to load usage data");

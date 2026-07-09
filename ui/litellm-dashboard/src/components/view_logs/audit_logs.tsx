@@ -4,7 +4,7 @@ import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
 import { ReloadOutlined, LoadingOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import moment from "moment";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
@@ -95,11 +95,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       dataIndex: "updated_at",
       key: "updated_at",
       width: 200,
-      render: (val: string) => (
-        <span className="font-mono text-xs whitespace-nowrap">
-          {moment.utc(val).local().format("MMM D, YYYY HH:mm:ss")}
-        </span>
-      ),
+      render: (val: string) => <DateCell value={val} />,
     },
     {
       title: "Action",
@@ -123,7 +119,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       title: "Object ID",
       dataIndex: "object_id",
       key: "object_id",
-      render: (val: string) => <span className="font-mono text-xs">{val}</span>,
+      render: (val: string) => <IdCell value={val} variant="plain" truncate={false} />,
     },
     {
       title: "Changed By",
@@ -137,7 +133,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       dataIndex: "changed_by_api_key",
       key: "changed_by_api_key",
       width: 140,
-      render: (val: string) => (val ? <span className="font-mono text-xs">{val.slice(0, 12)}…</span> : "—"),
+      render: (val: string) => <IdCell value={val} variant="plain" />,
     },
   ];
 

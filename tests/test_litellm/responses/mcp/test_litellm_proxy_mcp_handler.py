@@ -1,4 +1,6 @@
+import subprocess
 import sys
+import textwrap
 import types
 from unittest.mock import AsyncMock, MagicMock
 
@@ -557,3 +559,49 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     )
 
     assert captured["metadata"]["tags"] == ["team-a", "prod"]
+
+
+def test_completion_with_function_tools_works_without_fastapi_installed():
+    script = textwrap.dedent(
+        """
+        import sys
+
+        class _FastapiBlocker:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "fastapi" or fullname.startswith("fastapi."):
+                    raise ModuleNotFoundError("No module named 'fastapi'")
+                return None
+
+        sys.meta_path.insert(0, _FastapiBlocker())
+
+        import litellm
+
+        response = litellm.completion(
+            model="openai/gpt-5.5",
+            messages=[{"role": "user", "content": "What is the weather in SF?"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            mock_response="sunny",
+        )
+        assert response.choices[0].message.content == "sunny"
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr

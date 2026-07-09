@@ -10,6 +10,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip } from "antd";
 import React from "react";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { VectorStore } from "./types";
@@ -28,19 +29,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
     {
       header: "Vector Store ID",
       accessorKey: "vector_store_id",
-      cell: ({ row }) => {
-        const vectorStore = row.original;
-        return (
-          <button
-            onClick={() => onView(vectorStore.vector_store_id)}
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-          >
-            {vectorStore.vector_store_id.length > 15
-              ? `${vectorStore.vector_store_id.slice(0, 15)}...`
-              : vectorStore.vector_store_id}
-          </button>
-        );
-      },
+      cell: ({ row }) => <IdCell value={row.original.vector_store_id} onClick={onView} />,
     },
     {
       header: "Name",
@@ -109,19 +98,13 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
       header: "Created At",
       accessorKey: "created_at",
       sortingFn: "datetime",
-      cell: ({ row }) => {
-        const vectorStore = row.original;
-        return <span className="text-xs">{new Date(vectorStore.created_at).toLocaleDateString()}</span>;
-      },
+      cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
     },
     {
       header: "Updated At",
       accessorKey: "updated_at",
       sortingFn: "datetime",
-      cell: ({ row }) => {
-        const vectorStore = row.original;
-        return <span className="text-xs">{new Date(vectorStore.updated_at).toLocaleDateString()}</span>;
-      },
+      cell: ({ row }) => <DateCell value={row.original.updated_at} precision="date" />,
     },
     {
       id: "actions",

@@ -1117,45 +1117,6 @@ _OPENAPI_HTTP_METHODS = {
 # `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
 # and cache endpoint files.
 _ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
-_DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
-    {
-        "api_key",
-        "client_secret",
-        "vertex_credentials",
-        "vertex_ai_credentials",
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "aws_session_token",
-        "aws_region_name",
-        "aws_session_name",
-        "aws_profile_name",
-        "aws_role_name",
-        "aws_web_identity_token",
-        "aws_sts_endpoint",
-        "aws_external_id",
-        "aws_bedrock_runtime_endpoint",
-        "aws_bedrock_project_id",
-        "aws_batch_role_arn",
-        "aws_workspace_id",
-    }
-)
-
-
-def _db_model_is_team_scoped(model: object) -> bool:
-    model_info = getattr(model, "model_info", None)
-    if isinstance(model_info, BaseModel):
-        return getattr(model_info, "team_id", None) is not None
-    if isinstance(model_info, str):
-        try:
-            model_info = json.loads(model_info)
-        except (TypeError, ValueError):
-            model_info = None
-    if isinstance(model_info, dict) and model_info.get("team_id") is not None:
-        return True
-    if getattr(model_info, "team_id", None) is not None:
-        return True
-    model_name = getattr(model, "model_name", None)
-    return isinstance(model_name, str) and model_name.startswith("model_name_")
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -5009,17 +4970,12 @@ class ProxyConfig:
                     deleted_deployments += 1
         return deleted_deployments
 
-    def _resolve_db_litellm_param(self, key: str, value: object, resolve_env_refs: bool = True) -> object:
+    def _resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):
             return value
 
         decrypted_value = decrypt_value_helper(value=value, key=key, return_original_value=True)
-        if (
-            resolve_env_refs
-            and key in _DB_LITELLM_PARAM_ENV_REF_KEYS
-            and isinstance(decrypted_value, str)
-            and decrypted_value.startswith("os.environ/")
-        ):
+        if isinstance(decrypted_value, str) and decrypted_value.startswith("os.environ/"):
             return get_secret(decrypted_value)
         return decrypted_value
 
@@ -5040,13 +4996,10 @@ class ProxyConfig:
         ## ADD MODEL LOGIC
         for m in db_models:
             _litellm_params = m.litellm_params
-            resolve_env_refs = not _db_model_is_team_scoped(m)
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(
-                        key=k, value=v, resolve_env_refs=resolve_env_refs
-                    )
+                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -5072,15 +5025,12 @@ class ProxyConfig:
         _model_list: list = []
         for m in new_models:
             _litellm_params = m.litellm_params
-            resolve_env_refs = not _db_model_is_team_scoped(m)
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(
-                        key=k, value=v, resolve_env_refs=resolve_env_refs
-                    )
+                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
@@ -14285,6 +14235,9 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
+    if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
+        return await _persist_general_settings_ui_litellm_field(data.field_name, data.field_value, user_api_key_dict)
+
     if data.field_name not in ConfigGeneralSettings.model_fields:
         raise HTTPException(
             status_code=400,
@@ -14550,6 +14503,55 @@ async def get_config_general_settings(
             )
 
 
+_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
+    "budget_exceeded_throttle_percentage": {
+        "type": "Float",
+        "description": (
+            "Fraction (0, 1] of a key's configured TPM/RPM that an over-budget key with "
+            "'Throttle on budget exceeded' enabled keeps serving at. Leave empty to hard-block "
+            "over-budget keys."
+        ),
+    },
+}
+
+
+def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+        )
+    return float(value)
+
+
+async def _persist_general_settings_ui_litellm_field(
+    field_name: str, value: Any, user_api_key_dict: UserAPIKeyAuth
+) -> dict:
+    validated = _validate_general_settings_ui_litellm_value(field_name, value)
+    config = await proxy_config.get_config()
+    before_value = config.get("litellm_settings", {}).get(field_name)
+    setattr(litellm, field_name, validated)
+    if "litellm_settings" not in config:
+        config["litellm_settings"] = {}
+    config["litellm_settings"][field_name] = validated
+    await proxy_config.save_config(new_config=config)
+    asyncio.create_task(create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict))
+    return {"message": f"Field {field_name} updated", "status": "success"}
+
+
+async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
+    config = await proxy_config.get_config()
+    before_value = config.get("litellm_settings", {}).get(field_name)
+    setattr(litellm, field_name, None)
+    if "litellm_settings" in config:
+        config["litellm_settings"].pop(field_name, None)
+    await proxy_config.save_config(new_config=config)
+    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, None, user_api_key_dict))
+    return {"message": f"Field {field_name} reset", "status": "success"}
+
+
 @router.get(
     "/config/list",
     tags=["config.yaml"],
@@ -14703,6 +14705,35 @@ async def get_config_list(
                 )
                 return_val.append(_response_obj)
 
+    db_litellm_settings_row = await ConfigRepository(prisma_client).table.find_first(
+        where={"param_name": "litellm_settings"}
+    )
+    db_litellm_settings: dict = (
+        dict(db_litellm_settings_row.param_value)
+        if db_litellm_settings_row is not None and db_litellm_settings_row.param_value is not None
+        else {}
+    )
+    for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
+        current_value: Optional[float] = getattr(litellm, litellm_field_name, None)
+        stored_in_db_litellm: Optional[bool]
+        if litellm_field_name in db_litellm_settings:
+            stored_in_db_litellm = True
+        elif current_value is not None:
+            stored_in_db_litellm = False
+        else:
+            stored_in_db_litellm = None
+        return_val.append(
+            ConfigList(
+                field_name=litellm_field_name,
+                field_type=spec["type"],
+                field_description=spec["description"],
+                field_value=current_value,
+                stored_in_db=stored_in_db_litellm,
+                field_default_value=None,
+                nested_fields=None,
+            )
+        )
+
     return return_val
 
 
@@ -14742,6 +14773,9 @@ async def delete_config_general_settings(
                 )
             },
         )
+
+    if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
+        return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
 
     if data.field_name not in ConfigGeneralSettings.model_fields:
         raise HTTPException(

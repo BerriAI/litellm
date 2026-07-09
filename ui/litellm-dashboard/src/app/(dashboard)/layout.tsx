@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
@@ -116,6 +117,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
       />
       <DebugWarningBanner accessToken={accessToken} />
+      <LicenseExpiryBanner accessToken={accessToken} />
       <div className="flex flex-1">
         {mode !== "ai-gateway" ? (
           <div className="flex-1 flex">
