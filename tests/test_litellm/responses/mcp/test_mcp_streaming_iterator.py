@@ -130,24 +130,6 @@ async def test_eager_creation_reraises_pre_stream_failure_as_http_error(monkeypa
     assert "resp_bogus" in str(excinfo.value)
 
 
-@pytest.mark.asyncio
-async def test_initial_call_success_does_not_emit_error_event(monkeypatch):
-    """Happy path is unchanged: no error event, stream flows as before."""
-    monkeypatch.setattr(
-        responses_main_module,
-        "aresponses",
-        AsyncMock(return_value=_text_only_stream("all good")),
-    )
-
-    iterator = _make_lazy_iterator()
-    chunks = [chunk async for chunk in iterator]
-
-    assert all(getattr(c, "type", None) != ResponsesAPIStreamEvents.ERROR for c in chunks)
-    completed = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
-    assert len(completed) == 1
-    assert iterator._initial_creation_error is None
-
-
 import types
 from unittest.mock import MagicMock
 

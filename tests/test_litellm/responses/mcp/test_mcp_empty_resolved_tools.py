@@ -40,8 +40,9 @@ def _model_response() -> ResponsesAPIResponse:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-async def test_zero_resolved_mcp_tools_raises_before_model_call(monkeypatch, stream):
+async def test_zero_resolved_mcp_tools_raises_before_model_call(monkeypatch):
+    # The guard runs before the stream/non-stream branch in
+    # aresponses_api_with_mcp, so one case covers both.
     _patch_resolved_tools(monkeypatch, [])
     aresponses_mock = AsyncMock()
     monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
@@ -50,7 +51,7 @@ async def test_zero_resolved_mcp_tools_raises_before_model_call(monkeypatch, str
         await responses_main_module.aresponses_api_with_mcp(
             input="how many links do i have?",
             model="gpt-4",
-            stream=stream,
+            stream=False,
             tools=[MCP_TOOL],
         )
 
