@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 import litellm.proxy.proxy_server as ps
@@ -207,7 +208,9 @@ def test_collector_spend_logs_rejects_oversized_log(monkeypatch):
                 "logs": [
                     {
                         "request_id": "large-relay-request",
-                        "proxy_server_request": {"body_preview": "x" * (MAX_COLLECTOR_SPEND_LOG_BYTES + 1)},
+                        "proxy_server_request": {
+                            "body_preview": "x" * (MAX_COLLECTOR_SPEND_LOG_BYTES + 1)
+                        },
                     }
                 ]
             },
@@ -236,7 +239,9 @@ def test_collector_spend_logs_rejects_normalized_row_over_size_limit(monkeypatch
                 "logs": [
                     {
                         "request_id": "normalized-large-relay-request",
-                        "proxy_server_request": {"body_preview": "x" * (MAX_COLLECTOR_SPEND_LOG_BYTES - 50)},
+                        "proxy_server_request": {
+                            "body_preview": "x" * (MAX_COLLECTOR_SPEND_LOG_BYTES - 50)
+                        },
                     }
                 ]
             },
@@ -321,3 +326,37 @@ def test_collector_spend_logs_rejects_when_queue_is_full(monkeypatch):
         assert len(prisma_client.spend_log_transactions) == 3
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_collector_spend_logs_enqueue_is_capacity_checked_under_lock(monkeypatch):
+    prisma_client = MockPrismaClient()
+    monkeypatch.setattr(
+        collector_spend_logs,
+        "LITELLM_ASYNCIO_QUEUE_MAXSIZE",
+        3,
+    )
+
+    async def enqueue_two_batches():
+        await collector_spend_logs._enqueue_collector_spend_logs(
+            prisma_client=prisma_client,
+            spend_logs=[{"request_id": "one"}, {"request_id": "two"}],
+        )
+        with pytest.raises(collector_spend_logs.HTTPException) as exc_info:
+            await collector_spend_logs._enqueue_collector_spend_logs(
+                prisma_client=prisma_client,
+                spend_logs=[{"request_id": "three"}, {"request_id": "four"}],
+            )
+        return exc_info.value
+
+    error = asyncio.run(enqueue_two_batches())
+
+    assert error.status_code == 429
+    assert error.detail == {
+        "error": "Collector spend-log queue is full",
+        "queued": 2,
+        "limit": 3,
+    }
+    assert [row["request_id"] for row in prisma_client.spend_log_transactions] == [
+        "one",
+        "two",
+    ]
