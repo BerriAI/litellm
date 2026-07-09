@@ -1277,7 +1277,7 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
     mock_should_store.return_value = False
     guardrail_info = [
         {
-            "guardrail_name": "claude-code-access-guard",
+            "guardrail_name": "demo-echo-guard",
             "guardrail_provider": "custom",
             "guardrail_mode": "pre_call",
             "guardrail_status": "success",
@@ -1306,7 +1306,7 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
     entry = result[0]
     assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
     assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
-    assert entry["guardrail_name"] == "claude-code-access-guard"
+    assert entry["guardrail_name"] == "demo-echo-guard"
     assert entry["guardrail_provider"] == "custom"
     assert entry["guardrail_mode"] == "pre_call"
     assert entry["guardrail_status"] == "success"
@@ -1370,7 +1370,7 @@ def test_get_logging_payload_redacts_guardrail_prompt_fields_when_flag_false():
     """
     guardrail_info = [
         {
-            "guardrail_name": "claude-code-access-guard",
+            "guardrail_name": "demo-echo-guard",
             "guardrail_provider": "custom",
             "guardrail_status": "success",
             "guardrail_request": {"messages": [{"role": "user", "content": "secret"}]},
@@ -1400,7 +1400,7 @@ def test_get_logging_payload_redacts_guardrail_prompt_fields_when_flag_false():
     stored = metadata_result["guardrail_information"][0]
     assert stored["guardrail_request"] == REDACTED_BY_LITELM_STRING
     assert stored["guardrail_response"] == REDACTED_BY_LITELM_STRING
-    assert stored["guardrail_name"] == "claude-code-access-guard"
+    assert stored["guardrail_name"] == "demo-echo-guard"
     assert stored["guardrail_status"] == "success"
 
 

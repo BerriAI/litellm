@@ -890,10 +890,11 @@ def _sanitize_guardrail_information_for_spend_logs(
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
-    redacted: StandardLoggingGuardrailInformation = {**entry}
-    redacted["guardrail_request"] = REDACTED_BY_LITELM_STRING
-    redacted["guardrail_response"] = REDACTED_BY_LITELM_STRING
-    return redacted
+    return {
+        **entry,
+        "guardrail_request": REDACTED_BY_LITELM_STRING,
+        "guardrail_response": REDACTED_BY_LITELM_STRING,
+    }
 
 
 def _sanitize_error_information_for_spend_logs(
