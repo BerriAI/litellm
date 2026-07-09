@@ -1,0 +1,113 @@
+# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/CLAUDE.md for the grammar.
+- id: mcp.list_tools.api_key.succeeds
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:637"
+  rationale: Core operation; most common auth path; high usage
+- id: mcp.list_tools.api_key.denied_without_permission
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [denied_without_permission]
+  source: "mcp_server_manager.py:1409"
+  rationale: Permission guard is high blast-radius; multi-tenant safety
+- id: mcp.call_tool.api_key.succeeds
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:849"
+  rationale: Primary operation; customer-critical; high usage
+- id: mcp.call_tool.api_key.denied_without_permission
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [denied_without_permission]
+  source: "rest_endpoints.py:305-386"
+  rationale: Tool-level permission guard; multi-tenant safety
+- id: mcp.list_tools.bearer.succeeds
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: bearer
+  assertions: [succeeds]
+  source: "server.py:662"
+  rationale: OAuth/bearer token flow; upstream delegation
+- id: mcp.call_tool.bearer.succeeds
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: bearer
+  assertions: [succeeds]
+  source: "server.py:886"
+  rationale: Bearer token forwarding for tool invocation
+- id: mcp.list_tools.oauth.succeeds
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: oauth
+  assertions: [succeeds]
+  source: "rest_endpoints.py:138-188"
+  rationale: Interactive OAuth2 flow; live token management
+- id: mcp.call_tool.oauth.succeeds
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: oauth
+  assertions: [succeeds]
+  source: "db.py user_oauth_credential lookup"
+  rationale: OAuth2 token passthrough; per-user credential storage
+- id: mcp.list_tools.none.succeeds
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: none
+  assertions: [succeeds]
+  source: "mcp_server_manager.py:1485-1492"
+  rationale: Public/anonymous servers; delegate_auth_to_upstream
+- id: mcp.call_tool.none.succeeds
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: none
+  assertions: [succeeds]
+  source: "rest_endpoints.py:305-334"
+  rationale: No upstream auth required; demo servers
+- id: mcp.get_prompt.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: get_prompt
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:1042"
+  rationale: Prompt op; same auth stack as tools
+- id: mcp.read_resource.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: read_resource
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:1177"
+  rationale: Resource op; same permission model as tools
+- id: mcp.list_prompts.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: list_prompts
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:993"
+  rationale: Smoke-level; same auth stack as list_tools
+- id: mcp.list_resources.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: list_resources
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:1089"
+  rationale: Smoke; rarely used; same auth model as tools

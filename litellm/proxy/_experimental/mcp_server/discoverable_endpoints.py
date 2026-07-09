@@ -1,6 +1,7 @@
 import asyncio
 import html as _html
 import json
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
@@ -8,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
@@ -135,6 +136,72 @@ def decode_state_hash(encrypted_state: str) -> dict:
 
     state_data = json.loads(decrypted_json)
     return state_data
+
+
+# LIT-4197: some upstream authorization servers reject an over-long ``state``
+# (the encrypted OAuth session blob routinely exceeds their limit). The upstream
+# only needs an opaque value it echoes back on ``/callback``, so we forward a
+# short random handle and keep the encrypted session in a per-flow HttpOnly
+# cookie bound to that handle. The browser carries the cookie across the
+# upstream round trip, so the flow stays correct with no server-side session
+# store (works across proxy replicas, unlike an in-process map).
+_OAUTH_STATE_COOKIE_PREFIX = "mcp_oauth_state_"
+_OAUTH_STATE_COOKIE_TTL_SECONDS = 600
+_OAUTH_STATE_HANDLE_BYTES = 32
+
+
+def _oauth_state_cookie_name(relay_state: str) -> str:
+    return f"{_OAUTH_STATE_COOKIE_PREFIX}{relay_state}"
+
+
+def _oauth_state_cookie_path_and_secure(request: Request) -> tuple[str, bool]:
+    parsed = urlparse(get_request_base_url(request))
+    return parsed.path or "/", parsed.scheme == "https"
+
+
+def _set_oauth_state_cookie(
+    response: Response,
+    request: Request,
+    relay_state: str,
+    encoded_state: str,
+) -> None:
+    path, secure = _oauth_state_cookie_path_and_secure(request)
+    response.set_cookie(
+        key=_oauth_state_cookie_name(relay_state),
+        value=encoded_state,
+        max_age=_OAUTH_STATE_COOKIE_TTL_SECONDS,
+        path=path,
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _resolve_encoded_oauth_state(request: Request, state: str) -> str:
+    """Return the encrypted OAuth session for a ``/callback`` request.
+
+    New flows carry it in a per-flow cookie keyed by the short handle we
+    forwarded upstream (the IdP echoes that handle back as ``state``). Flows
+    started before this change - or in flight across a deploy - carry the
+    encrypted blob directly in ``state``, so fall back to it when the cookie
+    is absent.
+    """
+    cookie_value = request.cookies.get(_oauth_state_cookie_name(state))
+    return cookie_value if cookie_value else state
+
+
+def _clear_oauth_state_cookie(response: Response, request: Request, state: str) -> None:
+    cookie_name = _oauth_state_cookie_name(state)
+    if cookie_name not in request.cookies:
+        return
+    path, secure = _oauth_state_cookie_path_and_secure(request)
+    response.delete_cookie(
+        key=cookie_name,
+        path=path,
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 def _get_validated_client_redirect_uri(request: Request, state_data: Dict[str, Any]) -> str:
@@ -381,6 +448,12 @@ async def _store_per_user_token_server_side(
         )
         return  # Don't warm Redis if DB write failed
 
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+
+    await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server.server_id)
+
     # Warm the Redis cache so the first subsequent MCP call is a cache hit
     ttl = _compute_per_user_token_ttl(server, expires_in)
     await mcp_per_user_token_cache.set(
@@ -462,11 +535,12 @@ async def authorize_with_server(
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
     )
+    relay_state = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
     params = {
         "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
         "redirect_uri": f"{request_base_url}/callback",
-        "state": encoded_state,
+        "state": relay_state,
         "response_type": response_type or "code",
     }
     if scope:
@@ -483,7 +557,9 @@ async def authorize_with_server(
     existing_params = dict(parse_qsl(parsed_auth_url.query))
     existing_params.update(params)
     final_url = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
-    return RedirectResponse(final_url)
+    response = RedirectResponse(final_url)
+    _set_oauth_state_cookie(response, request, relay_state, encoded_state)
+    return response
 
 
 async def exchange_token_with_server(
@@ -505,8 +581,12 @@ async def exchange_token_with_server(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
+    # The id and secret must come from the same source. When the server-side client_id wins,
+    # falling back to the caller's secret pairs the persisted client with a foreign secret; the
+    # register short-circuit hands clients a placeholder secret ("dummy"), so a re-auth against a
+    # persisted public PKCE client (no stored secret) would send that placeholder and the IdP 401s.
     resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
-    resolved_client_secret = mcp_server.client_secret if mcp_server.client_secret else client_secret
+    resolved_client_secret = mcp_server.client_secret if mcp_server.client_id else client_secret
     try:
         client_auth = build_token_endpoint_client_auth(
             auth_method=mcp_server.token_endpoint_auth_method,
@@ -772,6 +852,7 @@ async def _persist_dcr_client_registration(
             data=UpdateMCPServerRequest(
                 server_id=mcp_server.server_id,
                 credentials=credentials,
+                oauth2_flow="authorization_code",
                 **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
             ),
             touched_by="mcp_oauth_dcr",
@@ -1016,17 +1097,19 @@ async def callback(
             error_description,
         )
         if state:
+            encoded_state = _resolve_encoded_oauth_state(request, state)
             try:
-                state_data = decode_state_hash(state)
+                state_data = decode_state_hash(encoded_state)
                 original_state = state_data.get("original_state")
                 redirect_uri = _get_validated_client_redirect_uri(request, state_data)
-            except HTTPException:
-                # Untrusted/invalid client redirect_uri — surface inline rather
-                # than blindly forwarding the error to an attacker-controlled URL.
-                return _render_oauth_error_html(error, error_description)
             except Exception:
-                # State could not be decrypted (expired key, tampered, etc.).
-                return _render_oauth_error_html(error, error_description)
+                # Untrusted/invalid client redirect_uri (HTTPException), or an
+                # undecryptable state (expired key, tampered): surface the IdP
+                # error inline rather than forwarding it to an attacker-controlled
+                # URL, and drop the one-time cookie we can no longer consume.
+                response = _render_oauth_error_html(error, error_description)
+                _clear_oauth_state_cookie(response, request, state)
+                return response
 
             params: Dict[str, str] = {"error": error}
             if error_description:
@@ -1036,7 +1119,9 @@ async def callback(
             if original_state is not None:
                 params["state"] = original_state
             complete_returned_url = _append_query_params(redirect_uri, params)
-            return RedirectResponse(url=complete_returned_url, status_code=302)
+            response = RedirectResponse(url=complete_returned_url, status_code=302)
+            _clear_oauth_state_cookie(response, request, state)
+            return response
 
         # No state — nothing to round-trip to. Show the user the error.
         return _render_oauth_error_html(error, error_description)
@@ -1052,7 +1137,8 @@ async def callback(
 
     # 3. Successful authorization response.
     try:
-        state_data = decode_state_hash(state)
+        encoded_state = _resolve_encoded_oauth_state(request, state)
+        state_data = decode_state_hash(encoded_state)
         original_state = state_data["original_state"]
 
         # Re-validate the client redirect URI at the sink. /authorize
@@ -1065,14 +1151,18 @@ async def callback(
 
         params = {"code": code, "state": original_state}
         complete_returned_url = _append_query_params(redirect_uri, params)
-        return RedirectResponse(url=complete_returned_url, status_code=302)
+        response = RedirectResponse(url=complete_returned_url, status_code=302)
+        _clear_oauth_state_cookie(response, request, state)
+        return response
 
     except HTTPException:
         # Re-raise so a non-loopback base_url surfaces as 400 instead of
         # a generic "authentication incomplete" redirect.
         raise
     except Exception:
-        return HTMLResponse("<html><body>Authentication incomplete. You can close this window.</body></html>")
+        response = HTMLResponse("<html><body>Authentication incomplete. You can close this window.</body></html>")
+        _clear_oauth_state_cookie(response, request, state)
+        return response
 
 
 # ------------------------------
@@ -1212,11 +1302,15 @@ async def _build_oauth_protected_resource_response(
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
-    For pass-through MCP servers (``MCPServer.is_oauth_passthrough``), the
-    gateway proxies the upstream's own ``oauth-protected-resource`` metadata
-    so that standards-compliant MCP clients discover the **upstream** IdP
-    instead of the gateway. The ``resource`` field is rewritten to the
-    gateway's own URL so clients present the bearer token back to the gateway.
+    For pass-through MCP servers, the gateway proxies the upstream's own
+    ``oauth-protected-resource`` metadata so standards-compliant MCP clients
+    discover the **upstream** IdP instead of the gateway. For ``true_passthrough``
+    and ``oauth_delegate`` the metadata is returned verbatim (``resource`` stays
+    the upstream): the caller's token is forwarded to and validated by the
+    upstream, so its audience must be the upstream — rewriting it to the gateway
+    would make a strict IdP (e.g. Entra) refuse to mint it or the upstream reject
+    it. Only the legacy ``is_oauth_passthrough`` opt-in rewrites ``resource`` to
+    the gateway's own URL so clients present the bearer token back to the gateway.
 
     Args:
         request: FastAPI Request object
@@ -1257,7 +1351,9 @@ async def _build_oauth_protected_resource_response(
 
     # Pass-through branch: proxy the upstream's own metadata so discovery
     # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
-    if mcp_server is not None and mcp_server.is_oauth_passthrough:
+    if mcp_server is not None and (
+        mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate or mcp_server.is_true_passthrough
+    ):
         try:
             upstream_metadata = await fetch_upstream_oauth_protected_resource(mcp_server)
         except Exception as exc:
@@ -1273,8 +1369,9 @@ async def _build_oauth_protected_resource_response(
             )
 
         if upstream_metadata is not None:
-            response = {**upstream_metadata, "resource": resource_url}
-            return response
+            if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+                return upstream_metadata
+            return {**upstream_metadata, "resource": resource_url}
 
         # Upstream responded but with non-200 or non-dict payload. For
         # pass-through servers the gateway is NOT the authorization server,

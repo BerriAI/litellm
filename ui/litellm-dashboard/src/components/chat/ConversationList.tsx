@@ -143,13 +143,15 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
             className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
-            <TooltipProvider delayDuration={300}>
+            <TooltipProvider delay={300}>
               <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button onClick={startEditing} variant="ghost" size="icon-xs" className="text-muted-foreground">
-                    <Pencil className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
+                <TooltipTrigger
+                  render={
+                    <Button onClick={startEditing} variant="ghost" size="icon-xs" className="text-muted-foreground">
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  }
+                />
                 <TooltipContent side="bottom">
                   <p>Rename</p>
                 </TooltipContent>
@@ -157,15 +159,23 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
             </TooltipProvider>
 
             <AlertDialog>
-              <TooltipProvider delayDuration={300}>
+              <TooltipProvider delay={300}>
                 <Tooltip>
-                  <TooltipTrigger asChild>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="icon-xs" className="text-muted-foreground hover:text-destructive">
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </AlertDialogTrigger>
-                  </TooltipTrigger>
+                  <TooltipTrigger
+                    render={
+                      <AlertDialogTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        }
+                      />
+                    }
+                  />
                   <TooltipContent side="bottom">
                     <p>Delete</p>
                   </TooltipContent>
