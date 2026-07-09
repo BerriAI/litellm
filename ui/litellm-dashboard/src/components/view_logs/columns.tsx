@@ -5,8 +5,19 @@ import { Tooltip } from "antd";
 import React from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES, RELAY_CALL_TYPES } from "./constants";
+import {
+  AgentBadge,
+  AgentIcon,
+  LlmBadge,
+  McpBadge,
+  RelayBadge,
+  RelayIcon,
+  RelaySourceBadge,
+  SparkleIcon,
+  WrenchIcon,
+  getRelaySource,
+} from "./TypeBadges";
 
 /** API sort field mapping for /spend/logs/ui endpoint */
 export const LOGS_SORT_FIELD_MAP = {
@@ -130,11 +141,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const sessionCount = row.session_total_count || 1;
       const isMcp = MCP_CALL_TYPES.includes(row.call_type);
       const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
-      const sessionLlmCount = row.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
+      const isRelay = RELAY_CALL_TYPES.includes(row.call_type);
+      const sessionLlmCount = row.session_llm_count ?? (isMcp || isAgent || isRelay ? 0 : sessionCount);
       const sessionAgentCount = row.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = row.session_mcp_count ?? (isMcp ? sessionCount : 0);
 
       if (isMcp) return <McpBadge />;
+      if (isRelay) return <RelayBadge />;
       if (isAgent && sessionCount <= 1) return <AgentBadge />;
       if (sessionCount <= 1) return <LlmBadge />;
 
@@ -155,6 +168,12 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
               <WrenchIcon />
             </>
           )}
+          {isRelay && (
+            <>
+              <span className="text-blue-300">·</span>
+              <RelayIcon size={10} />
+            </>
+          )}
         </span>
       );
 
@@ -162,8 +181,21 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
         sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
+        isRelay && "litellm-relay",
       ].filter(Boolean);
       return <Tooltip title={tooltipParts.join(" • ")}>{sessionTypeBadge}</Tooltip>;
+    },
+  },
+  {
+    header: "Source",
+    id: "source",
+    size: 120,
+    cell: (info: any) => {
+      const row = info.row.original;
+      if (!RELAY_CALL_TYPES.includes(row.call_type)) {
+        return <span className="text-slate-400">-</span>;
+      }
+      return <RelaySourceBadge source={getRelaySource(row)} />;
     },
   },
   {

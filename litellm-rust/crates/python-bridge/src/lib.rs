@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
+use litellm_core::collector::{
+    normalize_collector_spend_logs as normalize_collector_spend_logs_core, CollectorAuthContext,
+};
 use litellm_core::error::CoreError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -178,10 +181,44 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(stats.into_any().unbind())
 }
 
+#[pyfunction]
+#[pyo3(signature = (logs, auth_context, now))]
+fn normalize_collector_spend_logs(
+    py: Python<'_>,
+    logs: Py<PyAny>,
+    auth_context: Py<PyAny>,
+    now: String,
+) -> PyResult<Py<PyAny>> {
+    let logs = match py_to_json(py, logs.bind(py))? {
+        Value::Array(logs) => logs,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "logs must be a list, got {}",
+                match other {
+                    Value::Null => "null",
+                    Value::Bool(_) => "bool",
+                    Value::Number(_) => "number",
+                    Value::String(_) => "string",
+                    Value::Array(_) => "array",
+                    Value::Object(_) => "object",
+                }
+            )))
+        }
+    };
+    let auth_context: CollectorAuthContext =
+        serde_json::from_value(py_to_json(py, auth_context.bind(py))?)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+
+    let result = normalize_collector_spend_logs_core(logs, auth_context, &now)
+        .map_err(core_error_to_pyerr)?;
+    json_to_py(py, Value::Array(result))
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
+    module.add_function(wrap_pyfunction!(normalize_collector_spend_logs, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())
 }

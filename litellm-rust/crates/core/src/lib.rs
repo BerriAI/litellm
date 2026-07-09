@@ -1,4 +1,5 @@
 pub mod call_lifecycle;
+pub mod collector;
 pub mod error;
 pub mod ocr;
 pub mod providers;
