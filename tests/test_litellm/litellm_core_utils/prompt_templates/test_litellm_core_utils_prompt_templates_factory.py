@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -3054,3 +3055,86 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def test_map_system_message_pt_plain_string_merge():
+    """System string is merged into the following user message (existing behavior)."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [{"role": "user", "content": "You are helpful. Hi"}]
+
+
+def test_map_system_message_pt_structured_system_content():
+    """System message with list (structured) content must not raise and is merged as text.
+
+    Regression test: previously `m["content"] + " " + next_m["content"]` raised a
+    TypeError when either side was a list of content parts.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are helpful."}],
+        },
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [{"role": "user", "content": "You are helpful. Hi"}]
+
+
+def test_map_system_message_pt_structured_content_preserves_non_text_parts():
+    """Merging into a structured user message must preserve non-text parts (e.g. images)."""
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "Sys"}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+            ],
+        },
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Sys "},
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_trailing_structured_system():
+    """A trailing system message with list content becomes a user message string."""
+    messages = [{"role": "system", "content": [{"type": "text", "text": "only sys"}]}]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [{"role": "user", "content": "only sys"}]
+
+
+def test_map_system_message_pt_consecutive_structured_system_messages():
+    """A system message followed by another system message is appended as a user message."""
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "first"}]},
+        {"role": "system", "content": "second"},
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second Hi"},
+    ]

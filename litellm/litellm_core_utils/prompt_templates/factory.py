@@ -101,18 +101,30 @@ def map_system_message_pt(messages: list) -> list:
     new_messages = []
     for i, m in enumerate(messages):
         if m["role"] == "system":
+            # System content may be a plain string or a list of structured
+            # content parts (e.g. [{"type": "text", "text": "..."}]). Normalize
+            # it to a string so it can be safely merged into adjacent messages.
+            system_content_str = convert_content_list_to_str(m)
             if i < len(messages) - 1:  # Not the last message
                 next_m = messages[i + 1]
                 next_role = next_m["role"]
                 if next_role == "user" or next_role == "assistant":  # Next message is a user or assistant message
                     # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    next_content = next_m.get("content")
+                    if isinstance(next_content, list):
+                        # Preserve structured content (e.g. images) by prepending
+                        # the system text as a text part.
+                        next_m["content"] = [
+                            {"type": "text", "text": system_content_str + " "}
+                        ] + next_content
+                    else:
+                        next_m["content"] = system_content_str + " " + (next_content or "")
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
-                    new_message = {"role": "user", "content": m["content"]}
+                    new_message = {"role": "user", "content": system_content_str}
                     new_messages.append(new_message)
             else:  # Last message
-                new_message = {"role": "user", "content": m["content"]}
+                new_message = {"role": "user", "content": system_content_str}
                 new_messages.append(new_message)
         else:  # Not a system message
             new_messages.append(m)
