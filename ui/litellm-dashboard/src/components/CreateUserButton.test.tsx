@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { CreateUserButton } from "./CreateUserButton";
+import { CreateUserButton, generateUUID } from "./CreateUserButton";
 import * as networking from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
@@ -519,6 +519,46 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       expect(within(dialog).getByRole("checkbox", { name: /send invitation email/i })).toBeChecked();
+    });
+  });
+
+  describe("generateUUID", () => {
+    it("uses crypto.getRandomValues, never Math.random, when crypto.randomUUID is unavailable", () => {
+      const originalRandomUUID = crypto.randomUUID;
+      // @ts-expect-error simulating an environment without crypto.randomUUID
+      crypto.randomUUID = undefined;
+      const getRandomValuesSpy = vi.spyOn(crypto, "getRandomValues");
+      const mathRandomSpy = vi.spyOn(Math, "random");
+
+      try {
+        const id = generateUUID();
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+        expect(getRandomValuesSpy).toHaveBeenCalled();
+        expect(mathRandomSpy).not.toHaveBeenCalled();
+      } finally {
+        crypto.randomUUID = originalRandomUUID;
+        getRandomValuesSpy.mockRestore();
+        mathRandomSpy.mockRestore();
+      }
+    });
+
+    it("throws instead of falling back to Math.random when no secure RNG is available", () => {
+      const originalRandomUUID = crypto.randomUUID;
+      const originalGetRandomValues = crypto.getRandomValues;
+      // @ts-expect-error simulating an environment without any Web Crypto API
+      crypto.randomUUID = undefined;
+      // @ts-expect-error simulating an environment without any Web Crypto API
+      crypto.getRandomValues = undefined;
+      const mathRandomSpy = vi.spyOn(Math, "random");
+
+      try {
+        expect(() => generateUUID()).toThrow();
+        expect(mathRandomSpy).not.toHaveBeenCalled();
+      } finally {
+        crypto.randomUUID = originalRandomUUID;
+        crypto.getRandomValues = originalGetRandomValues;
+        mathRandomSpy.mockRestore();
+      }
     });
   });
 });

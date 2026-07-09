@@ -53,9 +53,9 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           gh api "repos/$REPO/code-scanning/alerts/$ALERT_NUMBER" > alert.json
-          jq -r '"rule: \(.rule.id) [\(.rule.severity // .rule.security_severity_level)]\nstate: \(.state)\nmost_recent_instance.ref: \(.most_recent_instance.ref)\nlocation: \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)\nhtml_url: \(.html_url)"' alert.json | tee -a $GITHUB_STEP_SUMMARY
+          jq -r '"rule: \(.rule.id) [\(.rule.severity // .rule.security_severity_level)]\nstate: \(.state)\nmost_recent_instance.ref: \(.most_recent_instance.ref)\nmost_recent_instance.commit_sha: \(.most_recent_instance.commit_sha)\nlocation: \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)\nmessage: \(.most_recent_instance.message.text)\nhtml_url: \(.html_url)"' alert.json | tee -a $GITHUB_STEP_SUMMARY
           echo '```json' >> $GITHUB_STEP_SUMMARY
-          cat alert.json >> $GITHUB_STEP_SUMMARY
+          cat alert.json | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Dismiss alerts

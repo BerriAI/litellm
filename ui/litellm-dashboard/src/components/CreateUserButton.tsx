@@ -31,16 +31,21 @@ import OnboardingModal, { InvitationLink } from "./onboarding_link";
 const { Option } = Select;
 const { Text, Link, Title } = Typography;
 // Helper function to generate UUID compatible across all environments
-const generateUUID = (): string => {
+export const generateUUID = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
   }
-  // Fallback UUID generation for environments without crypto.randomUUID
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-    const r = (Math.random() * 16) | 0;
-    const v = c == "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    // Fallback for environments with the Web Crypto API but no crypto.randomUUID
+    // (e.g. non-secure contexts). Uses a cryptographically secure RNG rather
+    // than Math.random(), which is predictable and unsafe for an identifier.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  throw new Error("No cryptographically secure random number generator available");
 };
 
 interface CreateuserProps {
