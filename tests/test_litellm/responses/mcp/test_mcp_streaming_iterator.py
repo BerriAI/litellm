@@ -229,6 +229,9 @@ async def test_tool_execution_failure_emits_error_event_and_skips_follow_up(monk
     assert "mcp server exploded" in error_events[0].error.message
     # The doomed follow-up call was never made.
     aresponses_mock.assert_not_called()
+    # No orphaned per-tool events: a batch failure must not emit
+    # mcp_call.in_progress items that never receive a terminal event.
+    assert all(getattr(c, "type", None) != ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS for c in chunks)
 
 
 @pytest.mark.asyncio
@@ -257,6 +260,13 @@ async def test_follow_up_failure_emits_error_event(monkeypatch):
     assert "No tool output found" in error_events[0].error.message
     # Tool-execution events were still streamed before the error surfaced.
     assert any(getattr(c, "type", None) == ResponsesAPIStreamEvents.MCP_CALL_COMPLETED for c in chunks)
+    # The terminal error event keeps sequence numbers monotonic for strict clients.
+    prior_sequence_numbers = [
+        c.sequence_number
+        for c in chunks
+        if isinstance(getattr(c, "sequence_number", None), int) and c is not error_events[0]
+    ]
+    assert error_events[0].sequence_number > max(prior_sequence_numbers)
 
 
 @pytest.mark.asyncio

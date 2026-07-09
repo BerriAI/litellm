@@ -313,6 +313,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._initial_creation_error: Optional[Exception] = None
         self._stream_error: Optional[Exception] = None
         self._error_event_emitted = False
+        # Highest sequence_number emitted so far; the terminal `error` event
+        # must be numbered after it to keep the stream monotonic for strict
+        # clients.
+        self._last_sequence_number = 0
 
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
@@ -386,7 +390,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         status_code = getattr(err, "status_code", None)
         return ErrorEvent(
             type=ResponsesAPIStreamEvents.ERROR,
-            sequence_number=1,
+            sequence_number=self._last_sequence_number + 1,
             error=ErrorEventError(
                 type="mcp_gateway_error",
                 code=str(status_code) if status_code is not None else "internal_error",
@@ -399,6 +403,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        chunk = await self._anext_impl()
+        sequence_number = getattr(chunk, "sequence_number", None)
+        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
+            self._last_sequence_number = sequence_number
+        return chunk
+
+    async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
         """
         Phase-based streaming:
         1. initial_response - Stream the first LLM response (includes response.created, response.in_progress, response.output_item.added)
@@ -733,6 +744,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.tool_results = []
+            # Drop the queued per-tool events: emitting mcp_call.in_progress
+            # items that never receive a completed/failed terminal event is a
+            # protocol deviation. The terminal `error` event carries the
+            # failure instead.
+            self.tool_execution_events = []
             # Remember the failure. Without this, the follow-up call is made
             # with function_call items but no function_call_output items and
             # the provider rejects it with "No tool output found for function
