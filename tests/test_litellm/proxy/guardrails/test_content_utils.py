@@ -362,10 +362,11 @@ def test_build_inspection_messages_drops_messages_with_no_text():
 
 def test_build_inspection_messages_responses_api_tool_call_taxonomy():
     """LIT-4294: mixed Responses ``input`` (message + function_call +
-    function_call_output) must produce a non-empty inspection list. An
-    empty ``messages`` posted to AIM's ``/fw/v1/analyze`` gets rejected with
-    a 422 ``No messages in the request`` and every other guardrail silently
-    scans nothing."""
+    function_call_output) must produce a non-empty inspection list. The
+    customer's writeup reproduced a 422 from AIM's ``/fw/v1/analyze``
+    (``No messages in the request``) when this synthesised list came back
+    empty; every other guardrail silently scanned nothing on the same
+    input."""
     data = {
         "input": [
             {
@@ -393,11 +394,14 @@ def test_build_inspection_messages_responses_api_tool_call_taxonomy():
 
 
 def test_build_inspection_messages_function_call_output_becomes_user():
-    """LIT-4294: tool-result items must surface to inspection APIs, but the
-    OpenAI chat schema requires ``tool_call_id`` on any ``tool`` message.
-    AIM's ``/fw/v1/analyze`` validates the posted payload and rejects a bare
-    tool message. ``function_call_output`` maps straight to ``user`` so a
-    schema-invalid shape is never materialised, even in isolation."""
+    """LIT-4294: tool-result items must surface to inspection APIs. The
+    OpenAI chat schema requires ``tool_call_id`` on any ``tool`` message,
+    and the customer's writeup reproduced a 422 from AIM's ``/fw/v1/analyze``
+    (``Tool Call ID required on tool calls``) when a ``function_call_output``
+    was mapped to bare ``role: "tool"`` without that field. Any guardrail
+    API that validates the posted payload against the OpenAI schema will
+    reject the same shape, so ``function_call_output`` maps straight to
+    ``user`` and a schema-invalid shape is never materialised."""
     data = {
         "input": [
             {
@@ -413,8 +417,9 @@ def test_build_inspection_messages_function_call_output_becomes_user():
 def test_build_inspection_messages_coerces_non_standard_caller_role_to_user():
     """LIT-4294: a caller-supplied role outside {system, user, assistant}
     (e.g. ``developer``, ``function``) is coerced to ``user`` before the
-    payload is posted to a third-party guardrail; downstream validators
-    reject unknown roles the same way they reject bare ``tool``."""
+    payload is posted to a third-party guardrail. Guardrail APIs that
+    validate the payload against the OpenAI chat schema reject unknown
+    roles the same way they reject bare ``tool``."""
     data = {
         "messages": [
             {"role": "developer", "content": "system-ish instruction"},
@@ -431,10 +436,12 @@ def test_build_inspection_messages_coerces_chat_completions_tool_role_to_user():
     """LIT-4294: a valid chat-completions ``role: "tool"`` message carries a
     ``tool_call_id``, but the inspection flatten drops every field except
     ``role`` and ``content``. A bare ``tool`` message without ``tool_call_id``
-    is schema-invalid; AIM's ``/fw/v1/analyze`` rejects it with 422. The role
-    must collapse to ``user`` so a legitimate tool-replay conversation reaches
-    the guardrail cleanly on chat completions the same way it does on
-    Responses."""
+    is schema-invalid per the OpenAI chat schema, and the customer's
+    writeup showed AIM's ``/fw/v1/analyze`` returning 422 on exactly this
+    shape when it was synthesised from the Responses ``function_call_output``
+    path. The role must collapse to ``user`` so a legitimate tool-replay
+    conversation reaches schema-validating guardrails cleanly on chat
+    completions the same way it does on Responses."""
     data = {
         "messages": [
             {"role": "user", "content": "what's the weather"},
