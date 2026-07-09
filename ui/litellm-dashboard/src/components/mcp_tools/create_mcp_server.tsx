@@ -239,7 +239,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Discard the held browser-authorized token and its tool preview when the authorization identity
   // changes (or the modal closes). The CLEARED_ON_INVALIDATION form fields (shared with the edit form
   // via types.tsx) are reset too; whatever the admin just changed (passed via changedValues) is
-  // re-applied so the invalidation never wipes their in-flight edit.
+  // re-applied so the invalidation never wipes their in-flight edit. Admin-typed endpoint fields are
+  // left alone (see CLEARED_ON_INVALIDATION).
   const clearHeldOAuthToken = (changedValues: Record<string, unknown> = {}) => {
     setOauthAccessToken(null);
     clearTools();
