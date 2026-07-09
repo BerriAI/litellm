@@ -5185,8 +5185,8 @@ class TestHealthCheckServersIncludesNames:
         server_a = generate_mock_mcp_server_db_record(server_id="server-1", alias="cit")
         server_a.server_name = "cit"
         server_a.status = "unknown"
-        server_b = generate_mock_mcp_server_db_record(server_id="server-2", alias="zapier")
-        server_b.server_name = "zapier_mcp"
+        server_b = generate_mock_mcp_server_db_record(server_id="server-2", alias="server-two-alias")
+        server_b.server_name = "server_two"
         server_b.status = "healthy"
 
         mock_manager = MagicMock()
@@ -5218,5 +5218,6 @@ class TestHealthCheckServersIncludesNames:
         assert by_id["server-1"]["server_name"] == "cit"
         assert by_id["server-1"]["alias"] == "cit"
         assert by_id["server-1"]["status"] == "unknown"
-        assert by_id["server-2"]["server_name"] == "zapier_mcp"
+        assert by_id["server-2"]["server_name"] == "server_two"
+        assert by_id["server-2"]["alias"] == "server-two-alias"
         assert by_id["server-2"]["status"] == "healthy"

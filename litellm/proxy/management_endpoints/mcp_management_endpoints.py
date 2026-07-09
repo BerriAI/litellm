@@ -21,7 +21,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from fastapi import (
     APIRouter,
@@ -1024,9 +1024,6 @@ if MCP_AVAILABLE:
         user_mcp_management_mode = _get_user_mcp_management_mode()
 
         def _health_entry(server: "LiteLLM_MCPServerTable") -> Dict[str, Any]:
-            # Include the human-readable identifiers alongside the opaque
-            # hashed server_id so operators can tell which server is
-            # unhealthy without reverse-engineering hashes.
             return {
                 "server_id": server.server_id,
                 "server_name": server.server_name,
