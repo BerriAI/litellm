@@ -3,8 +3,12 @@ Tests for AnthropicResponsesStreamWrapper
 (litellm/llms/anthropic/experimental_pass_through/responses_adapters/streaming_iterator.py)
 """
 
+import json
 import os
 import sys
+from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
@@ -77,3 +81,104 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestUpstreamFailuresEmitAnthropicErrorEvents:
+    """Mid-stream upstream failures must surface as Anthropic `error` SSE
+    events, not as a well-formed empty stream (message_delta(end_turn) +
+    message_stop) that clients can't distinguish from a model that
+    legitimately produced no output.
+
+    https://github.com/BerriAI/litellm/issues/32086
+    """
+
+    def test_response_failed_emits_error_event_not_end_turn(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "code": "server_error",
+                            "message": "The model is overloaded.",
+                        },
+                    },
+                }
+            ]
+        )
+        assert [c["type"] for c in chunks] == ["error"]
+        assert chunks[0]["error"]["type"] == "api_error"
+        assert "server_error" in chunks[0]["error"]["message"]
+        assert "The model is overloaded." in chunks[0]["error"]["message"]
+
+    def test_response_failed_without_error_details_still_emits_error_event(self):
+        chunks = _process_all([{"type": "response.failed", "response": {"status": "failed"}}])
+        assert [c["type"] for c in chunks] == ["error"]
+        assert chunks[0]["error"]["type"] == "api_error"
+        assert chunks[0]["error"]["message"]
+
+    def test_top_level_error_event_emits_error_event(self):
+        chunks = _process_all(
+            [{"type": "error", "code": "rate_limit_exceeded", "message": "Rate limit reached."}]
+        )
+        assert [c["type"] for c in chunks] == ["error"]
+        assert chunks[0]["error"]["message"] == "Rate limit reached."
+
+    def test_response_completed_still_emits_message_delta_and_stop(self):
+        chunks = _process_all(
+            [{"type": "response.completed", "response": {"status": "completed"}}]
+        )
+        assert [c["type"] for c in chunks] == ["message_delta", "message_stop"]
+        assert chunks[0]["delta"]["stop_reason"] == "end_turn"
+
+    def test_response_incomplete_still_maps_to_max_tokens(self):
+        # NOTE: the completed/incomplete branch reads `status` via getattr,
+        # so it only sees object-shaped responses (dict-shaped events fall
+        # back to end_turn) — mirror that here with an object.
+        response = SimpleNamespace(status="incomplete", usage=None, output=[])
+        chunks = _process_all([{"type": "response.incomplete", "response": response}])
+        assert [c["type"] for c in chunks] == ["message_delta", "message_stop"]
+        assert chunks[0]["delta"]["stop_reason"] == "max_tokens"
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_exception_emits_error_event_before_ending(self):
+        async def exploding_stream():
+            yield {"type": "response.created"}
+            raise RuntimeError("connection reset by upstream")
+
+        wrapper = AnthropicResponsesStreamWrapper(
+            responses_stream=exploding_stream(), model="m"
+        )
+        chunks = []
+        async for chunk in wrapper:
+            chunks.append(chunk)
+
+        assert chunks[0]["type"] == "message_start"
+        assert chunks[-1]["type"] == "error"
+        assert "connection reset by upstream" in chunks[-1]["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_sse_wrapper_renders_event_error(self):
+        async def failing_stream():
+            yield {"type": "response.created"}
+            yield {
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {"code": "server_error", "message": "boom"},
+                },
+            }
+
+        wrapper = AnthropicResponsesStreamWrapper(
+            responses_stream=failing_stream(), model="m"
+        )
+        payloads = []
+        async for raw in wrapper.async_anthropic_sse_wrapper():
+            payloads.append(raw.decode())
+
+        assert any(p.startswith("event: error\n") for p in payloads)
+        error_payload = next(p for p in payloads if p.startswith("event: error\n"))
+        data = json.loads(error_payload.split("data: ", 1)[1].strip())
+        assert data["error"]["type"] == "api_error"
+        assert "boom" in data["error"]["message"]

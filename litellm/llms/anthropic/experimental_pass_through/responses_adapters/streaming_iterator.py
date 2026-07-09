@@ -64,6 +64,18 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
+    def _make_error_chunk(self, message: str) -> Dict[str, Any]:
+        """Anthropic SSE error event, e.g. for mid-stream upstream failures.
+
+        Emitting `event: error` lets clients surface the failure instead of
+        receiving a well-formed but empty stream they can't distinguish from
+        a model that legitimately produced no output.
+        """
+        return {
+            "type": "error",
+            "error": {"type": "api_error", "message": message},
+        }
+
     def _process_event(self, event: Any) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
@@ -215,10 +227,48 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- upstream failure -> Anthropic `error` event ----
+        # Don't convert a failed response into a clean empty stream
+        # (message_delta(end_turn) + message_stop): clients can't tell that
+        # apart from a model that legitimately produced no output. Emit an
+        # error event instead, which clients already handle.
+        if event_type == "response.failed":
+            response_obj = getattr(event, "response", None) or (
+                event.get("response") if isinstance(event, dict) else None
+            )
+            error_obj = None
+            if response_obj is not None:
+                error_obj = getattr(response_obj, "error", None) or (
+                    response_obj.get("error") if isinstance(response_obj, dict) else None
+                )
+            message = "The upstream provider reported the response as failed."
+            if error_obj is not None:
+                error_message = getattr(error_obj, "message", None) or (
+                    error_obj.get("message") if isinstance(error_obj, dict) else None
+                )
+                error_code = getattr(error_obj, "code", None) or (
+                    error_obj.get("code") if isinstance(error_obj, dict) else None
+                )
+                if error_message:
+                    message = f"{error_code}: {error_message}" if error_code else str(error_message)
+            self._chunk_queue.append(self._make_error_chunk(message))
+            self._sent_message_stop = True
+            return
+
+        # ---- Responses API error event -> Anthropic `error` event ----
+        if event_type == "error":
+            message = (
+                getattr(event, "message", None)
+                or (event.get("message") if isinstance(event, dict) else None)
+                or "The upstream provider returned an error while streaming."
+            )
+            self._chunk_queue.append(self._make_error_chunk(str(message)))
+            self._sent_message_stop = True
+            return
+
         # ---- response completed -> message_delta + message_stop ----
         if event_type in (
             "response.completed",
-            "response.failed",
             "response.incomplete",
         ):
             response_obj = getattr(event, "response", None) or (
@@ -299,6 +349,11 @@ class AnthropicResponsesStreamWrapper:
             pass
         except Exception as e:
             verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
+            # Surface the failure to the client as an Anthropic `error` SSE
+            # event instead of silently ending the stream.
+            self._chunk_queue.append(
+                self._make_error_chunk(f"Upstream provider error while streaming: {str(e)}")
+            )
 
         # Drain any remaining queued chunks
         if self._chunk_queue:
