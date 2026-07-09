@@ -719,6 +719,56 @@ describe("CreateMCPServer", () => {
       expect(oauthHook.reset).not.toHaveBeenCalled();
     });
 
+    it("does not refetch the tool preview with a discarded token after invalidation", async () => {
+      // Regression: handleFormValuesChange used to publish the pre-reset antd snapshot into
+      // formValues after clearHeldOAuthToken, so useTestMCPConnection kept the discarded OAuth
+      // material (the DCR client minted for the old identity) and sent it on the next tool-preview
+      // request.
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "stale-tok" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Sync_FormValues" } });
+      });
+      vi.mocked(networking.testMCPToolsListRequest).mockClear();
+
+      await selectAntOption("Authentication", "API Key");
+
+      await waitFor(() => expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalled());
+      for (const call of vi.mocked(networking.testMCPToolsListRequest).mock.calls) {
+        expect(call[1]?.credentials?.client_id).not.toBe("client-a");
+        expect(call[1]?.credentials?.client_secret).not.toBe("secret-a");
+        expect(call[1]?.credentials?.access_token).not.toBe("stale-tok");
+      }
+    });
+
+    it("keeps the held token on an http to sse switch with the same url", async () => {
+      // Same url means the same resource/audience (RFC 8707): the minted token is still valid, so a
+      // pure transport swap between the two MCP wire protocols must not force a re-authorize.
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      await selectAntOption("Transport Type", "Server-Sent Events (SSE)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      expect(oauthHook.reset).not.toHaveBeenCalled();
+    });
+
     it("includes token_validation in payload when token_validation_json is filled with valid JSON", async () => {
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-oauth",

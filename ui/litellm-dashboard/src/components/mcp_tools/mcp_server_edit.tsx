@@ -6,6 +6,8 @@ import {
   AUTH_TYPE,
   isClientForwardedTokenMode,
   getOAuthAuthorizationIdentity,
+  CLEARED_ON_INVALIDATION,
+  isHeldOAuthTokenStale,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -392,11 +394,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   // identity it was minted against (url, auth_type, oauth_flow_type, client creds/scopes, or the
   // authorization/token/registration endpoints — see getOAuthAuthorizationIdentity). Discards the hook
   // token (resetOAuthFlow, which re-runs fetchTools to prompt a fresh authorize), the sessionStorage
-  // token (removeToken, browser-held modes), and the fetched token/DCR client in form.credentials + the
-  // discovered endpoint fields; the admin's in-flight edit is re-applied so it is never wiped. Only fires
-  // when a token was actually authorized here (ref set), so a token already valid for the saved server on
-  // mount is left untouched. Driven from onValuesChange (user input only), never programmatic resets.
-  const CLEARED_ON_INVALIDATION = ["credentials", "authorization_url", "token_url", "registration_url"] as const;
+  // token (removeToken, browser-held modes), and the fetched token/DCR client in the shared
+  // CLEARED_ON_INVALIDATION form fields; the admin's in-flight edit is re-applied so it is never wiped.
+  // Only fires when a token was actually authorized here (ref set), so a token already valid for the
+  // saved server on mount is left untouched. Driven from onValuesChange for user input, plus an explicit
+  // recheck after programmatic setFieldsValue paths (handleTransportChange), which antd does not report
+  // through onValuesChange.
   const clearHeldOAuthToken = (changedValues: Record<string, unknown> = {}) => {
     authorizedIdentityRef.current = undefined;
     if (mcpServer.server_id) {
@@ -413,10 +416,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   };
 
   const handleFormValuesChange = (changedValues: Record<string, unknown>) => {
-    if (
-      authorizedIdentityRef.current !== undefined &&
-      getOAuthAuthorizationIdentity(form.getFieldsValue(true)) !== authorizedIdentityRef.current
-    ) {
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentityRef.current)) {
       clearHeldOAuthToken(changedValues);
     }
   };
@@ -538,6 +538,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         stdio_config: undefined,
       });
+    }
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentityRef.current)) {
+      clearHeldOAuthToken();
     }
   };
 

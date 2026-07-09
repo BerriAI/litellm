@@ -57,7 +57,10 @@ from litellm.proxy._experimental.mcp_server.elicitation_handler import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
-from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
+from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+    mcp_per_user_token_cache,
+    resolve_mcp_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
     Ok,
@@ -4053,10 +4056,13 @@ class MCPServerManager:
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
 
     async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
-        """Drop the v2 chain's cached token for ``(user_id, server_id)`` after the credential row
-        changes (re-auth, revoke), so the next resolve reads the new row instead of serving the
-        replaced token until its cache TTL. Best-effort: a cache-drop failure is logged, never
-        raised, because the DB write already succeeded and the TTL remains the backstop.
+        """Drop every cached token for ``(user_id, server_id)`` after the credential row changes
+        (re-auth, revoke, config-change purge): the v2 chain's cache and the legacy per-user token
+        cache, so the next resolve reads the new row instead of serving the replaced token until its
+        cache TTL, whichever path resolves it. This is the single invalidation point for per-user
+        OAuth tokens; callers must not evict individual caches directly. Best-effort: a cache-drop
+        failure is logged, never raised, because the DB write already succeeded and the TTL remains
+        the backstop.
         """
         try:
             await self._per_user_oauth_token_store.invalidate(user_id, server_id)
@@ -4064,6 +4070,7 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
+        await mcp_per_user_token_cache.delete(user_id, server_id)
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,

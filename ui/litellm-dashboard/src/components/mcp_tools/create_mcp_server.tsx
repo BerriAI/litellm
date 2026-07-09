@@ -16,6 +16,8 @@ import {
   MCP_OAUTH2_FLOW_INTERACTIVE,
   isClientForwardedTokenMode,
   getOAuthAuthorizationIdentity,
+  CLEARED_ON_INVALIDATION,
+  isHeldOAuthTokenStale,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
@@ -235,11 +237,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   });
 
   // Discard the held browser-authorized token and its tool preview when the authorization identity
-  // changes (or the modal closes). For oauth2 the fetched token + DCR client also live in
-  // form.credentials, and the discovered endpoints in authorization_url/token_url/registration_url, so
-  // those form fields are reset too; whatever the admin just changed (passed via changedValues) is
+  // changes (or the modal closes). The CLEARED_ON_INVALIDATION form fields (shared with the edit form
+  // via types.tsx) are reset too; whatever the admin just changed (passed via changedValues) is
   // re-applied so the invalidation never wipes their in-flight edit.
-  const CLEARED_ON_INVALIDATION = ["credentials", "authorization_url", "token_url", "registration_url"] as const;
   const clearHeldOAuthToken = (changedValues: Record<string, unknown> = {}) => {
     setOauthAccessToken(null);
     clearTools();
@@ -588,21 +588,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? { url: undefined, command: undefined, args: undefined, env: undefined }
           : { spec_path: undefined, command: undefined, args: undefined, env: undefined };
 
-    const nextValues =
-      authorizedIdentity === undefined
-        ? transportValues
-        : {
-            ...transportValues,
-            credentials: undefined,
-            authorization_url: undefined,
-            token_url: undefined,
-            registration_url: undefined,
-          };
-
-    form.setFieldsValue(nextValues);
-    if (authorizedIdentity !== undefined) {
+    form.setFieldsValue(transportValues);
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
       clearHeldOAuthToken();
     }
+    setFormValues(form.getFieldsValue(true));
   };
 
   // Generate options with existing groups and potential new group
@@ -672,9 +662,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const handleFormValuesChange = (changedValues: Record<string, unknown>, allValues: Record<string, unknown>) => {
     // Any change to a mint-relevant field (url, auth_type, oauth_flow_type, client creds/scopes, or the
     // authorization/token/registration endpoints — see getOAuthAuthorizationIdentity) makes a held token
-    // stale, so discard it and force a fresh authorize.
-    if (authorizedIdentity !== undefined && getOAuthAuthorizationIdentity(allValues) !== authorizedIdentity) {
+    // stale, so discard it and force a fresh authorize. When that happens, formValues must be rebuilt
+    // from the form's post-reset state, not the pre-reset allValues snapshot: the snapshot still holds
+    // the discarded token in credentials, and useTestMCPConnection reads formValues for tool preview.
+    if (isHeldOAuthTokenStale(allValues, authorizedIdentity)) {
       clearHeldOAuthToken(changedValues);
+      setFormValues({ ...form.getFieldsValue(true), ...changedValues });
+      return;
     }
     setFormValues(allValues);
   };

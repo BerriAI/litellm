@@ -84,6 +84,21 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
   return JSON.stringify(identity);
 };
 
+// The form fields wiped when a held OAuth token is invalidated: the fetched token + DCR client live in
+// `credentials`, and the three endpoint fields were discovered by the authorize flow, so all of them are
+// stale together with the token. Shared by the create and edit forms so what gets wiped cannot drift.
+export const CLEARED_ON_INVALIDATION = ["credentials", "authorization_url", "token_url", "registration_url"] as const;
+
+// True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the
+// form's current identity no longer matches it. Every invalidation decision in both forms goes through
+// this single check: onValuesChange for user edits, and an explicit recheck after any programmatic
+// form.setFieldsValue (antd does not fire onValuesChange for those), so a missed event path cannot let a
+// stale token survive.
+export const isHeldOAuthTokenStale = (
+  values: Record<string, unknown>,
+  authorizedIdentity: string | undefined,
+): boolean => authorizedIdentity !== undefined && getOAuthAuthorizationIdentity(values) !== authorizedIdentity;
+
 // Backend value of `oauth2_flow` that marks a machine-to-machine server. Distinct
 // from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
 export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
