@@ -72,6 +72,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -562,8 +563,6 @@ class Router:
         self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)  # dict to store success_calls  made to each model
-        self.previous_models: List = []  # list to store failed calls (passed in as metadata to next call)
-
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
         self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
@@ -6940,34 +6939,32 @@ class Router:
         """
         When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
         """
-        try:
-            _metadata_var = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-            # Log failed model as the previous model
-            previous_model = {
-                "exception_type": type(e).__name__,
-                "exception_string": str(e),
-            }
-            for (
-                k,
-                v,
-            ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in [_metadata_var, "messages", "original_function"]:
-                    previous_model[k] = v
-                elif k == _metadata_var and isinstance(v, dict):
-                    previous_model[_metadata_var] = {}  # type: ignore
-                    for metadata_k, metadata_v in kwargs[_metadata_var].items():
-                        if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v  # type: ignore
+        _metadata_var = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        metadata = kwargs.get(_metadata_var)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            kwargs[_metadata_var] = metadata
 
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
-            if len(self.previous_models) > 3:
-                self.previous_models.pop(0)
+        # Keep retry breadcrumbs useful without copying arbitrary request kwargs
+        # (credentials, headers, messages, and tool schemas) into metadata.
+        previous_model = {
+            "litellm_call_id": kwargs.get("litellm_call_id"),
+            "litellm_trace_id": kwargs.get("litellm_trace_id"),
+            "model": kwargs.get("model"),
+            "exception_type": type(e).__name__,
+            "exception_string": redact_string(str(e))[:200],
+        }
 
-            self.previous_models.append(previous_model)
-            kwargs[_metadata_var]["previous_models"] = self.previous_models
-            return kwargs
-        except Exception as e:
-            raise e
+        previous_models = metadata.get("previous_models")
+        if isinstance(previous_models, list):
+            # Copy request-provided state so callers never share a mutable list.
+            request_history = list(previous_models[-3:])
+        else:
+            request_history = []
+
+        request_history.append(previous_model)
+        metadata["previous_models"] = request_history
+        return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Optional[Span]) -> int:
         """
