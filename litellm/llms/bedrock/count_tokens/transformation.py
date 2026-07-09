@@ -9,7 +9,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import get_bedrock_invocation_model_id
 
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
@@ -207,12 +207,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             Complete endpoint URL for CountTokens API
         """
-        # Use existing LiteLLM function to get the base model ID (removes region prefix)
-        model_id = get_bedrock_base_model(model)
-
-        # Remove bedrock/ prefix if present
-        if model_id.startswith("bedrock/"):
-            model_id = model_id[8:]  # Remove "bedrock/" prefix
+        model_id = get_bedrock_invocation_model_id(model)
         encoded_model_id = self.encode_model_id(model_id=model_id)
 
         base_url, _ = self.get_runtime_endpoint(

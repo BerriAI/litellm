@@ -285,6 +285,42 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     )
 
 
+def test_get_bedrock_invocation_model_id_preserves_cross_region_prefix():
+    """
+    Regression test for #32683: the count-tokens / invocation model ID must keep
+    the cross-region inference-profile prefix (global./us./eu./apac./...) so
+    Bedrock does not reject inference-profile-only models with a 400.
+    """
+    from litellm.llms.bedrock.common_utils import get_bedrock_invocation_model_id
+
+    assert (
+        get_bedrock_invocation_model_id("bedrock/global.anthropic.claude-opus-4-8")
+        == "global.anthropic.claude-opus-4-8"
+    )
+    assert (
+        get_bedrock_invocation_model_id("eu.anthropic.claude-sonnet-4-6")
+        == "eu.anthropic.claude-sonnet-4-6"
+    )
+    assert (
+        get_bedrock_invocation_model_id("us.meta.llama3-2-11b-instruct-v1:0")
+        == "us.meta.llama3-2-11b-instruct-v1:0"
+    )
+    # Non-prefixed foundation models are unchanged
+    assert (
+        get_bedrock_invocation_model_id("anthropic.claude-opus-4-8")
+        == "anthropic.claude-opus-4-8"
+    )
+    # Routing prefix and throughput/context suffixes are still stripped
+    assert (
+        get_bedrock_invocation_model_id("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0:51k")
+        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    assert (
+        get_bedrock_invocation_model_id("global.anthropic.claude-opus-4-5-20251101-v1:0[1m]")
+        == "global.anthropic.claude-opus-4-5-20251101-v1:0"
+    )
+
+
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
     import litellm.llms.bedrock.common_utils as mod
 

@@ -685,6 +685,41 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def get_bedrock_invocation_model_id(model: str) -> str:
+    """
+    Resolve the Bedrock model ID for invocation URLs (e.g. ``/model/{id}/converse``
+    or ``/model/{id}/count-tokens``).
+
+    Unlike ``get_bedrock_base_model``, this keeps the cross-region
+    inference-profile prefix (``global.`` / ``us.`` / ``eu.`` / ``apac.`` / ...).
+    Bedrock requires the inference-profile ID for models that are
+    inference-profile-only in a region, so stripping the prefix would produce a
+    bare foundation-model ID that Bedrock rejects with a 400 (see issue #32683).
+    It still strips LiteLLM routing prefixes, resolves ARNs, drops
+    throughput/context-window suffixes, and removes an embedded full-region path
+    prefix (e.g. ``us-east-1/model``).
+    """
+    stripped = model
+    for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
+        if stripped.startswith(rp):
+            stripped = stripped[len(rp) :]
+            break
+    if stripped.startswith("nova-2/"):
+        return "amazon.nova-2-custom"
+    elif stripped.startswith("nova/"):
+        return "amazon.nova-custom"
+
+    model = strip_bedrock_routing_prefix(model)
+    model = extract_model_name_from_bedrock_arn(model)
+    model = strip_bedrock_throughput_suffix(model)
+
+    alt_potential_region = model.split("/", 1)[0]
+    if alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
+        return model.split("/", 1)[1]
+
+    return model
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True

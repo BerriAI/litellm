@@ -167,6 +167,22 @@ class TestBedrockCountTokensEndpoint:
         )
         assert url == f"{api_base}/model/amazon.nova-lite-v1%3A0/count-tokens"
 
+    def test_cross_region_inference_profile_prefix_preserved(self):
+        """
+        Regression test for #32683: the count-tokens URL must keep the
+        cross-region inference-profile prefix (e.g. global.) so Bedrock does not
+        reject inference-profile-only models with a 400.
+        """
+        handler = self._make_handler()
+        url = handler.get_bedrock_count_tokens_endpoint(
+            model="bedrock/global.anthropic.claude-opus-4-8",
+            aws_region_name="eu-central-1",
+        )
+        assert (
+            url
+            == "https://bedrock-runtime.eu-central-1.amazonaws.com/model/global.anthropic.claude-opus-4-8/count-tokens"
+        )
+
     def test_env_var_overrides_default(self, monkeypatch):
         monkeypatch.setenv(
             "AWS_BEDROCK_RUNTIME_ENDPOINT",
