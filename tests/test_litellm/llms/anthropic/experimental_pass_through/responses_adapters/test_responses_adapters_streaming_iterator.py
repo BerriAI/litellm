@@ -6,9 +6,9 @@ Tests for AnthropicResponsesStreamWrapper
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
@@ -76,4 +76,41 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
         assert [(c["type"], c["index"]) for c in chunks] == [
             ("content_block_start", 0),
             ("content_block_delta", 0),
+        ]
+
+
+class TestSingleMessageStart:
+    """Exactly one message_start must be emitted per stream, per the
+    Anthropic streaming contract.
+
+    https://github.com/BerriAI/litellm/issues/32478
+    """
+
+    @pytest.mark.asyncio
+    async def test_response_created_does_not_duplicate_eager_message_start(self):
+        async def upstream():
+            yield {"type": "response.created"}
+            yield {"type": "response.completed", "response": {"status": "completed"}}
+
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=upstream(), model="m")
+        chunks = [c async for c in wrapper]
+
+        assert [c["type"] for c in chunks] == [
+            "message_start",
+            "message_delta",
+            "message_stop",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_message_start_still_emitted_without_response_created(self):
+        async def upstream():
+            yield {"type": "response.completed", "response": {"status": "completed"}}
+
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=upstream(), model="m")
+        chunks = [c async for c in wrapper]
+
+        assert [c["type"] for c in chunks] == [
+            "message_start",
+            "message_delta",
+            "message_stop",
         ]
