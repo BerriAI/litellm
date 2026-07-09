@@ -1,6 +1,7 @@
 import { BarChart } from "@tremor/react";
 import { Segmented } from "antd";
 import { useState } from "react";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { DataTable } from "../../../view_logs/table";
 
@@ -30,24 +31,25 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
     {
       header: "Spend (USD)",
       accessorKey: "spend",
-      cell: (info: any) => {
-        const value = info.getValue();
-        return `$${formatNumberWithCommas(value, 2)}`;
-      },
+      meta: { numeric: true },
+      cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
     },
     {
       header: "Successful",
       accessorKey: "successful_requests",
+      meta: { numeric: true },
       cell: (info: any) => <span className="text-green-600">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
       header: "Failed",
       accessorKey: "failed_requests",
+      meta: { numeric: true },
       cell: (info: any) => <span className="text-red-600">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
       header: "Tokens",
       accessorKey: "tokens",
+      meta: { numeric: true },
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];
@@ -99,13 +101,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={processedTopModels}
-            renderSubComponent={() => <></>}
-            getRowCanExpand={() => false}
-            isLoading={false}
-          />
+          <DataTable columns={columns} data={processedTopModels} isLoading={false} />
         </div>
       )}
     </>

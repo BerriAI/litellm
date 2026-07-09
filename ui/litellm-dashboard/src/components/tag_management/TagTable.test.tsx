@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCellDate } from "@/components/shared/table_cells";
 import TagTable from "./TagTable";
 import { Tag } from "./types";
 
@@ -75,14 +76,21 @@ describe("TagTable", () => {
 
   it("should display formatted created date", () => {
     render(<TagTable {...defaultProps} data={[mockTag]} />);
-    const formattedDate = new Date(mockTag.created_at).toLocaleDateString();
+    const formattedDate = formatCellDate(new Date(mockTag.created_at), "date");
     expect(screen.getByText(formattedDate)).toBeInTheDocument();
   });
 
-  it("should disable tag name button for dynamic spend tags", () => {
+  it("should call onSelectTag when tag name is clicked", () => {
+    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    fireEvent.click(screen.getByRole("button", { name: "test-tag" }));
+    expect(mockOnSelectTag).toHaveBeenCalledWith("test-tag");
+  });
+
+  it("should render tag name as non-clickable for dynamic spend tags", () => {
     render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
-    const tagButton = screen.getByRole("button", { name: "dynamic-spend-tag" });
-    expect(tagButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "dynamic-spend-tag" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("dynamic-spend-tag"));
+    expect(mockOnSelectTag).not.toHaveBeenCalled();
   });
 
   it("should disable edit icon for dynamic spend tags", () => {

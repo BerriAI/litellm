@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
@@ -116,6 +117,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
       />
       <DebugWarningBanner accessToken={accessToken} />
+      <LicenseExpiryBanner accessToken={accessToken} />
       <div className="flex flex-1">
         {mode !== "ai-gateway" ? (
           <div className="flex-1 flex">
@@ -135,17 +137,26 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 }
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, authLoading } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
-  if (authLoading) {
+  // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
+  // /onboarding route. Redirect once ui-config has loaded so migratedHref resolves the SERVER_ROOT_PATH base.
+  useEffect(() => {
+    if (!authLoading && isInvitationFlow) {
+      router.replace(`${migratedHref("onboarding")}?${searchParams.toString()}`);
+    }
+  }, [authLoading, isInvitationFlow, router, searchParams]);
+
+  if (authLoading || isInvitationFlow) {
     return <LoadingScreen />;
   }
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      {isInvitationFlow ? children : <DashboardShell>{children}</DashboardShell>}
+      <DashboardShell>{children}</DashboardShell>
     </ThemeProvider>
   );
 }

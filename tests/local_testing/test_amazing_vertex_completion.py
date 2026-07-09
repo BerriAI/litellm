@@ -355,7 +355,11 @@ async def test_async_vertexai_response_basic():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         response = await acompletion(
-            model="gemini-2.5-flash", messages=messages, temperature=0.7, timeout=5
+            model="gemini-3.5-flash",
+            messages=messages,
+            temperature=0.7,
+            timeout=5,
+            vertex_location="global",
         )
         print(f"response: {response}")
     except litellm.NotFoundError as e:
@@ -388,7 +392,7 @@ async def test_async_vertexai_streaming_response():
     )
     test_models = random.sample(list(test_models), 1)
     test_models += list(litellm.vertex_language_models)  # always test gemini-pro
-    test_models = ["gemini-2.5-flash"]
+    test_models = ["gemini-3.5-flash"]
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model
@@ -412,6 +416,7 @@ async def test_async_vertexai_streaming_response():
                 temperature=0.7,
                 timeout=5,
                 stream=True,
+                vertex_location="global",
             )
             print(f"response: {response}")
             complete_response: str = ""
@@ -3840,10 +3845,11 @@ def test_vertex_schema_test():
     }
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash",
+        model="vertex_ai/gemini-3.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=[tool],
         tool_choice="required",
+        vertex_location="global",
     )
 
     print(response)
@@ -3895,10 +3901,11 @@ def test_gemini_nullable_object_tool_schema_httpx():
     ]
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash",
+        model="vertex_ai/gemini-3.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=tools,
         tool_choice="required",
+        vertex_location="global",
     )
 
     print(response)

@@ -197,12 +197,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         return data
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
-        """Extract tool names from Responses API request (tools[].name for function, tools[].server_label for mcp)."""
+        """Extract tool names from Responses API request (tools[].name for function
+        and custom, tools[].server_label for mcp)."""
         names: List[str] = []
         for tool in data.get("tools") or []:
             if not isinstance(tool, dict):
                 continue
-            if tool.get("type") == "function" and tool.get("name"):
+            if tool.get("type") in ("function", "custom") and tool.get("name"):
                 names.append(str(tool["name"]))
             elif tool.get("type") == "mcp" and tool.get("server_label"):
                 names.append(str(tool["server_label"]))
