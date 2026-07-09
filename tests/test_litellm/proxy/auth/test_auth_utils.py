@@ -569,6 +569,43 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
     )
 
 
+def test_get_model_from_request_resolves_batch_id_deployment_to_model_name():
+    """Regression for #32580: managed batch retrieve/cancel encode the deployment
+    model_id (a sha256 hash) into the batch id. The auth layer must resolve that
+    hash back to the public model group name so team model-access checks compare
+    against the model group, not the raw deployment hash."""
+    import base64
+
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+                "model_info": {"id": "8d0eaa7e6c6f54a425dfd0062cb6b0dc"},
+            }
+        ]
+    )
+
+    decoded_batch_id = (
+        "litellm_proxy;model_id:8d0eaa7e6c6f54a425dfd0062cb6b0dc;"
+        "llm_batch_id:provider-batch-123"
+    )
+    batch_id = base64.urlsafe_b64encode(decoded_batch_id.encode()).decode().rstrip("=")
+
+    assert (
+        get_model_from_request(
+            request_data={"batch_id": batch_id},
+            route="/v1/batches/{batch_id}",
+            llm_router=router,
+        )
+        == "bedrock-batch-model"
+    )
+
+
 def test_get_model_from_request_resolves_character_id_model_with_router():
     from litellm.types.videos.utils import encode_character_id_with_provider
 
