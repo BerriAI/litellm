@@ -200,23 +200,36 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
-      if (token?.access_token) {
-        const credentials = {
-          access_token: token.access_token,
-          ...(token.refresh_token && { refresh_token: token.refresh_token }),
-          ...(token.expires_in && { expires_in: token.expires_in }),
-          ...(token.scope && { scope: token.scope }),
-          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
-          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
-        };
-
-        form.setFieldsValue({ credentials });
-        setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
-
-        NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
-        );
+      if (!token?.access_token) {
+        return;
       }
+
+      if (isClientForwardedTokenMode(form.getFieldValue("auth_type"))) {
+        // Browser-only modes: the token is held in local state (oauthAccessToken) for tool preview
+        // and committed to sessionStorage on submit; it must never be written into form.credentials,
+        // which would persist it as server-level credentials on the created server row. Mirrors the
+        // edit form's onTokenReceived early return.
+        NotificationsManager.success(
+          "Token held for this browser session. Tools can now be previewed and configured; nothing will be saved to LiteLLM.",
+        );
+        return;
+      }
+
+      const credentials = {
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+        ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
+        ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
+      };
+
+      form.setFieldsValue({ credentials });
+      setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
+
+      NotificationsManager.success(
+        "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
+      );
     },
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
