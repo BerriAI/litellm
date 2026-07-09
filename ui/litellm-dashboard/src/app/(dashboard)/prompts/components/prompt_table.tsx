@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
 import { PromptSpec, modelHubCall } from "@/components/networking";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import {
   ColumnDef,
   flexRender,
@@ -62,48 +62,11 @@ const PromptTable: React.FC<PromptTableProps> = ({
     fetchModelHubData();
   }, [accessToken]);
 
-  // Format date helper function
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-  };
-
   const columns: ColumnDef<PromptSpec>[] = [
     {
       header: "Prompt ID",
       accessorKey: "prompt_id",
-      cell: (info: any) => {
-        const fullId = String(info.getValue() || "");
-        const displayId = fullId.length > 25 ? `${fullId.slice(0, 25)}...` : fullId;
-        return (
-          <div className="flex items-center gap-2">
-            <Tooltip title={fullId}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[220px] justify-start"
-                onClick={() => info.getValue() && onPromptClick?.(info.getValue())}
-              >
-                {displayId}
-              </Button>
-            </Tooltip>
-            <Tooltip title="Copy prompt ID">
-              <CopyOutlined
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyToClipboard(fullId);
-                }}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
-              />
-            </Tooltip>
-          </div>
-        );
-      },
+      cell: (info: any) => <IdCell value={info.getValue()} onClick={onPromptClick} copyable />,
     },
     {
       header: "Model",
@@ -162,26 +125,12 @@ const PromptTable: React.FC<PromptTableProps> = ({
     {
       header: "Created At",
       accessorKey: "created_at",
-      cell: ({ row }) => {
-        const prompt = row.original;
-        return (
-          <Tooltip title={prompt.created_at}>
-            <span className="text-xs">{formatDate(prompt.created_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.created_at} />,
     },
     {
       header: "Updated At",
       accessorKey: "updated_at",
-      cell: ({ row }) => {
-        const prompt = row.original;
-        return (
-          <Tooltip title={prompt.updated_at}>
-            <span className="text-xs">{formatDate(prompt.updated_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.updated_at} />,
     },
     {
       header: "Environment",

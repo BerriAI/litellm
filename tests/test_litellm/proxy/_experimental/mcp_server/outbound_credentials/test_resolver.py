@@ -1,9 +1,9 @@
 """Tests for the resolver dispatch: live arms produce auth, stubbed arms fail closed.
 
-`none`, `api_key` (shared-key source), `authorization_code`, and `token_exchange` are implemented;
-every other arm, plus the `api_key` BYOK source, returns a typed `not_implemented` error until its
-mode lands. Parametrizing the stubs over one config each also guards reachability: a dropped `case`
-would hit `assert_never` and raise instead of returning the stub.
+`none`, `api_key` (shared-key source), `passthrough`, `authorization_code`, and `token_exchange` are
+implemented; every other arm, plus the `api_key` BYOK source, returns a typed `not_implemented` error
+until its mode lands. Parametrizing the stubs over one config each also guards reachability: a dropped
+`case` would hit `assert_never` and raise instead of returning the stub.
 """
 
 import httpx
@@ -253,9 +253,24 @@ async def test_token_exchange_without_an_exchanger_fails_closed():
     assert result.error.tag == "misconfigured"
 
 
+@pytest.mark.asyncio
+async def test_passthrough_forwards_the_inbound_token_verbatim():
+    subject = Subject(tenant_id="", subject_id="", inbound_token=SecretStr("Bearer upstream-xyz"))
+    result = await UpstreamCredentialProvider().resolve_credentials(subject, _spec(PassthroughConfig()))
+    assert isinstance(result, Ok)
+    assert isinstance(result.ok, StaticHeaderAuth)
+    assert _emitted(result.ok)["Authorization"] == "Bearer upstream-xyz"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_without_inbound_token_is_a_no_op():
+    result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, _spec(PassthroughConfig()))
+    assert isinstance(result, Ok)
+    assert isinstance(result.ok, NoOpAuth)
+
+
 _STUBBED = [
     ("api_key_byok", ApiKeyConfig(key_source=Byok())),
-    ("passthrough", PassthroughConfig()),
     ("client_credentials", ClientCredentialsConfig()),
     ("aws_sigv4", AwsSigV4Config(region="us-east-1")),
 ]

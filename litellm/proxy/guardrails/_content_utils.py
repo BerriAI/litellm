@@ -32,6 +32,9 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
+TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
+
+
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped."""
@@ -48,7 +51,7 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 continue
             if not isinstance(part, dict):
                 continue
-            if part.get("type") == "text":
+            if part.get("type") in TEXT_PART_TYPES:
                 text = part.get("text")
                 if isinstance(text, str) and text:
                     yield text
@@ -58,14 +61,20 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
-    if isinstance(input_value, list):
-        if input_value and all(isinstance(item, dict) and "role" in item for item in input_value):
-            return list(input_value)
-        # Mixed lists (content-part dicts + bare strings) and pure
-        # string/dict lists all become a single user message; the content
-        # iterator below handles each element type uniformly.
-        return [{"role": "user", "content": input_value}]
-    return []
+    if not isinstance(input_value, list):
+        return []
+    messages: List[Dict[str, Any]] = []
+    for item in input_value:
+        if isinstance(item, str):
+            messages.append({"role": "user", "content": item})
+        elif isinstance(item, dict):
+            if item.get("type") in TEXT_PART_TYPES:
+                messages.append({"role": item.get("role") or "user", "content": [item]})
+            elif "content" in item:
+                messages.append({"role": item.get("role") or "user", "content": item["content"]})
+            elif item.get("type") == "function_call_output" and "output" in item:
+                messages.append({"role": item.get("role") or "tool", "content": item["output"]})
+    return messages
 
 
 def _iter_inspection_messages(data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
@@ -112,7 +121,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                     new_parts.append(visit(part))
                 elif (
                     isinstance(part, dict)
-                    and part.get("type") == "text"
+                    and part.get("type") in TEXT_PART_TYPES
                     and isinstance(part.get("text"), str)
                     and part["text"]
                 ):
@@ -136,25 +145,20 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
             data["input"] = visit(input_value)
         return visited
     if isinstance(input_value, list):
-        # List of full messages: rewrite each message's content.
-        if input_value and all(isinstance(item, dict) and "role" in item for item in input_value):
-            for item in input_value:
-                if "content" in item:
-                    item["content"] = _rewrite_content(item["content"])
-            return visited
-        # List of content parts and/or bare strings: rewrite in place.
         for idx, item in enumerate(input_value):
-            if isinstance(item, str) and item:
-                visited += 1
-                input_value[idx] = visit(item)
-            elif (
-                isinstance(item, dict)
-                and item.get("type") == "text"
-                and isinstance(item.get("text"), str)
-                and item["text"]
-            ):
-                visited += 1
-                input_value[idx] = {**item, "text": visit(item["text"])}
+            if isinstance(item, str):
+                if item:
+                    visited += 1
+                    input_value[idx] = visit(item)
+            elif isinstance(item, dict):
+                if item.get("type") in TEXT_PART_TYPES:
+                    if isinstance(item.get("text"), str) and item["text"]:
+                        visited += 1
+                        input_value[idx] = {**item, "text": visit(item["text"])}
+                elif "content" in item:
+                    item["content"] = _rewrite_content(item["content"])
+                elif item.get("type") == "function_call_output" and "output" in item:
+                    item["output"] = _rewrite_content(item["output"])
         return visited
 
     return visited

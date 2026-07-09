@@ -27,7 +27,7 @@ import {
 import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { formatNumberWithCommas } from "../utils/dataUtils";
+import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -263,30 +263,22 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                   .map((org: Organization) => (
                                     <TableRow key={org.organization_id}>
                                       <TableCell>
-                                        <div className="overflow-hidden">
-                                          <Tooltip title={org.organization_id}>
-                                            <Button
-                                              size="xs"
-                                              variant="light"
-                                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                              onClick={() => setSelectedOrgId(org.organization_id)}
-                                            >
-                                              {org.organization_id?.slice(0, 7)}
-                                              ...
-                                            </Button>
-                                          </Tooltip>
-                                        </div>
+                                        <IdCell value={org.organization_id} onClick={setSelectedOrgId} />
                                       </TableCell>
                                       <TableCell>{org.organization_alias}</TableCell>
                                       <TableCell>
-                                        {org.created_at ? new Date(org.created_at).toLocaleDateString() : "N/A"}
+                                        <DateCell value={org.created_at} precision="date" />
                                       </TableCell>
-                                      <TableCell>{formatNumberWithCommas(org.spend, 4)}</TableCell>
                                       <TableCell>
-                                        {org.litellm_budget_table?.max_budget !== null &&
-                                        org.litellm_budget_table?.max_budget !== undefined
-                                          ? org.litellm_budget_table?.max_budget
-                                          : "No limit"}
+                                        <MoneyCell value={org.spend} decimals={4} />
+                                      </TableCell>
+                                      <TableCell>
+                                        <MoneyCell
+                                          value={org.litellm_budget_table?.max_budget}
+                                          decimals={2}
+                                          emptyText="Unlimited"
+                                          showZero
+                                        />
                                       </TableCell>
                                       <TableCell
                                         style={{

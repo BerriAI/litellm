@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input, InputNumber, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
@@ -626,9 +626,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Clear form, tools, and OAuth state when the modal closes so a previous server's
   // authorization, credentials, or tool list never bleed into the next "Add New MCP
   // Server" session, including when a parent dismisses the modal without routing
-  // through handleCancel or handleCreate.
+  // through handleCancel or handleCreate. Only a real open -> closed transition may
+  // trigger this: on the post-OAuth-redirect remount the modal starts closed while
+  // resumeOAuthFlow's token exchange is in flight, and resetting then discards the
+  // fetched token.
+  const wasModalVisibleRef = React.useRef(isModalVisible);
   React.useEffect(() => {
-    if (!isModalVisible) {
+    const wasVisible = wasModalVisibleRef.current;
+    wasModalVisibleRef.current = isModalVisible;
+    if (!isModalVisible && wasVisible) {
       form.resetFields();
       setFormValues({});
       setOauthAccessToken(null);
@@ -922,6 +928,26 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </Form.Item>
               </>
             )}
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Max Concurrent Requests (optional)
+                  <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="max_concurrent_requests"
+            >
+              <InputNumber
+                min={1}
+                precision={0}
+                placeholder="e.g. 10"
+                style={{ width: "100%" }}
+                className="rounded-lg"
+              />
+            </Form.Item>
 
             {/* Authentication - show for HTTP, SSE, and OpenAPI */}
             {transportType !== "stdio" && transportType !== "" && (
