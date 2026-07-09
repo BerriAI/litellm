@@ -275,6 +275,38 @@ async def test_get_cache_settings_masks_password_bearing_url():
     assert response.current_values["namespace"] == "ns"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_settings, expected_redis_type",
+    [
+        ({"type": "redis-semantic", "host": "localhost"}, "semantic"),
+        ({"type": "redis", "redis_startup_nodes": [{"host": "h", "port": "7001"}]}, "cluster"),
+        ({"type": "redis", "sentinel_nodes": [["localhost", 26379]]}, "sentinel"),
+        ({"type": "redis", "host": "localhost"}, "node"),
+    ],
+)
+async def test_get_cache_settings_derives_redis_type_for_ui(stored_settings, expected_redis_type):
+    """The UI's Cache Type/Redis Deployment Type selectors round-trip on reload: a
+    redis-semantic config must surface as 'semantic' (not fall back to node),
+    and redis topologies must resolve to cluster/sentinel/node."""
+    cache_row = MagicMock()
+    cache_row.cache_settings = json.dumps(stored_settings)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
+
+    proxy_config = MagicMock()
+    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+    ):
+        response = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+    assert response.current_values["redis_type"] == expected_redis_type
+
+
 class TestCacheSettingsManager:
     """Tests for CacheSettingsManager class"""
 

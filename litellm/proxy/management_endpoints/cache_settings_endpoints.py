@@ -287,7 +287,9 @@ async def get_cache_settings(
 
                 # Derive redis_type for UI based on settings
                 # UI uses redis_type to show/hide fields, backend only stores 'type'
-                if decrypted_settings.get("type") == "redis":
+                if decrypted_settings.get("type") == "redis-semantic":
+                    decrypted_settings["redis_type"] = "semantic"
+                elif decrypted_settings.get("type") == "redis":
                     if decrypted_settings.get("redis_startup_nodes"):
                         decrypted_settings["redis_type"] = "cluster"
                     elif decrypted_settings.get("sentinel_nodes"):
