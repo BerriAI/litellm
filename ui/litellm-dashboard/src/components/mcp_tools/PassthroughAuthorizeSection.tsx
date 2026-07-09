@@ -1,6 +1,6 @@
 import React from "react";
 import { Button, Form, Input } from "antd";
-import { AUTH_TYPE } from "./types";
+import { isClientForwardedTokenMode } from "./types";
 
 interface PassthroughOAuthFlow {
   startOAuthFlow: () => void | Promise<void>;
@@ -26,7 +26,12 @@ export default function PassthroughAuthorizeSection({
   authType?: string | null;
   oauthFlow: PassthroughOAuthFlow;
 }) {
-  if (authType !== AUTH_TYPE.TRUE_PASSTHROUGH && authType !== AUTH_TYPE.OAUTH_DELEGATE) return null;
+  if (!isClientForwardedTokenMode(authType)) return null;
+  const authorizeButtonLabels: Record<string, string> = {
+    authorizing: "Waiting for authorization...",
+    exchanging: "Exchanging authorization code...",
+  };
+  const authorizeButtonLabel = authorizeButtonLabels[oauthFlow.status] ?? "Authorize & Fetch Tools (browser-only)";
   return (
     <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2 mb-4">
       <p className="text-sm text-gray-600">
@@ -57,11 +62,7 @@ export default function PassthroughAuthorizeSection({
         onClick={oauthFlow.startOAuthFlow}
         disabled={oauthFlow.status === "authorizing" || oauthFlow.status === "exchanging"}
       >
-        {oauthFlow.status === "authorizing"
-          ? "Waiting for authorization..."
-          : oauthFlow.status === "exchanging"
-            ? "Exchanging authorization code..."
-            : "Authorize & Fetch Tools (browser-only)"}
+        {authorizeButtonLabel}
       </Button>
       {oauthFlow.error && <p className="text-sm text-red-500">{oauthFlow.error}</p>}
       {oauthFlow.status === "success" && oauthFlow.tokenResponse?.access_token && (
