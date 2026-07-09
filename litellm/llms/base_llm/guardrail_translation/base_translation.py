@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -9,6 +10,26 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
+
+
+@dataclass(slots=True)
+class StreamTransformSink:
+    """Out-parameter used by ``process_output_streaming_response`` to hand the
+    guardrailed streaming state back to the caller.
+
+    The streaming text-transform path must not mutate ``responses_so_far`` (it is
+    the raw accumulator the guardrail re-reads every round), so the guardrailed
+    accumulated text per choice (``mutated_text_per_choice``, keyed by
+    ``StreamingChoices.index``) and the per-choice trailing holdback the guardrail
+    requested (``holdback_per_choice``, from ``stream_holdback_chars``) are
+    reported here instead of in place. Only the OpenAI chat handler populates this
+    today; the hook passes a fresh sink per round and reads it afterwards. A
+    mutable dataclass is deliberate: it is a write-once output parameter for a
+    single call, not shared state.
+    """
+
+    mutated_text_per_choice: dict[int, str] = field(default_factory=dict)
+    holdback_per_choice: dict[int, int] = field(default_factory=dict)
 
 
 class BaseTranslation(ABC):
@@ -93,11 +114,14 @@ class BaseTranslation(ABC):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: Optional[dict] = None,
+        stream_transform_sink: Optional[StreamTransformSink] = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
 
-        Optional to override in subclasses.
+        Optional to override in subclasses. ``stream_transform_sink`` is the
+        out-parameter used by handlers that support streaming text
+        transformations (see ``StreamTransformSink``); base handlers ignore it.
         """
         return responses_so_far
 

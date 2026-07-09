@@ -181,6 +181,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         extra_headers: Optional[list] = None,
         streaming_end_of_stream_only: Optional[bool] = None,
         streaming_sampling_rate: Optional[int] = None,
+        streaming_transform_mode: Optional[Literal["block_only", "incremental_diff"]] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -220,6 +221,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         if streaming_sampling_rate is not None and streaming_sampling_rate < 1:
             raise ValueError(f"streaming_sampling_rate must be >= 1 (got {streaming_sampling_rate})")
         self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
+
+        # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook.
+        # "block_only" (default) drops text rewrites on the streaming path;
+        # "incremental_diff" emits them as synthetic deltas.
+        self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
+            "block_only" if streaming_transform_mode is None else streaming_transform_mode
+        )
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:
@@ -331,6 +339,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        if guardrail_response.stream_holdback_chars is not None:
+            return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
 
     def _handle_guardrail_request_error(

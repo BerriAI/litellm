@@ -18,7 +18,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamTransformSink,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -27,6 +30,9 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    coerce_stream_holdback_value,
+)
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -405,6 +411,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[dict] = None,
+        stream_transform_sink: Optional[StreamTransformSink] = None,
     ) -> List["ModelResponseStream"]:
         """
         Process output streaming responses by applying guardrails to text content.
@@ -414,14 +421,50 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
+            stream_transform_sink: Optional out-parameter for the streaming text
+                transformation path. When provided, the guardrail runs over the raw
+                accumulated text (``responses_so_far`` is left untouched so it stays
+                a correct raw accumulator across rounds) and the guardrailed text
+                plus requested holdback are reported per choice on the sink.
 
         Returns:
-            Modified list of responses with guardrail applied to content
+            The (unmodified) list of responses.
 
         Response Format Support:
             - String content: choice.message.content = "text here"
             - List content: choice.message.content = [{"type": "text", "text": "text here"}, ...]
         """
+        if stream_transform_sink is not None:
+            await self._process_streaming_transform(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                sink=stream_transform_sink,
+            )
+            return responses_so_far
+
+        return await self._process_streaming_block_only(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+
+    async def _process_streaming_block_only(
+        self,
+        *,
+        responses_so_far: list["ModelResponseStream"],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any],
+        user_api_key_dict: Optional[Any],
+        request_data: Optional[dict],
+    ) -> list["ModelResponseStream"]:
+        """Block-only streaming path: run the guardrail so an in-flight BLOCK can
+        terminate the stream. Text rewrites are not propagated to the client here
+        (see ``_process_streaming_transform`` for the incremental_diff path)."""
         # check if the stream has ended
         has_stream_ended = False
         for chunk in responses_so_far:
@@ -519,6 +562,100 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return responses_so_far
+
+    @staticmethod
+    def _accumulate_string_content_by_choice_index(
+        responses_so_far: list["ModelResponseStream"],
+    ) -> dict[int, str]:
+        """Accumulate raw string ``delta.content`` per choice, keyed by
+        ``StreamingChoices.index`` (not enumerate position, which collapses to 0
+        when each chunk carries a single non-zero-indexed choice for ``n > 1``).
+
+        Only string content participates; list-of-blocks content is out of scope
+        for the incremental transform path. Reads ``responses_so_far`` without
+        mutating it so it stays a correct raw accumulator across rounds.
+        """
+        accumulated: dict[int, str] = {}
+        for response in responses_so_far:
+            for choice in response.choices:
+                if isinstance(choice, litellm.StreamingChoices):
+                    content = choice.delta.content
+                elif isinstance(choice, litellm.Choices):
+                    content = choice.message.content
+                else:
+                    continue
+                if isinstance(content, str) and content:
+                    idx = getattr(choice, "index", 0) or 0
+                    accumulated[idx] = accumulated.get(idx, "") + content
+        return accumulated
+
+    async def _process_streaming_transform(
+        self,
+        *,
+        responses_so_far: list["ModelResponseStream"],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any],
+        user_api_key_dict: Optional[Any],
+        request_data: Optional[dict],
+        sink: StreamTransformSink,
+    ) -> None:
+        """Run the guardrail over the raw accumulated text and report the
+        guardrailed text plus requested holdback per choice on ``sink``.
+
+        Unlike the block-only path this never mutates ``responses_so_far``: it
+        re-derives the raw accumulated text every round (so a rewrite guardrail
+        always sees consistent input) and hands the result back out of band.
+        """
+        raw_by_index = self._accumulate_string_content_by_choice_index(responses_so_far)
+        if not raw_by_index:
+            sink.mutated_text_per_choice = {}
+            sink.holdback_per_choice = {}
+            return
+
+        indices = list(raw_by_index.keys())
+        texts_to_check = list(raw_by_index.values())
+
+        if request_data is None:
+            request_data = {"responses": responses_so_far}
+        elif "responses" not in request_data:
+            request_data["responses"] = responses_so_far
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+
+        inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if responses_so_far and getattr(responses_so_far[0], "model", None):
+            inputs["model"] = responses_so_far[0].model
+        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+
+        returned_texts = guardrailed_inputs.get("texts")
+        # No "texts" key means the guardrail made no change (action NONE): the raw
+        # accumulated text is the guardrailed text. A present-but-shorter list is a
+        # guardrail contract violation; those choices are omitted below (withheld,
+        # not emitted raw) so a malformed response fails closed instead of leaking.
+        if returned_texts is None:
+            returned_texts = texts_to_check
+        elif len(returned_texts) < len(texts_to_check):
+            verbose_proxy_logger.warning(
+                "OpenAI Chat Completions: guardrail returned %s transformed texts for %s inputs on the "
+                "streaming transform path; withholding the unmatched choices to fail closed.",
+                len(returned_texts),
+                len(texts_to_check),
+            )
+
+        holdback = guardrailed_inputs.get("stream_holdback_chars") or []
+        sink.mutated_text_per_choice = {
+            idx: returned_texts[i] for i, idx in enumerate(indices) if i < len(returned_texts)
+        }
+        sink.holdback_per_choice = {
+            indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
+        }
 
     def _combine_streaming_texts(
         self, responses_so_far: List["ModelResponseStream"]
