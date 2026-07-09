@@ -485,6 +485,74 @@ def test_build_span_exporter_variants():
         OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
     )
     assert "OTLPSpanExporter" in type(http_exporter).__name__
+
+
+def test_otlp_logs_endpoint_normalization():
+    norm = providers._otlp_logs_endpoint
+    # A base endpoint gets the signal path appended (the common OTLP env shape).
+    assert norm("http://collector:4318") == "http://collector:4318/v1/logs"
+    assert norm("http://collector:4318/") == "http://collector:4318/v1/logs"
+    # An already-correct path is left intact.
+    assert norm("http://collector:4318/v1/logs") == "http://collector:4318/v1/logs"
+    # A sibling signal's path is rewritten to logs, so one OTEL_ENDPOINT works
+    # for every signal rather than POSTing events at the traces path.
+    assert norm("http://collector:4318/v1/traces") == "http://collector:4318/v1/logs"
+    assert norm("http://collector:4318/v1/metrics") == "http://collector:4318/v1/logs"
+    assert norm(None) is None
+
+
+def test_build_log_exporter_variants():
+    from opentelemetry.sdk._logs.export import ConsoleLogExporter, InMemoryLogExporter
+
+    assert isinstance(
+        providers.build_log_exporter(OpenTelemetryV2Config(exporter="console")),
+        ConsoleLogExporter,
+    )
+    assert isinstance(
+        providers.build_log_exporter(OpenTelemetryV2Config(exporter="in_memory")),
+        InMemoryLogExporter,
+    )
+    # An unrecognized kind falls back to console rather than dropping events.
+    assert isinstance(
+        providers.build_log_exporter(OpenTelemetryV2Config(exporter="unknown")),
+        ConsoleLogExporter,
+    )
+    http_exporter = providers.build_log_exporter(
+        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
+    )
+    assert "OTLPLogExporter" in type(http_exporter).__name__
+
+
+def test_build_logger_provider_picks_processor_by_exporter_kind():
+    """Console and in-memory exporters export synchronously (tests depend on it);
+    every other destination gets the batch processor."""
+    from opentelemetry.sdk._logs.export import (
+        BatchLogRecordProcessor,
+        ConsoleLogExporter,
+        InMemoryLogExporter,
+        SimpleLogRecordProcessor,
+    )
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+
+    def processor_of(provider):
+        return provider._multi_log_record_processor._log_record_processors[0]
+
+    assert isinstance(
+        processor_of(providers.build_logger_provider(cfg, log_exporter=InMemoryLogExporter())),
+        SimpleLogRecordProcessor,
+    )
+    assert isinstance(
+        processor_of(providers.build_logger_provider(cfg, log_exporter=ConsoleLogExporter())),
+        SimpleLogRecordProcessor,
+    )
+    http_exporter = providers.build_log_exporter(
+        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
+    )
+    assert isinstance(
+        processor_of(providers.build_logger_provider(cfg, log_exporter=http_exporter)),
+        BatchLogRecordProcessor,
+    )
     grpc_exporter = providers.build_span_exporter(
         OpenTelemetryV2Config(exporter="otlp_grpc", endpoint="http://h:4317")
     )
