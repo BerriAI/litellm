@@ -1778,26 +1778,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
             transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(result.usage)
-            # Convert to dict: ResponseAPIUsage has no prompt_tokens/completion_tokens
-            # fields, so model_dump() would silently drop them from a raw Usage object.
-            setattr(
-                result,
-                "usage",
-                (
-                    transformed_usage.model_dump()
-                    if hasattr(transformed_usage, "model_dump")
-                    else dict(transformed_usage)
-                ),
+            # Convert to dict so model_dump() doesn't drop prompt/completion tokens
+            transformed_usage_dict = (
+                transformed_usage.model_dump() if hasattr(transformed_usage, "model_dump") else dict(transformed_usage)
             )
+            setattr(result, "usage", transformed_usage_dict)
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
                 response_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result)
-                # Ensure usage is properly included with transformed chat format
-                if transformed_usage is not None:
-                    response_dict["usage"] = (
-                        transformed_usage.model_dump()
-                        if hasattr(transformed_usage, "model_dump")
-                        else dict(transformed_usage)
-                    )
                 standard_logging_payload["response"] = response_dict
         elif isinstance(result, TranscriptionResponse):
             from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
