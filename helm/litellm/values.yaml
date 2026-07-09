@@ -82,7 +82,11 @@ masterKey:
 billingMetrics:
   enabled: false
   endpoint: https://telemetry.litellm.ai              # collector to push the counter to
-  secretName: ""                                      # existing Secret holding tls.crt and tls.key
+  # An existing Secret holding the client certificate under tls.crt and its key
+  # under tls.key, usually created from the onboarding artifact. The default is
+  # the conventional name, so the common path is to create that Secret and set
+  # enabled: true. Override only if yours is named differently.
+  secretName: litellm-billing-metrics-mtls
   # Only for private or test collectors whose server certificate is not on the
   # public web PKI. The production collector needs no CA override.
   caSecretName: ""                                    # existing Secret holding ca.crt

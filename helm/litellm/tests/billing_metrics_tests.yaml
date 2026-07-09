@@ -212,11 +212,27 @@ tests:
       - isNull:
           path: spec.template.spec.volumes
 
-  - it: fails loudly when enabled without a secretName
+  # The conventional Secret name is the default, so enabling metering needs no
+  # secretName at all; the guard below only fires on an explicitly blanked one.
+  - it: uses the conventional secret name by default
     template: gateway/deployment.yaml
     set:
       billingMetrics:
         enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: litellm-billing-metrics-mtls
+
+  - it: fails loudly when the secretName is explicitly blanked
+    template: gateway/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        secretName: ""
     asserts:
       - failedTemplate:
           errorMessage: billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)
