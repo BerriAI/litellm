@@ -107,11 +107,12 @@ _MCP_ROUTING_PEEK_MAX_BYTES = 4096
 
 
 def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
-    """Reduce an MCP server URL to its bare resource identifier for logging.
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
 
-    Keeps scheme, host, and path; drops userinfo (``user:pass@``), the query string,
-    and the fragment, so an upstream URL carrying an embedded token, userinfo, or a
-    secret query parameter never reaches spend-log metadata or logging callbacks.
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
     Returns None when the URL has no host to identify (nothing safe to log).
     """
     if not isinstance(url, str) or not url:
@@ -123,7 +124,7 @@ def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
     if not parts.hostname:
         return None
     netloc = f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
-    return urlunsplit((parts.scheme, netloc, parts.path, "", "")) or None
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:

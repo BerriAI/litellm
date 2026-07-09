@@ -6859,11 +6859,13 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
 @pytest.mark.parametrize(
     "url, expected",
     [
-        # userinfo + secret query param must both be stripped from the logged resource
-        ("https://user:s3cr3t@mcp.example.com/mcp?token=abcd1234&x=1", "https://mcp.example.com/mcp"),
-        ("https://mcp.example.com/mcp#frag", "https://mcp.example.com/mcp"),
-        ("https://host:8443/a/b?q=1", "https://host:8443/a/b"),
-        ("https://mcp.notion.com/mcp", "https://mcp.notion.com/mcp"),
+        # only the origin may be logged: userinfo, query, fragment, and the PATH are all stripped,
+        # because hosted MCP servers routinely embed the credential in the path (e.g. /mcp/s/<token>)
+        ("https://user:s3cr3t@mcp.example.com/mcp?token=abcd1234&x=1", "https://mcp.example.com"),
+        ("https://mcp.example.com/mcp#frag", "https://mcp.example.com"),
+        ("https://host:8443/a/b?q=1", "https://host:8443"),
+        ("https://mcp.zapier.com/api/mcp/s/NDgzcret-token/mcp", "https://mcp.zapier.com"),
+        ("https://mcp.notion.com/mcp", "https://mcp.notion.com"),
         (None, None),
         ("", None),
         ("not a url", None),
