@@ -10,6 +10,7 @@ vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
+  testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -509,6 +510,30 @@ describe("MCPServerEdit OAuth token invalidation", () => {
 
     await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
     expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
+  });
+
+  it("previews tools with a staged interactive OAuth token before it is saved", async () => {
+    // Regression: for authorization_code the fetch went by server_id only, relying on the stored DB
+    // credential, so a token authorized in this edit session gave an empty preview until the admin
+    // saved; the create form previews the identical state via the config-based preview endpoint.
+    mockOauth.tokenResponse = { access_token: "staged-obo-tok" };
+
+    renderOAuthEdit();
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({ server_id: "oauth_server_1", url: "https://example.com/mcp" }),
+        "staged-obo-tok",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
+    // Previewing must stay stateless: the staged token is committed only by an explicit Save
+    // (storeMCPOAuthUserCredential for authorization_code, setToken for the client-forwarded modes).
+    expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+    expect(mockSetToken).not.toHaveBeenCalled();
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    mockOauth.tokenResponse = null;
   });
 
   it("keeps the admin's in-flight endpoint edits when the token is invalidated", async () => {

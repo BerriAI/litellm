@@ -17,7 +17,7 @@ import {
   getMcpOAuthMode,
   oauth2FlowToFormValue,
 } from "./types";
-import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential } from "../networking";
+import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential, testMCPToolsListRequest } from "../networking";
 import { getToken, isTokenValid, removeToken, setToken } from "@/utils/mcpTokenStore";
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -421,6 +421,53 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   };
 
+  // A token authorized in this edit session for interactive OAuth (authorization_code) is only
+  // committed to the DB on save, so a plain by-server_id listing cannot use it and the preview would
+  // stay empty until the admin saves; the create form previews the identical state through the
+  // config-based preview endpoint, which takes the staged token explicitly. Returns false when there
+  // is no staged interactive token so fetchTools falls through to the by-server_id listing.
+  const previewWithStagedInteractiveToken = async (
+    isPassthrough: boolean,
+    isBrowserHeldTokenMode: boolean,
+  ): Promise<boolean> => {
+    const stagedToken =
+      !isPassthrough && !isBrowserHeldTokenMode && getEffectiveAuthType() === AUTH_TYPE.OAUTH2
+        ? oauthTokenResponse?.access_token
+        : undefined;
+    if (!stagedToken) {
+      return false;
+    }
+    setIsLoadingTools(true);
+    setToolsError(null);
+    try {
+      const values = form.getFieldsValue(true);
+      const rawTransport = values.transport || mcpServer.transport;
+      const previewConfig = {
+        server_id: mcpServer.server_id,
+        server_name: values.server_name || mcpServer.server_name || mcpServer.alias,
+        url: values.url || mcpServer.url,
+        transport: rawTransport === TRANSPORT.OPENAPI ? TRANSPORT.HTTP : rawTransport,
+        auth_type: AUTH_TYPE.OAUTH2,
+        authorization_url: values.authorization_url,
+        token_url: values.token_url,
+        registration_url: values.registration_url,
+      };
+      const toolsResponse = await testMCPToolsListRequest(accessToken, previewConfig, stagedToken);
+      if (toolsResponse.tools && !toolsResponse.error) {
+        setTools(toolsResponse.tools);
+      } else {
+        setTools([]);
+        setToolsError(toolsResponse.message || "Failed to load tools");
+      }
+    } catch (error) {
+      setTools([]);
+      setToolsError(error instanceof Error ? error.message : "Failed to load tools");
+    } finally {
+      setIsLoadingTools(false);
+    }
+    return true;
+  };
+
   const fetchTools = async () => {
     if (!accessToken || !mcpServer.server_id) return;
 
@@ -436,6 +483,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
       }) === "passthrough";
     const isBrowserHeldTokenMode = isClientForwardedTokenMode(getEffectiveAuthType());
+
+    if (await previewWithStagedInteractiveToken(isPassthrough, isBrowserHeldTokenMode)) {
+      return;
+    }
     if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
