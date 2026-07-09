@@ -251,10 +251,23 @@ def test_split_concatenated_json_non_dict_value():
     assert result == [{}]
 
 
-def test_split_concatenated_json_invalid_raises():
-    """Completely invalid JSON raises JSONDecodeError."""
-    with pytest.raises(json.JSONDecodeError):
-        split_concatenated_json_objects("not json at all")
+def test_split_concatenated_json_invalid_returns_empty():
+    """Completely invalid JSON yields no objects (caller degrades to {})."""
+    assert split_concatenated_json_objects("not json at all") == []
+
+
+def test_split_concatenated_json_truncated_object_returns_empty():
+    """A single object truncated mid-stream (provider cut the tool-call
+    arguments stream) yields no objects instead of raising — raising here
+    poisons every subsequent request that replays the conversation
+    (https://github.com/BerriAI/litellm/issues/18667)."""
+    assert split_concatenated_json_objects('{"command": ["cat","file.md"]') == []
+
+
+def test_split_concatenated_json_salvages_objects_before_truncated_tail():
+    """Complete objects parsed before a truncated tail are kept."""
+    result = split_concatenated_json_objects('{"a": 1}{"b": [2')
+    assert result == [{"a": 1}]
 
 
 # ---------------------------------------------------------------------------

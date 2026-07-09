@@ -3166,3 +3166,51 @@ async def test_bedrock_converse_message_level_cache_point_preserves_ttl_async():
     )
 
     assert _collect_cache_points(result) == [{"type": "default", "ttl": "1h"}]
+
+
+def test_convert_to_bedrock_tool_call_invoke_truncated_arguments_degrade_to_empty_input():
+    """A historical tool call whose arguments JSON was truncated (provider
+    stream ended mid-call) must not fail the whole request: every later turn
+    replays the conversation, so raising here permanently poisons the session
+    (https://github.com/BerriAI/litellm/issues/18667). The call converts with
+    input={} and the paired tool result stays addressable by toolUseId."""
+    tool_calls = [
+        {
+            "id": "tooluse_ALM3Cu9twX9iB0NLzcxhdc",
+            "type": "function",
+            "function": {
+                "name": "shell",
+                # exact truncation shape observed from a Bedrock ConverseStream
+                # that ended before the final input_json delta
+                "arguments": '{"command": ["cat",".glia/project.md"]',
+            },
+        }
+    ]
+
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    assert len(result) == 1
+    tool_use = result[0]["toolUse"]
+    assert tool_use["toolUseId"] == "tooluse_ALM3Cu9twX9iB0NLzcxhdc"
+    assert tool_use["name"] == "shell"
+    assert tool_use["input"] == {}
+
+
+def test_convert_to_bedrock_tool_call_invoke_salvages_complete_objects_before_truncated_tail():
+    """Complete objects before a truncated tail still split into toolUse
+    blocks; the unparseable tail is dropped."""
+    tool_calls = [
+        {
+            "id": "tooluse_1",
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "arguments": '{"command": ["pwd"]}{"command": ["ls", "-',
+            },
+        }
+    ]
+
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {"command": ["pwd"]}

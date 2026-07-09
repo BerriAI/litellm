@@ -1685,10 +1685,13 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
         A list of parsed dicts – one per JSON object found.  If *raw* is
         empty or whitespace-only, an empty list is returned.
 
-    Raises
-    ------
-    json.JSONDecodeError
-        If the string contains text that cannot be parsed as JSON at all.
+    Trailing text that cannot be parsed as JSON (e.g. a tool-call arguments
+    string truncated by a provider stream that ended mid-call) is ignored:
+    every complete object parsed before it is still returned. The caller
+    treats an empty result as "no usable arguments" and degrades to ``{}``
+    rather than failing the whole request — a malformed historical tool call
+    would otherwise poison every subsequent request in the conversation
+    (https://github.com/BerriAI/litellm/issues/18667).
     """
     import json
 
@@ -1708,7 +1711,11 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
         if idx >= length:
             break
 
-        obj, end_idx = decoder.raw_decode(raw, idx)
+        try:
+            obj, end_idx = decoder.raw_decode(raw, idx)
+        except json.JSONDecodeError:
+            # Truncated / unparseable tail: keep what parsed so far.
+            break
         if isinstance(obj, dict):
             results.append(obj)
         else:
