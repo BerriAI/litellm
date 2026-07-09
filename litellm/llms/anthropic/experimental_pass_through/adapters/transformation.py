@@ -582,15 +582,43 @@ class LiteLLMAnthropicMessagesAdapter:
                 else:
                     assistant_content = assistant_message_str
 
+                # Gate ``thinking_blocks`` on the target backend. Non-Anthropic
+                # OpenAI-compatible backends (e.g. Fireworks, DeepSeek) reject
+                # the Anthropic-specific ``thinking_blocks`` field with "Extra
+                # inputs are not permitted", breaking multi-turn conversations.
+                # Only Anthropic Claude backends (including Bedrock ARNs that
+                # point at Claude) understand the field and its signed
+                # signatures. For everyone else, drop ``thinking_blocks`` and
+                # convert to the OpenAI-style ``reasoning_content`` string,
+                # which those backends accept and consume. When the model is
+                # unknown (``None``) we conservatively preserve the field to
+                # keep the prior behaviour. See #27946.
+                preserve_thinking_blocks = (
+                    model is None or self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
+                )
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
-                    thinking_blocks=(thinking_blocks if len(thinking_blocks) > 0 else None),
+                    thinking_blocks=(
+                        thinking_blocks if (preserve_thinking_blocks and len(thinking_blocks) > 0) else None
+                    ),
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
                 if len(thinking_blocks) > 0:
-                    assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    if preserve_thinking_blocks:
+                        assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    else:
+                        # Concatenate every unredacted thinking block. Redacted
+                        # blocks carry no readable text (only encrypted ``data``)
+                        # and are dropped.
+                        reasoning_content = "".join(
+                            block.get("thinking", "")  # type: ignore[union-attr]
+                            for block in thinking_blocks
+                            if block.get("type") == "thinking"
+                        )
+                        if reasoning_content:
+                            assistant_message["reasoning_content"] = reasoning_content  # type: ignore
                 new_messages.append(assistant_message)
 
         return new_messages

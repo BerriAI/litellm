@@ -345,6 +345,92 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def _thinking_and_redacted_messages():
+    return [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "What is 2+2?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "The user asks 2+2.",
+                    "signature": "sig123",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "REDACTED",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": " It is 4.",
+                    "signature": "sig456",
+                },
+                {"type": "text", "text": "4"},
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Now multiply that by 3."}],
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "model", ["glm-4.6", "azure/my-glm-deployment", "deepseek/deepseek-reasoner"]
+)
+def test_translate_anthropic_messages_to_openai_strips_thinking_blocks_for_non_anthropic(
+    model,
+):
+    """Non-Anthropic backends reject the Anthropic-specific ``thinking_blocks``
+    field ("Extra inputs are not permitted"). The adapter must drop it and
+    convert the unredacted blocks to a single ``reasoning_content`` string."""
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=_thinking_and_redacted_messages(), model=model
+    )
+
+    assistant = result[1]
+    assert assistant["role"] == "assistant"
+    # raw thinking_blocks must NOT be forwarded to a non-Anthropic backend.
+    # The key may be present as ``None`` (the constructor default), which
+    # litellm strips before serializing the request; what matters is that the
+    # actual blocks are not attached.
+    assert assistant.get("thinking_blocks") is None
+    # unredacted blocks are concatenated; the redacted block (no text) is dropped
+    assert assistant["reasoning_content"] == "The user asks 2+2. It is 4."
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4",
+        "anthropic/claude-3-5-sonnet",
+        "vertex_ai/claude-opus",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile",
+    ],
+)
+def test_translate_anthropic_messages_to_openai_preserves_thinking_blocks_for_anthropic(
+    model,
+):
+    """Anthropic Claude backends understand ``thinking_blocks`` (and their
+    signed signatures), so the field must be preserved unchanged and
+    ``reasoning_content`` must not be added."""
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=_thinking_and_redacted_messages(), model=model
+    )
+
+    assistant = result[1]
+    assert "thinking_blocks" in assistant
+    assert len(assistant["thinking_blocks"]) == 3
+    assert "reasoning_content" not in assistant
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
