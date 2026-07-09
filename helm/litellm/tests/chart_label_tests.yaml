@@ -1,0 +1,60 @@
+suite: test helm.sh/chart label stays within the 63 byte kubernetes limit
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+  - migrations-job.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders the plain chart label for a normal semver version
+    template: gateway/deployment.yaml
+    chart:
+      version: 0.1.0
+    asserts:
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: litellm-0.1.0
+
+  # CI publishes branch builds as 0.0.0-branch-<branch>-<sha>. Untruncated, the
+  # label is 64 bytes and the API server rejects every labeled resource with
+  # "must be no more than 63 bytes", which wedges the whole release.
+  - it: truncates a long branch-build version to 63 bytes on the gateway
+    template: gateway/deployment.yaml
+    chart:
+      version: 0.0.0-branch-litellm-enterprise-request-metering-f0b217f
+    asserts:
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: litellm-0.0.0-branch-litellm-enterprise-request-metering-f0b217
+
+  - it: truncates the long version on the migrations job that blocked the sync
+    template: migrations-job.yaml
+    chart:
+      version: 0.0.0-branch-litellm-enterprise-request-metering-f0b217f
+    asserts:
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: litellm-0.0.0-branch-litellm-enterprise-request-metering-f0b217
+
+  - it: truncates the long version on backend and ui
+    templates:
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    chart:
+      version: 0.0.0-branch-litellm-enterprise-request-metering-f0b217f
+    asserts:
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: litellm-0.0.0-branch-litellm-enterprise-request-metering-f0b217
+
+  # trunc can land on the separator; a label value may not end in a dash.
+  - it: never leaves a trailing dash after truncation
+    template: gateway/deployment.yaml
+    chart:
+      version: 0.0.0-branch-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbb
+    asserts:
+      - matchRegex:
+          path: metadata.labels["helm.sh/chart"]
+          pattern: "[^-]$"
