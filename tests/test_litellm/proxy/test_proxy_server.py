@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -23,6 +24,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server_module
+from litellm.caching.caching import RedisCache
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
@@ -9358,3 +9362,89 @@ def test_update_config_redacts_all_environment_variable_values(
         assert "db.internal" not in data["updated_values"]
     finally:
         restore()
+
+
+class _EnvBuiltRedisCache(RedisCache):
+    """RedisCache stand-in that records its constructor kwargs and never
+    opens a network connection, so tests can assert which connection params
+    the proxy used to build its coordination Redis."""
+
+    def __init__(self, **kwargs):
+        self.init_kwargs = kwargs
+
+
+def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
+    """Run ProxyConfig._init_cache with a stubbed response-cache backend and a
+    controlled REDIS_* environment, returning (redis_usage_cache,
+    spend_counter redis, config-cache redis) as observed after the call."""
+    mock_litellm_cache = MagicMock()
+    mock_litellm_cache.cache = cache_backend
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        patch.object(proxy_server_module, "redis_usage_cache", None),
+        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "llm_router", None),
+        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch(
+            "litellm._redis._redis_kwargs_from_environment",
+            return_value=redis_env_kwargs,
+        ),
+        patch("litellm.Cache", return_value=mock_litellm_cache),
+    ):
+        litellm.cache = None
+        proxy_server_module.ProxyConfig()._init_cache(
+            cache_params={"type": "qdrant-semantic"}
+        )
+        return (
+            proxy_server_module.redis_usage_cache,
+            fresh_spend_cache.redis_cache,
+            fresh_config_cache.redis_cache,
+        )
+
+
+def test_init_cache_non_redis_backend_builds_usage_redis_from_environment():
+    """A semantic (non-Redis-KV) response cache must not disable the proxy's
+    coordination Redis: when REDIS_* env vars provide a connection,
+    _init_cache builds a standalone usage cache so cross-pod rate limits,
+    spend tracking, and the pod lock manager stay Redis-backed."""
+    usage_cache, spend_redis, config_redis = _run_init_cache_with_backend(
+        cache_backend=object(),
+        redis_env_kwargs={"host": "coordination-redis", "port": "6379"},
+    )
+
+    assert isinstance(usage_cache, _EnvBuiltRedisCache)
+    assert usage_cache.init_kwargs["host"] == "coordination-redis"
+    assert spend_redis is usage_cache
+    assert config_redis is usage_cache
+
+
+def test_init_cache_non_redis_backend_without_redis_env_stays_in_memory():
+    """Without any REDIS_* connection info, a non-Redis response cache must
+    leave the coordination Redis unset instead of building a broken client."""
+    usage_cache, spend_redis, config_redis = _run_init_cache_with_backend(
+        cache_backend=object(),
+        redis_env_kwargs={},
+    )
+
+    assert usage_cache is None
+    assert spend_redis is None
+    assert config_redis is None
+
+
+def test_init_cache_redis_backend_reuses_cache_backend_over_environment():
+    """When the response cache itself is a plain Redis KV cache, it must be
+    reused as the coordination Redis; the REDIS_* environment fallback must
+    not construct a second client."""
+    redis_backend = _EnvBuiltRedisCache(host="cache-params-host")
+    usage_cache, spend_redis, _ = _run_init_cache_with_backend(
+        cache_backend=redis_backend,
+        redis_env_kwargs={"host": "env-host"},
+    )
+
+    assert usage_cache is redis_backend
+    assert usage_cache.init_kwargs["host"] == "cache-params-host"
+    assert spend_redis is redis_backend
