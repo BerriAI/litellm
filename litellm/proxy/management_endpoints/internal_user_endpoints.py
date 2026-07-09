@@ -79,6 +79,12 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 
+# Default limits applied to a service account when the requester doesn't
+# specify them. Stored on LiteLLM_ServiceAccountTable (nullable Int columns
+# with no DB default, so we apply the default here to avoid NULL).
+DEFAULT_SERVICE_ACCOUNT_RPM_LIMIT = 150
+DEFAULT_SERVICE_ACCOUNT_PARALLEL_REQUESTS_LIMIT = 10
+
 
 def _hash_password_in_dict(data: dict) -> None:
     """Hash password field in-place if present."""
@@ -473,6 +479,12 @@ async def new_user(
             "requested_parallel_requests_limit": data_json.pop(
                 "requested_parallel_requests_limit", None
             ),
+            # GPG key delivery: the requester's ASCII-armored OpenPGP public key
+            # (used at approve time to encrypt the issued key) and the requester's
+            # user_id (the Slack DM recipient). `public_key` is validated by the
+            # grid proxy before forwarding; defend-in-depth here too.
+            "public_key": data_json.pop("public_key", None),
+            "requester": data_json.pop("requester", None),
         }
         # Pop is_service_account so it isn't passed to generate_key_helper_fn;
         # the value is read from the validated `data` object below.
@@ -519,7 +531,37 @@ async def new_user(
                     status_code=400,
                     detail="is_service_account requires owner_ids with at least 2 user IDs",
                 )
+            # A service account request must carry the requester's GPG public
+            # key (the grid proxy validates + forwards it; defend-in-depth here)
+            # so the issued key can be encrypted at approve time. The requester
+            # defaults to the calling user when not explicitly provided.
+            from litellm.proxy.management_endpoints.service_account_endpoints import (
+                _validate_openpgp_public_key,
+            )
+
+            service_account_fields["public_key"] = _validate_openpgp_public_key(
+                service_account_fields.get("public_key")
+            )
+            if not service_account_fields.get("requester") and isinstance(
+                user_api_key_dict, UserAPIKeyAuth
+            ):
+                service_account_fields["requester"] = user_api_key_dict.user_id
+
             create_data: dict = {"user_id": user_id, "owner_ids": owner_ids}
+            # Apply defaults for the requested-limit fields when the requester
+            # didn't specify them, so the SA row always carries concrete limits
+            # (the DB columns are nullable with no default).
+            if service_account_fields.get("requested_rpm_limit") is None:
+                service_account_fields["requested_rpm_limit"] = (
+                    DEFAULT_SERVICE_ACCOUNT_RPM_LIMIT
+                )
+            if (
+                service_account_fields.get("requested_parallel_requests_limit")
+                is None
+            ):
+                service_account_fields["requested_parallel_requests_limit"] = (
+                    DEFAULT_SERVICE_ACCOUNT_PARALLEL_REQUESTS_LIMIT
+                )
             # Only set fields that were explicitly provided so Prisma defaults
             # (e.g. requested_models=[], is_active=false) apply otherwise.
             for field, value in service_account_fields.items():
@@ -528,6 +570,28 @@ async def new_user(
             await prisma_client.db.litellm_serviceaccounttable.upsert(
                 where={"user_id": user_id},
                 data={"create": create_data, "update": create_data},
+            )
+
+            # Notify the requester + owners that a creation request was filed
+            # (best-effort, non-blocking Slack DM). This is the only SA event
+            # that originates here (the others fire from service_account_endpoints).
+            from types import SimpleNamespace
+
+            from litellm.proxy.management_endpoints.service_account_endpoints import (
+                _notify_sa_event_slack,
+            )
+
+            sa_snapshot_data = dict(create_data)
+            sa_snapshot_data.setdefault("is_active", False)
+            sa_snapshot_data.setdefault("is_key_rotation_requested", False)
+            sa_snapshot = SimpleNamespace(**sa_snapshot_data)
+            asyncio.create_task(
+                _notify_sa_event_slack(  # type: ignore[arg-type]
+                    prisma_client,
+                    sa_snapshot,
+                    "creation requested",
+                    requester_id=service_account_fields.get("requester"),
+                )
             )
 
         special_keys = ["token", "token_id"]

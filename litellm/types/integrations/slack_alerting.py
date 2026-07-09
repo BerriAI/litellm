@@ -170,6 +170,12 @@ class AlertType(str, Enum):
     internal_user_updated = "internal_user_updated"
     internal_user_deleted = "internal_user_deleted"
 
+    # Service Account Events (approvals / rejections of service account
+    # creation and key-rotation requests). Opt-in: not in DEFAULT_ALERT_TYPES,
+    # so an operator must add it to `litellm_settings.alert_types` for Slack
+    # notifications to fire.
+    service_account_request = "service_account_request"
+
 
 DEFAULT_ALERT_TYPES: List[AlertType] = [
     # LLM related alerts

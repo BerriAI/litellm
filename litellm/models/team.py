@@ -37,8 +37,8 @@ class MemberBase(LiteLLMPydanticObjectBase):
 
 
 class Member(MemberBase):
-    role: Literal["admin", "user"] = Field(
-        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
+    role: Literal["admin", "user", "service_account"] = Field(
+        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member, 'service_account' is a non-human member treated as a non-admin user for permission checks."
     )
 
 

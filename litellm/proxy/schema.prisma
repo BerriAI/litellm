@@ -1458,6 +1458,8 @@ model LiteLLM_ServiceAccountTable {
   requested_parallel_requests_limit Int?
   is_active                    Boolean  @default(false)
   is_key_rotation_requested    Boolean  @default(false)
+  public_key                   String?  // requester's ASCII-armored OpenPGP public key (used to encrypt the issued key)
+  requester                    String?  // user_id of the user who filed the creation request (Slack DM recipient)
   created_at                   DateTime @default(now()) @map("created_at")
   updated_at                   DateTime @default(now()) @updatedAt @map("updated_at")
 }

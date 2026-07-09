@@ -1410,6 +1410,204 @@ Model Info:
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
 
+    async def send_dm(self, user_email: str, message: str) -> bool:
+        """Send a Slack DM (direct message) to a single user by email.
+
+        Uses the Slack Web API (not a webhook), which requires a bot token
+        (``SLACK_BOT_TOKEN``, an ``xoxb-...`` token with the ``users:read``,
+        ``users:read.email``, ``im:write`` and ``chat:write`` scopes). Flow:
+            1. users.lookupByEmail  → resolve the email to a Slack user id
+            2. conversations.open   → open a DM channel with that user
+            3. chat.postMessage     → post the message to the DM channel
+
+        Non-blocking: if ``SLACK_WEB_API_TOKEN``/``SLACK_BOT_TOKEN`` is unset or
+        any step fails (e.g. the email isn't on Slack), this logs a warning and
+        returns False rather than raising — mirroring send_alert's posture so a
+        Slack misconfiguration never fails a service-account approve/reject.
+
+        Returns True on success, False otherwise.
+        """
+        bot_token = os.getenv("SLACK_WEB_API_TOKEN") or os.getenv("SLACK_BOT_TOKEN")
+        if not bot_token or not user_email:
+            verbose_proxy_logger.warning(
+                "SlackAlerting.send_dm: skipped (no bot token or empty email). "
+                "Set SLACK_BOT_TOKEN (xoxb-..., scopes: users:read, users:read.email, "
+                "im:write, chat:write) to enable service-account DMs."
+            )
+            return False
+
+        headers = {
+            "Content-type": "application/json",
+            "Authorization": f"Bearer {bot_token}",
+        }
+        try:
+            # 1. Resolve email → Slack user id.
+            lookup = await self.async_http_handler.get(
+                url="https://slack.com/api/users.lookupByEmail",
+                params={"email": user_email},
+                headers=headers,
+            )
+            lookup_json = lookup.json()
+            if not lookup_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    f"SlackAlerting.send_dm: users.lookupByEmail failed for "
+                    f"{user_email}: {lookup_json.get('error')}"
+                )
+                return False
+            slack_user_id = lookup_json["user"]["id"]
+
+            # 2. Open a DM channel.
+            open_resp = await self.async_http_handler.post(
+                url="https://slack.com/api/conversations.open",
+                headers=headers,
+                json={"users": [slack_user_id]},
+            )
+            open_json = open_resp.json()
+            if not open_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    f"SlackAlerting.send_dm: conversations.open failed for "
+                    f"{slack_user_id}: {open_json.get('error')}"
+                )
+                return False
+            channel_id = open_json["channel"]["id"]
+
+            # 3. Post the message.
+            post_resp = await self.async_http_handler.post(
+                url="https://slack.com/api/chat.postMessage",
+                headers=headers,
+                json={"channel": channel_id, "text": message},
+            )
+            post_json = post_resp.json()
+            if not post_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    f"SlackAlerting.send_dm: chat.postMessage failed for "
+                    f"channel {channel_id}: {post_json.get('error')}"
+                )
+                return False
+            return True
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"SlackAlerting.send_dm: exception sending to {user_email}: {e}"
+            )
+            return False
+
+    async def send_dm_file(
+        self,
+        user_email: str,
+        message: str,
+        filename: str,
+        file_content: Union[str, bytes],
+        title: Optional[str] = None,
+    ) -> bool:
+        """Send a Slack DM with a file attachment to a single user by email.
+
+        Uses Slack's external upload flow:
+            1. users.lookupByEmail      → resolve email to Slack user id
+            2. conversations.open       → open a DM channel
+            3. files.getUploadURLExternal
+            4. POST bytes to upload_url
+            5. files.completeUploadExternal with the DM channel + initial comment
+
+        Requires the same DM scopes as send_dm plus ``files:write``.
+        Returns True on success, False otherwise.
+        """
+        bot_token = os.getenv("SLACK_WEB_API_TOKEN") or os.getenv("SLACK_BOT_TOKEN")
+        if not bot_token or not user_email or not filename:
+            verbose_proxy_logger.warning(
+                "SlackAlerting.send_dm_file: skipped (no bot token, email, or filename). "
+                "Set SLACK_BOT_TOKEN (xoxb-..., scopes: users:read, users:read.email, "
+                "im:write, chat:write, files:write) to enable service-account file DMs."
+            )
+            return False
+
+        auth_headers = {"Authorization": f"Bearer {bot_token}"}
+        json_headers = {**auth_headers, "Content-type": "application/json"}
+
+        def _slack_error(payload: Dict[str, Any]) -> str:
+            error = payload.get("error")
+            messages = (payload.get("response_metadata") or {}).get("messages")
+            if messages:
+                return f"{error} ({'; '.join(str(m) for m in messages)})"
+            return str(error)
+
+        try:
+            lookup = await self.async_http_handler.get(
+                url="https://slack.com/api/users.lookupByEmail",
+                params={"email": user_email},
+                headers=auth_headers,
+            )
+            lookup_json = lookup.json()
+            if not lookup_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    f"SlackAlerting.send_dm_file: users.lookupByEmail failed for "
+                    f"{user_email}: {_slack_error(lookup_json)}"
+                )
+                return False
+            slack_user_id = lookup_json["user"]["id"]
+
+            open_resp = await self.async_http_handler.post(
+                url="https://slack.com/api/conversations.open",
+                headers=json_headers,
+                json={"users": [slack_user_id]},
+            )
+            open_json = open_resp.json()
+            if not open_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    f"SlackAlerting.send_dm_file: conversations.open failed for "
+                    f"{slack_user_id}: {_slack_error(open_json)}"
+                )
+                return False
+            channel_id = open_json["channel"]["id"]
+
+            content_bytes = (
+                file_content
+                if isinstance(file_content, bytes)
+                else file_content.encode("utf-8")
+            )
+            upload_ticket_resp = await self.async_http_handler.post(
+                url="https://slack.com/api/files.getUploadURLExternal",
+                headers=auth_headers,
+                data={"filename": filename, "length": str(len(content_bytes))},
+            )
+            upload_ticket_json = upload_ticket_resp.json()
+            if not upload_ticket_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    "SlackAlerting.send_dm_file: files.getUploadURLExternal failed "
+                    f"for {user_email}: {_slack_error(upload_ticket_json)}"
+                )
+                return False
+            upload_url = upload_ticket_json["upload_url"]
+            file_id = upload_ticket_json["file_id"]
+
+            await self.async_http_handler.post(
+                url=upload_url,
+                headers={"Content-Type": "application/octet-stream"},
+                content=content_bytes,
+            )
+
+            complete_resp = await self.async_http_handler.post(
+                url="https://slack.com/api/files.completeUploadExternal",
+                headers=json_headers,
+                json={
+                    "files": [{"id": file_id, "title": title or filename}],
+                    "channel_id": channel_id,
+                    "initial_comment": message,
+                },
+            )
+            complete_json = complete_resp.json()
+            if not complete_json.get("ok"):
+                verbose_proxy_logger.warning(
+                    "SlackAlerting.send_dm_file: files.completeUploadExternal failed "
+                    f"for {user_email}: {_slack_error(complete_json)}"
+                )
+                return False
+            return True
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"SlackAlerting.send_dm_file: exception sending file to {user_email}: {e}"
+            )
+            return False
+
     async def async_send_batch(self):
         if not self.log_queue:
             return

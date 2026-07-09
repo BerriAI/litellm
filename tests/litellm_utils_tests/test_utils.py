@@ -832,7 +832,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
 
 @pytest.mark.parametrize(
     "duration, unit",
-    [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo")],
+    [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo"), ("7y", "y")],
 )
 def test_extract_from_regex(duration, unit):
     value, _unit = _extract_from_regex(duration=duration)
@@ -889,6 +889,8 @@ def test_duration_in_seconds_basic():
     assert duration_in_seconds(duration="3h") == 10800
     assert duration_in_seconds(duration="3d") == 259200
     assert duration_in_seconds(duration="3w") == 1814400
+    assert duration_in_seconds(duration="1y") == 31536000  # 365 days
+    assert duration_in_seconds(duration="2y") == 63072000  # 2 * 365 days
 
 
 def test_get_llm_provider_ft_models():

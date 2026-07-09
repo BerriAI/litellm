@@ -6,6 +6,8 @@ import unittest
 from typing import List, Optional, Tuple
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
@@ -245,3 +247,74 @@ class TestSlackAlerting(unittest.TestCase):
         )
         self.assertEqual(parsed_data["alerts"], [408])
         self.assertEqual(parsed_data["provider_region_id"], "vertex_aius-east1")
+
+
+class _MockSlackResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def json(self):
+        return self.payload
+
+
+@pytest.mark.asyncio
+async def test_send_dm_file_uses_external_upload_flow():
+    slack_alerting = SlackAlerting()
+    handler = MagicMock()
+    handler.get = AsyncMock(
+        return_value=_MockSlackResponse({"ok": True, "user": {"id": "U123"}})
+    )
+
+    async def post_response(url, **kwargs):
+        if url == "https://slack.com/api/conversations.open":
+            return _MockSlackResponse({"ok": True, "channel": {"id": "D123"}})
+        if url == "https://slack.com/api/files.getUploadURLExternal":
+            return _MockSlackResponse(
+                {
+                    "ok": True,
+                    "upload_url": "https://files.slack.test/upload",
+                    "file_id": "F123",
+                }
+            )
+        if url == "https://files.slack.test/upload":
+            return _MockSlackResponse({})
+        if url == "https://slack.com/api/files.completeUploadExternal":
+            return _MockSlackResponse({"ok": True})
+        raise AssertionError(f"unexpected Slack URL: {url}")
+
+    handler.post = AsyncMock(side_effect=post_response)
+    slack_alerting.async_http_handler = handler
+
+    with patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}):
+        sent = await slack_alerting.send_dm_file(
+            user_email="requester@juspay.in",
+            message="Decrypt with gpg --decrypt filename.gpg",
+            filename="filename.gpg",
+            title="filename.gpg",
+            file_content="-----BEGIN PGP MESSAGE-----\n...",
+        )
+
+    assert sent is True
+    handler.get.assert_awaited_once()
+    assert handler.get.await_args.kwargs["url"] == "https://slack.com/api/users.lookupByEmail"
+    assert handler.get.await_args.kwargs["params"] == {"email": "requester@juspay.in"}
+
+    post_calls = handler.post.await_args_list
+    assert [call.kwargs["url"] for call in post_calls] == [
+        "https://slack.com/api/conversations.open",
+        "https://slack.com/api/files.getUploadURLExternal",
+        "https://files.slack.test/upload",
+        "https://slack.com/api/files.completeUploadExternal",
+    ]
+    assert post_calls[0].kwargs["json"] == {"users": ["U123"]}
+    assert "json" not in post_calls[1].kwargs
+    assert post_calls[1].kwargs["data"] == {
+        "filename": "filename.gpg",
+        "length": str(len("-----BEGIN PGP MESSAGE-----\n...".encode("utf-8"))),
+    }
+    assert post_calls[2].kwargs["content"] == b"-----BEGIN PGP MESSAGE-----\n..."
+    assert post_calls[3].kwargs["json"] == {
+        "files": [{"id": "F123", "title": "filename.gpg"}],
+        "channel_id": "D123",
+        "initial_comment": "Decrypt with gpg --decrypt filename.gpg",
+    }

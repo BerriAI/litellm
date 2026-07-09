@@ -36,6 +36,37 @@ from litellm.proxy.proxy_server import app
 client = TestClient(app)
 
 
+# A real ASCII-armored OpenPGP public key for service-account creation tests.
+# A creation request must now carry the requester's public key (litellm
+# GPG-encrypts the issued key to it at approve time), so the /user/new SA path
+# validates it. Generated once at import time.
+def _make_sa_test_public_key() -> str:
+    import warnings
+
+    warnings.filterwarnings("ignore")
+    import pgpy
+    from pgpy.constants import (
+        HashAlgorithm,
+        KeyFlags,
+        PubKeyAlgorithm,
+        SymmetricKeyAlgorithm,
+    )
+
+    key = pgpy.PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign, 4096)
+    uid = pgpy.PGPUID.new("SA Test Requester", email="sa-test@juspay.in")
+    key.add_uid(
+        uid,
+        usage={KeyFlags.Sign, KeyFlags.EncryptCommunications, KeyFlags.EncryptStorage},
+        hashes=[HashAlgorithm.SHA256],
+        ciphers=[SymmetricKeyAlgorithm.AES256],
+        compression=[],
+    )
+    return str(key.pubkey)
+
+
+_SA_TEST_PUBLIC_KEY = _make_sa_test_public_key()
+
+
 @pytest.mark.asyncio
 async def test_ui_view_users_with_null_email(mocker, caplog):
     """
@@ -1600,6 +1631,8 @@ async def test_new_user_creates_service_account_when_toggle_on(mocker):
         use_case="batch inference",
         requested_rpm_limit=500,
         requested_parallel_requests_limit=10,
+        public_key=_SA_TEST_PUBLIC_KEY,  # required — issued key is GPG-encrypted to it
+        requester="owner-1",
     )
     mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
 
@@ -1617,6 +1650,10 @@ async def test_new_user_creates_service_account_when_toggle_on(mocker):
     assert create_data["use_case"] == "batch inference"
     assert create_data["requested_rpm_limit"] == 500
     assert create_data["requested_parallel_requests_limit"] == 10
+    # The requester's GPG public key + requester id are persisted on the SA row
+    # so the issued key can be encrypted + DM'd at approve time.
+    assert create_data["public_key"] == _SA_TEST_PUBLIC_KEY.strip()
+    assert create_data["requester"] == "owner-1"
 
     # The same payload is used for both create and update of the upsert.
     assert upsert_call.kwargs["data"]["update"] == create_data
@@ -1638,8 +1675,157 @@ async def test_new_user_creates_service_account_when_toggle_on(mocker):
         "use_case",
         "requested_rpm_limit",
         "requested_parallel_requests_limit",
+        "public_key",
+        "requester",
     ):
         assert leaked not in passed_kwargs, f"{leaked} leaked to generate_key_helper_fn"
+
+
+@pytest.mark.asyncio
+async def test_new_user_service_account_creation_request_dms_owners(mocker):
+    """Filing a service-account creation request DMs the requester + owners."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mocker.patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"})
+    mock_prisma_client = await _setup_new_user_service_account_mocks(mocker)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock(user_id="owner-1", user_email="owner1@juspay.in")
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            mocker.MagicMock(user_id="owner-1", user_email="owner1@juspay.in"),
+            mocker.MagicMock(user_id="owner-2", user_email="owner2@juspay.in"),
+        ]
+    )
+
+    slack_instance = mocker.MagicMock()
+    slack_instance.send_alert = AsyncMock()
+    slack_instance.send_dm = AsyncMock()
+    proxy_logging = mocker.MagicMock()
+    proxy_logging.slack_alerting_instance = slack_instance
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+
+    user_request = NewUserRequest(
+        user_email="sa@example.com",
+        user_role="internal_user",
+        is_service_account=True,
+        owner_ids=["owner-1", "owner-2"],
+        name="my-service-account",
+        requested_models=["gpt-4"],
+        use_case="batch inference",
+        public_key=_SA_TEST_PUBLIC_KEY,
+        requester="owner-1",
+    )
+
+    await new_user(data=user_request, user_api_key_dict=UserAPIKeyAuth(user_id="test_admin"))
+    await asyncio.sleep(0)
+
+    sent_to = [call.kwargs["user_email"] for call in slack_instance.send_dm.await_args_list]
+    assert sent_to == ["owner1@juspay.in", "owner2@juspay.in"]
+    message = slack_instance.send_dm.await_args.kwargs["message"]
+    assert "creation requested" in message
+    assert "Requester: owner1@juspay.in" in message
+    assert "Owners: owner1@juspay.in, owner2@juspay.in" in message
+    assert "Name: my-service-account" in message
+    assert "Use case: batch inference" in message
+    assert "Requested models: gpt-4" in message
+    assert "Requested RPM limit: 150" in message
+    assert "Requested parallel requests limit: 10" in message
+    assert "Status: Creation pending" in message
+    assert "GPG public key on file: Yes" in message
+
+
+@pytest.mark.asyncio
+async def test_new_user_service_account_creation_request_continues_when_requester_dm_fails(mocker):
+    """A requester without Slack must not block DMs to owners who do have Slack."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mocker.patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"})
+    mock_prisma_client = await _setup_new_user_service_account_mocks(mocker)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock(
+            user_id="requester-1", user_email="requester@juspay.in"
+        )
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            mocker.MagicMock(user_id="requester-1", user_email="requester@juspay.in"),
+            mocker.MagicMock(user_id="owner-2", user_email="owner2@juspay.in"),
+        ]
+    )
+
+    async def send_dm_side_effect(user_email: str, message: str) -> bool:
+        if user_email == "requester@juspay.in":
+            raise RuntimeError("users_not_found")
+        return True
+
+    slack_instance = mocker.MagicMock()
+    slack_instance.send_alert = AsyncMock()
+    slack_instance.send_dm = AsyncMock(side_effect=send_dm_side_effect)
+    proxy_logging = mocker.MagicMock()
+    proxy_logging.slack_alerting_instance = slack_instance
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+
+    user_request = NewUserRequest(
+        user_email="sa@example.com",
+        user_role="internal_user",
+        is_service_account=True,
+        owner_ids=["requester-1", "owner-2"],
+        name="my-service-account",
+        requested_models=["gpt-4"],
+        use_case="batch inference",
+        public_key=_SA_TEST_PUBLIC_KEY,
+        requester="requester-1",
+    )
+
+    await new_user(data=user_request, user_api_key_dict=UserAPIKeyAuth(user_id="test_admin"))
+    await asyncio.sleep(0)
+
+    sent_to = [call.kwargs["user_email"] for call in slack_instance.send_dm.await_args_list]
+    assert sent_to == ["requester@juspay.in", "owner2@juspay.in"]
+    slack_instance.send_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_user_service_account_applies_default_limits(mocker):
+    """When the requester omits requested_rpm_limit / requested_parallel_requests_limit,
+    /user/new stores the defaults (150 / 10) on the SA row rather than NULL."""
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import internal_user_endpoints
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        DEFAULT_SERVICE_ACCOUNT_PARALLEL_REQUESTS_LIMIT,
+        DEFAULT_SERVICE_ACCOUNT_RPM_LIMIT,
+        new_user,
+    )
+
+    mock_prisma_client = await _setup_new_user_service_account_mocks(mocker)
+
+    user_request = NewUserRequest(
+        user_email="sa2@example.com",
+        user_role="internal_user",
+        is_service_account=True,
+        owner_ids=["owner-1", "owner-2"],
+        name="my-sa",
+        public_key=_SA_TEST_PUBLIC_KEY,  # required for a service-account creation
+        # requested_rpm_limit and requested_parallel_requests_limit omitted
+    )
+    await new_user(data=user_request, user_api_key_dict=UserAPIKeyAuth(user_id="test_admin"))
+
+    upsert_call = mock_prisma_client.db.litellm_serviceaccounttable.upsert.call_args
+    create_data = upsert_call.kwargs["data"]["create"]
+    assert create_data["requested_rpm_limit"] == DEFAULT_SERVICE_ACCOUNT_RPM_LIMIT
+    assert (
+        create_data["requested_parallel_requests_limit"]
+        == DEFAULT_SERVICE_ACCOUNT_PARALLEL_REQUESTS_LIMIT
+    )
 
 
 @pytest.mark.asyncio

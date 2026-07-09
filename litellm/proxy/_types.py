@@ -1544,6 +1544,13 @@ class NewUserRequest(GenerateRequestBase):
     use_case: Optional[str] = None
     requested_rpm_limit: Optional[int] = None
     requested_parallel_requests_limit: Optional[int] = None
+    # Service-account GPG key delivery. `public_key` is the requester's
+    # ASCII-armored OpenPGP public key — stored on the SA row and used at
+    # creation-approve time to encrypt the issued key before it is relayed
+    # (the plaintext key never leaves litellm). `requester` is the user_id of
+    # the user who filed the creation request (the Slack DM recipient).
+    public_key: Optional[str] = None
+    requester: Optional[str] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -4458,3 +4465,102 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
     provider: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Service Account key management — request/response types.
+#
+# A service account is a LiteLLM user with a row in LiteLLM_ServiceAccountTable.
+# Its lifecycle is driven by two boolean columns: `is_active` (true once a key
+# has been issued) and `is_key_rotation_requested` (true when an owner has asked
+# for a new key). The four pending states map onto the three list filters:
+#
+#   is_active=False, is_key_rotation_requested=False → creation request
+#   is_active=True,  is_key_rotation_requested=False → active (my_keys)
+#   is_active=True,  is_key_rotation_requested=True  → rotation request
+# ---------------------------------------------------------------------------
+
+
+class ServiceAccountKeyInfo(LiteLLMPydanticObjectBase):
+    """A single VerificationToken key owned by a service account user."""
+
+    token: str  # hashed key id (LiteLLM_VerificationToken PK)
+    key_alias: Optional[str] = None
+    key_name: Optional[str] = None
+    expires: Optional[datetime] = None
+    blocked: Optional[bool] = None
+    spend: Optional[float] = None
+    created_at: Optional[datetime] = None
+
+
+class ServiceAccountListItem(LiteLLMPydanticObjectBase):
+    """One service account row joined with its keys."""
+
+    user_id: str
+    owner_ids: List[str] = []
+    name: Optional[str] = None
+    requested_models: List[str] = []
+    use_case: Optional[str] = None
+    requested_rpm_limit: Optional[int] = None
+    requested_parallel_requests_limit: Optional[int] = None
+    is_active: bool = False
+    is_key_rotation_requested: bool = False
+    # Requester's ASCII-armored OpenPGP public key (used at creation-approve
+    # time to encrypt the issued key) and the user_id of the requester (the
+    # Slack DM recipient). Surfaced in the list response so the approver UI
+    # can show that a key is on file and who will receive the encrypted key.
+    public_key: Optional[str] = None
+    requester: Optional[str] = None
+    created_at: Optional[datetime] = None
+    keys: List[ServiceAccountKeyInfo] = []
+
+
+class ServiceAccountListResponse(LiteLLMPydanticObjectBase):
+    service_accounts: List[ServiceAccountListItem]
+
+
+class RequestRotationRequest(LiteLLMPydanticObjectBase):
+    """Owner-side: file a key-rotation request for a service account they own."""
+
+    user_id: str
+    # The litellm user_id of the calling owner. The grid proxy forwards this
+    # from the authenticated user's session; litellm validates it is in
+    # owner_ids before flipping the flag.
+    requested_by_user_id: str
+
+
+class ApproveServiceAccountRequest(LiteLLMPydanticObjectBase):
+    """Approve a creation OR rotation request (litellm branches on SA state).
+
+    For a creation-pending SA, the approver may edit the request's fields
+    (name, use_case, requested_models, limits, owner_ids, team_id) before
+    issuing the key. Provided (non-None) editable fields overwrite the SA row.
+    Rotation approval only uses duration/team_id (identity fields are ignored).
+    """
+
+    user_id: str
+    duration: str  # e.g. "30d", "1y", "-1" for never-expire
+    team_id: Optional[str] = None
+    # Editable on creation approval only:
+    name: Optional[str] = None
+    use_case: Optional[str] = None
+    requested_models: Optional[List[str]] = None
+    requested_rpm_limit: Optional[int] = None
+    requested_parallel_requests_limit: Optional[int] = None
+    owner_ids: Optional[List[str]] = None
+
+
+class RejectServiceAccountRequest(LiteLLMPydanticObjectBase):
+    """Reject a creation OR rotation request (litellm branches on SA state)."""
+
+    user_id: str
+    reason: Optional[str] = None
+
+
+class ApproveServiceAccountResponse(LiteLLMPydanticObjectBase):
+    """Returned after an approve — the freshly generated key value (shown once)."""
+
+    user_id: str
+    key: str  # the new virtual key value
+    key_id: Optional[str] = None  # hashed token id
+    expires: Optional[datetime] = None

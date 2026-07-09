@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
-    match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    match = re.match(r"(\d+)(mo|[smhdwy]?)", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -45,6 +45,7 @@ def duration_in_seconds(duration: str) -> int:
         - "<number>d" - days
         - "<number>w" - weeks
         - "<number>mo" - months
+        - "<number>y" - years (fixed 365-day year)
 
     Returns time in seconds till when budget needs to be reset
     """
@@ -60,6 +61,10 @@ def duration_in_seconds(duration: str) -> int:
         return value * 86400
     elif unit == "w":
         return value * 604800
+    elif unit == "y":
+        # Fixed 365-day year (consistent with the fixed-multiplier d/w handling,
+        # not calendar-aware like mo). 1y == 365d == 31536000s.
+        return value * 31536000
     elif unit == "mo":
         now = time.time()
         current_time = datetime.fromtimestamp(now)
