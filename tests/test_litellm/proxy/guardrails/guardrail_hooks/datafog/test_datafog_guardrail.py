@@ -7,6 +7,7 @@ domains, test card numbers, invalid SSN ranges).
 
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -82,6 +83,95 @@ async def test_pre_call_redacts_content_parts_and_skips_images():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_redacts_tool_and_function_call_arguments():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "legacy_lookup",
+                    "arguments": f'{{"ssn": "{SSN}"}}',
+                },
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "send_email",
+                            "arguments": f'{{"recipient": "{EMAIL}"}}',
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original,
+        call_type="completion",
+    )
+
+    message = data["messages"][0]
+    assert message["content"] is None
+    assert SSN not in message["function_call"]["arguments"]
+    assert EMAIL not in message["tool_calls"][0]["function"]["arguments"]
+    assert SSN in original["messages"][0]["function_call"]["arguments"]
+    assert EMAIL in original["messages"][0]["tool_calls"][0]["function"]["arguments"]
+
+
+def test_process_content_returns_unmodified_non_text_content():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    content = {"structured": "payload"}
+    assert guardrail._process_content(content) == (content, {})
+
+
+def test_process_tool_payload_handles_nested_lists_and_non_text_values():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    payload = ["plain", {"email": EMAIL}, [SSN], 42]
+    redacted, counts = guardrail._process_tool_payload(payload)
+
+    assert EMAIL not in redacted[1]["email"]
+    assert SSN not in redacted[2][0]
+    assert redacted[3] == 42
+    assert counts == {"EMAIL": 1, "SSN": 1}
+    assert guardrail._process_tool_payload(42) == (42, {})
+
+
+def test_process_tool_payload_skips_seen_containers():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    payload = {"self": None, "email": EMAIL}
+    payload["self"] = payload
+    list_payload = [EMAIL]
+    list_payload.append(list_payload)
+
+    redacted, counts = guardrail._process_tool_payload(payload)
+    redacted_list, list_counts = guardrail._process_tool_payload(list_payload)
+
+    assert EMAIL not in redacted["email"]
+    assert counts == {"EMAIL": 1}
+    assert EMAIL not in redacted_list[0]
+    assert list_counts == {"EMAIL": 1}
+
+
+def test_scan_request_tool_calls_preserves_unsupported_entries():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    tool_calls = ["not-a-tool", {"id": "call_1", "type": "function"}]
+    assert guardrail._scan_request_tool_calls(tool_calls) == (tool_calls, {})
+
+
+def test_scan_messages_ignores_non_message_payloads():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    data = {"messages": "not-a-list"}
+    assert guardrail._scan_messages(data) == (data, {})
+
+    data = {"messages": ["not-a-dict", {"role": "system"}]}
+    assert guardrail._scan_messages(data) == (data, {})
+
+
+@pytest.mark.asyncio
 async def test_block_raises_http_400_without_echoing_pii():
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
     with pytest.raises(HTTPException) as exc:
@@ -109,6 +199,34 @@ async def test_during_call_blocks_when_action_is_block():
 
 
 @pytest.mark.asyncio
+async def test_during_call_blocks_tool_call_arguments_when_action_is_block():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "send_email",
+                                    "arguments": f'{{"recipient": "{EMAIL}"}}',
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            user_api_key_dict=None,
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_during_call_noop_when_action_is_redact():
     # during_call cannot modify content mid-flight; redact mode is a no-op.
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="redact")
@@ -123,6 +241,130 @@ async def test_post_call_redacts_model_response():
     response = _model_response(f"the customer is reachable at {EMAIL}")
     await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
     assert EMAIL not in response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+async def test_post_call_redacts_model_response_tool_and_function_arguments():
+    import litellm
+
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    response = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": None,
+                    "role": "assistant",
+                    "function_call": {
+                        "name": "legacy_lookup",
+                        "arguments": f'{{"ssn": "{SSN}"}}',
+                    },
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "send_email",
+                                "arguments": f'{{"recipient": "{EMAIL}"}}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+
+    message = response.choices[0].message
+    assert message.content is None
+    assert SSN not in message.function_call.arguments
+    assert EMAIL not in message.tool_calls[0].function.arguments
+
+
+@pytest.mark.asyncio
+async def test_post_call_redacts_responses_api_output_text_and_arguments():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    response = SimpleNamespace(
+        output=[
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": f"contact {EMAIL}"}],
+            },
+            {
+                "type": "function_call",
+                "arguments": f'{{"card": "{CARD}"}}',
+            },
+        ]
+    )
+
+    await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+
+    assert EMAIL not in response.output[0]["content"][0]["text"]
+    assert CARD not in response.output[1]["arguments"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_redacts_anthropic_messages_content_and_tool_use_input():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": f"email {EMAIL}"},
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "lookup_customer",
+                "input": {"ssn": SSN},
+            },
+        ],
+    }
+
+    await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+
+    assert EMAIL not in response["content"][0]["text"]
+    assert SSN not in response["content"][1]["input"]["ssn"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_returns_original_when_event_hook_does_not_match():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, event_hook="pre_call")
+    response = _model_response(f"the customer is reachable at {EMAIL}")
+    result = await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+    assert result is response
+    assert response.choices[0].message.content == f"the customer is reachable at {EMAIL}"
+
+
+@pytest.mark.asyncio
+async def test_post_call_returns_response_without_choices():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    response = SimpleNamespace(choices=[])
+    result = await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_post_call_skips_non_text_response_parts():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=[{"type": "image"}]))])
+    result = await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_post_call_fail_open_returns_response_on_engine_error(monkeypatch):
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.datafog.datafog._redact_text",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    response = _model_response(f"the customer is reachable at {EMAIL}")
+    result = await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+    assert result is response
+    assert response.choices[0].message.content == f"the customer is reachable at {EMAIL}"
 
 
 @pytest.mark.asyncio
@@ -218,6 +460,42 @@ async def test_post_call_block_raises_on_response_pii():
         await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
     assert exc.value.status_code == 400
     assert EMAIL not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_post_call_block_raises_on_response_tool_call_arguments():
+    import litellm
+
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+    response = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": None,
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "send_email",
+                                "arguments": f'{{"recipient": "{EMAIL}"}}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+
+    assert exc.value.status_code == 400
+    assert EMAIL not in str(exc.value.detail)
+    assert response.choices[0].message.tool_calls[0].function.arguments == f'{{"recipient": "{EMAIL}"}}'
 
 
 def test_invalid_config_rejected():
