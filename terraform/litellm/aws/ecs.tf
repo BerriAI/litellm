@@ -317,6 +317,18 @@ resource "aws_ecs_service" "gateway" {
 
 # ---------- Backend ----------
 resource "aws_ecs_task_definition" "backend" {
+  # Same guard as the gateway: the backend meters too (it serves the named-server
+  # MCP transport), and a targeted apply of just this resource must not slip a
+  # billing endpoint through without the credentials to use it.
+  lifecycle {
+    precondition {
+      condition = var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
+    }
+  }
+
   family                   = "${local.name}-backend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
