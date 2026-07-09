@@ -21,6 +21,7 @@ sys.path.insert(
 
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from tests.litellm_utils_tests.base_token_counter_test import BaseTokenCounterTest
 
 
@@ -110,6 +111,38 @@ class TestBedrockTokenCounter(BaseTokenCounterTest):
         assert (
             result.error is not True
         ), f"Token counting should not error: {result.error_message}"
+
+
+@pytest.mark.asyncio
+async def test_sdk_token_counter_preserves_cross_region_prefix():
+    """
+    Regression test for #32683 on the SDK token_counter() path: the resolved
+    model passed to the Bedrock CountTokens handler must keep the cross-region
+    inference-profile prefix instead of collapsing to the bare foundation model.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    counter = BedrockTokenCounter()
+
+    with patch.object(
+        BedrockCountTokensHandler,
+        "handle_count_tokens_request",
+        new=AsyncMock(return_value={"input_tokens": 7}),
+    ) as mock_handler:
+        result = await counter.count_tokens(
+            model_to_use="bedrock/global.anthropic.claude-opus-4-8",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"aws_region_name": "eu-central-1"}},
+            request_model="global.anthropic.claude-opus-4-8",
+        )
+
+    assert result is not None
+    assert result.total_tokens == 7
+    assert (
+        mock_handler.call_args.kwargs["resolved_model"]
+        == "global.anthropic.claude-opus-4-8"
+    )
 
 
 class TestBedrockCountTokensEndpoint:
