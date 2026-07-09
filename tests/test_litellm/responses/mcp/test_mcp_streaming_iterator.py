@@ -143,3 +143,130 @@ async def test_initial_call_success_does_not_emit_error_event(monkeypatch):
     completed = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     assert len(completed) == 1
     assert iterator._initial_creation_error is None
+
+
+import types
+from unittest.mock import MagicMock
+
+from mcp.types import CallToolResult, TextContent
+
+
+def _output_item_added_chunk():
+    return SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)
+
+
+def _function_call(call_id: str, name: str, arguments: str = "{}"):
+    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": arguments}
+
+
+def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Patch the MCP tool-call plumbing so _execute_tool_calls can run in tests."""
+    call_tool = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False))
+    fake_manager = types.SimpleNamespace(
+        call_tool=call_tool,
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        types.SimpleNamespace(proxy_logging_obj=MagicMock()),
+    )
+    return call_tool
+
+
+def _make_tool_call_iterator() -> MCPEnhancedStreamingIterator:
+    return MCPEnhancedStreamingIterator(
+        base_iterator=_FakeAsyncStream(
+            [
+                _output_item_added_chunk(),
+                _completed_chunk([_function_call("call_1", "read_wiki_contents")]),
+            ]
+        ),
+        mcp_events=[],
+        tool_server_map={"read_wiki_contents": "deepwiki"},
+        mcp_tools_with_litellm_proxy=[{"require_approval": "never"}],
+        user_api_key_auth=None,
+        original_request_params={
+            "model": "gpt-4",
+            "input": "what is berriai/litellm?",
+            "tools": [{"type": "mcp"}],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_failure_emits_error_event_and_skips_follow_up(monkeypatch):
+    """
+    When tool execution blows up as a batch (not a per-tool error string),
+    the stream used to proceed to a follow-up call carrying function_call
+    items with no outputs — rejected by the provider with "No tool output
+    found for function call ..." — and then end silently. It must instead
+    skip the doomed follow-up and emit a terminal `error` event.
+    """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_execute_tool_calls",
+        AsyncMock(side_effect=RuntimeError("mcp server exploded")),
+    )
+    aresponses_mock = AsyncMock()
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    iterator = _make_tool_call_iterator()
+    chunks = [chunk async for chunk in iterator]
+
+    error_events = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.ERROR]
+    assert len(error_events) == 1
+    assert "mcp server exploded" in error_events[0].error.message
+    # The doomed follow-up call was never made.
+    aresponses_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_failure_emits_error_event(monkeypatch):
+    """
+    When the follow-up LLM call after successful tool execution fails, the
+    stream used to end with no terminal event (the client saw tool events
+    and then... nothing). It must emit a terminal `error` event carrying the
+    mapped provider failure.
+    """
+    _mock_mcp_environment(monkeypatch)
+
+    boom = litellm.BadRequestError(
+        message="No tool output found for function call call_1.",
+        model="gpt-4",
+        llm_provider="openai",
+    )
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=boom))
+
+    iterator = _make_tool_call_iterator()
+    chunks = [chunk async for chunk in iterator]
+
+    error_events = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.ERROR]
+    assert len(error_events) == 1
+    assert error_events[0].error.code == "400"
+    assert "No tool output found" in error_events[0].error.message
+    # Tool-execution events were still streamed before the error surfaced.
+    assert any(getattr(c, "type", None) == ResponsesAPIStreamEvents.MCP_CALL_COMPLETED for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_happy_path_emits_no_error_event(monkeypatch):
+    """Regression guard: the tool-call success path must stay error-free."""
+    _mock_mcp_environment(monkeypatch)
+
+    aresponses_mock = AsyncMock(return_value=_text_only_stream("final answer"))
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    iterator = _make_tool_call_iterator()
+    chunks = [chunk async for chunk in iterator]
+
+    assert all(getattr(c, "type", None) != ResponsesAPIStreamEvents.ERROR for c in chunks)
+    completed = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
+    assert completed[-1].response.output[0]["content"][0]["text"] == "final answer"

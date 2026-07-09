@@ -306,10 +306,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Cache the response ID to ensure consistency across all events
         self._cached_response_id: Optional[str] = None
 
-        # Initial-LLM-call failures are stashed here so they can be surfaced
-        # to the client as an `error` stream event (lazy path) or re-raised
-        # before any SSE bytes are written (eager path in
-        # aresponses_api_with_mcp).
+        # Internal failures (initial LLM call, tool execution, follow-up call)
+        # are stashed here so they can be surfaced to the client as an `error`
+        # stream event, or re-raised before any SSE bytes are written (eager
+        # path in aresponses_api_with_mcp for the initial call).
         self._initial_creation_error: Optional[Exception] = None
         self._stream_error: Optional[Exception] = None
         self._error_event_emitted = False
@@ -456,6 +456,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     raise
             else:
                 self.phase = "finished"
+                # Tool execution or the follow-up call failed: emit a terminal
+                # `error` event so the client can distinguish a failed stream
+                # from a completed one.
+                if self._stream_error is not None and not self._error_event_emitted:
+                    self._error_event_emitted = True
+                    return self._make_stream_error_event()
                 raise StopAsyncIteration
 
         # Phase 6: Finished
@@ -727,10 +733,20 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.tool_results = []
+            # Remember the failure. Without this, the follow-up call is made
+            # with function_call items but no function_call_output items and
+            # the provider rejects it with "No tool output found for function
+            # call ...".
+            self._stream_error = e
 
     async def _create_follow_up_iterator(self) -> None:
         """Create the follow-up response iterator with tool results"""
         if not self.collected_response or not hasattr(self, "tool_results"):
+            return
+        # Tool execution already failed; skip the doomed follow-up call (it
+        # would be rejected with "No tool output found for function call ...")
+        # and let __anext__ emit the terminal error event.
+        if self._stream_error is not None:
             return
 
         from litellm.responses.main import aresponses
@@ -772,6 +788,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.follow_up_iterator = None
+            # Surface via a terminal `error` event in __anext__ instead of
+            # silently ending the stream with no terminal event.
+            self._stream_error = e
 
     def __iter__(self):
         return self
