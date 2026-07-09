@@ -91,6 +91,14 @@ PROVIDERS = (
         ),
     ),
     # RealtimeProvider("bedrock", "bedrock-realtime", ...) # TODO: Enable when Bedrock is passing
+    # RealtimeProvider(
+    #     "xai",
+    #     "xai-realtime",
+    #     LiteLLMParamsBody(
+    #         model="xai/grok-4-1-fast-non-reasoning",
+    #         api_key="os.environ/XAI_API_KEY",
+    #     ),
+    # ),  # TODO: Enable once xai Grok Voice realtime is passing end-to-end here
 )
 
 

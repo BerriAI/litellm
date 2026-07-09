@@ -43,6 +43,10 @@ at call time. The provider table below is the source of truth; edit `PROVIDERS` 
 | gemini | `gemini-realtime` | `gemini/gemini-3.1-flash-live-preview` |
 | vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025` |
 
+Bedrock and xai (`xai/grok-4-1-fast-non-reasoning`) are supported by the proxy but
+kept commented out in `PROVIDERS` until they pass end-to-end here; re-enable them by
+uncommenting their entry.
+
 Every provider is provisioned and asserted; the suite never skips a provider. Per
 `tests/e2e/CLAUDE.md` the only sanctioned skip is the whole-suite proxy-liveness
 skip, so a provider whose credentials or upstream realtime model are missing on the
