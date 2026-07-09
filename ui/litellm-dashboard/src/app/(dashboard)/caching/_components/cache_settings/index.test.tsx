@@ -77,6 +77,14 @@ describe("CacheSettings", () => {
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
+
+    it("should NOT reveal the semantic fields when similarity_threshold is null", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { similarity_threshold: null } });
+      renderSettings();
+      expect(await screen.findByText("Connection Settings")).toBeInTheDocument();
+      expect(screen.queryByText("Similarity Threshold")).not.toBeInTheDocument();
+      expect(screen.queryByText("Embedding Model")).not.toBeInTheDocument();
+    });
   });
 
   describe("when a field fails inline validation", () => {

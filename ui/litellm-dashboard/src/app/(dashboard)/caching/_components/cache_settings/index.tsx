@@ -39,8 +39,8 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       // Detect if existing config uses semantic caching
       if (
         currentValues.redis_type === "semantic" ||
-        currentValues.similarity_threshold !== undefined ||
-        currentValues.redis_semantic_cache_embedding_model !== undefined
+        currentValues.similarity_threshold != null ||
+        currentValues.redis_semantic_cache_embedding_model != null
       ) {
         setSemanticEnabled(true);
       }
