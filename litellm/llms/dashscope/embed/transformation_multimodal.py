@@ -13,7 +13,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 from ..common_utils import DashScopeError
 
-DEFAULT_API_BASE = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding"
+DEFAULT_API_BASE = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
 
 DASHSCOPE_MULTIMODAL_EMBEDDING_MODELS = {
     "tongyi-embedding-vision-flash",
@@ -68,9 +68,11 @@ class DashScopeMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             return DEFAULT_API_BASE
         if api_base:
             base = api_base.rstrip("/")
+            if base.endswith("/multimodal-embedding/multimodal-embedding"):
+                return base
             if base.endswith("/multimodal-embedding"):
                 return base
-            return f"{base}/services/embeddings/multimodal-embedding"
+            return f"{base}/services/embeddings/multimodal-embedding/multimodal-embedding"
         return DEFAULT_API_BASE
 
     def _normalize_content_blocks(self, content: list) -> list:
