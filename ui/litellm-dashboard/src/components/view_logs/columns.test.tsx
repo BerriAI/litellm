@@ -45,6 +45,28 @@ describe("view logs columns", () => {
     expect(screen.queryByText("LLM")).not.toBeInTheDocument();
   });
 
+  it("should render collector rows with relay metadata as relay logs", () => {
+    const legacyCollectorLog = {
+      ...baseLog,
+      request_id: "collector-01f159da",
+      call_type: "completion",
+      metadata: {
+        ...baseLog.metadata,
+        app: "codex",
+        source: "litellm-relay",
+      },
+      model: "codex-ai",
+      request_tags: ["litellm-relay", "codex"],
+    };
+
+    render(<DataTable data={[legacyCollectorLog]} columns={createColumns()} />);
+
+    expect(screen.getByText("litellm-relay")).toBeInTheDocument();
+    expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("img", { name: "Codex logo" }).length).toBeGreaterThan(0);
+    expect(screen.queryByText("LLM")).not.toBeInTheDocument();
+  });
+
   it("should fall back to row api_key when relay metadata does not include a key hash", () => {
     render(<DataTable data={[baseLog]} columns={createColumns()} />);
 

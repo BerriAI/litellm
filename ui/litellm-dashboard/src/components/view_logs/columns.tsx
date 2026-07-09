@@ -68,7 +68,7 @@ export type LogEntry = {
   metadata?: Record<string, any>;
   cache_hit: string;
   cache_key?: string;
-  request_tags?: Record<string, any>;
+  request_tags?: Record<string, any> | string[] | string;
   requester_ip_address?: string;
   messages: string | any[] | Record<string, any>;
   response: string | any[] | Record<string, any>;
@@ -116,6 +116,33 @@ const SortableHeader = ({
   </div>
 );
 
+const requestTagsIncludeRelay = (requestTags: LogEntry["request_tags"]): boolean => {
+  if (!requestTags) return false;
+  if (Array.isArray(requestTags)) {
+    return requestTags.some((tag) => String(tag).toLowerCase() === "litellm-relay");
+  }
+  if (typeof requestTags === "string") {
+    try {
+      return requestTagsIncludeRelay(JSON.parse(requestTags));
+    } catch {
+      return requestTags.toLowerCase().includes("litellm-relay");
+    }
+  }
+  return Object.entries(requestTags).some(
+    ([key, value]) =>
+      key.toLowerCase().includes("litellm-relay") || String(value).toLowerCase().includes("litellm-relay"),
+  );
+};
+
+const isRelayLog = (row: LogEntry): boolean => {
+  return (
+    RELAY_CALL_TYPES.includes(row.call_type) ||
+    row.metadata?.source === "litellm-relay" ||
+    requestTagsIncludeRelay(row.request_tags) ||
+    (row.request_id?.startsWith("collector-") && getRelaySource(row) !== "unknown")
+  );
+};
+
 export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] => [
   {
     header: sortProps
@@ -142,7 +169,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const sessionCount = row.session_total_count || 1;
       const isMcp = MCP_CALL_TYPES.includes(row.call_type);
       const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
-      const isRelay = RELAY_CALL_TYPES.includes(row.call_type);
+      const isRelay = isRelayLog(row);
       const sessionLlmCount = row.session_llm_count ?? (isMcp || isAgent || isRelay ? 0 : sessionCount);
       const sessionAgentCount = row.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = row.session_mcp_count ?? (isMcp ? sessionCount : 0);
@@ -193,7 +220,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     size: 120,
     cell: (info: any) => {
       const row = info.row.original;
-      if (!RELAY_CALL_TYPES.includes(row.call_type)) {
+      if (!isRelayLog(row)) {
         return <span className="text-slate-400">-</span>;
       }
       return <RelaySourceBadge source={getRelaySource(row)} />;
