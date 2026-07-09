@@ -199,6 +199,7 @@ class HealthCheckHelpers:
                 api_base=model_params.get("api_base", None),
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
+                model_params=model_params,
             ),
             "batch": lambda: HealthCheckHelpers._batch_health_check(
                 custom_llm_provider=custom_llm_provider,
