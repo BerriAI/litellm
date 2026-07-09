@@ -34,6 +34,8 @@ describe("ScoreChart", () => {
     expect(screen.queryByText("No chart data for this period")).not.toBeInTheDocument();
     expect(screen.getByText("passed")).toBeInTheDocument();
     expect(screen.getByText("blocked")).toBeInTheDocument();
+    expect(screen.getAllByText(/2026-03-01/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/2026-03-02/).length).toBeGreaterThan(0);
     const bars = container.querySelectorAll(".recharts-bar");
     expect(bars).toHaveLength(2);
   });
