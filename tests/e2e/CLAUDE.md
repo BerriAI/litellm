@@ -15,6 +15,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `spend_tracking/` - spend logging and cost attribution on `/spend/*`
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials
 - `logging/` - logging-integration delivery (datadog and friends)
+- `ui/` - Admin UI browser flows, a standalone Playwright (TypeScript) project separate from the Python harness above: an admin walks a real page (login, create/edit resources) and the test asserts both the UI outcome and, via the proxy API, that the action persisted and the gateway enforces it. Its own `package.json`/`playwright.config.ts`; run with `npm test` from that folder, not pytest
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (rate limits, fallbacks, cooldowns)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
