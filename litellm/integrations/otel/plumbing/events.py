@@ -29,11 +29,10 @@ class GenAIEventRecorder:
         stack_trace: str | None,
         timestamp_ns: int | None,
     ) -> None:
-        pairs = (
-            (ExceptionEvent.TYPE, error_type),
-            (ExceptionEvent.MESSAGE, message),
-            (ExceptionEvent.STACKTRACE, stack_trace),
-        )
+        # ``exception.type`` and ``exception.message`` are the semconv-required
+        # pair and always ride the event; only the recommended stacktrace is
+        # conditional on the payload carrying one.
+        stacktrace = ((ExceptionEvent.STACKTRACE, stack_trace),) if stack_trace else ()
         self.event_logger.emit(
             Event(
                 name=GenAIEvent.OPERATION_EXCEPTION,
@@ -42,6 +41,12 @@ class GenAIEventRecorder:
                 span_id=span_context.span_id,
                 trace_flags=span_context.trace_flags,
                 severity_number=SeverityNumber.WARN,
-                attributes={key: value for key, value in pairs if value},
+                attributes=dict(
+                    (
+                        (ExceptionEvent.TYPE, error_type),
+                        (ExceptionEvent.MESSAGE, message),
+                        *stacktrace,
+                    )
+                ),
             )
         )

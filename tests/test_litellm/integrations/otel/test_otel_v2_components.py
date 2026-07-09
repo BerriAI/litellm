@@ -800,6 +800,36 @@ def test_operation_exception_log_event_omits_absent_stacktrace():
     assert log.log_record.attributes[ExceptionEvent.MESSAGE] == "boom"
 
 
+def test_operation_exception_log_event_always_carries_required_pair():
+    """``exception.type`` and ``exception.message`` are the semconv-required pair:
+    they ride the event even when the recorder is handed empty strings, so an
+    event is never emitted with no required field. Only the stacktrace is
+    conditional."""
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+    from opentelemetry.trace import INVALID_SPAN_CONTEXT
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    log_exporter = InMemoryLogExporter()
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider))
+
+    recorder.record_operation_exception(
+        span_context=INVALID_SPAN_CONTEXT,
+        error_type="",
+        message="",
+        stack_trace="",
+        timestamp_ns=None,
+    )
+    (log,) = log_exporter.get_finished_logs()
+    attributes = log.log_record.attributes
+    assert attributes[ExceptionEvent.TYPE] == ""
+    assert attributes[ExceptionEvent.MESSAGE] == ""
+    assert ExceptionEvent.STACKTRACE not in attributes
+
+
 def test_operation_exception_log_event_not_emitted_on_success():
     engine, span_exporter, log_exporter = _engine_with_event_recorder()
     engine.emit(SpanRole.LLM_CALL, _llm_call_data(None))
