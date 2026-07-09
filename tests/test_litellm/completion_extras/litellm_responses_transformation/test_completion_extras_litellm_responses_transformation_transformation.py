@@ -2576,6 +2576,41 @@ def test_convert_chat_completion_file_type_with_file_id():
     assert "file_data" not in content[1]
 
 
+def test_convert_chat_completion_file_type_with_url_file_id_maps_to_file_url():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    file_url = "https://arxiv.org/pdf/1706.03762"
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is this document about?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": file_url,
+                        "format": "application/pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    (
+        input_items,
+        instructions,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = input_items[0]["content"]
+    assert content[1]["type"] == "input_file"
+    assert content[1]["file_url"] == file_url
+    assert "file_id" not in content[1]
+
+
 # =============================================================================
 # Tests for reasoning_items round-trip (encrypted_content preservation)
 # =============================================================================

@@ -114,6 +114,15 @@ def _reasoning_item_to_response_input(
     return r_input
 
 
+def _convert_chat_file_id_to_responses_file_reference(file_data: Dict[str, Any]) -> Dict[str, Any]:
+    if "file_id" not in file_data:
+        return {}
+    file_id = file_data["file_id"]
+    if isinstance(file_id, str) and file_id.startswith(("http://", "https://")):
+        return {"file_url": file_id}
+    return {"file_id": file_id}
+
+
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     """
     Handler for transforming /chat/completions api requests to litellm.responses requests
@@ -834,7 +843,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             file_data = item.get("file", {})
                             converted = {"type": "input_file"}
                             if isinstance(file_data, dict):
-                                for key in ["file_id", "file_data", "filename"]:
+                                converted.update(_convert_chat_file_id_to_responses_file_reference(file_data))
+                                for key in ["file_data", "filename"]:
                                     if key in file_data:
                                         converted[key] = file_data[key]
                             result.append(converted)
