@@ -9,7 +9,7 @@ import pytest
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
-from models import KeyGenerateBody
+from models import ChatResponse, KeyGenerateBody
 from rate_limiting_client import RateLimitingClient
 
 pytestmark = pytest.mark.e2e
@@ -47,6 +47,25 @@ def _chat(client: RateLimitingClient, key: str, marker: str) -> StreamingRespons
     )
 
 
+def _assert_successful_chat_response(outcome: StreamingResponse) -> ChatResponse:
+    require_successful_call(outcome)
+    response = ChatResponse.model_validate_json(outcome.body)
+    assert (
+        response.choices
+    ), f"successful chat response should include choices, got: {outcome.body[:300]}"
+    message = response.choices[0].message
+    assert (
+        message is not None
+    ), f"successful chat response should include an assistant message, got: {outcome.body[:300]}"
+    assert (
+        message.content is not None and message.content.strip()
+    ), f"successful chat response should include non-empty assistant content, got: {outcome.body[:300]}"
+    assert (
+        response.usage is not None and (response.usage.total_tokens or 0) > 0
+    ), f"successful chat response should include positive token usage, got: {outcome.body[:300]}"
+    return response
+
+
 class TestKeyTpmRateLimiting:
     @pytest.mark.covers("rate_limiting.key.tpm.under_limit_allows")
     def test_tpm_key_under_limit_allows_request(
@@ -57,7 +76,7 @@ class TestKeyTpmRateLimiting:
 
         outcome = _chat(client, key, unique_marker())
 
-        require_successful_call(outcome)
+        _assert_successful_chat_response(outcome)
         assert (
             outcome.call_id is not None
         ), "successful chat response should include x-litellm-call-id for spend-log correlation"
@@ -70,7 +89,7 @@ class TestKeyTpmRateLimiting:
         _assert_tpm_limit_persisted(client, key, 1)
 
         first = _chat(client, key, unique_marker())
-        require_successful_call(first)
+        _assert_successful_chat_response(first)
         assert (
             first.call_id is not None
         ), "first request should return a call id so the TPM-consuming success can be observed"
