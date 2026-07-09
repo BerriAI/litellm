@@ -163,7 +163,7 @@ describe("TeamVirtualKeysTable", () => {
     expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
   });
 
-  it("should show Page X of Y when multiple pages exist", async () => {
+  it("should show the current range from total_count when multiple pages exist", async () => {
     mockUseKeys.mockReturnValue({
       data: {
         keys: [createMockKey()],
@@ -179,7 +179,7 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 100");
     });
   });
 
@@ -203,15 +203,37 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 100");
     });
 
-    const nextButton = screen.getByRole("button", { name: "Next" });
-    await user.click(nextButton);
+    await user.click(screen.getByTestId("pagination-next"));
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(2, 50, expect.objectContaining({ teamID: "team-1" }));
     });
+  });
+
+  it("routes a sort-header click to useKeys as a server-side sort", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => expect(screen.getByTestId("sort-header-created_at")).toBeInTheDocument());
+    await user.click(screen.getByTestId("sort-header-created_at"));
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
+      ),
+    );
   });
 
   it("should show Loading keys when isPending", async () => {
