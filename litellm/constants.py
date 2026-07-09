@@ -473,6 +473,7 @@ LITELLM_CHAT_PROVIDERS = [
     "huggingface",
     "together_ai",
     "datarobot",
+    "edenai",
     "helicone",
     "openrouter",
     "cometapi",
@@ -710,6 +711,7 @@ openai_compatible_endpoints: List = [
     "https://api.inceptionlabs.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
+    "https://api.edenai.run/v3",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
@@ -752,6 +754,7 @@ openai_compatible_providers: List = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "edenai",  # Eden AI - JSON-configured meta-gateway provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
