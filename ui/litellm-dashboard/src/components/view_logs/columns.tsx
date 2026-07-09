@@ -13,7 +13,6 @@ import {
   LlmBadge,
   McpBadge,
   RelayIcon,
-  RelaySourceBadge,
   RelayTypeBadge,
   SparkleIcon,
   WrenchIcon,
@@ -212,18 +211,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         isRelay && "litellm-relay",
       ].filter(Boolean);
       return <Tooltip title={tooltipParts.join(" • ")}>{sessionTypeBadge}</Tooltip>;
-    },
-  },
-  {
-    header: "Source",
-    id: "source",
-    size: 120,
-    cell: (info: any) => {
-      const row = info.row.original;
-      if (!isRelayLog(row)) {
-        return <span className="text-slate-400">-</span>;
-      }
-      return <RelaySourceBadge source={getRelaySource(row)} />;
     },
   },
   {

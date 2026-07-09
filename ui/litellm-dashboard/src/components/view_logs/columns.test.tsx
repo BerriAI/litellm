@@ -42,6 +42,7 @@ describe("view logs columns", () => {
     expect(screen.getByText("litellm-relay")).toBeInTheDocument();
     expect(screen.getAllByText("Notion").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("img", { name: "Notion logo" }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("columnheader", { name: "Source" })).not.toBeInTheDocument();
     expect(screen.queryByText("LLM")).not.toBeInTheDocument();
   });
 
