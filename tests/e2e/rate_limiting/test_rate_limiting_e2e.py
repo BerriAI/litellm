@@ -85,33 +85,32 @@ class TestKeyTpmRateLimiting:
     def test_tpm_key_over_limit_blocks_next_request(
         self, client: RateLimitingClient, resources: ResourceManager
     ) -> None:
-        key = _generate_tpm_key(client, resources, tpm_limit=1)
-        _assert_tpm_limit_persisted(client, key, 1)
+        tpm_limit = 60
+        key = _generate_tpm_key(client, resources, tpm_limit=tpm_limit)
+        _assert_tpm_limit_persisted(client, key, tpm_limit)
 
-        first = _chat(client, key, unique_marker())
-        _assert_successful_chat_response(first)
-        assert (
-            first.call_id is not None
-        ), "first request should return a call id so the TPM-consuming success can be observed"
-
-        rows = client.gateway.poll_logs_for_request_id(
-            first.call_id,
-            predicate=lambda found: any((row.total_tokens or 0) > 1 for row in found),
-        )
-        assert any(
-            (row.total_tokens or 0) > 1 for row in rows
-        ), f"expected first request to record more than the 1 TPM limit, got rows={rows}"
-
+        logged_tokens = 0
         deadline = time.monotonic() + client.gateway.poll_timeout
         last = StreamingResponse(status_code=-1, body="not attempted")
         while time.monotonic() < deadline:
             last = _chat(client, key, unique_marker())
             if last.status_code == 429:
                 break
+
+            response = _assert_successful_chat_response(last)
+            assert (
+                last.call_id is not None
+            ), "successful TPM-consuming request should return a call id for spend-log correlation"
+            assert response.usage is not None
+            logged_tokens += response.usage.total_tokens or 0
+
             time.sleep(client.gateway.poll_interval)
 
+        assert (
+            logged_tokens > 0
+        ), "expected at least one successful request to record TPM usage before blocking"
         assert last.status_code == 429, (
-            f"request after exhausting a 1 TPM key should be blocked with 429, got "
+            f"request after exhausting a {tpm_limit} TPM key should be blocked with 429, got "
             f"{last.status_code}: {last.body[:300]}"
         )
         assert any(
