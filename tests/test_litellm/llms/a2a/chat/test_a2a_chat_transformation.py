@@ -66,13 +66,17 @@ def registered_agent():
         global_agent_registry.agent_list = original
 
 
-def test_resolve_agent_config_applies_static_headers(registered_agent):
+@pytest.mark.parametrize("model", ["a2a/static-headers-agent", "static-headers-agent"])
+def test_resolve_agent_config_applies_static_headers(registered_agent, model):
     """Regression for #32608: the /chat/completions bridge must forward an agent's
-    static_headers, consistent with the native /a2a/{agent_id} route."""
+    static_headers, consistent with the native /a2a/{agent_id} route.
+
+    get_llm_provider strips the "a2a/" prefix before dispatch, so the resolver
+    must find the agent whether the model still carries the prefix or not."""
     registered_agent(static_headers={"x-api-key": "secret-value"})
 
-    _, _, headers = A2AConfig.resolve_agent_config_from_registry(
-        model="a2a/static-headers-agent",
+    api_base, _, headers = A2AConfig.resolve_agent_config_from_registry(
+        model=model,
         api_base=None,
         api_key=None,
         headers=None,
@@ -80,6 +84,7 @@ def test_resolve_agent_config_applies_static_headers(registered_agent):
     )
 
     assert headers == {"x-api-key": "secret-value"}
+    assert api_base == "http://agent.example.com:9999"
 
 
 def test_static_headers_win_over_request_headers_case_insensitive(registered_agent):

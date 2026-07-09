@@ -51,8 +51,8 @@ class A2AConfig(BaseConfig):
         Returns:
             Tuple of (api_base, api_key, headers) with registry values filled in
         """
-        # Extract agent name from model (e.g., "a2a/my-agent" -> "my-agent")
-        agent_name = model.split("/", 1)[1] if "/" in model else None
+        # get_llm_provider strips the "a2a/" prefix, so model is usually the bare agent name
+        agent_name = model.split("/", 1)[1] if "/" in model else model
 
         if not agent_name:
             return api_base, api_key, headers
