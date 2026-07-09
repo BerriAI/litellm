@@ -37,6 +37,7 @@ CLIENT_KEY_ENV = "LITELLM_BILLING_METRICS_CLIENT_KEY"
 CA_CERT_ENV = "LITELLM_BILLING_METRICS_CA_CERT"
 EXPORT_INTERVAL_ENV = "LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS"
 DEFAULT_EXPORT_INTERVAL_MS = 60_000
+SHUTDOWN_FLUSH_TIMEOUT_MS = 5_000
 _METRICS_PATH = "/v1/metrics"
 
 METRIC_NAME = "litellm.enterprise.billable_requests"
@@ -116,6 +117,11 @@ class BillingMetricsRecorder:
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None:
         self._counter.add(1, _billable_attributes(category, route, status_code, model_id))
 
+    def shutdown(self) -> None:
+        """Final flush + exporter-thread stop. Without this, up to one export
+        interval of billable counts is dropped on every proxy restart."""
+        self._provider.shutdown(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MS)
+
 
 def _export_interval_ms() -> int:
     raw = os.getenv(EXPORT_INTERVAL_ENV)
@@ -176,6 +182,26 @@ def load_billing_metrics_config(
     )
 
 
+class _ActiveRecorderRegistry:
+    """One-slot registry linking the factory-built recorder to the shutdown
+    hook; the middleware instance holding the recorder is not reachable from
+    proxy_shutdown_event."""
+
+    def __init__(self) -> None:
+        self._recorder: Optional[BillingMetricsRecorder] = None
+
+    def set(self, recorder: BillingMetricsRecorder) -> None:
+        self._recorder = recorder
+
+    def pop(self) -> Optional[BillingMetricsRecorder]:
+        recorder = self._recorder
+        self._recorder = None
+        return recorder
+
+
+_ACTIVE_RECORDER = _ActiveRecorderRegistry()
+
+
 def build_billing_metrics_recorder(
     *, premium: bool, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
 ) -> Optional[BillingMetricsRecorder]:
@@ -188,7 +214,20 @@ def build_billing_metrics_recorder(
         return None
 
     try:
-        return BillingMetricsRecorder(build_mtls_meter_provider(config))
+        recorder = BillingMetricsRecorder(build_mtls_meter_provider(config))
     except Exception as exc:  # noqa: BLE001 -- metering must never break proxy startup
         verbose_proxy_logger.warning("Enterprise billing metrics disabled: failed to initialize exporter: %s", exc)
         return None
+    _ACTIVE_RECORDER.set(recorder)
+    return recorder
+
+
+def shutdown_billing_metrics_recorder() -> None:
+    """Flush and stop the active recorder, if any. Idempotent; never raises."""
+    recorder = _ACTIVE_RECORDER.pop()
+    if recorder is None:
+        return
+    try:
+        recorder.shutdown()
+    except Exception as exc:  # noqa: BLE001 -- shutdown must never block or fail proxy exit
+        verbose_proxy_logger.warning("Enterprise billing metrics: final flush failed: %s", exc)

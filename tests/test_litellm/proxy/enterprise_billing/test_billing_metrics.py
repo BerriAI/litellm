@@ -31,6 +31,8 @@ _ENV_VARS = (
 def clear_env(monkeypatch):
     for name in _ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    yield
+    bm.shutdown_billing_metrics_recorder()
 
 
 def _write_certs(tmp_path: Path) -> Dict[str, str]:
@@ -95,7 +97,33 @@ def test_premium_with_full_config_builds_recorder(monkeypatch, tmp_path):
         premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
     )
     assert isinstance(recorder, bm.BillingMetricsRecorder)
-    recorder._provider.shutdown()
+    bm.shutdown_billing_metrics_recorder()
+
+
+def test_shutdown_flushes_active_recorder_once(monkeypatch, tmp_path):
+    """The shutdown hook must flush the recorder the factory built (buffered
+    counts are lost on restart otherwise) and be idempotent for repeat calls."""
+    _set_full_env(monkeypatch, tmp_path)
+    shutdowns = []
+
+    class _SpyProvider:
+        def get_meter(self, name):
+            return MeterProvider().get_meter(name)
+
+        def shutdown(self, timeout_millis=None):
+            shutdowns.append(timeout_millis)
+
+    monkeypatch.setattr(bm, "build_mtls_meter_provider", lambda config: _SpyProvider())
+    recorder = bm.build_billing_metrics_recorder(premium=True, license_data=None, litellm_version="1.0")
+    assert recorder is not None
+
+    bm.shutdown_billing_metrics_recorder()
+    bm.shutdown_billing_metrics_recorder()
+    assert shutdowns == [bm.SHUTDOWN_FLUSH_TIMEOUT_MS]
+
+
+def test_shutdown_without_active_recorder_is_noop():
+    bm.shutdown_billing_metrics_recorder()
 
 
 # ── Config loading ────────────────────────────────────────────────────────────

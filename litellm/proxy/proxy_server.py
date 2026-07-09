@@ -447,10 +447,15 @@ try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
         build_billing_metrics_recorder as _build_billing_metrics_recorder,
     )
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        shutdown_billing_metrics_recorder as _shutdown_billing_metrics_recorder,
+    )
 
     build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
+    shutdown_billing_metrics_recorder: Optional[Callable[[], None]] = _shutdown_billing_metrics_recorder
 except ImportError:
     build_billing_metrics_recorder = None
+    shutdown_billing_metrics_recorder = None
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -770,6 +775,11 @@ async def proxy_shutdown_event():
 
     if db_writer_client is not None:
         await db_writer_client.close()  # type: ignore[reportGeneralTypeIssues]
+
+    # final flush of billable-request counts: without it, up to one export
+    # interval of enterprise billing data is dropped on every restart
+    if shutdown_billing_metrics_recorder is not None:
+        shutdown_billing_metrics_recorder()
 
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
