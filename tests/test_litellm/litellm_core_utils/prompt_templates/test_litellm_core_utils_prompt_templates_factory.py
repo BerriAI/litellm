@@ -1,5 +1,6 @@
 import base64
 import json
+from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3070,7 +3071,7 @@ def test_map_system_message_pt_plain_string_merge():
 
 
 def test_map_system_message_pt_structured_system_content():
-    """System message with list (structured) content must not raise and is merged as text.
+    """System message with list content must not raise and remains structured.
 
     Regression test: previously `m["content"] + " " + next_m["content"]` raised a
     TypeError when either side was a list of content parts.
@@ -3085,7 +3086,15 @@ def test_map_system_message_pt_structured_system_content():
 
     result = map_system_message_pt(messages)
 
-    assert result == [{"role": "user", "content": "You are helpful. Hi"}]
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are helpful. "},
+                {"type": "text", "text": "Hi"},
+            ],
+        }
+    ]
 
 
 def test_map_system_message_pt_structured_content_preserves_non_text_parts():
@@ -3116,12 +3125,17 @@ def test_map_system_message_pt_structured_content_preserves_non_text_parts():
 
 
 def test_map_system_message_pt_trailing_structured_system():
-    """A trailing system message with list content becomes a user message string."""
+    """A trailing structured system message becomes a structured user message."""
     messages = [{"role": "system", "content": [{"type": "text", "text": "only sys"}]}]
 
     result = map_system_message_pt(messages)
 
-    assert result == [{"role": "user", "content": "only sys"}]
+    assert result == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "only sys"}],
+        }
+    ]
 
 
 def test_map_system_message_pt_consecutive_structured_system_messages():
@@ -3135,6 +3149,44 @@ def test_map_system_message_pt_consecutive_structured_system_messages():
     result = map_system_message_pt(messages)
 
     assert result == [
-        {"role": "user", "content": "first"},
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
         {"role": "user", "content": "second Hi"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("system_content", "user_content"),
+    [
+        ("Follow the instructions.", [{"type": "text", "text": "Write code."}]),
+        ([{"type": "text", "text": "Follow the instructions."}], "Write code."),
+    ],
+)
+def test_map_system_message_pt_mixed_content_types(system_content, user_content):
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Follow the instructions. "},
+                {"type": "text", "text": "Write code."},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_does_not_mutate_input():
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "System"}]},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+    original_messages = deepcopy(messages)
+
+    map_system_message_pt(messages)
+
+    assert messages == original_messages

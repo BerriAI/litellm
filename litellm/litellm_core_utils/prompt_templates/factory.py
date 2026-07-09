@@ -87,6 +87,37 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 
+def _merge_message_content(first_content: Any, second_content: Any) -> Any:
+    """Merge string or structured message content without dropping content blocks."""
+    if first_content is None:
+        return copy.deepcopy(second_content)
+    if second_content is None:
+        return copy.deepcopy(first_content)
+    if isinstance(first_content, str) and isinstance(second_content, str):
+        return f"{first_content} {second_content}"
+
+    def _as_content_blocks(content: Any) -> List[Any]:
+        if isinstance(content, list):
+            return copy.deepcopy(content)
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        return [{"type": "text", "text": str(content)}]
+
+    first_blocks = _as_content_blocks(first_content)
+    second_blocks = _as_content_blocks(second_content)
+    if first_blocks and second_blocks:
+        last_block = first_blocks[-1]
+        if (
+            isinstance(last_block, dict)
+            and last_block.get("type") == "text"
+            and isinstance(last_block.get("text"), str)
+        ):
+            last_block["text"] += " "
+        else:
+            first_blocks.append({"type": "text", "text": " "})
+    return first_blocks + second_blocks
+
+
 def map_system_message_pt(messages: list) -> list:
     """
     Convert 'system' message to 'user' message if provider doesn't support 'system' role.
@@ -98,33 +129,30 @@ def map_system_message_pt(messages: list) -> list:
     if next message is system -> append a user message instead of the system message
     """
 
+    messages = copy.deepcopy(messages)
     new_messages = []
     for i, m in enumerate(messages):
         if m["role"] == "system":
-            # System content may be a plain string or a list of structured
-            # content parts (e.g. [{"type": "text", "text": "..."}]). Normalize
-            # it to a string so it can be safely merged into adjacent messages.
-            system_content_str = convert_content_list_to_str(m)
             if i < len(messages) - 1:  # Not the last message
                 next_m = messages[i + 1]
                 next_role = next_m["role"]
                 if next_role == "user" or next_role == "assistant":  # Next message is a user or assistant message
                     # Merge system prompt into the next message
-                    next_content = next_m.get("content")
-                    if isinstance(next_content, list):
-                        # Preserve structured content (e.g. images) by prepending
-                        # the system text as a text part.
-                        next_m["content"] = [
-                            {"type": "text", "text": system_content_str + " "}
-                        ] + next_content
-                    else:
-                        next_m["content"] = system_content_str + " " + (next_content or "")
+                    next_m["content"] = _merge_message_content(
+                        m.get("content"), next_m.get("content")
+                    )
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
-                    new_message = {"role": "user", "content": system_content_str}
+                    new_message = {
+                        "role": "user",
+                        "content": copy.deepcopy(m.get("content")),
+                    }
                     new_messages.append(new_message)
             else:  # Last message
-                new_message = {"role": "user", "content": system_content_str}
+                new_message = {
+                    "role": "user",
+                    "content": copy.deepcopy(m.get("content")),
+                }
                 new_messages.append(new_message)
         else:  # Not a system message
             new_messages.append(m)
