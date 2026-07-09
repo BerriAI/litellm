@@ -120,7 +120,15 @@ def test_deepseek_anthropic_messages_headers_use_deepseek_key():
     assert headers["content-type"] == "application/json"
 
 
-def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_tools():
+def test_deepseek_anthropic_messages_preserves_thinking_sanitizes_tools_and_backfills_reasoning_content():
+    """
+    Thinking-mode request through the DeepSeek anthropic endpoint:
+      - thinking blocks in assistant history are preserved (untouched)
+      - custom tool discriminator is stripped (existing behaviour)
+      - assistant messages missing `reasoning_content` get a placeholder
+        backfill so DeepSeek does not reject the request with
+        "The reasoning_content in the thinking mode must be passed back"
+    """
     config = DeepSeekAnthropicMessagesConfig()
     messages = [
         {
@@ -179,11 +187,138 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
         headers={},
     )
 
-    assert request["messages"] == messages
+    # thinking param preserved
     assert request["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+    # tools sanitized (custom stripped, hosted tool kept)
     assert request["tools"][0] == {
         "name": "get_weather",
         "description": "Get weather",
         "input_schema": {"type": "object"},
     }
     assert request["tools"][1]["type"] == "web_search_20260209"
+
+    # user + tool_result messages unchanged
+    assert request["messages"][0] == messages[0]
+    assert request["messages"][2] == messages[2]
+
+    # assistant message: thinking block content preserved, reasoning_content backfilled
+    assistant = request["messages"][1]
+    assert assistant["content"] == messages[1]["content"]
+    assert assistant["reasoning_content"] == " "
+
+
+# ---------------------------------------------------------------------------
+# reasoning_content backfill unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_fill_reasoning_content_injects_placeholder_when_missing():
+    config = DeepSeekAnthropicMessagesConfig()
+    out = config._fill_reasoning_content(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+    )
+    assert out[1]["reasoning_content"] == " "
+    assert "reasoning_content" not in out[0]
+
+
+def test_fill_reasoning_content_preserves_existing_value():
+    config = DeepSeekAnthropicMessagesConfig()
+    out = config._fill_reasoning_content(
+        [
+            {
+                "role": "assistant",
+                "content": "x",
+                "reasoning_content": "real chain",
+            }
+        ]
+    )
+    assert out[0]["reasoning_content"] == "real chain"
+
+
+def test_fill_reasoning_content_promotes_from_provider_specific_fields():
+    config = DeepSeekAnthropicMessagesConfig()
+    out = config._fill_reasoning_content(
+        [
+            {
+                "role": "assistant",
+                "content": "x",
+                "provider_specific_fields": {
+                    "reasoning_content": "stored chain",
+                    "other": "keep",
+                },
+            }
+        ]
+    )
+    assert out[0]["reasoning_content"] == "stored chain"
+    assert "reasoning_content" not in out[0]["provider_specific_fields"]
+    assert out[0]["provider_specific_fields"]["other"] == "keep"
+
+
+def test_fill_reasoning_content_skips_non_assistant_messages():
+    config = DeepSeekAnthropicMessagesConfig()
+    out = config._fill_reasoning_content(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "sys"},
+        ]
+    )
+    assert "reasoning_content" not in out[0]
+    assert "reasoning_content" not in out[1]
+
+
+def test_fill_reasoning_content_handles_empty_list():
+    config = DeepSeekAnthropicMessagesConfig()
+    assert config._fill_reasoning_content([]) == []
+
+
+def test_fill_reasoning_content_does_not_mutate_input():
+    config = DeepSeekAnthropicMessagesConfig()
+    src = [{"role": "assistant", "content": "x"}]
+    src_snapshot = dict(src[0])
+    config._fill_reasoning_content(src)
+    assert src[0] == src_snapshot
+
+
+def test_transform_does_not_backfill_when_thinking_disabled():
+    """Non-thinking requests must not get spurious reasoning_content injection."""
+    config = DeepSeekAnthropicMessagesConfig()
+    out = config.transform_anthropic_messages_request(
+        model="deepseek-v4-pro",
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "reasoning_content" not in out["messages"][1]
+
+
+def test_thinking_mode_active_returns_true_only_when_explicitly_enabled():
+    """Guard must fire ONLY on `thinking: {type: enabled}`, not other shapes."""
+    config = DeepSeekAnthropicMessagesConfig()
+    # explicit enabled -> fill
+    assert config._thinking_mode_active(
+        model="deepseek-v4-pro",
+        optional_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+    ) is True
+    # type=disabled -> no fill
+    assert config._thinking_mode_active(
+        model="deepseek-v4-pro",
+        optional_params={"thinking": {"type": "disabled"}},
+    ) is False
+    # thinking absent -> no fill (most common non-thinking case)
+    assert config._thinking_mode_active(
+        model="deepseek-v4-pro",
+        optional_params={"max_tokens": 100},
+    ) is False
+    # thinking present but not a dict (defensive) -> no fill
+    assert config._thinking_mode_active(
+        model="deepseek-v4-pro",
+        optional_params={"thinking": None},
+    ) is False
