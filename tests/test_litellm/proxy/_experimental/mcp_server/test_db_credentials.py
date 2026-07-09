@@ -149,11 +149,11 @@ def test_mcp_oauth_token_identity_detects_change_under_encryption():
 
 
 @pytest.mark.asyncio
-async def test_purge_user_oauth_credentials_for_server_invalidates_every_store(monkeypatch):
-    """The purge must route each (user, server) through the manager's shared invalidation, which is
-    the single point covering both the legacy per-user token cache and the v2 per-user OAuth token
-    store; evicting only one cache lets the other keep serving a token minted for the old config."""
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+async def test_purge_user_oauth_credentials_for_server_invalidates_every_store():
+    """The purge must route each (user, server) through the injected invalidator (defaulting to the
+    manager's shared invalidation, the single point covering both the legacy per-user token cache and
+    the v2 per-user OAuth token store); evicting only one cache lets the other keep serving a token
+    minted for the old config."""
     from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
 
     r1 = MagicMock(user_id="alice", server_id="srv-1")
@@ -163,13 +163,11 @@ async def test_purge_user_oauth_credentials_for_server_invalidates_every_store(m
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=2)
 
     invalidations = []
-    monkeypatch.setattr(
-        mcp_server_manager.global_mcp_server_manager,
-        "invalidate_user_oauth_token_cache",
-        AsyncMock(side_effect=lambda uid, sid: invalidations.append((uid, sid))),
-    )
 
-    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1")
+    async def record_invalidation(user_id: str, server_id: str) -> None:
+        invalidations.append((user_id, server_id))
+
+    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1", invalidate_token_cache=record_invalidation)
 
     assert purged == 2
     prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once()
@@ -179,7 +177,6 @@ async def test_purge_user_oauth_credentials_for_server_invalidates_every_store(m
 @pytest.mark.asyncio
 async def test_purge_user_oauth_credentials_for_server_logs_raced_rows(monkeypatch):
     from litellm.proxy._experimental.mcp_server import db as db_module
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
 
     prisma = MagicMock()
@@ -187,15 +184,10 @@ async def test_purge_user_oauth_credentials_for_server_logs_raced_rows(monkeypat
         return_value=[MagicMock(user_id="alice", server_id="srv-1")]
     )
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=2)
-    monkeypatch.setattr(
-        mcp_server_manager.global_mcp_server_manager,
-        "invalidate_user_oauth_token_cache",
-        AsyncMock(),
-    )
     warning = MagicMock()
     monkeypatch.setattr(db_module.verbose_proxy_logger, "warning", warning)
 
-    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1")
+    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1", invalidate_token_cache=AsyncMock())
 
     assert purged == 2
     warning.assert_called_once()
