@@ -310,6 +310,23 @@ class DataFogGuardrail(CustomGuardrail):
                 _merge_counts(counts, field_counts)
         return new_data, counts
 
+    def _process_completion_prompt(self, prompt: Any) -> tuple[Any, dict[str, int]]:
+        if isinstance(prompt, str):
+            return _redact_text(prompt, self.entity_types, self.locales)
+        if not isinstance(prompt, list) or not all(isinstance(item, str) for item in prompt):
+            return prompt, {}
+
+        counts: dict[str, int] = {}
+        new_prompt = []
+        changed = False
+        for item in prompt:
+            new_item, item_counts = _redact_text(item, self.entity_types, self.locales)
+            new_prompt.append(new_item)
+            if item_counts:
+                changed = True
+                _merge_counts(counts, item_counts)
+        return (new_prompt if changed else prompt), counts
+
     def _handle_engine_error(self, exc: Exception) -> None:
         """Apply the fail policy without leaking scanned text.
 
@@ -365,9 +382,24 @@ class DataFogGuardrail(CustomGuardrail):
             new_data = new_prompt_data
             _merge_counts(total_counts, prompt_counts)
 
+        if "prompt" in new_data:
+            new_prompt, completion_prompt_counts = self._process_completion_prompt(new_data["prompt"])
+            if completion_prompt_counts:
+                new_data = {**new_data, "prompt": new_prompt}
+                _merge_counts(total_counts, completion_prompt_counts)
+
         if not total_counts:
             return data, {}
         return new_data, total_counts
+
+    def _scan_text_field(self, container: Any, field_name: str, *, redact: bool) -> dict[str, int]:
+        text = _get_field(container, field_name)
+        if not isinstance(text, str):
+            return {}
+        new_text, counts = _redact_text(text, self.entity_types, self.locales)
+        if counts and redact:
+            _set_field(container, field_name, new_text)
+        return counts
 
     def _scan_response_content(self, container: Any, *, redact: bool) -> dict[str, int]:
         content = _get_field(container, "content")
@@ -479,6 +511,11 @@ class DataFogGuardrail(CustomGuardrail):
             return
 
         for choice_index, choice in enumerate(choices):
+            choice_text = _get_field(choice, "text")
+            if isinstance(choice_text, str) and choice_text:
+                key = self._stream_group_key("completion", _get_field(choice, "index") or choice_index)
+                refs.append((key, choice_text, lambda new_text, choice=choice: _set_field(choice, "text", new_text)))
+
             delta = _get_field(choice, "delta")
             if delta is None:
                 continue
@@ -674,6 +711,7 @@ class DataFogGuardrail(CustomGuardrail):
                     message = getattr(choice, "message", None)
                     if message is not None:
                         _merge_counts(response_counts, self._scan_response_message(message, redact=redact))
+                    _merge_counts(response_counts, self._scan_text_field(choice, "text", redact=redact))
             _merge_counts(response_counts, self._scan_responses_api_output(response, redact=redact))
             if isinstance(response, dict):
                 _merge_counts(response_counts, self._scan_response_content(response, redact=redact))

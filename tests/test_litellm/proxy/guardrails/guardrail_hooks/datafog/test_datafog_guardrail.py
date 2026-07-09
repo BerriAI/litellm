@@ -273,6 +273,33 @@ async def test_pre_call_redacts_top_level_anthropic_system_content_blocks():
     assert SSN in original["system"][0]["text"]
 
 
+@pytest.mark.asyncio
+async def test_pre_call_redacts_text_completion_prompt_string_and_list():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original_string = {"prompt": f"Complete the account note for {EMAIL}"}
+    original_list = {"prompt": [f"Email {EMAIL}", f"SSN {SSN}"]}
+
+    string_data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original_string,
+        call_type="completion",
+    )
+    list_data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original_list,
+        call_type="completion",
+    )
+
+    assert EMAIL not in string_data["prompt"]
+    assert "[EMAIL_1]" in string_data["prompt"]
+    assert EMAIL not in list_data["prompt"][0]
+    assert SSN not in list_data["prompt"][1]
+    assert original_string["prompt"] == f"Complete the account note for {EMAIL}"
+    assert original_list["prompt"] == [f"Email {EMAIL}", f"SSN {SSN}"]
+
+
 def test_process_content_returns_unmodified_non_text_content():
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
     content = {"structured": "payload"}
@@ -408,6 +435,18 @@ async def test_during_call_blocks_top_level_prompt_fields_when_action_is_block()
 
 
 @pytest.mark.asyncio
+async def test_during_call_blocks_text_completion_prompt_when_action_is_block():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={"prompt": [f"Complete customer note for {EMAIL}"]},
+            user_api_key_dict=None,
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_during_call_noop_when_action_is_redact():
     # during_call cannot modify content mid-flight; redact mode is a no-op.
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="redact")
@@ -422,6 +461,17 @@ async def test_post_call_redacts_model_response():
     response = _model_response(f"the customer is reachable at {EMAIL}")
     await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
     assert EMAIL not in response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+async def test_post_call_redacts_text_completion_choice_text():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    response = SimpleNamespace(choices=[SimpleNamespace(text=f"the customer email is {EMAIL}")])
+
+    await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+
+    assert EMAIL not in response.choices[0].text
+    assert "[EMAIL_1]" in response.choices[0].text
 
 
 @pytest.mark.asyncio
@@ -628,6 +678,27 @@ async def test_streaming_redacts_anthropic_sse_text_delta_bytes():
 
 
 @pytest.mark.asyncio
+async def test_streaming_redacts_text_completion_choice_text_before_yielding():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    chunks = [
+        SimpleNamespace(choices=[SimpleNamespace(index=0, text="email jane.doe@")]),
+        SimpleNamespace(choices=[SimpleNamespace(index=0, text="example.com")]),
+    ]
+
+    result = await _collect_async(
+        guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=None,
+            response=_async_iter(chunks),
+            request_data={},
+        )
+    )
+
+    text = "".join(chunk.choices[0].text for chunk in result)
+    assert EMAIL not in text
+    assert "[EMAIL_1]" in text
+
+
+@pytest.mark.asyncio
 async def test_streaming_block_raises_before_mutating_chunks():
     from litellm.types.utils import ModelResponseStream
 
@@ -781,6 +852,19 @@ async def test_post_call_block_raises_on_response_tool_call_arguments():
     assert exc.value.status_code == 400
     assert EMAIL not in str(exc.value.detail)
     assert response.choices[0].message.tool_calls[0].function.arguments == f'{{"recipient": "{EMAIL}"}}'
+
+
+@pytest.mark.asyncio
+async def test_post_call_block_raises_on_text_completion_choice_text():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+    response = SimpleNamespace(choices=[SimpleNamespace(text=f"the customer email is {EMAIL}")])
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+
+    assert exc.value.status_code == 400
+    assert EMAIL not in str(exc.value.detail)
+    assert response.choices[0].text == f"the customer email is {EMAIL}"
 
 
 def test_invalid_config_rejected():
