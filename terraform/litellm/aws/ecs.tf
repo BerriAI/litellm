@@ -213,6 +213,11 @@ resource "aws_ecs_task_definition" "gateway" {
   # never exporting. ca_cert_pem stays optional: empty means fall back to the
   # system trust store.
   #
+  # The guard lives here, on an unconditional resource, rather than on the cert
+  # secret: that secret is count-gated on the cert itself, so it has zero
+  # instances in exactly the case this must catch. Adding count or for_each to
+  # this resource would silently stop the guard from evaluating.
+  #
   #   endpoint  cert  key  -> result
   #   ""        any   any  -> metering off, no secrets created
   #   set       set   set  -> metering on
