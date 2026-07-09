@@ -1,8 +1,8 @@
 "use client";
 import React from "react";
 import { Text, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor/react";
-import CodeBlock from "./components/CodeBlock";
-import DocLink from "@/app/(dashboard)/api-reference/components/DocLink";
+import CodeBlock from "@/components/CodeBlock";
+import DocLink from "./DocLink";
 
 interface ApiRefProps {
   proxySettings: {
