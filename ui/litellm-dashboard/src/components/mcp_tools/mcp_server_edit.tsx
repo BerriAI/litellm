@@ -405,6 +405,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (mcpServer.server_id) {
       removeToken(mcpServer.server_id, userID);
     }
+    setTools([]);
     resetOAuthFlow();
     form.resetFields([...CLEARED_ON_INVALIDATION]);
     const preserved = Object.fromEntries(
@@ -442,12 +443,18 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     try {
       const values = form.getFieldsValue(true);
       const rawTransport = values.transport || mcpServer.transport;
+      // oauth2_flow must be explicit: the preview endpoint infers client_credentials from the
+      // inherited client_id/client_secret/token_url (common once DCR or discovery filled them) and
+      // would strip the staged bearer to preview as M2M. spec_path keeps OpenAPI servers on the
+      // spec-based preview path, mirroring the create form's config.
       const previewConfig = {
         server_id: mcpServer.server_id,
         server_name: values.server_name || mcpServer.server_name || mcpServer.alias,
         url: values.url || mcpServer.url,
+        spec_path: values.spec_path || mcpServer.spec_path,
         transport: rawTransport === TRANSPORT.OPENAPI ? TRANSPORT.HTTP : rawTransport,
         auth_type: AUTH_TYPE.OAUTH2,
+        oauth2_flow: MCP_OAUTH2_FLOW_INTERACTIVE,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,

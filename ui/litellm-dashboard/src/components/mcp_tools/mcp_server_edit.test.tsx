@@ -523,7 +523,13 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     await waitFor(() => {
       expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
         "access-token",
-        expect.objectContaining({ server_id: "oauth_server_1", url: "https://example.com/mcp" }),
+        // oauth2_flow must be explicit: the preview endpoint infers client_credentials from
+        // inherited client_id/client_secret/token_url and would strip the staged bearer.
+        expect.objectContaining({
+          server_id: "oauth_server_1",
+          url: "https://example.com/mcp",
+          oauth2_flow: "authorization_code",
+        }),
         "staged-obo-tok",
       );
     });
@@ -533,6 +539,34 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
     expect(mockSetToken).not.toHaveBeenCalled();
     expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    mockOauth.tokenResponse = null;
+  });
+
+  it("previews an OpenAPI server's staged token against its spec_path", async () => {
+    mockOauth.tokenResponse = { access_token: "staged-obo-tok" };
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          transport: "openapi",
+          url: null,
+          spec_path: "https://example.com/openapi.json",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({ spec_path: "https://example.com/openapi.json" }),
+        "staged-obo-tok",
+      );
+    });
     mockOauth.tokenResponse = null;
   });
 
