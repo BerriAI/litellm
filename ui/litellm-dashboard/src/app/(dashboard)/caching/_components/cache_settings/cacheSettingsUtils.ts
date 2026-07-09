@@ -76,12 +76,12 @@ export const buildCachePayload = (
     if (!isFieldVisible(field, redisType)) {
       return false;
     }
-    // Exclude semantic section fields when semantic caching is disabled
-    if (field.section === "semantic" && !semanticEnabled) {
-      return false;
-    }
     return true;
   }).flatMap((field) => {
+    // Send explicit null to clear semantic fields when semantic caching is disabled
+    if (field.section === "semantic" && !semanticEnabled) {
+      return [[field.name, null] as const];
+    }
     const value = saveValueForField(field, values[field.name]);
     return value === undefined ? [] : [[field.name, value] as const];
   });

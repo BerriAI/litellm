@@ -49,6 +49,8 @@ describe("buildCachePayload", () => {
       port: "6379",
       ssl: false,
       ssl_check_hostname: false,
+      similarity_threshold: null,
+      redis_semantic_cache_embedding_model: null,
     });
     expect(payload).not.toHaveProperty("redis_type");
     expect(payload).not.toHaveProperty("username");
@@ -69,13 +71,31 @@ describe("buildCachePayload", () => {
   });
 
   it("should send type redis-semantic when saving with semantic caching enabled", () => {
-    const payload = buildCachePayload("node", { similarity_threshold: 0.9 }, { forTesting: false, semanticEnabled: true });
+    const payload = buildCachePayload(
+      "node",
+      { similarity_threshold: 0.9 },
+      { forTesting: false, semanticEnabled: true },
+    );
     expect(payload.type).toBe("redis-semantic");
     expect(payload.similarity_threshold).toBe(0.9);
   });
 
+  it("should send null for semantic fields when semantic caching is disabled to prevent ghost state", () => {
+    const payload = buildCachePayload(
+      "node",
+      { similarity_threshold: 0.9 },
+      { forTesting: false, semanticEnabled: false },
+    );
+    expect(payload.type).toBe("redis");
+    expect(payload.similarity_threshold).toBe(null);
+  });
+
   it("should keep type redis when testing with semantic caching enabled so the test endpoint accepts it", () => {
-    const payload = buildCachePayload("node", { similarity_threshold: 0.9 }, { forTesting: true, semanticEnabled: true });
+    const payload = buildCachePayload(
+      "node",
+      { similarity_threshold: 0.9 },
+      { forTesting: true, semanticEnabled: true },
+    );
     expect(payload.type).toBe("redis");
   });
 

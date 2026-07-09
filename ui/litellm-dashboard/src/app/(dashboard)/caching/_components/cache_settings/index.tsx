@@ -37,7 +37,11 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       form.setFieldsValue(buildInitialValues(currentValues));
       setRedisType(toRedisType(currentValues.redis_type));
       // Detect if existing config uses semantic caching
-      if (currentValues.redis_type === "semantic" || currentValues.similarity_threshold !== undefined || currentValues.redis_semantic_cache_embedding_model !== undefined) {
+      if (
+        currentValues.redis_type === "semantic" ||
+        currentValues.similarity_threshold !== undefined ||
+        currentValues.redis_semantic_cache_embedding_model !== undefined
+      ) {
         setSemanticEnabled(true);
       }
     } catch (error) {
@@ -114,7 +118,10 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
     setIsSaving(true);
     try {
-      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false, semanticEnabled }));
+      await updateCacheSettingsCall(
+        accessToken,
+        buildCachePayload(redisType, values, { forTesting: false, semanticEnabled }),
+      );
       NotificationsManager.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {
@@ -177,13 +184,12 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
         <div className="pt-4 border-t border-gray-200">
           <div className="flex items-center gap-3 mb-4">
-            <Switch
-              checked={semanticEnabled}
-              onChange={(checked) => setSemanticEnabled(checked)}
-            />
+            <Switch checked={semanticEnabled} onChange={(checked) => setSemanticEnabled(checked)} />
             <div>
               <span className="text-sm font-medium text-gray-900">Enable Semantic Caching</span>
-              <p className="text-xs text-gray-500">Reuse responses for semantically similar prompts using embedding vectors</p>
+              <p className="text-xs text-gray-500">
+                Reuse responses for semantically similar prompts using embedding vectors
+              </p>
             </div>
           </div>
           {semanticEnabled && (

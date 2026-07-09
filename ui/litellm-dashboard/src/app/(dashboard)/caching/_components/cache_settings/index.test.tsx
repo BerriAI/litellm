@@ -70,6 +70,13 @@ describe("CacheSettings", () => {
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
+
+    it("should reveal the semantic fields when redis_type is semantic", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "semantic" } });
+      renderSettings();
+      expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
+    });
   });
 
   describe("when a field fails inline validation", () => {
@@ -128,6 +135,8 @@ describe("CacheSettings", () => {
           port: "6379",
           ssl: false,
           ssl_check_hostname: false,
+          similarity_threshold: null,
+          redis_semantic_cache_embedding_model: null,
         }),
       );
     });
