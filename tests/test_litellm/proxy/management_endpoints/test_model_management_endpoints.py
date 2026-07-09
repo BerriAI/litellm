@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm._uuid import uuid
 
 sys.path.insert(
@@ -458,6 +459,10 @@ class TestClearCache:
         mock_router.delete_deployment = MagicMock(return_value=True)
         mock_router.auto_routers = MagicMock()
         mock_router.auto_routers.clear = MagicMock()
+        mock_router.complexity_routers = MagicMock()
+        mock_router.complexity_routers.clear = MagicMock()
+        mock_router.quality_routers = MagicMock()
+        mock_router.quality_routers.clear = MagicMock()
 
         mock_config = MagicMock()
         mock_config.add_deployment = AsyncMock(return_value=True)
@@ -479,13 +484,64 @@ class TestClearCache:
             mock_router.delete_deployment.assert_any_call(id="db-model-1")
             mock_router.delete_deployment.assert_any_call(id="db-model-2")
 
-            # Should have cleared auto routers
             mock_router.auto_routers.clear.assert_called_once()
+            mock_router.complexity_routers.clear.assert_called_once()
+            mock_router.quality_routers.clear.assert_called_once()
 
             # Should have called add_deployment to reload DB models
             mock_config.add_deployment.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
+
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_complexity_router_survives_update(self):
+        """
+        Regression test for #31694: after PATCH /model/{id}/update on an
+        auto_router/complexity_router model, the deployment must reappear
+        in the router. Before the fix, clear_cache only cleared auto_routers
+        but not complexity_routers, so init_complexity_router_deployment raised
+        ValueError("already exists") on re-add and the model silently vanished.
+        """
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "fake"},
+                    "model_info": {"id": "dep-gpt4o"},
+                },
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake"},
+                    "model_info": {"id": "dep-gpt4o-mini"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+        complexity_dep = Deployment(
+            model_name="my-complexity-model",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MODERATE": "gpt-4o", "COMPLEX": "gpt-4o"},
+                },
+                complexity_router_default_model="gpt-4o-mini",
+            ),
+            model_info={"id": "dep-complexity", "db_model": True},
+        )
+        router.add_deployment(deployment=complexity_dep)
+
+        assert "my-complexity-model" in router.complexity_routers
+        assert router.get_deployment(model_id="dep-complexity") is not None
+
+        router.delete_deployment(id="dep-complexity")
+        router.complexity_routers.clear()
+
+        re_added = router.add_deployment(deployment=complexity_dep)
+        assert re_added is not None, "complexity_router deployment must be re-added after clearing"
+        assert "my-complexity-model" in router.complexity_routers
+        assert router.get_deployment(model_id="dep-complexity") is not None
 
 
 class TestUpdateModel:

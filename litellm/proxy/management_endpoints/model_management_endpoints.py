@@ -1715,8 +1715,9 @@ async def clear_cache():
         for model_id in db_model_ids:
             llm_router.delete_deployment(id=model_id)
 
-        # Clear auto routers
         llm_router.auto_routers.clear()
+        llm_router.complexity_routers.clear()
+        llm_router.quality_routers.clear()
 
         # Reload only DB models
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
