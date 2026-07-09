@@ -100,7 +100,9 @@ class SemanticToolFilterHook(CustomLogger):
             openai_tools,
             _,
         ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
-            user_api_key_auth=user_api_key_dict, mcp_tools_with_litellm_proxy=mcp_tools
+            user_api_key_auth=user_api_key_dict,
+            mcp_tools_with_litellm_proxy=mcp_tools,
+            target_format="chat",
         )
 
         # Convert Pydantic models to dicts for compatibility
