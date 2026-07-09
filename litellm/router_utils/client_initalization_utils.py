@@ -27,9 +27,4 @@ class InitalizeCachedClient:
         )
         if calculated_max_parallel_requests:
             semaphore = asyncio.Semaphore(calculated_max_parallel_requests)
-            cache_key = f"{model_id}_max_parallel_requests_client"
-            litellm_router_instance.cache.set_cache(
-                key=cache_key,
-                value=semaphore,
-                local_only=True,
-            )
+            litellm_router_instance._max_parallel_requests_semaphores[model_id] = semaphore
