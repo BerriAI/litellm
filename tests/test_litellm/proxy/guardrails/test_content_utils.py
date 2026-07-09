@@ -394,14 +394,11 @@ def test_build_inspection_messages_responses_api_tool_call_taxonomy():
 
 
 def test_build_inspection_messages_function_call_output_becomes_user():
-    """LIT-4294: tool-result items must surface to inspection APIs. The
-    OpenAI chat schema requires ``tool_call_id`` on any ``tool`` message,
-    and the customer's writeup reproduced a 422 from AIM's ``/fw/v1/analyze``
-    (``Tool Call ID required on tool calls``) when a ``function_call_output``
-    was mapped to bare ``role: "tool"`` without that field. Any guardrail
-    API that validates the posted payload against the OpenAI schema will
-    reject the same shape, so ``function_call_output`` maps straight to
-    ``user`` and a schema-invalid shape is never materialised."""
+    """LIT-4294: a Responses ``function_call_output`` item has no natural
+    ``role`` field — the walker synthesises one to flatten the item into a
+    chat-style message. It emits ``role: "user"`` rather than ``role: "tool"``
+    so no schema-invalid bare tool message (missing ``tool_call_id``) is
+    ever materialised, even in isolation."""
     data = {
         "input": [
             {
@@ -412,57 +409,6 @@ def test_build_inspection_messages_function_call_output_becomes_user():
         ]
     }
     assert build_inspection_messages(data) == [{"role": "user", "content": "tool text"}]
-
-
-def test_build_inspection_messages_coerces_non_standard_caller_role_to_user():
-    """LIT-4294: a caller-supplied role outside {system, user, assistant}
-    (e.g. ``developer``, ``function``) is coerced to ``user`` before the
-    payload is posted to a third-party guardrail. Guardrail APIs that
-    validate the payload against the OpenAI chat schema reject unknown
-    roles the same way they reject bare ``tool``."""
-    data = {
-        "messages": [
-            {"role": "developer", "content": "system-ish instruction"},
-            {"role": "user", "content": "normal user text"},
-        ]
-    }
-    assert build_inspection_messages(data) == [
-        {"role": "user", "content": "system-ish instruction"},
-        {"role": "user", "content": "normal user text"},
-    ]
-
-
-def test_build_inspection_messages_coerces_chat_completions_tool_role_to_user():
-    """LIT-4294: a valid chat-completions ``role: "tool"`` message carries a
-    ``tool_call_id``, but the inspection flatten drops every field except
-    ``role`` and ``content``. A bare ``tool`` message without ``tool_call_id``
-    is schema-invalid per the OpenAI chat schema, and the customer's
-    writeup showed AIM's ``/fw/v1/analyze`` returning 422 on exactly this
-    shape when it was synthesised from the Responses ``function_call_output``
-    path. The role must collapse to ``user`` so a legitimate tool-replay
-    conversation reaches schema-validating guardrails cleanly on chat
-    completions the same way it does on Responses."""
-    data = {
-        "messages": [
-            {"role": "user", "content": "what's the weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "get_weather", "arguments": "{}"},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
-        ]
-    }
-    assert build_inspection_messages(data) == [
-        {"role": "user", "content": "what's the weather"},
-        {"role": "user", "content": "sunny"},
-    ]
 
 
 def test_build_inspection_messages_empty_data():

@@ -34,8 +34,6 @@ def is_text_content_call_type(call_type: str) -> bool:
 
 TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
 
-_INSPECTION_SAFE_ROLES: FrozenSet[str] = frozenset({"system", "user", "assistant"})
-
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
@@ -227,7 +225,5 @@ def build_inspection_messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
         if not text:
             continue
         role = message.get("role", "user") or "user"
-        if role not in _INSPECTION_SAFE_ROLES:
-            role = "user"
         flattened.append({"role": role, "content": text})
     return flattened
