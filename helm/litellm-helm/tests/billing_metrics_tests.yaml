@@ -2,6 +2,7 @@ suite: test billingMetrics wiring on the proxy deployment
 templates:
   - deployment.yaml
   - configmap-litellm.yaml
+  - migrations-job.yaml
 tests:
   - it: is off by default, adding no env, volume, or mount
     template: deployment.yaml
@@ -255,6 +256,25 @@ tests:
             name: litellm-config
             mountPath: /etc/litellm/config.yaml
             subPath: config.yaml
+
+  # Only the proxy serves billable traffic. The migrations Job must never mount
+  # the client certificate, and it renders its own env and volumes, so nothing
+  # stops a future edit from wiring the billing include into it by mistake.
+  - it: does not touch the migrations job when enabled
+    template: migrations-job.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.volumes
 
   - it: fails loudly when enabled with an emptied secretName
     template: deployment.yaml
