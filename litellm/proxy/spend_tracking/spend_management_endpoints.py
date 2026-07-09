@@ -1910,7 +1910,7 @@ async def ui_view_spend_logs(
             p += 2
             sql_conditions.append(or_clause)
 
-        if session_id is not None:
+        if session_id is not None and isinstance(session_id, str):
             like_escaped_session_id = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             sql_conditions.append(f"session_id LIKE ${p}")
             sql_params.append(f"%{like_escaped_session_id}%")
