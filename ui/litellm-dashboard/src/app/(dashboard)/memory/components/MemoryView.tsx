@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Drawer, Empty, Input, Space, Table, Tooltip, Typography, message } from "antd";
+import { Button, Card, Drawer, Empty, Input, Space, Table, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   DeleteOutlined,
@@ -13,6 +13,7 @@ import {
   SearchOutlined,
 } from "@ant-design/icons";
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { MemoryEditModal } from "./MemoryEditModal";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 
@@ -191,34 +192,13 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     }
   };
 
-  const renderIdPill = (id: string | null | undefined, onClick?: () => void) => {
-    if (!id) return <Text type="secondary">-</Text>;
-    const short = id.length > 10 ? `${id.slice(0, 7)}...` : id;
-    const pillClass =
-      "font-mono text-blue-600 bg-blue-50 text-xs font-medium px-2 py-0.5 rounded-md border border-blue-200 inline-block max-w-[15ch] truncate whitespace-nowrap";
-    return (
-      <Tooltip title={id}>
-        {onClick ? (
-          <button
-            onClick={onClick}
-            className={`${pillClass} hover:bg-blue-100 cursor-pointer transition-colors text-left`}
-          >
-            {short}
-          </button>
-        ) : (
-          <span className={pillClass}>{short}</span>
-        )}
-      </Tooltip>
-    );
-  };
-
   const columns: ColumnsType<MemoryRow> = [
     {
       title: "ID",
       dataIndex: "memory_id",
       key: "memory_id",
       width: 140,
-      render: (_: unknown, r: MemoryRow) => renderIdPill(r.memory_id, () => setDetailRow(r)),
+      render: (_: unknown, r: MemoryRow) => <IdCell value={r.memory_id} onClick={() => setDetailRow(r)} />,
     },
     {
       title: "Name",
@@ -246,21 +226,21 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       dataIndex: "user_id",
       key: "user_id",
       width: 160,
-      render: (uid?: string | null) => renderIdPill(uid),
+      render: (uid?: string | null) => <IdCell value={uid} />,
     },
     {
       title: "Team ID",
       dataIndex: "team_id",
       key: "team_id",
       width: 160,
-      render: (tid?: string | null) => renderIdPill(tid),
+      render: (tid?: string | null) => <IdCell value={tid} />,
     },
     {
       title: "Updated",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
-      render: (ts?: string) => <Text type="secondary">{formatTimestamp(ts)}</Text>,
+      render: (ts?: string) => <DateCell value={ts} />,
       // No sorter — backend already returns rows in `updated_at DESC` order,
       // and a client-side sorter on a paginated view would only affect the
       // current page.

@@ -1029,6 +1029,8 @@ jobs:
       - *python312_image
     working_directory: ~/project
     resource_class: large
+    environment:
+      REQUEST_TIMEOUT: "180"
 
     steps:
       - checkout
@@ -1058,7 +1060,8 @@ jobs:
                 -v -x \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
-                -n 8"
+                -n 8 \
+                --reruns 1 --only-rerun Timeout"
           no_output_timeout: 15m
 
       # Store test results

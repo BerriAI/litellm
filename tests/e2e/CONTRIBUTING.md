@@ -34,6 +34,20 @@ The suites run against a live proxy, so bring one up first. `docker-compose.yml`
    uv run pytest tests/e2e/llm_translation/ -v
    ```
 
+   The browser tests in the `management/` suite drive the dashboard the proxy serves at `/ui` through playwright, an optional dependency behind `importorskip` (the suite's API tests run without it). Install it once into your environment along with its browser:
+
+   ```bash
+   uv pip install playwright
+   uv run playwright install chromium
+   ```
+
+   They also need a proxy whose bundled UI contains the change under test. The published `main-latest` image ships the UI from the last release; to test local UI changes, build the image from your branch and point the compose stack at it:
+
+   ```bash
+   docker build -t litellm-local .
+   LITELLM_E2E_IMAGE=litellm-local docker compose up -d
+   ```
+
 4. Tear it down when you're done:
 
    ```bash

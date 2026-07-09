@@ -154,9 +154,8 @@ describe("VectorStoreTable", () => {
 
     it("should truncate long vector store IDs", () => {
       renderComponent();
-      // Check that the truncated text is rendered (first 15 chars + ...)
-      const truncatedText = "very-long-vecto...";
-      expect(screen.getByText(truncatedText)).toBeInTheDocument();
+      const idButton = screen.getByText("very-long-vector-store-id-that-should-be-truncated");
+      expect(idButton).toHaveClass("truncate", "max-w-[15ch]");
     });
 
     it("should make vector store ID clickable", async () => {
@@ -245,13 +244,13 @@ describe("VectorStoreTable", () => {
   describe("Date Columns", () => {
     it("should render created at dates", () => {
       renderComponent();
-      const dateElements = screen.getAllByText(/1\/\d+\/2024/);
+      const dateElements = screen.getAllByText(/Jan \d+, 2024/);
       expect(dateElements.length).toBe(6); // 3 created_at + 3 updated_at dates
     });
 
     it("should render updated at dates", () => {
       renderComponent();
-      const dateElements = screen.getAllByText(/1\/\d+\/2024/);
+      const dateElements = screen.getAllByText(/Jan \d+, 2024/);
       expect(dateElements.length).toBe(6); // 3 created_at + 3 updated_at dates
     });
   });

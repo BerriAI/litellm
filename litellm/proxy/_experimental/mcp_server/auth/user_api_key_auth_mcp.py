@@ -220,6 +220,12 @@ class MCPRequestHandler:
             # when EVERY target is auth_type=oauth2 with delegate_auth_to_upstream
             # set; fails closed otherwise.
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif MCPRequestHandler._target_servers_are_true_passthrough(
+            path=request_route,
+            mcp_servers=mcp_servers,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ):
+            validated_user_api_key_auth = UserAPIKeyAuth()
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
             # LiteLLM credential, so a failed validation is a genuine 401/403 and
@@ -400,6 +406,33 @@ class MCPRequestHandler:
         return True
 
     @staticmethod
+    def _target_servers_are_true_passthrough(
+        path: str, mcp_servers: Optional[list[str]], client_ip: Optional[str]
+    ) -> bool:
+        """
+        True only when EVERY MCP server the request targets is ``auth_type == true_passthrough``.
+        Fails closed when any target does not opt in or cannot be resolved.
+
+        Used by :meth:`process_mcp_request` to skip LiteLLM admission auth entirely: the gateway is a
+        transparent proxy and the caller's ``Authorization`` is an upstream token, never a LiteLLM key.
+        Mirrors :meth:`_target_servers_delegate_auth_to_upstream`; a mixed-target request keeps normal auth.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+            if server is None or server.auth_type != MCPAuth.true_passthrough:
+                return False
+        return True
+
+    @staticmethod
     def _resolve_target_server_names(path: str, mcp_servers_header: Optional[List[str]]) -> List[str]:
         """
         Resolve the target MCP server names exactly as downstream routing
@@ -558,10 +591,19 @@ class MCPRequestHandler:
 
         ASGI headers are in format: List[List[bytes, bytes]]
         We need to convert them to the format Headers expects.
+
+        Collapsing the ASGI list into a dict keeps the last value for a duplicated
+        header name, so a request carrying more than one ``Authorization`` is
+        rejected first: for the client-forwarded token modes the gateway relays the
+        caller's ``Authorization`` upstream, so a duplicate would make which token is
+        forwarded ambiguous (and diverge from what admission inspected). Multiple
+        ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
+        a comma-combinable field), so fail closed with a 400.
         """
+        raw_headers = scope.get("headers", [])
+        MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
-            raw_headers = scope.get("headers", [])
             # Convert bytes to strings and create dict for Headers constructor
             headers_dict = {name.decode("latin-1"): value.decode("latin-1") for name, value in raw_headers}
             return Headers(headers_dict)
@@ -569,6 +611,26 @@ class MCPRequestHandler:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
             # Return empty Headers object with empty dict
             return Headers({})
+
+    @staticmethod
+    def _reject_duplicate_authorization(raw_headers: object) -> None:
+        """Raise 400 when the raw ASGI headers carry more than one ``Authorization`` header."""
+        if not isinstance(raw_headers, (list, tuple)):
+            return
+        count = 0
+        for entry in raw_headers:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 1:
+                continue
+            name = entry[0]
+            if isinstance(name, (bytes, bytearray)) and bytes(name).lower() == b"authorization":
+                count += 1
+            elif isinstance(name, str) and name.lower() == "authorization":
+                count += 1
+        if count > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Multiple Authorization headers are not allowed",
+            )
 
     @staticmethod
     async def get_allowed_mcp_servers(

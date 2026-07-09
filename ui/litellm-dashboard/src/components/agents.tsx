@@ -20,7 +20,7 @@ import AgentInfoView from "./agents/agent_info";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Agent } from "./agents/types";
 import { Team } from "./key_team_helpers/key_list";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface AgentsPanelProps {
@@ -193,19 +193,10 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                         <Text>{agent.agent_name}</Text>
                       </TableCell>
                       <TableCell>
-                        <Tooltip title={agent.agent_id}>
-                          <Button
-                            size="xs"
-                            variant="light"
-                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                            onClick={() => setSelectedAgentId(agent.agent_id)}
-                          >
-                            {agent.agent_id.slice(0, 7)}...
-                          </Button>
-                        </Tooltip>
+                        <IdCell value={agent.agent_id} onClick={(id) => setSelectedAgentId(id)} />
                       </TableCell>
                       <TableCell>
-                        <Text>{formatNumberWithCommas(agent.spend, 4)}</Text>
+                        <MoneyCell value={agent.spend} decimals={4} />
                       </TableCell>
                       <TableCell>
                         <Badge size="xs" color="blue">
@@ -213,13 +204,13 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Text>{agent.created_at ? new Date(agent.created_at).toLocaleDateString() : "N/A"}</Text>
+                        <DateCell value={agent.created_at} precision="date" />
                       </TableCell>
                       <TableCell>
                         {(agent.keys?.length ?? 0) > 0 ? (
-                          <Badge color="green">Active</Badge>
+                          <StatusBadge tone="success" label="Active" />
                         ) : (
-                          <Badge color="yellow">Needs Setup</Badge>
+                          <StatusBadge tone="warning" label="Needs Setup" />
                         )}
                       </TableCell>
                       {isAdmin && (

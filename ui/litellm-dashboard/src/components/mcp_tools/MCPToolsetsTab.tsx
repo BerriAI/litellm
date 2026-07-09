@@ -6,6 +6,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { DataTable } from "../view_logs/table";
 import { createMCPToolset, updateMCPToolset, deleteMCPToolset, listMCPTools, getProxyBaseUrl } from "../networking";
 import { MCPToolset, MCPToolsetTool } from "./types";
@@ -302,11 +303,7 @@ function toolsetColumns(
     {
       header: "Toolset ID",
       accessorKey: "toolset_id",
-      cell: ({ row }) => (
-        <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded-sm text-gray-600">
-          {row.original.toolset_id.slice(0, 8)}…
-        </span>
-      ),
+      cell: ({ row }) => <IdCell value={row.original.toolset_id} />,
     },
     {
       header: "Name",
@@ -359,11 +356,7 @@ function toolsetColumns(
     {
       header: "Created",
       accessorKey: "created_at",
-      cell: ({ row }) => (
-        <span className="text-xs text-gray-500">
-          {row.original.created_at ? new Date(row.original.created_at).toLocaleDateString() : "—"}
-        </span>
-      ),
+      cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
     },
     ...(isAdmin
       ? [
@@ -509,8 +502,6 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
       <DataTable
         data={toolsets}
         columns={columns}
-        renderSubComponent={() => <div />}
-        getRowCanExpand={() => false}
         isLoading={isLoading}
         noDataMessage="No toolsets yet. Click 'New Toolset' to create one."
         loadingMessage="Loading toolsets..."

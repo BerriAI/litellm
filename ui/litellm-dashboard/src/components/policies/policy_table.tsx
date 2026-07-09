@@ -10,6 +10,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import { DateCell } from "@/components/shared/table_cells";
 import { Policy } from "./types";
 
 /** One row per policy name; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
@@ -58,12 +59,6 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   const [sorting, setSorting] = useState<SortingState>([{ id: "policy_name", desc: false }]);
 
   const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
-
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
 
   const columns: ColumnDef<PolicyRow>[] = [
     {
@@ -199,14 +194,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       header: "Created At",
       id: "created_at",
       accessorFn: (row) => row.primaryPolicy.created_at ?? "",
-      cell: ({ row }) => {
-        const policy = row.original.primaryPolicy;
-        return (
-          <Tooltip title={policy.created_at}>
-            <span className="text-xs">{formatDate(policy.created_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.primaryPolicy.created_at} />,
     },
     {
       id: "actions",

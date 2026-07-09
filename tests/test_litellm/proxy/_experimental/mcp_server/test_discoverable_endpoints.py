@@ -4055,3 +4055,163 @@ async def test_oauth_authorization_server_404_for_unknown_server_name():
             mcp_server_name="does_not_exist",
         )
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_store_per_user_token_server_side_invalidates_v2_token_cache():
+    """A token stored by the OAuth callback (code exchange or refresh) drops the v2 per-user
+    token cache entry, so egress stops serving the replaced token immediately instead of
+    until its TTL."""
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _store_per_user_token_server_side,
+    )
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-cb-1",
+        name="cb_server",
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+    )
+    invalidate_mock = AsyncMock(return_value=None)
+    cache_set_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache.set",
+            new=cache_set_mock,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        await _store_per_user_token_server_side(
+            server=server,
+            user_id="user-cb-1",
+            token_response={"access_token": "fresh-tok", "expires_in": 3600},
+        )
+
+    invalidate_mock.assert_awaited_once_with("user-cb-1", "srv-cb-1")
+    cache_set_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_store_per_user_token_server_side_skips_invalidate_when_db_write_fails():
+    """A failed DB write neither warms the v1 cache nor drops the v2 cache entry; the
+    previously stored token is still the truth."""
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _store_per_user_token_server_side,
+    )
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-cb-2",
+        name="cb_server_2",
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+    )
+    invalidate_mock = AsyncMock(return_value=None)
+    cache_set_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache.set",
+            new=cache_set_mock,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        await _store_per_user_token_server_side(
+            server=server,
+            user_id="user-cb-2",
+            token_response={"access_token": "fresh-tok", "expires_in": 3600},
+        )
+
+    invalidate_mock.assert_not_awaited()
+    cache_set_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_pairs_client_secret_with_server_client_id():
+    """Re-auth regression: the register short-circuit hands the browser a placeholder
+    ``client_secret: "dummy"``, which the browser echoes back to /token. The server-side
+    persisted client_id wins the resolution, so the secret must come from the same (server)
+    source; pairing the persisted public PKCE client (no stored secret) with the caller's
+    placeholder makes the IdP reject the exchange with 401 on every re-auth."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="srv-1",
+        server_name="srv-1",
+        alias="srv-1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="persisted-client",
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"access_token": "at", "token_type": "Bearer"}
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            client_id="srv-1",
+            client_secret="dummy",
+            code_verifier="verifier",
+        )
+
+    sent = mock_async_client.post.call_args.kwargs["data"]
+    assert sent["client_id"] == "persisted-client"
+    assert "client_secret" not in sent

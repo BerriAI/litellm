@@ -1,7 +1,7 @@
 import React from "react";
 import { Table, Progress } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { MetricWithMetadata } from "../../../types";
 
 interface EndpointUsageTableProps {
@@ -112,7 +112,7 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       title: "Spend",
       dataIndex: "spend",
       key: "spend",
-      render: (value: number) => `$${formatNumberWithCommas(value, 2)}`,
+      render: (value: number) => <MoneyCell value={value} decimals={2} />,
     },
   ];
 

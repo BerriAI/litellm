@@ -710,6 +710,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_flex": {"type": "number"},
+                "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
@@ -1061,6 +1064,43 @@ def test_get_model_info_gemini():
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_cost_map):
+    """Regression LIT-4056: with the bedrock/ routing prefix (plain, converse/, or
+    invoke/), the exact regional cost-map entry must win over the region-stripped
+    base entry, matching the unprefixed control form."""
+    regional = litellm.model_cost["au.anthropic.claude-opus-4-8"]
+    base = litellm.model_cost["anthropic.claude-opus-4-8"]
+    assert regional["input_cost_per_token"] > base["input_cost_per_token"]
+
+    for model in (
+        "bedrock/au.anthropic.claude-opus-4-8",
+        "bedrock/converse/au.anthropic.claude-opus-4-8",
+        "bedrock/invoke/au.anthropic.claude-opus-4-8",
+    ):
+        info = litellm.get_model_info(model=model)
+        assert info["key"] == "au.anthropic.claude-opus-4-8", model
+        assert info["input_cost_per_token"] == regional["input_cost_per_token"], model
+        assert info["output_cost_per_token"] == regional["output_cost_per_token"], model
+
+    control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
+    assert control["key"] == "au.anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
+    """A regional profile with no dedicated cost-map entry must still resolve to its
+    region-stripped base entry."""
+    assert "jp.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/jp.anthropic.claude-opus-4-8")
+    assert info["key"] == "anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost_map):
+    """A doubled bedrock/ prefix routes at runtime via strip_bedrock_routing_prefix,
+    so model info must resolve it to the same entry the request actually bills as."""
+    info = litellm.get_model_info(model="bedrock/bedrock/us.anthropic.claude-sonnet-4-6")
+    assert info["key"] == "us.anthropic.claude-sonnet-4-6"
 
 
 def test_openai_models_in_model_info():

@@ -1,8 +1,8 @@
 import React, { useState } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon, Button } from "@tremor/react";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon } from "@tremor/react";
 import { TrashIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
-import { Badge } from "@tremor/react";
+import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
 import {
   ColumnDef,
   flexRender,
@@ -43,13 +43,6 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedGuardrail, setSelectedGuardrail] = useState<Guardrail | null>(null);
 
-  // Format date helper function
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
-
   const handleEditClick = (guardrail: Guardrail) => {
     setSelectedGuardrail(guardrail);
     setEditModalVisible(true);
@@ -65,18 +58,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     {
       header: "Guardrail ID",
       accessorKey: "guardrail_id",
-      cell: (info: any) => (
-        <Tooltip title={String(info.getValue() || "")}>
-          <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-            onClick={() => info.getValue() && onGuardrailClick(info.getValue())}
-          >
-            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
-          </Button>
-        </Tooltip>
-      ),
+      cell: (info: any) => <IdCell value={info.getValue()} onClick={onGuardrailClick} />,
     },
     {
       header: "Name",
@@ -126,41 +108,21 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
       header: "Default On",
       accessorKey: "litellm_params.default_on",
       cell: ({ row }) => {
-        const guardrail = row.original;
+        const isDefaultOn = !!row.original.litellm_params?.default_on;
         return (
-          <Badge
-            color={guardrail.litellm_params?.default_on ? "green" : "gray"}
-            className="text-xs font-normal"
-            size="xs"
-          >
-            {guardrail.litellm_params?.default_on ? "Default On" : "Default Off"}
-          </Badge>
+          <StatusBadge tone={isDefaultOn ? "success" : "neutral"} label={isDefaultOn ? "Default On" : "Default Off"} />
         );
       },
     },
     {
       header: "Created At",
       accessorKey: "created_at",
-      cell: ({ row }) => {
-        const guardrail = row.original;
-        return (
-          <Tooltip title={guardrail.created_at}>
-            <span className="text-xs">{formatDate(guardrail.created_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.created_at} />,
     },
     {
       header: "Updated At",
       accessorKey: "updated_at",
-      cell: ({ row }) => {
-        const guardrail = row.original;
-        return (
-          <Tooltip title={guardrail.updated_at}>
-            <span className="text-xs">{formatDate(guardrail.updated_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.updated_at} />,
     },
     {
       id: "actions",

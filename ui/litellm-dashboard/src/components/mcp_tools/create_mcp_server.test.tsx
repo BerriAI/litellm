@@ -388,16 +388,58 @@ describe("CreateMCPServer", () => {
       expect(screen.queryByText("Subject Token Type (optional)")).not.toBeInTheDocument();
     });
 
-    it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
+    it("sends max_concurrent_requests in the create payload when set", async () => {
       await selectHttpTransport();
 
       const user = userEvent.setup({ delay: null });
 
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "TE_Server");
+      await user.type(nameInput, "Limited_Server");
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://upstream.example.com/mcp");
+      await user.type(urlInput, "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "None");
+
+      const limitInput = screen.getByPlaceholderText("e.g. 10");
+      await user.type(limitInput, "5");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Limited_Server",
+        alias: "Limited_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.max_concurrent_requests).toBe(5);
+    });
+
+    it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
+      await selectHttpTransport();
+
+      // fireEvent.change over user.type: this test asserts payload shape, not
+      // keystroke behavior, and char-by-char typing re-renders the whole form
+      // per character, which pushed this test past the 30s CI timeout.
+      fireEvent.change(getServerNameInput(), { target: { value: "TE_Server" } });
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      fireEvent.change(urlInput, { target: { value: "https://upstream.example.com/mcp" } });
 
       await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
 
@@ -405,12 +447,15 @@ describe("CreateMCPServer", () => {
         expect(screen.getByPlaceholderText("https://idp.example.com/oauth2/token")).toBeInTheDocument();
       });
 
-      await user.type(
-        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
-        "https://idp.example.com/oauth2/token",
-      );
-      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "te-client-id");
-      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "te-client-secret");
+      fireEvent.change(screen.getByPlaceholderText("https://idp.example.com/oauth2/token"), {
+        target: { value: "https://idp.example.com/oauth2/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "te-client-id" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), {
+        target: { value: "te-client-secret" },
+      });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-te",
@@ -447,10 +492,13 @@ describe("CreateMCPServer", () => {
     it("makes scope required when the Entra OBO profile is selected", async () => {
       await selectHttpTransport();
 
-      const user = userEvent.setup({ delay: null });
-
-      await user.type(getServerNameInput(), "Entra_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://upstream.example.com/mcp");
+      // fireEvent.change over user.type for the same reason as the payload
+      // test above: char-by-char typing re-renders the whole form per
+      // character and pushes this test toward the 30s CI timeout.
+      fireEvent.change(getServerNameInput(), { target: { value: "Entra_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
 
       await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
       await waitFor(() => {
@@ -459,12 +507,15 @@ describe("CreateMCPServer", () => {
 
       await selectAntOption("Profile", "Microsoft Entra OBO");
 
-      await user.type(
-        screen.getByPlaceholderText("https://idp.example.com/oauth2/token"),
-        "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
-      );
-      await user.type(screen.getByPlaceholderText("Enter OAuth client ID"), "entra-client");
-      await user.type(screen.getByPlaceholderText("Enter OAuth client secret"), "entra-secret");
+      fireEvent.change(screen.getByPlaceholderText("https://idp.example.com/oauth2/token"), {
+        target: { value: "https://login.microsoftonline.com/tenant/oauth2/v2.0/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "entra-client" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), {
+        target: { value: "entra-secret" },
+      });
 
       // Selecting Entra OBO makes the scope required; submitting without one is blocked by validation
       // (rfc8693 would not require it), which confirms the profile selection took effect.
@@ -1066,6 +1117,22 @@ describe("CreateMCPServer", () => {
       rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
       const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com") as HTMLInputElement;
       expect(reopenedUrlInput.value).toBe("");
+    });
+
+    it("does not reset an in-flight OAuth resume when mounted with the modal closed (post-redirect restore)", () => {
+      // After the "Authorize & Fetch Token" redirect the page reloads and this
+      // component mounts with isModalVisible=false while useMcpOAuthFlow is still
+      // exchanging the authorization code. Calling reset() during that mount bumps
+      // the hook's reset version and the fetched token is silently discarded, so
+      // the user sees no Connection Status / Tool Configuration and must authorize
+      // again after saving.
+      const { rerender } = render(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      expect(oauthHook.reset).not.toHaveBeenCalled();
+
+      // A real open -> closed transition must still reset (the #30000 leak fix).
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      expect(oauthHook.reset).toHaveBeenCalled();
     });
   });
 

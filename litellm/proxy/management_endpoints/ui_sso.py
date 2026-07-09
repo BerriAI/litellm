@@ -113,7 +113,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -1746,6 +1746,18 @@ async def auth_callback(request: Request, state: Optional[str] = None):
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
 
+    oauth_error = request.query_params.get("error")
+    if oauth_error:
+        oauth_error_description = request.query_params.get("error_description")
+        verbose_proxy_logger.warning(
+            f"SSO callback received OAuth error: {oauth_error}, description: {oauth_error_description}"
+        )
+        raise HTTPException(
+            status_code=401,
+            detail=f"OAuth error: {oauth_error}"
+            + (f", error_description: {oauth_error_description}" if oauth_error_description else ""),
+        )
+
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
     from litellm.proxy._types import LiteLLM_JWTAuth
@@ -2134,12 +2146,16 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
-            user_db_obj = await get_user_object(
-                user_id=user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-            )
+            try:
+                user_db_obj = await get_user_object(
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                )
+            except ValueError as e:
+                verbose_proxy_logger.debug(f"CLI poll: user lookup failed, proceeding without user budget: {e}")
+                user_db_obj = None
             user_budget = user_db_obj.max_budget if user_db_obj is not None else None
 
             team_budget: Optional[float] = None
@@ -3733,8 +3749,7 @@ class MicrosoftSSOHandler:
     Handles Microsoft SSO callback response and returns a CustomOpenID object
     """
 
-    graph_api_base_url = "https://graph.microsoft.com/v1.0"
-    graph_api_user_groups_endpoint = f"{graph_api_base_url}/me/memberOf"
+    DEFAULT_GRAPH_API_BASE_URL = "https://graph.microsoft.com/v1.0"
 
     """
     Constants
@@ -3743,6 +3758,19 @@ class MicrosoftSSOHandler:
 
     # used for debugging to show the user groups litellm found from Graph API
     GRAPH_API_RESPONSE_KEY = "graph_api_user_groups"
+
+    @staticmethod
+    def get_graph_api_base_url() -> str:
+        """
+        Returns the Microsoft Graph API base URL, configurable via the
+        `MICROSOFT_GRAPH_ENDPOINT` env var so non-default clouds such as Azure
+        Government (GCC High) can point at `https://graph.microsoft.us/v1.0`
+        """
+        return get_secret_str("MICROSOFT_GRAPH_ENDPOINT") or MicrosoftSSOHandler.DEFAULT_GRAPH_API_BASE_URL
+
+    @staticmethod
+    def get_graph_api_user_groups_endpoint() -> str:
+        return f"{MicrosoftSSOHandler.get_graph_api_base_url()}/me/memberOf"
 
     @staticmethod
     async def get_microsoft_callback_response(
@@ -3920,7 +3948,7 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            next_link: Optional[str] = MicrosoftSSOHandler.get_graph_api_user_groups_endpoint()
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -4003,7 +4031,7 @@ class MicrosoftSSOHandler:
 
         Users use Enterprise Applications to manage Groups and Users on Microsoft Entra ID
         """
-        base_url = "https://graph.microsoft.com/v1.0"
+        base_url = MicrosoftSSOHandler.get_graph_api_base_url()
         # Endpoint to get app role assignments for the given service principal
         endpoint = f"/servicePrincipals/{service_principal_id}/appRoleAssignedTo"
         url = base_url + endpoint

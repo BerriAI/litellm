@@ -25,6 +25,7 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { useBudgets, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
+import { MoneyCell } from "@/components/shared/table_cells";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
@@ -127,7 +128,9 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                       .map((value: budgetItem) => (
                         <TableRow key={value.budget_id}>
                           <TableCell>{value.budget_id}</TableCell>
-                          <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
+                          <TableCell>
+                            <MoneyCell value={value.max_budget} decimals={2} showZero emptyText="Unlimited" />
+                          </TableCell>
                           <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
                           <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
                           {canModify && (

@@ -3619,6 +3619,7 @@ class PrometheusLogger(CustomLogger):
                     hashed_token=user_api_key_dict.token,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
+                    check_cache_only=True,
                 )
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at

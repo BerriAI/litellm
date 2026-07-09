@@ -140,10 +140,13 @@ describe("AttachmentTable", () => {
     expect(screen.queryByRole("button", { name: /TrashIcon/i })).not.toBeInTheDocument();
   });
 
-  it("should show a truncated attachment ID in the table", () => {
+  it("should show the attachment ID as truncated plain mono text", () => {
     const attachment = makeAttachment({ attachment_id: "att-abcdef1234567" });
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
-    expect(screen.getByText("att-abc...")).toBeInTheDocument();
+    const idElement = screen.getByText("att-abcdef1234567");
+    expect(idElement.className).toContain("font-mono");
+    expect(idElement.className).toContain("truncate");
+    expect(idElement.className).not.toContain("bg-blue-50");
   });
 
   it("should render model tags when the attachment has models", () => {
