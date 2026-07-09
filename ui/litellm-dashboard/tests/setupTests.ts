@@ -164,11 +164,13 @@ vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
 
 afterEach(() => {
   cleanup();
-  if (consumePendingRefWarnings().length > 0) {
+  const refWarnings = consumePendingRefWarnings();
+  if (refWarnings.length > 0) {
     throw new Error(
       "A ref was passed to a plain function component and silently dropped under React 18, which breaks " +
         "ref-based composition (Base UI render triggers, tooltips, focus). Wrap the component in React.forwardRef. " +
-        "This tripwire lives in tests/setupTests.ts and can be removed after the React 19 upgrade.",
+        "This tripwire lives in tests/setupTests.ts and can be removed after the React 19 upgrade.\n\n" +
+        refWarnings.join("\n\n"),
     );
   }
 });
