@@ -2320,8 +2320,18 @@ if MCP_AVAILABLE:
                 },
             )
 
-        # Snapshot the pre-update identity so we can detect a mint-relevant change below.
-        old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
+        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
+        # warning instead of failing the edit, whose primary job is the update itself.
+        try:
+            old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+        except Exception as exc:  # noqa: BLE001 - advisory read; invalidation is best-effort end-to-end
+            verbose_logger.warning(
+                "MCP server %s: could not snapshot the pre-update record; skipping the stale-token check: %s",
+                payload.server_id,
+                exc,
+            )
+            old_server_record = None
 
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
