@@ -103,10 +103,14 @@ _MCP_REST_TOOL_CALL = "/mcp-rest/tools/call"
 
 _A2A_INVOKE_SUFFIX = "/message/send"
 _A2A_TRANSPORT_PREFIXES: tuple[str, ...] = ("/v1/a2a/", "/a2a/")
-# Bare POST /a2a/{agent_id} is the JSON-RPC invoke route (method message/send
-# or message/stream travels in the body). /v1/a2a/discover has an extra path
-# segment before the agent id, so this pattern cannot match it.
-_A2A_BARE_INVOKE = re.compile(r"/a2a/[^/]+")
+# Bare POST /a2a/{agent_id} carries the JSON-RPC method in the body, not the
+# path. Only message/send and message/stream write a SpendLogs row there; the
+# task RPCs (tasks/get, tasks/cancel, tasks/pushNotificationConfig/*, ...) are
+# forwarded upstream and write none. A path-only classifier cannot separate
+# them, so the bare route does not bill: counting a task RPC would overcount,
+# while missing a bare-path message/send only undercounts, and undercounting is
+# the sole direction this metric is allowed to drift. The /mcp transport is
+# method-agnostic by contrast because its list path logs a SpendLogs row too.
 
 
 def _classify_mcp_route(path: str) -> Optional[str]:
@@ -123,8 +127,6 @@ def _classify_mcp_route(path: str) -> Optional[str]:
 
 def _classify_a2a_route(path: str) -> Optional[str]:
     if path.endswith(_A2A_INVOKE_SUFFIX) and any(path.startswith(prefix) for prefix in _A2A_TRANSPORT_PREFIXES):
-        return "/a2a"
-    if _A2A_BARE_INVOKE.fullmatch(path) is not None:
         return "/a2a"
     return None
 

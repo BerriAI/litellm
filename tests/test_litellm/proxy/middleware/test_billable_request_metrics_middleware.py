@@ -24,6 +24,9 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
     _extract_model_id,
     classify_billable_request,
 )
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    InFlightRequestsMiddleware,
+)
 
 
 class FakeRecorder:
@@ -120,9 +123,6 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/mcp-rest/tools/call", (BillableCategory.MCP, "/mcp")),
         ("/a2a/agent-1/message/send", (BillableCategory.A2A, "/a2a")),
         ("/v1/a2a/agent-9/message/send", (BillableCategory.A2A, "/a2a")),
-        # bare invoke route: the JSON-RPC method (message/send or message/stream)
-        # travels in the body, not the path
-        ("/a2a/agent-1", (BillableCategory.A2A, "/a2a")),
     ],
 )
 def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
@@ -183,6 +183,25 @@ def test_classify_non_billable_returns_none(path: str):
     ],
 )
 def test_classify_management_writes_are_not_billable(path: str):
+    assert classify_billable_request(path, "POST") is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/a2a/agent-1",
+        "/a2a/agent-1/",
+        "/v1/a2a/agent-1",
+    ],
+)
+def test_classify_bare_a2a_route_is_not_billable(path: str):
+    """
+    The bare A2A route multiplexes JSON-RPC methods off the request body. Only
+    message/send and message/stream write a SpendLogs row; tasks/get,
+    tasks/cancel and the pushNotificationConfig RPCs are forwarded upstream and
+    write none. Billing the path would count those task RPCs and push the metric
+    above the dashboard's successful-request count, so it must stay unbilled.
+    """
     assert classify_billable_request(path, "POST") is None
 
 
@@ -401,3 +420,39 @@ def _make_app_with_factory(factory, status_code: int) -> Starlette:
     app = Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])])
     app.add_middleware(BillableRequestMetricsMiddleware, recorder_factory=factory)
     return app
+
+
+# ── Shutdown ordering ───────────────────────────────────────────────────────
+
+
+def test_record_runs_before_request_leaves_the_in_flight_tracker():
+    """
+    The count is recorded after the inner app returns. If this middleware sat
+    outside InFlightRequestsMiddleware, a request could be seen as drained while
+    its record() had not run, letting proxy_shutdown_event flush and stop the
+    exporter underneath it. Nested inside, the in-flight count still covers it.
+    """
+    observed: List[int] = []
+
+    class _CountingRecorder:
+        def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None:
+            observed.append(InFlightRequestsMiddleware.get_count())
+
+    async def inner(scope, receive, send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    stack = InFlightRequestsMiddleware(BillableRequestMetricsMiddleware(inner, recorder=_CountingRecorder()))
+    assert TestClient(stack).post("/v1/chat/completions").status_code == 200
+
+    assert observed == [1]
+    assert InFlightRequestsMiddleware.get_count() == 0
+
+
+def test_billable_middleware_is_registered_inside_the_in_flight_tracker():
+    """Starlette makes the last-added middleware outermost, so the in-flight
+    tracker must be registered after the billing middleware to wrap it."""
+    from litellm.proxy.proxy_server import app as proxy_app
+
+    classes = [middleware.cls for middleware in proxy_app.user_middleware]
+    assert classes.index(InFlightRequestsMiddleware) < classes.index(BillableRequestMetricsMiddleware)

@@ -1784,8 +1784,11 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
-app.add_middleware(InFlightRequestsMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
+# Added before InFlightRequestsMiddleware so it nests *inside* it: Starlette
+# makes the last-added middleware outermost. The billable count is recorded
+# after the inner app returns, so if this sat outside the in-flight tracker a
+# request could be counted as drained while its record() had not yet run, and
+# proxy_shutdown_event could flush and stop the exporter underneath it.
 app.add_middleware(
     BillableRequestMetricsMiddleware,
     # Factory, not an instance: the recorder is resolved on the first request so
@@ -1806,6 +1809,8 @@ app.add_middleware(
         else None
     ),
 )
+app.add_middleware(InFlightRequestsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 def mount_swagger_ui():
