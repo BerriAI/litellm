@@ -116,6 +116,11 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
         assert chunks[0]["error"]["type"] == "api_error"
         assert chunks[0]["error"]["message"]
 
+    def test_error_event_without_any_message_uses_fallback(self):
+        chunks = _process_all([{"type": "error"}])
+        assert [c["type"] for c in chunks] == ["error"]
+        assert chunks[0]["error"]["message"]
+
     def test_top_level_error_event_emits_error_event(self):
         chunks = _process_all([{"type": "error", "code": "rate_limit_exceeded", "message": "Rate limit reached."}])
         assert [c["type"] for c in chunks] == ["error"]
