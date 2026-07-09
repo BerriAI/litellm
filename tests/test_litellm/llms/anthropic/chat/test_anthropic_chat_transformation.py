@@ -1607,6 +1607,72 @@ def test_input_examples_empty_list_not_added():
     )
 
 
+def _anthropic_custom_tool():
+    return {
+        "type": "custom",
+        "name": "exec_command",
+        "description": "Run a command",
+        "input_schema": {
+            "type": "object",
+            "properties": {"cmd": {"type": "string"}},
+            "required": ["cmd"],
+        },
+    }
+
+
+def test_deepseek_anthropic_chat_strips_custom_tool_type(local_model_cost_map):
+    config = AnthropicConfig()
+    tool = _anthropic_custom_tool()
+
+    result = config.transform_request(
+        model="anthropic/deepseek-chat",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "tools": [tool]},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"] == [
+        {
+            "name": "exec_command",
+            "description": "Run a command",
+            "input_schema": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}},
+                "required": ["cmd"],
+            },
+        }
+    ]
+    assert tool["type"] == "custom"
+
+
+def test_non_deepseek_anthropic_chat_keeps_custom_tool_type():
+    config = AnthropicConfig()
+    tool = _anthropic_custom_tool()
+
+    result = config.transform_request(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "tools": [tool]},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"] == [tool]
+
+
+def test_deepseek_anthropic_chat_ignores_non_list_tools(local_model_cost_map):
+    tools = {"type": "custom"}
+    optional_params = {"tools": tools}
+
+    AnthropicConfig._strip_custom_tool_type(
+        model="anthropic/deepseek-chat",
+        optional_params=optional_params,
+    )
+
+    assert optional_params["tools"] == tools
+
+
 # ============ Effort Parameter Tests ============
 
 
