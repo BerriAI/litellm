@@ -37,6 +37,15 @@ def _model_response(text: str):
     return resp
 
 
+async def _async_iter(items):
+    for item in items:
+        yield item
+
+
+async def _collect_async(async_iterable):
+    return [item async for item in async_iterable]
+
+
 @pytest.mark.asyncio
 async def test_pre_call_redacts_email():
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
@@ -120,6 +129,53 @@ async def test_pre_call_redacts_tool_and_function_call_arguments():
     assert EMAIL not in message["tool_calls"][0]["function"]["arguments"]
     assert SSN in original["messages"][0]["function_call"]["arguments"]
     assert EMAIL in original["messages"][0]["tool_calls"][0]["function"]["arguments"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_redacts_responses_api_input_string():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original = {"input": f"Please contact {EMAIL}"}
+
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original,
+        call_type="responses",
+    )
+
+    assert EMAIL not in data["input"]
+    assert "[EMAIL_1]" in data["input"]
+    assert original["input"] == f"Please contact {EMAIL}"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_redacts_responses_api_input_items():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original = {
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": f"email {EMAIL}"}],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": {"ssn": SSN},
+            },
+        ]
+    }
+
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original,
+        call_type="responses",
+    )
+
+    assert EMAIL not in data["input"][0]["content"][0]["text"]
+    assert SSN not in data["input"][1]["output"]["ssn"]
+    assert EMAIL in original["input"][0]["content"][0]["text"]
+    assert SSN in original["input"][1]["output"]["ssn"]
 
 
 def test_process_content_returns_unmodified_non_text_content():
@@ -223,6 +279,17 @@ async def test_during_call_blocks_tool_call_arguments_when_action_is_block():
             },
             user_api_key_dict=None,
             call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_during_call_blocks_responses_api_input_when_action_is_block():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={"input": [{"role": "user", "content": [{"type": "input_text", "text": f"email {EMAIL}"}]}]},
+            user_api_key_dict=None,
+            call_type="responses",
         )
 
 
@@ -368,6 +435,110 @@ async def test_post_call_fail_open_returns_response_on_engine_error(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_streaming_redacts_model_response_chunks_before_yielding():
+    from litellm.types.utils import ModelResponseStream
+
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    chunks = [
+        ModelResponseStream(choices=[{"index": 0, "delta": {"content": "email jane.doe@"}}]),
+        ModelResponseStream(choices=[{"index": 0, "delta": {"content": "example.com"}, "finish_reason": "stop"}]),
+    ]
+
+    result = await _collect_async(
+        guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=None,
+            response=_async_iter(chunks),
+            request_data={},
+        )
+    )
+
+    text = "".join(chunk.choices[0].delta.content or "" for chunk in result)
+    assert EMAIL not in text
+    assert "[EMAIL_1]" in text
+
+
+@pytest.mark.asyncio
+async def test_streaming_redacts_responses_api_output_text_delta_events():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    chunks = [
+        SimpleNamespace(
+            type="response.output_text.delta",
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="email jane.doe@",
+        ),
+        SimpleNamespace(
+            type="response.output_text.delta",
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="example.com",
+        ),
+    ]
+
+    result = await _collect_async(
+        guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=None,
+            response=_async_iter(chunks),
+            request_data={},
+        )
+    )
+
+    text = "".join(chunk.delta for chunk in result)
+    assert EMAIL not in text
+    assert "[EMAIL_1]" in text
+
+
+@pytest.mark.asyncio
+async def test_streaming_redacts_anthropic_sse_text_delta_bytes():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    chunks = [
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"email jane.doe@"}}\n\n',
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"example.com"}}\n\n',
+    ]
+
+    result = await _collect_async(
+        guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=None,
+            response=_async_iter(chunks),
+            request_data={},
+        )
+    )
+
+    raw_text = b"".join(result).decode("utf-8")
+    assert EMAIL not in raw_text
+    assert "[EMAIL_1]" in raw_text
+
+
+@pytest.mark.asyncio
+async def test_streaming_block_raises_before_mutating_chunks():
+    from litellm.types.utils import ModelResponseStream
+
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+    chunks = [
+        ModelResponseStream(choices=[{"index": 0, "delta": {"content": "email jane.doe@"}}]),
+        ModelResponseStream(choices=[{"index": 0, "delta": {"content": "example.com"}, "finish_reason": "stop"}]),
+    ]
+
+    with pytest.raises(HTTPException) as exc:
+        await _collect_async(
+            guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None,
+                response=_async_iter(chunks),
+                request_data={},
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert EMAIL not in str(exc.value.detail)
+    assert chunks[0].choices[0].delta.content == "email jane.doe@"
+    assert chunks[1].choices[0].delta.content == "example.com"
+
+
+@pytest.mark.asyncio
 async def test_noisy_entities_off_by_default():
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
     data = await guardrail.async_pre_call_hook(
@@ -509,8 +680,52 @@ def test_registry_registration():
     from litellm.proxy.guardrails.guardrail_hooks.datafog import (
         guardrail_class_registry,
         guardrail_initializer_registry,
+        initialize_guardrail,
     )
     from litellm.types.guardrails import SupportedGuardrailIntegrations
 
     assert SupportedGuardrailIntegrations.DATAFOG.value in guardrail_initializer_registry
+    assert guardrail_initializer_registry[SupportedGuardrailIntegrations.DATAFOG.value] is initialize_guardrail
     assert guardrail_class_registry[SupportedGuardrailIntegrations.DATAFOG.value] is (DataFogGuardrail)
+
+
+def test_initialize_guardrail_registers_callback(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.datafog import initialize_guardrail
+
+    registered = []
+    monkeypatch.setattr(
+        "litellm.logging_callback_manager.add_litellm_callback",
+        lambda callback: registered.append(callback),
+    )
+    params = SimpleNamespace(
+        mode="pre_call",
+        default_on=True,
+        datafog_action="block",
+        optional_params=SimpleNamespace(
+            datafog_entity_types=["EMAIL"],
+            datafog_locales=["de"],
+            datafog_fail_policy="closed",
+        ),
+    )
+
+    guardrail = initialize_guardrail(params, {"guardrail_name": "datafog-pii"})
+
+    assert isinstance(guardrail, DataFogGuardrail)
+    assert registered == [guardrail]
+    assert guardrail.guardrail_name == "datafog-pii"
+    assert guardrail.action == "block"
+    assert guardrail.entity_types == ["EMAIL"]
+    assert guardrail.locales == ["de"]
+    assert guardrail.fail_policy == "closed"
+
+
+def test_initialize_guardrail_requires_name():
+    from litellm.proxy.guardrails.guardrail_hooks.datafog import initialize_guardrail
+
+    params = SimpleNamespace(mode="pre_call", default_on=True, datafog_action="redact", optional_params=None)
+    with pytest.raises(ValueError, match="guardrail_name"):
+        initialize_guardrail(params, {})
+
+
+def test_config_model_ui_name():
+    assert DataFogGuardrail.get_config_model().ui_friendly_name() == "DataFog PII Guardrail"
