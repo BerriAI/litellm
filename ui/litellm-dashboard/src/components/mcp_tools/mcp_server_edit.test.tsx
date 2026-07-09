@@ -511,6 +511,33 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
   });
 
+  it("keeps the admin's in-flight endpoint edits when the token is invalidated", async () => {
+    // Regression: invalidation used to form.resetFields the endpoint fields; with the edit Form's
+    // initialValues that silently reverted an admin-corrected token_url back to the saved (wrong)
+    // value while still looking plausible. Only credentials (the minted material) may be wiped.
+    renderOAuthEdit();
+
+    const tokenUrlInput = screen.getByPlaceholderText("https://example.com/oauth/token");
+    await act(async () => {
+      fireEvent.change(tokenUrlInput, { target: { value: "https://corrected.example.com/token" } });
+    });
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://moved.example.com/mcp" } });
+    });
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect((screen.getByPlaceholderText("https://example.com/oauth/token") as HTMLInputElement).value).toBe(
+      "https://corrected.example.com/token",
+    );
+  });
+
   it("keeps a session-authorized token on an http to sse switch with the same url", async () => {
     // Same url means the same resource/audience (RFC 8707): the minted token is still valid, so a
     // pure transport swap between the two MCP wire protocols must not force a re-authorize.
