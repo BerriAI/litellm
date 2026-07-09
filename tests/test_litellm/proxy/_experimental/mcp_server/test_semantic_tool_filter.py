@@ -1356,3 +1356,107 @@ def test_truncate_csv_at_tool_name_boundary_edges():
     assert _truncate_csv_at_tool_name_boundary(tool_names_csv="ab,cd,ef", max_length=5) == "ab,cd"
     assert _truncate_csv_at_tool_name_boundary(tool_names_csv="ab,cd,ef", max_length=4) == "ab"
     assert _truncate_csv_at_tool_name_boundary(tool_names_csv="single_name_longer_than_cap", max_length=10) == ""
+
+
+def _batching_mock_router():
+    """Router mock that returns one embedding per input item and records the
+    size of every embedding request, so batching can be asserted."""
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    call_input_sizes: list[int] = []
+
+    def mock_embedding_sync(*args, **kwargs):
+        inputs = kwargs["input"]
+        call_input_sizes.append(len(inputs))
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 8, index=i, object="embedding") for i in range(len(inputs))],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync(*args, **kwargs)
+
+    mock_router = Mock()
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+    return mock_router, call_input_sizes
+
+
+def test_build_router_batches_embeddings_when_tools_exceed_batch_size():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/32528
+
+    With more tools than the embedding provider's input-array limit, building
+    the semantic router must split embedding requests into batches no larger
+    than embedding_batch_size instead of sending every tool in one oversized
+    call (which hangs / errors against the provider).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    tools = [
+        MCPTool(name=f"tool_{i}", description=f"Tool number {i}", inputSchema={"type": "object"})
+        for i in range(2500)
+    ]
+
+    mock_router, call_input_sizes = _batching_mock_router()
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+        embedding_batch_size=1024,
+    )
+
+    filter_instance._build_router(tools)
+
+    assert filter_instance.tool_router is not None
+    assert len(filter_instance._tool_map) == len(tools)
+    assert call_input_sizes, "Expected embedding to be called while building the router"
+    # The core fix: no single embedding request exceeds the configured limit.
+    assert max(call_input_sizes) <= 1024, f"A batch exceeded the limit: {max(call_input_sizes)}"
+    # 2500 utterances at batch size 1024 require ceil(2500/1024) == 3 batched calls;
+    # a non-batching encoder would embed all 2500 in a single oversized request.
+    assert sum(1 for size in call_input_sizes if size > 1) >= 3
+    assert sum(call_input_sizes) >= len(tools)
+
+
+def test_semantic_filter_forwards_embedding_batch_size_to_encoder():
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router, _ = _batching_mock_router()
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        embedding_batch_size=256,
+    )
+
+    captured = {}
+
+    real_encoder_cls = __import__(
+        "litellm.router_strategy.auto_router.litellm_encoder",
+        fromlist=["LiteLLMRouterEncoder"],
+    ).LiteLLMRouterEncoder
+
+    class _SpyEncoder(real_encoder_cls):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            captured["embedding_batch_size"] = kwargs.get("embedding_batch_size")
+            super().__init__(*args, **kwargs)
+
+    with patch(
+        "litellm.router_strategy.auto_router.litellm_encoder.LiteLLMRouterEncoder",
+        _SpyEncoder,
+    ):
+        filter_instance._build_router(
+            [MCPTool(name="t", description="d", inputSchema={"type": "object"})]
+        )
+
+    assert captured["embedding_batch_size"] == 256

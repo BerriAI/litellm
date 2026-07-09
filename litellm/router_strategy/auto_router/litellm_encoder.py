@@ -5,6 +5,7 @@ from semantic_router.encoders import DenseEncoder
 from semantic_router.encoders.base import AsymmetricDenseMixin
 
 import litellm
+from litellm.constants import DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -50,6 +51,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         litellm_router_instance: "Router",
         model_name: str,
         score_threshold: Union[float, None] = None,
+        embedding_batch_size: int = DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE,
     ):
         """Initialize the LiteLLMEncoder.
 
@@ -60,6 +62,11 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         :type model_name: str
         :param score_threshold: The score threshold for the embeddings.
         :type score_threshold: float
+        :param embedding_batch_size: Maximum number of inputs sent to the embedding
+            provider per request. Documents beyond this size are embedded across
+            multiple calls and concatenated, preserving order. Guards against
+            provider input-array limits (e.g. OpenAI 2048, DeepInfra 1024).
+        :type embedding_batch_size: int
         """
         super().__init__(
             name=model_name,
@@ -67,6 +74,16 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         )
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
+        self.embedding_batch_size = (
+            embedding_batch_size
+            if embedding_batch_size and embedding_batch_size > 0
+            else DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE
+        )
+
+    def _batches(self, docs: list[str]) -> tuple[list[str], ...]:
+        """Split docs into ordered batches no larger than embedding_batch_size."""
+        size = self.embedding_batch_size
+        return tuple(docs[i : i + size] for i in range(0, len(docs), size))
 
     def __call__(self, docs: list[Any], **kwargs) -> list[list[float]]:
         """Encode a list of text documents into embeddings using LiteLLM.
@@ -86,34 +103,32 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds = self.litellm_router_instance.embedding(input=docs, model=self.model_name, **kwargs)
-            return litellm_to_list(embeds)
+            return [
+                embedding
+                for batch in self._batches(docs)
+                for embedding in litellm_to_list(
+                    self.litellm_router_instance.embedding(input=batch, model=self.model_name, **kwargs)
+                )
+            ]
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
     def encode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
-        if self.litellm_router_instance is None:
-            raise ValueError("litellm_router_instance is not set")
-        try:
-            embeds = self.litellm_router_instance.embedding(input=docs, model=self.model_name, **kwargs)
-            return litellm_to_list(embeds)
-        except Exception as e:
-            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
+        return self.encode_queries(docs, **kwargs)
 
     async def aencode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds = await self.litellm_router_instance.aembedding(input=docs, model=self.model_name, **kwargs)
-            return litellm_to_list(embeds)
+            return [
+                embedding
+                for batch in self._batches(docs)
+                for embedding in litellm_to_list(
+                    await self.litellm_router_instance.aembedding(input=batch, model=self.model_name, **kwargs)
+                )
+            ]
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
     async def aencode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
-        if self.litellm_router_instance is None:
-            raise ValueError("litellm_router_instance is not set")
-        try:
-            embeds = await self.litellm_router_instance.aembedding(input=docs, model=self.model_name, **kwargs)
-            return litellm_to_list(embeds)
-        except Exception as e:
-            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
+        return await self.aencode_queries(docs, **kwargs)

@@ -7,6 +7,7 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ class SemanticMCPToolFilter:
         top_k: int = 10,
         similarity_threshold: float = 0.3,
         enabled: bool = True,
+        embedding_batch_size: int = DEFAULT_EMBEDDING_ENCODER_BATCH_SIZE,
     ):
         """
         Initialize the semantic tool filter.
@@ -35,11 +37,15 @@ class SemanticMCPToolFilter:
             top_k: Maximum number of tools to return
             similarity_threshold: Minimum similarity score for filtering
             enabled: Whether filtering is enabled
+            embedding_batch_size: Maximum number of tool descriptions embedded per
+                provider request when building the router index. Prevents exceeding
+                the embedding provider's input-array limit for large tool catalogs.
         """
         self.enabled = enabled
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_batch_size = embedding_batch_size
         self.router_instance = litellm_router_instance
         self.tool_router: Optional["SemanticRouter"] = None
         self._tool_map: Dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
@@ -134,6 +140,7 @@ class SemanticMCPToolFilter:
                     litellm_router_instance=self.router_instance,
                     model_name=self.embedding_model,
                     score_threshold=self.similarity_threshold,
+                    embedding_batch_size=self.embedding_batch_size,
                 ),
                 auto_sync="local",
             )
