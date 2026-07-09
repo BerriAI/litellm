@@ -5,6 +5,6 @@ import pytest
 from rate_limiting_client import RateLimitingClient, build_client
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def client() -> RateLimitingClient:
     return build_client()
