@@ -172,3 +172,46 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
         data = json.loads(error_payload.split("data: ", 1)[1].strip())
         assert data["error"]["type"] == "api_error"
         assert "boom" in data["error"]["message"]
+
+
+class TestReviewFindings:
+    """Regression tests for review findings on the error-event handling."""
+
+    def test_error_event_with_nested_error_message(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "error",
+                    "error": {"code": "overloaded", "message": "Nested boom."},
+                }
+            ]
+        )
+        assert [c["type"] for c in chunks] == ["error"]
+        assert chunks[0]["error"]["message"] == "Nested boom."
+
+    @pytest.mark.asyncio
+    async def test_persistently_failing_upstream_emits_exactly_one_error(self):
+        class AlwaysFailingStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError("max streaming duration exceeded")
+
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=AlwaysFailingStream(), model="m")
+        chunks = []
+        async for chunk in wrapper:
+            chunks.append(chunk)
+
+        assert [c["type"] for c in chunks] == ["message_start", "error"]
+
+    @pytest.mark.asyncio
+    async def test_no_chunks_after_message_stop(self):
+        async def completed_stream():
+            yield {"type": "response.created"}
+            yield {"type": "response.completed", "response": {"status": "completed"}}
+
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=completed_stream(), model="m")
+        chunks = [c async for c in wrapper]
+        assert chunks[-1]["type"] == "message_stop"
+        assert [c["type"] for c in chunks].count("message_stop") == 1
