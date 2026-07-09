@@ -289,6 +289,18 @@ export function LogDetailsDrawer({
     }
   };
 
+  const shareUrl = useMemo(() => {
+    if (typeof window === "undefined" || !currentLog) return "";
+    const url = new URL(window.location.href);
+    url.searchParams.set("request_id", currentLog.request_id);
+    if (isSessionMode && sessionId) {
+      url.searchParams.set("session_id", sessionId);
+    } else {
+      url.searchParams.delete("session_id");
+    }
+    return url.toString();
+  }, [currentLog, isSessionMode, sessionId]);
+
   if (!currentLog || !enrichedLog) return null;
 
   return (
@@ -457,6 +469,7 @@ export function LogDetailsDrawer({
             statusLabel={statusLabel}
             statusColor={statusColor}
             environment={environment}
+            shareUrl={shareUrl}
           />
           <div className="flex-1 overflow-y-auto">
             <LogDetailContent

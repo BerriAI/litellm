@@ -1,5 +1,6 @@
 import { Button, Space, Tag, Tooltip, Typography } from "antd";
-import { CloseOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloseOutlined, DownOutlined, LinkOutlined, UpOutlined } from "@ant-design/icons";
+import { useState } from "react";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
@@ -25,6 +26,7 @@ interface DrawerHeaderProps {
   statusLabel: string;
   statusColor: "error" | "success";
   environment: string;
+  shareUrl: string;
 }
 
 /**
@@ -39,6 +41,7 @@ export function DrawerHeader({
   statusLabel,
   statusColor,
   environment,
+  shareUrl,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
@@ -66,7 +69,7 @@ export function DrawerHeader({
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}
       >
         <RequestIdSection requestId={log.request_id} />
-        <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
+        <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} shareUrl={shareUrl} />
       </div>
 
       {/* Row 2: Status + Env + Timestamp */}
@@ -148,10 +151,12 @@ function NavigationSection({
   onPrevious,
   onNext,
   onClose,
+  shareUrl,
 }: {
   onPrevious: () => void;
   onNext: () => void;
   onClose: () => void;
+  shareUrl: string;
 }) {
   const keyboardShortcutStyle = {
     border: "1px solid #d9d9d9",
@@ -165,6 +170,7 @@ function NavigationSection({
 
   return (
     <Space size={SPACING_SMALL} split={<div style={{ width: 1, height: 20, background: COLOR_BORDER }} />}>
+      <ShareLinkButton shareUrl={shareUrl} />
       <Button type="text" size="small" onClick={onPrevious}>
         <UpOutlined />
         <span style={keyboardShortcutStyle}>K</span>
@@ -177,6 +183,37 @@ function NavigationSection({
         <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
       </Tooltip>
     </Space>
+  );
+}
+
+/**
+ * Copy-link button that yields a shareable deep link reopening this exact
+ * request / session in the log drawer.
+ */
+function ShareLinkButton({ shareUrl }: { shareUrl: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable in non-secure contexts */
+    }
+  };
+
+  return (
+    <Tooltip title={copied ? "Copied!" : "Copy link to this log"}>
+      <Button
+        type="text"
+        size="small"
+        icon={copied ? <CheckOutlined /> : <LinkOutlined />}
+        onClick={handleCopy}
+        aria-label="Copy link to this log"
+      />
+    </Tooltip>
   );
 }
 
