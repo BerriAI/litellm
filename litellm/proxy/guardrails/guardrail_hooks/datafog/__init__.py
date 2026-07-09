@@ -42,7 +42,7 @@ def initialize_guardrail(
         datafog_entity_types=_param("datafog_entity_types"),
         datafog_locales=_param("datafog_locales"),
         datafog_fail_policy=_param("datafog_fail_policy"),
-        event_hook=litellm_params.mode,  # type: ignore
+        event_hook=litellm_params.mode,
         default_on=litellm_params.default_on or False,
     )
 
