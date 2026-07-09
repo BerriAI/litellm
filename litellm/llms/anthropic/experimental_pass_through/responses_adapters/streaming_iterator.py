@@ -246,6 +246,11 @@ class AnthropicResponsesStreamWrapper:
                     output_tokens = _get_field(usage, "output_tokens", 0) or 0
                     cache_creation_tokens = int(_get_field(usage, "cache_creation_input_tokens", 0) or 0)
                     cache_read_tokens = int(_get_field(usage, "cache_read_input_tokens", 0) or 0)
+                    if cache_read_tokens == 0:
+                        input_tokens_details = _get_field(usage, "input_tokens_details")
+                        if input_tokens_details is not None:
+                            cache_read_tokens = int(_get_field(input_tokens_details, "cached_tokens", 0) or 0)
+                    input_tokens = max(input_tokens - cache_read_tokens - cache_creation_tokens, 0)
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
