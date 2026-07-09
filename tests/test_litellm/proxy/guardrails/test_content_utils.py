@@ -389,16 +389,15 @@ def test_build_inspection_messages_responses_api_tool_call_taxonomy():
     }
     assert build_inspection_messages(data) == [
         {"role": "user", "content": "hello"},
-        {"role": "user", "content": "sunny"},
+        {"role": "tool", "content": "sunny"},
     ]
 
 
-def test_build_inspection_messages_function_call_output_becomes_user():
-    """LIT-4294: a Responses ``function_call_output`` item has no natural
-    ``role`` field — the walker synthesises one to flatten the item into a
-    chat-style message. It emits ``role: "user"`` rather than ``role: "tool"``
-    so no schema-invalid bare tool message (missing ``tool_call_id``) is
-    ever materialised, even in isolation."""
+def test_build_inspection_messages_function_call_output_defaults_to_tool():
+    """LIT-4294: a Responses ``function_call_output`` item is the semantic
+    equivalent of a chat-completions ``role: "tool"`` message, so the shared
+    helper synthesises ``role: "tool"`` when the item has no explicit role.
+    AIM's schema-safe coercion happens at the AIM call site, not here."""
     data = {
         "input": [
             {
@@ -408,7 +407,53 @@ def test_build_inspection_messages_function_call_output_becomes_user():
             },
         ]
     }
-    assert build_inspection_messages(data) == [{"role": "user", "content": "tool text"}]
+    assert build_inspection_messages(data) == [{"role": "tool", "content": "tool text"}]
+
+
+def test_build_inspection_messages_function_call_output_preserves_explicit_role():
+    """When ``function_call_output`` carries a caller-supplied ``role`` the
+    shared helper preserves it rather than synthesising ``tool``."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "role": "assistant",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "tool text"}],
+            },
+        ]
+    }
+    assert build_inspection_messages(data) == [{"role": "assistant", "content": "tool text"}]
+
+
+def test_build_inspection_messages_bare_content_part_preserves_explicit_role():
+    """A bare content-part dict with an explicit ``role`` keeps it. Only
+    absent roles get defaulted to ``user``."""
+    data = {
+        "input": [
+            {"type": "input_text", "text": "no role"},
+            {"type": "output_text", "role": "assistant", "text": "with role"},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "user", "content": "no role"},
+        {"role": "assistant", "content": "with role"},
+    ]
+
+
+def test_build_inspection_messages_message_item_preserves_role():
+    """Responses message items carry a role explicitly; the shared helper
+    passes it through untouched."""
+    data = {
+        "input": [
+            {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "sys"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "asst"}]},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "asst"},
+    ]
 
 
 def test_build_inspection_messages_empty_data():

@@ -69,11 +69,11 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
             messages.append({"role": "user", "content": item})
         elif isinstance(item, dict):
             if item.get("type") in TEXT_PART_TYPES:
-                messages.append({"role": "user", "content": [item]})
+                messages.append({"role": item.get("role") or "user", "content": [item]})
             elif "content" in item:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
             elif item.get("type") == "function_call_output" and "output" in item:
-                messages.append({"role": "user", "content": item["output"]})
+                messages.append({"role": item.get("role") or "tool", "content": item["output"]})
     return messages
 
 

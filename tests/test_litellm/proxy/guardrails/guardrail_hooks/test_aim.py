@@ -51,6 +51,26 @@ def test_aim_inspection_messages_coerces_non_standard_caller_role_to_user():
     ]
 
 
+def test_aim_inspection_messages_coerces_responses_function_call_output_role():
+    """LIT-4294: the shared helper synthesises ``role: "tool"`` for a
+    Responses ``function_call_output`` item (semantic equivalent of
+    chat-completions tool messages). AIM's schema-validating POST cannot
+    carry ``tool_call_id`` in the flat inspection payload, so AIM collapses
+    that ``tool`` role to ``user`` locally before POSTing."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "sunny"}],
+            },
+        ]
+    }
+    assert AimGuardrail._build_aim_inspection_messages(data) == [
+        {"role": "user", "content": "sunny"},
+    ]
+
+
 def test_aim_inspection_messages_preserves_safe_roles():
     """Safe roles pass through untouched — the coercion only fires for
     roles the OpenAI chat schema flatten cannot represent standalone."""
