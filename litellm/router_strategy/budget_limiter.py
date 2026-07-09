@@ -529,33 +529,40 @@ class RouterBudgetLimiting(CustomLogger):
         resulting per-key Redis values so callers can merge them back into memory without clobbering
         concurrent in-memory increments.
 
+        If the pipeline fails, the snapshot is restored to the queue so the increments are retried on the
+        next push rather than lost. Returns None in that case.
+
         Only runs if Redis is initialized
         """
+        if not self.dual_cache.redis_cache:
+            return None  # Redis is not initialized
+
+        if len(self.redis_increment_operation_queue) == 0:
+            return None
+
+        queue = self.redis_increment_operation_queue
+        self.redis_increment_operation_queue = []
+
+        verbose_router_logger.debug(
+            "Pushing Redis Increment Pipeline for queue: %s",
+            queue,
+        )
         try:
-            if not self.dual_cache.redis_cache:
-                return None  # Redis is not initialized
-
-            if len(self.redis_increment_operation_queue) == 0:
-                return None
-
-            queue = self.redis_increment_operation_queue
-            self.redis_increment_operation_queue = []
-
-            verbose_router_logger.debug(
-                "Pushing Redis Increment Pipeline for queue: %s",
-                queue,
-            )
             increment_result = await self.dual_cache.redis_cache.async_increment_pipeline(
                 increment_list=queue,
             )
-            if increment_result is None:
-                return None
-
-            return {op["key"]: float(value) for op, value in zip(queue, increment_result)}
-
         except Exception as e:
+            # Put the snapshot back (ahead of anything queued during the await) so the
+            # increments are retried on the next push instead of being silently lost;
+            # otherwise other instances would never see this spend in Redis
+            self.redis_increment_operation_queue = queue + self.redis_increment_operation_queue
             verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
             return None
+
+        if increment_result is None:
+            return None
+
+        return {op["key"]: float(value) for op, value in zip(queue, increment_result)}
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -619,6 +626,11 @@ class RouterBudgetLimiting(CustomLogger):
                 current: Optional[float] = await self.dual_cache.in_memory_cache.async_get_cache(key=key)
                 after = float(current or 0)
                 delta = after - before
+                # When after <= redis_spend, Redis reflects the push and is the authoritative
+                # cross-instance total; add only the local increments that landed mid-sync (delta).
+                # When after > redis_spend, Redis is missing local spend (push failed or was
+                # skipped), so the in-memory total is already authoritative; applying delta on
+                # top of the stale Redis value would drop pre-snapshot local spend
                 merged = redis_spend + delta if after <= redis_spend else after
                 await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=merged)
                 verbose_router_logger.debug(f"Updated in-memory cache for {key}: {merged}")

@@ -33,6 +33,20 @@ class FakeRedisCache:
         return results
 
 
+class FlakyRedisCache(FakeRedisCache):
+    """Fails the increment pipeline while `failures` > 0, then behaves like FakeRedisCache."""
+
+    def __init__(self, store, failures=0):
+        super().__init__(store)
+        self.failures = failures
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        if self.failures > 0:
+            self.failures -= 1
+            raise ConnectionError("redis unreachable")
+        return await super().async_increment_pipeline(increment_list, **kwargs)
+
+
 @pytest.fixture
 def disable_budget_sync(monkeypatch):
     async def noop(*args, **kwargs):
@@ -116,3 +130,26 @@ async def test_push_returns_awaited_redis_values(disable_budget_sync):
     assert result == {spend_key: 15.0}
     assert fake_redis.store[spend_key] == 15.0
     assert limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_push_requeues_increments_when_pipeline_fails(disable_budget_sync):
+    """A failed Redis pipeline must restore the snapshot to the queue so the increments
+    are retried on the next push instead of being silently lost."""
+    provider = "openai"
+    spend_key = f"provider_spend:{provider}:1d"
+
+    fake_redis = FlakyRedisCache({spend_key: 10.0})
+    limiter = await _make_limiter(fake_redis, provider)
+
+    op = RedisPipelineIncrementOperation(key=spend_key, increment_value=5.0, ttl=86400)
+    limiter.redis_increment_operation_queue = [op]
+    fake_redis.failures = 1
+
+    assert await limiter._push_in_memory_increments_to_redis() is None
+    assert limiter.redis_increment_operation_queue == [op]
+    assert fake_redis.store[spend_key] == 10.0
+
+    assert await limiter._push_in_memory_increments_to_redis() == {spend_key: 15.0}
+    assert limiter.redis_increment_operation_queue == []
+    assert fake_redis.store[spend_key] == 15.0
