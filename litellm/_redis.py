@@ -325,8 +325,19 @@ def _get_redis_client_logic(**env_overrides):
             value = get_secret(v)  # type: ignore
             env_overrides[k] = value
 
+    environment_kwargs = _redis_kwargs_from_environment()
+
+    # An explicitly configured connection target outranks REDIS_URL from the
+    # environment. Without this, the url branch below strips the caller's
+    # host/port/password and silently connects to whatever REDIS_URL names.
+    caller_named_a_target = any(
+        env_overrides.get(key) is not None for key in ("host", "startup_nodes", "sentinel_nodes")
+    )
+    if caller_named_a_target and env_overrides.get("url") is None:
+        environment_kwargs.pop("url", None)
+
     redis_kwargs = {
-        **_redis_kwargs_from_environment(),
+        **environment_kwargs,
         **env_overrides,
     }
 
