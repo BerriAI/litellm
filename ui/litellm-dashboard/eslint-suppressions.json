@@ -2323,7 +2323,7 @@
   },
   "src/components/team/TeamVirtualKeysTable.tsx": {
     "no-nested-ternary": {
-      "count": 2
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 1
