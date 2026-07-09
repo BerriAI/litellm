@@ -56,9 +56,7 @@ def test_initialize_from_proxy_config_honors_dict_callback_specific_params():
     """A valid dict under callback_settings.websearch_interception is applied."""
     logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
         litellm_settings={},
-        callback_specific_params={
-            "websearch_interception": {"search_tool_name": "ws-tool"}
-        },
+        callback_specific_params={"websearch_interception": {"search_tool_name": "ws-tool"}},
     )
 
     assert logger.search_tool_name == "ws-tool"
@@ -119,9 +117,7 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
         "response_format": "anthropic",
     }
     logging_obj = MagicMock()
-    logging_obj.model_call_details = {
-        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
-    }
+    logging_obj.model_call_details = {"agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}}
     kwargs = {
         "temperature": 0.2,
         "_websearch_interception_converted_stream": True,
@@ -174,9 +170,7 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v
-        for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith("_websearch_interception")
+        k: v for k, v in kwargs_with_internal_flags.items() if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -216,15 +210,12 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "other_tool"
-        for t in result["tools"]
+        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool" for t in result["tools"]
     )
 
 
@@ -261,8 +252,7 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -323,8 +313,7 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -357,13 +346,64 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_followup_promotes_extra_headers_from_litellm_params():
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(return_value=("result", None))
+    extra_headers = {"editor-version": "vscode/1.110.0"}
+
+    patch, _ = await logger._build_anthropic_request_patch(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[],
+        tool_calls=[
+            {
+                "id": "call_1",
+                "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+                "input": {"query": "hello"},
+            }
+        ],
+        thinking_blocks=[],
+        anthropic_messages_optional_request_params={},
+        logging_obj=Mock(model_call_details={}),
+        kwargs={"litellm_params": {"extra_headers": extra_headers}},
+    )
+
+    assert patch.kwargs["extra_headers"] == extra_headers
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_followup_promotes_extra_headers_from_litellm_params():
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+    logger._execute_search = AsyncMock(return_value=("result", None))
+    extra_headers = {"editor-version": "vscode/1.110.0"}
+
+    patch = await logger._build_chat_completion_request_patch(
+        model="gpt-4o",
+        messages=[],
+        tool_calls=[
+            {
+                "id": "call_1",
+                "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+                "input": {"query": "hello"},
+            }
+        ],
+        optional_params={},
+        kwargs={"litellm_params": {"extra_headers": extra_headers}},
+    )
+
+    assert patch.kwargs["extra_headers"] == extra_headers
+
+
+def test_prepare_followup_kwargs_handles_none_litellm_params():
+    assert WebSearchInterceptionLogger._prepare_followup_kwargs({"litellm_params": None}) == {"litellm_params": None}
 
 
 @pytest.mark.asyncio
@@ -478,9 +518,7 @@ def test_sync_forced_tool_choice_leaves_non_forced_untouched(tool_choice):
     and None pass through unchanged."""
     converted_tools = [{"name": LITELLM_WEB_SEARCH_TOOL_NAME}]
 
-    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
-        tool_choice, converted_tools
-    )
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(tool_choice, converted_tools)
 
     assert result == tool_choice
 
