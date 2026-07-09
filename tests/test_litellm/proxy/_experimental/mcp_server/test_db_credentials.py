@@ -84,6 +84,7 @@ def _identity_server(**overrides):
     "overrides",
     [
         {"url": "https://other.example.com/mcp"},
+        {"spec_path": "https://up.example.com/openapi.json"},
         {"auth_type": "oauth_delegate"},
         {"oauth2_flow": "client_credentials"},
         {"authorization_url": "https://other.example.com/authorize"},
@@ -113,29 +114,91 @@ def test_mcp_oauth_token_identity_stable_on_non_mint_fields(overrides):
     assert mcp_oauth_token_identity(_identity_server()) == mcp_oauth_token_identity(_identity_server(**overrides))
 
 
+def _encrypted_creds_json(client_id: str = "cid", client_secret: str = "csec") -> str:
+    from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+
+    encrypted = encrypt_credentials(
+        credentials={"client_id": client_id, "client_secret": client_secret, "scopes": ["a"]},
+        encryption_key=None,
+    )
+    return json.dumps(encrypted)
+
+
+def test_mcp_oauth_token_identity_stable_across_reencryption():
+    """Stored client_id/client_secret are NaCl-encrypted with a fresh nonce on every write, so two
+    saves of the SAME plaintext produce different ciphertext. The identity must compare decrypted
+    values; comparing ciphertext would flag every routine save as a mint-relevant change and purge
+    per-user tokens that are still valid."""
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    first = _encrypted_creds_json()
+    second = _encrypted_creds_json()
+    assert first != second
+
+    assert mcp_oauth_token_identity(_identity_server(credentials=first)) == mcp_oauth_token_identity(
+        _identity_server(credentials=second)
+    )
+
+
+def test_mcp_oauth_token_identity_detects_change_under_encryption():
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    unchanged = _identity_server(credentials=_encrypted_creds_json())
+    changed = _identity_server(credentials=_encrypted_creds_json(client_id="other"))
+    assert mcp_oauth_token_identity(unchanged) != mcp_oauth_token_identity(changed)
+
+
 @pytest.mark.asyncio
-async def test_purge_user_oauth_credentials_for_server_deletes_rows_and_cache(monkeypatch):
-    from litellm.proxy._experimental.mcp_server import oauth2_token_cache
+async def test_purge_user_oauth_credentials_for_server_invalidates_every_store(monkeypatch):
+    """The purge must route each (user, server) through the manager's shared invalidation, which is
+    the single point covering both the legacy per-user token cache and the v2 per-user OAuth token
+    store; evicting only one cache lets the other keep serving a token minted for the old config."""
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
 
     r1 = MagicMock(user_id="alice", server_id="srv-1")
     r2 = MagicMock(user_id="bob", server_id="srv-1")
     prisma = MagicMock()
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[r1, r2])
-    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=2)
 
-    cache_deletes = []
+    invalidations = []
     monkeypatch.setattr(
-        oauth2_token_cache.mcp_per_user_token_cache,
-        "delete",
-        AsyncMock(side_effect=lambda uid, sid: cache_deletes.append((uid, sid))),
+        mcp_server_manager.global_mcp_server_manager,
+        "invalidate_user_oauth_token_cache",
+        AsyncMock(side_effect=lambda uid, sid: invalidations.append((uid, sid))),
     )
 
     purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1")
 
     assert purged == 2
     prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once()
-    assert set(cache_deletes) == {("alice", "srv-1"), ("bob", "srv-1")}
+    assert set(invalidations) == {("alice", "srv-1"), ("bob", "srv-1")}
+
+
+@pytest.mark.asyncio
+async def test_purge_user_oauth_credentials_for_server_logs_raced_rows(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import db as db_module
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(
+        return_value=[MagicMock(user_id="alice", server_id="srv-1")]
+    )
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=2)
+    monkeypatch.setattr(
+        mcp_server_manager.global_mcp_server_manager,
+        "invalidate_user_oauth_token_cache",
+        AsyncMock(),
+    )
+    warning = MagicMock()
+    monkeypatch.setattr(db_module.verbose_proxy_logger, "warning", warning)
+
+    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1")
+
+    assert purged == 2
+    warning.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -225,9 +288,7 @@ async def test_store_user_oauth_credential_does_not_persist_plaintext():
     access_token = "ya29.a0AfH6SMBverysecretaccesstoken"
     prisma = _make_prisma_with_existing(row=None)
 
-    await store_user_oauth_credential(
-        prisma, "alice", "srv-1", access_token, refresh_token="rfr-xyz"
-    )
+    await store_user_oauth_credential(prisma, "alice", "srv-1", access_token, refresh_token="rfr-xyz")
 
     stored = _stored_value(prisma)
     try:
@@ -310,9 +371,7 @@ async def test_byok_guard_rejects_overwriting_encrypted_byok():
 
     encrypted_row = MagicMock()
     encrypted_row.credential_b64 = _stored_value(prisma)
-    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(
-        return_value=encrypted_row
-    )
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=encrypted_row)
 
     with pytest.raises(ValueError, match="could not be verified as an OAuth2"):
         await store_user_oauth_credential(prisma, "alice", "srv-1", "tok")
@@ -354,18 +413,14 @@ async def test_list_oauth_credentials_filters_byok_and_returns_payloads():
         "connected_at": "2024-01-01T00:00:00Z",
     }
     legacy_row = MagicMock()
-    legacy_row.credential_b64 = base64.urlsafe_b64encode(
-        json.dumps(legacy_payload).encode()
-    ).decode()
+    legacy_row.credential_b64 = base64.urlsafe_b64encode(json.dumps(legacy_payload).encode()).decode()
     legacy_row.server_id = "srv-legacy"
 
     byok_row = MagicMock()
     byok_row.credential_b64 = base64.urlsafe_b64encode(b"plain-byok-key").decode()
     byok_row.server_id = "srv-byok"
 
-    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(
-        return_value=[encrypted_row, legacy_row, byok_row]
-    )
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[encrypted_row, legacy_row, byok_row])
 
     results = await list_user_oauth_credentials(prisma, "alice")
 
@@ -415,9 +470,7 @@ async def test_rotate_re_encrypts_byok_with_new_key(monkeypatch):
     prisma.db.litellm_mcpusercredentials.update = AsyncMock()
 
     new_master_key = "rotated-salt-key-9999-9999-9999-9999"
-    await rotate_mcp_user_credentials_master_key(
-        prisma_client=prisma, new_master_key=new_master_key
-    )
+    await rotate_mcp_user_credentials_master_key(prisma_client=prisma, new_master_key=new_master_key)
 
     update_call = prisma.db.litellm_mcpusercredentials.update.call_args
     new_stored = update_call.kwargs["data"]["credential_b64"]
@@ -445,19 +498,13 @@ async def test_rotate_migrates_legacy_plaintext_rows(monkeypatch):
     legacy_row.user_id = "alice"
     legacy_row.server_id = "srv-legacy"
     legacy_row.credential_b64 = base64.urlsafe_b64encode(b"legacy-plain").decode()
-    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(
-        return_value=[legacy_row]
-    )
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[legacy_row])
     prisma.db.litellm_mcpusercredentials.update = AsyncMock()
 
     new_key = "another-rotation-key-aaaa-bbbb-cccc-dddd"
-    await rotate_mcp_user_credentials_master_key(
-        prisma_client=prisma, new_master_key=new_key
-    )
+    await rotate_mcp_user_credentials_master_key(prisma_client=prisma, new_master_key=new_key)
 
-    new_stored = prisma.db.litellm_mcpusercredentials.update.call_args.kwargs["data"][
-        "credential_b64"
-    ]
+    new_stored = prisma.db.litellm_mcpusercredentials.update.call_args.kwargs["data"]["credential_b64"]
     monkeypatch.setenv("LITELLM_SALT_KEY", new_key)
     assert (
         decrypt_value_helper(
@@ -485,14 +532,10 @@ async def test_rotate_skips_undecodable_rows():
     good_row.server_id = "srv-ok"
     good_row.credential_b64 = base64.urlsafe_b64encode(b"good-byok").decode()
 
-    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(
-        return_value=[bad_row, good_row]
-    )
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[bad_row, good_row])
     prisma.db.litellm_mcpusercredentials.update = AsyncMock()
 
-    await rotate_mcp_user_credentials_master_key(
-        prisma_client=prisma, new_master_key="new-key-xxxx"
-    )
+    await rotate_mcp_user_credentials_master_key(prisma_client=prisma, new_master_key="new-key-xxxx")
 
     # Only one update call — the good row.
     assert prisma.db.litellm_mcpusercredentials.update.call_count == 1
@@ -508,9 +551,7 @@ def _oauth_cred(access_token="at-live", refresh_token=None, expires_in_seconds=N
     if refresh_token is not None:
         cred["refresh_token"] = refresh_token
     if expires_in_seconds is not None:
-        cred["expires_at"] = (
-            datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
-        ).isoformat()
+        cred["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)).isoformat()
     return cred
 
 
@@ -527,12 +568,7 @@ def test_expiry_buffer_treats_soon_to_expire_as_expired():
     cred = _oauth_cred(expires_in_seconds=30)
     assert is_oauth_credential_expired(cred, buffer_seconds=60) is True
     # A token comfortably beyond the buffer stays valid.
-    assert (
-        is_oauth_credential_expired(
-            _oauth_cred(expires_in_seconds=600), buffer_seconds=60
-        )
-        is False
-    )
+    assert is_oauth_credential_expired(_oauth_cred(expires_in_seconds=600), buffer_seconds=60) is False
 
 
 def test_expiry_past_is_expired_regardless_of_buffer():
@@ -554,9 +590,7 @@ async def test_resolve_returns_valid_token_without_refreshing(monkeypatch):
     refresh = AsyncMock()
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
-    cred = _oauth_cred(
-        access_token="at-live", refresh_token="rt-1", expires_in_seconds=600
-    )
+    cred = _oauth_cred(access_token="at-live", refresh_token="rt-1", expires_in_seconds=600)
     result = await resolve_valid_user_oauth_token(
         user_id="alice", server=MagicMock(), cred=cred, prisma_client=MagicMock()
     )
@@ -572,15 +606,11 @@ async def test_resolve_refreshes_expired_token_with_refresh_token(monkeypatch):
     # new token rather than returning None (which left the UI tool list empty).
     import litellm.proxy._experimental.mcp_server.db as db_mod
 
-    refreshed = _oauth_cred(
-        access_token="at-fresh", refresh_token="rt-2", expires_in_seconds=3600
-    )
+    refreshed = _oauth_cred(access_token="at-fresh", refresh_token="rt-2", expires_in_seconds=3600)
     refresh = AsyncMock(return_value=refreshed)
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
-    expired = _oauth_cred(
-        access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5
-    )
+    expired = _oauth_cred(access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5)
     result = await resolve_valid_user_oauth_token(
         user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
     )
@@ -599,9 +629,7 @@ async def test_resolve_refreshes_token_expiring_within_buffer(monkeypatch):
     refresh = AsyncMock(return_value=refreshed)
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
-    soon = _oauth_cred(
-        access_token="at-soon", refresh_token="rt-1", expires_in_seconds=30
-    )
+    soon = _oauth_cred(access_token="at-soon", refresh_token="rt-1", expires_in_seconds=30)
     result = await resolve_valid_user_oauth_token(
         user_id="alice", server=MagicMock(), cred=soon, prisma_client=MagicMock()
     )
@@ -635,9 +663,7 @@ async def test_resolve_returns_none_when_refresh_fails(monkeypatch):
     refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
-    expired = _oauth_cred(
-        access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5
-    )
+    expired = _oauth_cred(access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5)
     result = await resolve_valid_user_oauth_token(
         user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
     )
@@ -654,9 +680,7 @@ async def test_resolve_returns_none_for_missing_credential(monkeypatch):
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
     assert (
-        await resolve_valid_user_oauth_token(
-            user_id="alice", server=MagicMock(), cred=None, prisma_client=MagicMock()
-        )
+        await resolve_valid_user_oauth_token(user_id="alice", server=MagicMock(), cred=None, prisma_client=MagicMock())
         is None
     )
     assert (
@@ -690,19 +714,13 @@ async def test_rotate_user_env_vars_re_encrypts_with_new_key(monkeypatch):
     encrypted_old = encrypt_value_helper(json.dumps(values))
 
     prisma = MagicMock()
-    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(
-        return_value=[_env_var_row(encrypted_old)]
-    )
+    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[_env_var_row(encrypted_old)])
     prisma.db.litellm_mcpuserenvvars.update = AsyncMock()
 
     new_master_key = "rotated-env-key-1111-2222-3333-4444"
-    await rotate_mcp_user_env_vars_master_key(
-        prisma_client=prisma, new_master_key=new_master_key
-    )
+    await rotate_mcp_user_env_vars_master_key(prisma_client=prisma, new_master_key=new_master_key)
 
-    new_stored = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["data"][
-        "values_b64"
-    ]
+    new_stored = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["data"]["values_b64"]
     assert new_stored != encrypted_old, "rotation must produce different ciphertext"
 
     monkeypatch.setenv("LITELLM_SALT_KEY", new_master_key)
@@ -719,18 +737,14 @@ async def test_rotate_user_env_vars_re_encrypts_with_new_key(monkeypatch):
 async def test_rotate_user_env_vars_skips_undecryptable_rows():
     # A corrupt row must be skipped (not overwritten) so recoverable data is
     # preserved and one bad row does not abort the rest of the rotation.
-    good = _env_var_row(
-        encrypt_value_helper(json.dumps({"A": "1"})), server_id="srv-ok"
-    )
+    good = _env_var_row(encrypt_value_helper(json.dumps({"A": "1"})), server_id="srv-ok")
     bad = _env_var_row("!!! not encrypted !!!", server_id="srv-corrupt")
 
     prisma = MagicMock()
     prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[bad, good])
     prisma.db.litellm_mcpuserenvvars.update = AsyncMock()
 
-    await rotate_mcp_user_env_vars_master_key(
-        prisma_client=prisma, new_master_key="new-key-xxxx"
-    )
+    await rotate_mcp_user_env_vars_master_key(prisma_client=prisma, new_master_key="new-key-xxxx")
 
     assert prisma.db.litellm_mcpuserenvvars.update.call_count == 1
     where = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["where"]
@@ -758,9 +772,7 @@ async def test_refresh_user_oauth_token_uses_client_secret_basic(monkeypatch):
 
     monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **kwargs: mock_client)
     monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
-    monkeypatch.setattr(
-        db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "new-at"})
-    )
+    monkeypatch.setattr(db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "new-at"}))
 
     result = await db_mod.refresh_user_oauth_token(
         prisma_client=MagicMock(),
@@ -799,9 +811,7 @@ async def test_refresh_user_oauth_token_defaults_to_client_secret_post(monkeypat
 
     monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **kwargs: mock_client)
     monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
-    monkeypatch.setattr(
-        db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "new-at"})
-    )
+    monkeypatch.setattr(db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "new-at"}))
 
     await db_mod.refresh_user_oauth_token(
         prisma_client=MagicMock(),
