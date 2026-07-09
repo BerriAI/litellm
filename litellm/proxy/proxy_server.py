@@ -9176,8 +9176,12 @@ class ProxyStartupEvent:
                 redis_cache=redis_usage_cache,
             )
 
+        # init_mcp_servers_from_db already gates on _should_load_db_object("mcp"), so calling
+        # it unconditionally keeps the allowlist behavior while letting store_model_in_db=True
+        # deployments hydrate the in-memory MCP registry on boot.
+        await proxy_config.init_mcp_servers_from_db()
+
         if store_model_in_db is not True:
-            await proxy_config.init_mcp_servers_from_db()
             # Without this branch's own refresh, a UI-created search tool never reaches the router:
             # the add_deployment job that carries it in store_model_in_db=True mode is not scheduled.
             await proxy_config.reload_search_tools_from_db()
