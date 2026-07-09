@@ -8549,6 +8549,8 @@ async def chat_completion(
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
+        # Capture logging_obj before post_call_failure_hook pops it from _data.
+        _logging_obj = _data.get("litellm_logging_obj")
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -8568,7 +8570,7 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=e.model,
                 custom_llm_provider="cached_response",
-                logging_obj=_data.get("litellm_logging_obj", None),
+                logging_obj=_logging_obj,
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
