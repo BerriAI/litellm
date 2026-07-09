@@ -7969,8 +7969,13 @@ class ProxyStartupEvent:
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
 
-        if store_model_in_db is not True:
-            await proxy_config.init_mcp_servers_from_db()
+        # `add_deployment` above also hydrates MCP servers via `_init_non_llm_objects_in_db`
+        # when `store_model_in_db=True`. The direct call here is intentionally redundant
+        # in that case; `_init_mcp_servers_in_db` re-uses existing entries matched by
+        # `updated_at` and is fully wrapped in try/except, so the second pass is a no-op.
+        # Calling unconditionally ensures MCP hydration runs even when `store_model_in_db`
+        # is False (the prior `if store_model_in_db is not True` gate skipped it in that case).
+        await proxy_config.init_mcp_servers_from_db()
 
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
