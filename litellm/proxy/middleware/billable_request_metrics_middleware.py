@@ -33,12 +33,12 @@ class BillingRecorder(Protocol):
 _MODEL_ID_HEADER = b"x-litellm-model-id"
 
 # Ordered: a longer suffix that shares an ending with a shorter one must come
-# first, e.g. "/chat/completions" before "/completions". This is the inference
-# surface that writes a SpendLogs row on success -- the same population the
-# admin UI usage page counts -- so the collector and the UI report the same
-# number. LLM routes are POST-only inference calls; GET reads on the same
-# resources (list/status/content) are not billable and are excluded by the
-# method gate in classify_billable_request.
+# first, e.g. "/chat/completions" before "/completions". This is the POST
+# inference surface that writes a SpendLogs row on success, so the exported
+# count lines up with the admin UI usage page for inference traffic. Billing
+# is a deliberate lower bound on SpendLogs rows: management writes that also
+# log (batch/file/fine-tuning creation, interaction cancel) and non-POST calls
+# that log (passthrough reads) never bill, so drift only ever undercounts.
 _LLM_ROUTE_SUFFIXES: tuple[str, ...] = (
     "/chat/completions",
     "/completions",
@@ -130,8 +130,9 @@ def classify_billable_request(path: str, method: str = "POST") -> Optional[tuple
     if a2a_route is not None:
         return (BillableCategory.A2A, a2a_route)
 
-    # Inference calls are POSTs; GETs on these paths are reads (list videos,
-    # fetch a response object), which write no SpendLogs row and must not bill.
+    # POST-only is a conservative gate: non-POST calls can still write a
+    # SpendLogs row (passthrough reads, resource GETs) but must not bill, so
+    # any classifier-vs-dashboard mismatch is an undercount, never an overcount.
     if method.upper() != "POST":
         return None
 
