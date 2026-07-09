@@ -1,8 +1,9 @@
-suite: test billingMetrics wiring on the gateway
+suite: test billingMetrics wiring on gateway and backend
 templates:
   - gateway/deployment.yaml
   - gateway/configmap.yaml
   - backend/deployment.yaml
+  - migrations-job.yaml
 values:
   - ./values/required.yaml
 tests:
@@ -158,9 +159,46 @@ tests:
             secret:
               secretName: billing-mtls
 
-  # Only the gateway serves billable traffic; the backend must not mount the cert.
-  - it: does not touch the backend when enabled
+  # The backend keeps the named-server MCP transport (/{mcp_server_name}/mcp),
+  # which writes a SpendLogs row, so it must meter too or that traffic is lost.
+  - it: meters the backend as well, since it serves the MCP transport
     template: backend/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        secretName: billing-mtls
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics-mtls
+            mountPath: /etc/litellm/billing-mtls
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: billing-mtls
+
+  - it: leaves the backend alone when metering is off
+    template: backend/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+
+  # The migrations job runs prisma and serves no traffic; it must never receive
+  # the client key.
+  - it: never mounts the billing cert on the migrations job
+    template: migrations-job.yaml
     set:
       billingMetrics:
         enabled: true
@@ -171,6 +209,8 @@ tests:
           content:
             name: LITELLM_BILLING_METRICS_ENDPOINT
             value: https://telemetry.litellm.ai
+      - isNull:
+          path: spec.template.spec.volumes
 
   - it: fails loudly when enabled without a secretName
     template: gateway/deployment.yaml

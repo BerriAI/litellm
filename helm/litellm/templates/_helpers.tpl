@@ -44,10 +44,13 @@ helm.sh/chart: {{ include "litellm.chart" . }}
 {{- end -}}
 
 {{/*
-Enterprise billable-request metering. Gateway only: the gateway is the component
-that serves billable traffic. The client certificate identifies the deployment to
-LiteLLM's collector, so it is mounted read-only from an existing Secret rather
-than passed through the environment.
+Enterprise billable-request metering. Wired into gateway and backend, not the
+migrations job. The gateway serves nearly all billable traffic, but the backend
+keeps the named-server MCP transport (/{mcp_server_name}/mcp), which writes a
+SpendLogs row, so metering only the gateway would silently drop that traffic.
+The client certificate identifies the deployment to LiteLLM's collector, so it is
+mounted read-only from an existing Secret rather than passed through the
+environment.
 */}}
 {{- define "litellm.billingMetrics.certDir" -}}/etc/litellm/billing-mtls{{- end -}}
 {{- define "litellm.billingMetrics.caDir" -}}/etc/litellm/billing-mtls-ca{{- end -}}
