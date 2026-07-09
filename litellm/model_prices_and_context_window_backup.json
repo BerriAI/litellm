@@ -44077,6 +44077,23 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "tenzro/qwen3-0.6b": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "tenzro",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://tenzro.com/",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": false
+    },
     "deepseek/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 3.625e-09,

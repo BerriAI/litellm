@@ -338,6 +338,92 @@ class TestDarkbloom:
             assert model_cost[model]["output_cost_per_token"] == output_cost
 
 
+class TestTenzro:
+    def test_tenzro_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        tenzro = JSONProviderRegistry.get("tenzro")
+        assert tenzro is not None
+        assert tenzro.base_url == "https://rpc.tenzro.network/v1"
+        assert tenzro.api_key_env == "TENZRO_API_KEY"
+        assert tenzro.api_base_env == "TENZRO_API_BASE"
+        assert tenzro.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_tenzro_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="tenzro/qwen3-0.6b",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "qwen3-0.6b"
+        assert provider == "tenzro"
+        assert api_key is None
+        assert api_base == "https://rpc.tenzro.network/v1"
+
+    def test_tenzro_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("tenzro")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://rpc.tenzro.network/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "http://localhost:8545/v1", "test-key"
+        )
+        assert api_base == "http://localhost:8545/v1"
+        assert api_key == "test-key"
+
+    def test_tenzro_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("tenzro")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://rpc.tenzro.network/v1",
+            api_key="test-key",
+            model="tenzro/qwen3-0.6b",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://rpc.tenzro.network/v1/chat/completions"
+
+    def test_tenzro_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="qwen3-0.6b", provider=LlmProviders.TENZRO
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "tenzro"
+
+    def test_tenzro_model_cost_map(self):
+        with open(
+            os.path.join(workspace_path, "model_prices_and_context_window.json")
+        ) as f:
+            model_cost = json.load(f)
+
+        assert "tenzro/qwen3-0.6b" in model_cost
+        entry = model_cost["tenzro/qwen3-0.6b"]
+        assert entry["litellm_provider"] == "tenzro"
+        assert entry["max_input_tokens"] == 32768
+        assert entry["supports_native_streaming"] is True
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 
