@@ -5,10 +5,9 @@ Tests for AnthropicResponsesStreamWrapper
 
 import os
 import sys
+from types import SimpleNamespace
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
@@ -77,3 +76,66 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestDictShapedCompletedEvents:
+    """Usage, status, and output must be read from dict-shaped
+    `response.completed` payloads, not only attribute-shaped ones.
+
+    Previously this branch used getattr-only access, so dict-shaped events
+    always produced usage 0/0 (disabling spend tracking and TPM enforcement,
+    https://github.com/BerriAI/litellm/issues/32086) and mapped
+    `response.incomplete` to end_turn instead of max_tokens.
+    """
+
+    def test_dict_usage_is_extracted(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "status": "completed",
+                        "usage": {
+                            "input_tokens": 11,
+                            "output_tokens": 42,
+                            "cache_read_input_tokens": 7,
+                        },
+                    },
+                }
+            ]
+        )
+        assert chunks[0]["type"] == "message_delta"
+        assert chunks[0]["usage"] == {
+            "input_tokens": 11,
+            "output_tokens": 42,
+            "cache_read_input_tokens": 7,
+        }
+
+    def test_dict_incomplete_maps_to_max_tokens(self):
+        chunks = _process_all([{"type": "response.incomplete", "response": {"status": "incomplete"}}])
+        assert chunks[0]["delta"]["stop_reason"] == "max_tokens"
+
+    def test_dict_function_call_output_maps_to_tool_use(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "status": "completed",
+                        "output": [{"type": "function_call", "name": "get_weather"}],
+                    },
+                }
+            ]
+        )
+        assert chunks[0]["delta"]["stop_reason"] == "tool_use"
+
+    def test_object_shaped_usage_still_extracted(self):
+        usage = SimpleNamespace(
+            input_tokens=3,
+            output_tokens=5,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+        response = SimpleNamespace(status="completed", usage=usage, output=[])
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        assert chunks[0]["usage"] == {"input_tokens": 3, "output_tokens": 5}

@@ -9,6 +9,12 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 
 
+def _get_field(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 class AnthropicResponsesStreamWrapper:
     """
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
@@ -231,22 +237,19 @@ class AnthropicResponsesStreamWrapper:
             cache_read_tokens = 0
 
             if response_obj is not None:
-                status = getattr(response_obj, "status", None)
+                status = _get_field(response_obj, "status")
                 if status == "incomplete":
                     stop_reason = "max_tokens"
-                usage = getattr(response_obj, "usage", None)
+                usage = _get_field(response_obj, "usage")
                 if usage is not None:
-                    input_tokens = getattr(usage, "input_tokens", 0) or 0
-                    output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
-                    # Prefer direct cache fields if present
-                    cache_creation_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-                    cache_read_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                    input_tokens = _get_field(usage, "input_tokens", 0) or 0
+                    output_tokens = _get_field(usage, "output_tokens", 0) or 0
+                    cache_creation_tokens = int(_get_field(usage, "cache_creation_input_tokens", 0) or 0)
+                    cache_read_tokens = int(_get_field(usage, "cache_read_input_tokens", 0) or 0)
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
-                output = getattr(response_obj, "output", []) or []
+                output = _get_field(response_obj, "output", []) or []
                 for out_item in output:
                     out_type = getattr(out_item, "type", None) or (
                         out_item.get("type") if isinstance(out_item, dict) else None
