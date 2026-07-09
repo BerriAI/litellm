@@ -5134,3 +5134,89 @@ def test_stamp_oauth2_flow_ignores_non_oauth2():
     payload = _oauth2_create_payload(auth_type="none")
     mgmt_endpoints.stamp_omitted_oauth2_flow(payload)
     assert payload.oauth2_flow is None
+
+
+class TestHealthCheckServersIncludesNames:
+    """`GET /v1/mcp/server/health` must include human-readable identifiers
+    (server_name, alias) alongside the opaque hashed server_id, so operators
+    can tell which server is unhealthy without reverse-engineering hashes.
+
+    https://github.com/BerriAI/litellm/issues/31233
+    """
+
+    @pytest.mark.asyncio
+    async def test_health_view_all_includes_server_name_and_alias(self):
+        server = generate_mock_mcp_server_db_record(server_id="server-1", alias="github_onprem")
+        server.server_name = "github_onprem"
+        server.status = "healthy"
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_unfiltered = AsyncMock(return_value=[server])
+
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                health_check_servers,
+            )
+
+            result = await health_check_servers(server_ids=None, user_api_key_dict=mock_user_auth)
+
+        assert result == [
+            {
+                "server_id": "server-1",
+                "server_name": "github_onprem",
+                "alias": "github_onprem",
+                "status": "healthy",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_health_scoped_mode_includes_server_name_and_alias(self):
+        server_a = generate_mock_mcp_server_db_record(server_id="server-1", alias="cit")
+        server_a.server_name = "cit"
+        server_a.status = "unknown"
+        server_b = generate_mock_mcp_server_db_record(server_id="server-2", alias="zapier")
+        server_b.server_name = "zapier_mcp"
+        server_b.status = "healthy"
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(return_value=[server_a, server_b])
+
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="self_serve",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                health_check_servers,
+            )
+
+            result = await health_check_servers(server_ids=None, user_api_key_dict=mock_user_auth)
+
+        by_id = {entry["server_id"]: entry for entry in result}
+        assert by_id["server-1"]["server_name"] == "cit"
+        assert by_id["server-1"]["alias"] == "cit"
+        assert by_id["server-1"]["status"] == "unknown"
+        assert by_id["server-2"]["server_name"] == "zapier_mcp"
+        assert by_id["server-2"]["status"] == "healthy"

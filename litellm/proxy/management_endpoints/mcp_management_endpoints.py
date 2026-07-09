@@ -1023,23 +1023,34 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode = _get_user_mcp_management_mode()
 
+        def _health_entry(server: "LiteLLM_MCPServerTable") -> Dict[str, Any]:
+            # Include the human-readable identifiers alongside the opaque
+            # hashed server_id so operators can tell which server is
+            # unhealthy without reverse-engineering hashes.
+            return {
+                "server_id": server.server_id,
+                "server_name": server.server_name,
+                "alias": server.alias,
+                "status": server.status,
+            }
+
         if user_mcp_management_mode == "view_all":
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
-            return [{"server_id": server.server_id, "status": server.status} for server in servers]
+            return [_health_entry(server) for server in servers]
 
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Dict[str, Optional[Literal["healthy", "unhealthy", "unknown"]]] = {}
+        server_health_map: Dict[str, Dict[str, Any]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
                 server_ids=server_ids,
             )
             for server in servers:
-                if server.server_id not in server_status_map:
-                    server_status_map[server.server_id] = server.status
+                if server.server_id not in server_health_map:
+                    server_health_map[server.server_id] = _health_entry(server)
 
-        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
+        return list(server_health_map.values())
 
     @router.post(
         "/server/register",
