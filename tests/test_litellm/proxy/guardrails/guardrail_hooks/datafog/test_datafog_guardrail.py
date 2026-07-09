@@ -225,6 +225,54 @@ async def test_pre_call_redacts_responses_api_input_items():
     assert SSN in original["input"][1]["output"]["ssn"]
 
 
+@pytest.mark.asyncio
+async def test_pre_call_redacts_top_level_instructions_and_system_string():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original = {
+        "instructions": f"Route customer follow-up to {EMAIL}",
+        "system": f"Billing card on file is {CARD}",
+        "input": "summarize the customer account",
+    }
+
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original,
+        call_type="responses",
+    )
+
+    assert EMAIL not in data["instructions"]
+    assert "[EMAIL_1]" in data["instructions"]
+    assert CARD not in data["system"]
+    assert "[CREDIT_CARD_1]" in data["system"]
+    assert original["instructions"] == f"Route customer follow-up to {EMAIL}"
+    assert original["system"] == f"Billing card on file is {CARD}"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_redacts_top_level_anthropic_system_content_blocks():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    original = {
+        "system": [
+            {"type": "text", "text": f"Use tax profile {SSN} for context"},
+            {"type": "cache_control", "cache_control": {"type": "ephemeral"}},
+        ],
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=original,
+        call_type="completion",
+    )
+
+    assert SSN not in data["system"][0]["text"]
+    assert "[SSN_1]" in data["system"][0]["text"]
+    assert data["system"][1] == original["system"][1]
+    assert SSN in original["system"][0]["text"]
+
+
 def test_process_content_returns_unmodified_non_text_content():
     guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
     content = {"structured": "payload"}
@@ -337,6 +385,25 @@ async def test_during_call_blocks_responses_api_input_when_action_is_block():
             data={"input": [{"role": "user", "content": [{"type": "input_text", "text": f"email {EMAIL}"}]}]},
             user_api_key_dict=None,
             call_type="responses",
+        )
+
+
+@pytest.mark.asyncio
+async def test_during_call_blocks_top_level_prompt_fields_when_action_is_block():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={"instructions": f"Contact billing at {EMAIL}"},
+            user_api_key_dict=None,
+            call_type="responses",
+        )
+
+    with pytest.raises(HTTPException):
+        await guardrail.async_moderation_hook(
+            data={"system": [{"type": "text", "text": f"Use card {CARD} for lookup"}]},
+            user_api_key_dict=None,
+            call_type="completion",
         )
 
 
