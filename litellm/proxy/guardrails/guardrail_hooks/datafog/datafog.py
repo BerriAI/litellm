@@ -46,7 +46,7 @@ VALID_FAIL_POLICIES = {"open", "closed"}
 def _redact_text(text: str, entity_types: list[str], locales: list[str] | None) -> tuple[str, dict[str, int]]:
     """Redact ``text``; return (redacted_text, counts per entity type)."""
     try:
-        import datafog  # pyright: ignore[reportMissingTypeStubs]
+        import datafog  # pyright: ignore[reportMissingTypeStubs]  # datafog does not ship pyright stubs
     except ImportError as exc:
         raise ImportError(
             "The DataFog guardrail requires the `datafog` package. Install it with: pip install datafog"
@@ -579,7 +579,7 @@ class DataFogGuardrail(CustomGuardrail):
                 guardrail_status="guardrail_intervened",
                 masked_entity_count=dict(total_counts),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # logging failures must not break guardrail enforcement
             verbose_proxy_logger.debug("DataFog guardrail: could not record logging information")
 
     async def async_pre_call_hook(
@@ -593,7 +593,7 @@ class DataFogGuardrail(CustomGuardrail):
             return data
         try:
             new_data, total_counts = self._scan_request_data(data)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # engine failures are handled by the configured fail policy
             self._handle_engine_error(exc)
             return data
 
@@ -623,7 +623,7 @@ class DataFogGuardrail(CustomGuardrail):
             return data
         try:
             _, total_counts = self._scan_request_data(data)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # engine failures are handled by the configured fail policy
             self._handle_engine_error(exc)
             return data
 
@@ -685,7 +685,7 @@ class DataFogGuardrail(CustomGuardrail):
         stream_counts: dict[str, int] = {}
         try:
             stream_counts = self._scan_streaming_chunks(chunks, redact=self.action != "block")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # engine failures are handled by the configured fail policy
             self._handle_engine_error(exc)
             for chunk in chunks:
                 yield chunk
