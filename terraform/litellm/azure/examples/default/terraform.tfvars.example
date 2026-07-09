@@ -1,0 +1,42 @@
+location    = "eastus"
+tenant      = "acme"
+env         = "stage"
+azs         = ["1", "2"]
+
+# Optional: pre-existing LiteLLM master key (must begin with `sk-`). Leave
+# empty to have the stack auto-generate a random `sk-...` value and store
+# it in Key Vault.
+# litellm_master_key = "sk-..."
+
+# Optional: enterprise license (omit for OSS-only).
+# litellm_license = "..."
+
+# Optional: UI admin password (omit to fall back to LITELLM_MASTER_KEY).
+# ui_password = "..."
+
+# Optional: Key Vault certificate ID for the App Gateway HTTPS listener.
+# Either set this OR set allow_plaintext_app_gateway = true (dev only).
+# key_vault_certificate_id = "https://acmestagekv.vault.azure.net/certificates/litellm-cert/<version>"
+allow_plaintext_app_gateway = true
+
+# Optional: tell `terraform destroy` to remove a non-empty storage
+# container (and any uploaded files). Off by default.
+storage_force_destroy = false
+
+# Optional: enable proxy config with model list. Triggers a Container App
+# revision swap when changed.
+proxy_config = {
+  model_list = [
+    {
+      model_name = "gpt-4o"
+      litellm_params = {
+        model   = "openai/gpt-4o"
+        api_key = "os.environ/OPENAI_API_KEY"
+      }
+    },
+  ]
+  general_settings = {
+    master_key   = "os.environ/LITELLM_MASTER_KEY"
+    database_url = "os.environ/DATABASE_URL"
+  }
+}
