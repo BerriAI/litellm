@@ -24,11 +24,12 @@ from access_control_client import (
 )
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
+from model_matrix import GEMINI_CHAT, OPENAI_CHAT
 
 pytestmark = pytest.mark.e2e
 
-ALLOWED_MODEL = "gemini-2.5-flash"
-DISALLOWED_MODEL = "gpt-5.5"
+ALLOWED_MODEL = GEMINI_CHAT.alias
+DISALLOWED_MODEL = OPENAI_CHAT.alias
 
 
 def _is_json(body: str) -> bool:

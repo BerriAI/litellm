@@ -49,6 +49,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
+from model_matrix import OPENAI_CHAT_MINI
 from models import KeyGenerateBody, SpendLogRow, SpendLogsParams
 
 pytestmark = pytest.mark.e2e
@@ -339,7 +340,7 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
 
     file = unwrap(
         client.upload_file(
-            content=render_jsonl("gpt-4o-mini"),
+            content=render_jsonl(OPENAI_CHAT_MINI.alias),
             form=FileUploadForm(purpose="batch"),
             model="openai-batch",
             key=key,

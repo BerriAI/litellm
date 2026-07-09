@@ -30,12 +30,13 @@ from pydantic import BaseModel
 from e2e_config import unique_marker
 from e2e_http import NoBody, require_successful_call, unwrap
 from lifecycle import ResourceManager
+from model_matrix import GEMINI_CHAT
 from models import SpendLogRow
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-VERTEX_MODEL = "gemini-2.5-flash"
+VERTEX_MODEL = GEMINI_CHAT.alias
 # The added deployment's region and the passthrough URL's region are the same constant,
 # so they always agree; the proxy registers passthrough credentials per project+region.
 VERTEX_LOCATION = os.environ.get("VERTEXAI_LOCATION", "us-central1")

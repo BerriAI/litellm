@@ -23,10 +23,11 @@ from prometheus_client.parser import text_string_to_metric_families
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
+from model_matrix import GEMINI_CHAT
 
 pytestmark = pytest.mark.e2e
 
-DRIVER_MODEL = "gemini-2.5-flash"
+DRIVER_MODEL = GEMINI_CHAT.alias
 REQUESTS_METRIC = "litellm_requests_metric_total"
 ALIAS_LABEL = "api_key_alias"
 DISTINCT_KEYS = 3

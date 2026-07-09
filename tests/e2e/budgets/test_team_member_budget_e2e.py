@@ -22,11 +22,12 @@ from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import Success, require_successful_call
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT
 from models import ChatBody, ChatMessage
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "claude-haiku-4-5"
+MODEL = ANTHROPIC_CHAT.alias
 TEAM_BUDGET = 100.0
 MEMBER_BUDGET = 3e-6
 BURST = 6

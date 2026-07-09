@@ -15,15 +15,16 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from model_matrix import ANTHROPIC_CHAT, GEMINI_CHAT, OPENAI_CHAT
 from models import ChatBody, ChatMessage
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
-    ("gpt-5.5", "openai"),
-    ("claude-haiku-4-5", "anthropic"),
-    ("gemini-2.5-flash", "gemini"),
+    (OPENAI_CHAT.alias, "openai"),
+    (ANTHROPIC_CHAT.alias, "anthropic"),
+    (GEMINI_CHAT.alias, "gemini"),
 )
 
 

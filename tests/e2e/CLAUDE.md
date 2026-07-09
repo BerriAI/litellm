@@ -32,12 +32,16 @@ class TestPromptCompression:
 
     def test_prompt_compression_accumulate_spend(self, key_id, user_id):
         for _ in range(10):
-            response = self.resources.gateway.post("gemini-2.5-flash", key_id, user_id)
+            response = self.resources.gateway.post(GEMINI_CHAT.alias, key_id, user_id)
         compressed_value = ...
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
 
 That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from; it creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
+
+## Models come from model_matrix.py, never hardcoded
+
+Every model a test drives is a pin imported from `model_matrix.py` (`GEMINI_CHAT.alias`, `OPENAI_CHAT_MINI.backend`, ...), named for the role it plays, never its version. Bumping a model version is then a one-file change (plus `docker-compose.yml`, which cannot import Python). `tests/code_coverage_tests/check_e2e_model_freshness.py` enforces this in CI: it fails on hardcoded versioned model literals in any `.py` file here, on pins missing from `model_prices_and_context_window.json` or near their `deprecation_date`, and on drift between `GATEWAY_MODELS` and the compose gateway config
 
 ## Use the shared transport; never touch requests directly
 

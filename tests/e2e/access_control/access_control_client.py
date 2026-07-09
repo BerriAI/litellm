@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import StreamingResponse
+from model_matrix import OPENAI_CHAT_MINI
 from models import (
     ChatBody,
     ChatMessage,
@@ -46,7 +47,7 @@ class AccessControlClient:
             headers=self.gateway.transport.bearer(key),
             json=ModelNewBody(
                 model_name=model_name,
-                litellm_params=LiteLLMParamsBody(model="openai/gpt-4o-mini"),
+                litellm_params=LiteLLMParamsBody(model=OPENAI_CHAT_MINI.backend),
                 model_info=ModelInfoBody(id=model_name),
             ),
         )

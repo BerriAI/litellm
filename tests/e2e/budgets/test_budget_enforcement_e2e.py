@@ -20,6 +20,7 @@ from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import run_case
+from model_matrix import ANTHROPIC_CHAT
 
 pytestmark = pytest.mark.e2e
 
@@ -31,7 +32,7 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
     for _ in range(40):
         result = client.chat(
             key,
-            "claude-haiku-4-5",
+            ANTHROPIC_CHAT.alias,
             f"spend {unique_marker()}",
             max_tokens=16,
             user=user or None,
@@ -88,7 +89,7 @@ class EndUserBudgetCase(_BudgetCase):
         customer = f"e2e-budget-cust-{unique_marker()}"
         self.client.create_customer(customer, max_budget=3e-6)
         self._undo.append(lambda: self.client.delete_customers([customer]))
-        self.key = self.client.generate_key(models=["claude-haiku-4-5"])
+        self.key = self.client.generate_key(models=[ANTHROPIC_CHAT.alias])
         self._undo.append(lambda: self.client.delete_key(self.key))
         self._customer = customer
 

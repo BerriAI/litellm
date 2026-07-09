@@ -21,6 +21,7 @@ from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT
 from models import BudgetWindow
 
 pytestmark = pytest.mark.e2e
@@ -29,7 +30,7 @@ WINDOW_SECONDS = 30
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
+    return client.chat(key, ANTHROPIC_CHAT.alias, f"team-window {unique_marker()}", max_tokens=16)
 
 
 def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:

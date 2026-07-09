@@ -17,6 +17,7 @@ import pytest
 from e2e_config import PROXY_BASE_URL, unique_marker
 from lifecycle import ResourceManager
 from management_client import ManagementClient
+from model_matrix import OPENAI_CHAT
 from models import KeyGenerateBody, TeamNewBody
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed")
@@ -77,7 +78,7 @@ def _open_key_edit_form(page: Page, key_alias: str) -> None:
 
 
 def _provision_team(client: ManagementClient, resources: ResourceManager, alias: str) -> str:
-    team_id = client.create_team(TeamNewBody(team_alias=alias, models=["all-proxy-models", "gpt-5.5"]))
+    team_id = client.create_team(TeamNewBody(team_alias=alias, models=["all-proxy-models", OPENAI_CHAT.alias]))
     resources.defer(lambda: client.delete_team(team_id))
     return team_id
 
@@ -85,7 +86,7 @@ def _provision_team(client: ManagementClient, resources: ResourceManager, alias:
 def _provision_key(
     client: ManagementClient, resources: ResourceManager, alias: str, team_id: str | None = None
 ) -> str:
-    key = client.gateway.generate_key(KeyGenerateBody(key_alias=alias, models=["gpt-5.5"], team_id=team_id))
+    key = client.gateway.generate_key(KeyGenerateBody(key_alias=alias, models=[OPENAI_CHAT.alias], team_id=team_id))
     resources.defer(lambda: client.gateway.delete_key(key))
     return key
 
@@ -98,7 +99,7 @@ class TestKeyModelsDropdownUI:
     ) -> None:
         _open_create_key_modal(ui_page)
 
-        options = _models_dropdown_texts(ui_page, must_contain="gpt-5.5")
+        options = _models_dropdown_texts(ui_page, must_contain=OPENAI_CHAT.alias)
         assert "All Proxy Models" in options, f"teamless create lost 'All Proxy Models': {options}"
         assert "All Team Models" not in options, f"teamless create offered 'All Team Models': {options}"
 
@@ -120,7 +121,7 @@ class TestKeyModelsDropdownUI:
         _select_team(ui_page, team_alias)
 
         options = _models_dropdown_texts(ui_page, must_contain="All Team Models")
-        assert "gpt-5.5" in options, f"team key create lost the team's own model: {options}"
+        assert OPENAI_CHAT.alias in options, f"team key create lost the team's own model: {options}"
         assert "All Proxy Models" not in options, f"team key create offered 'All Proxy Models': {options}"
         assert "all-proxy-models" not in options, f"team key create offered the raw sentinel: {options}"
 
@@ -140,7 +141,7 @@ class TestKeyModelsDropdownUI:
 
         _open_key_edit_form(ui_page, key_alias)
 
-        options = _models_dropdown_texts(ui_page, must_contain="gpt-5.5")
+        options = _models_dropdown_texts(ui_page, must_contain=OPENAI_CHAT.alias)
         assert "All Proxy Models" in options, f"teamless edit lost 'All Proxy Models': {options}"
         assert "All Team Models" not in options, f"teamless edit offered 'All Team Models': {options}"
 
@@ -156,6 +157,6 @@ class TestKeyModelsDropdownUI:
         _open_key_edit_form(ui_page, key_alias)
 
         options = _models_dropdown_texts(ui_page, must_contain="All Team Models")
-        assert "gpt-5.5" in options, f"team key edit lost the team's own model: {options}"
+        assert OPENAI_CHAT.alias in options, f"team key edit lost the team's own model: {options}"
         assert "All Proxy Models" not in options, f"team key edit offered 'All Proxy Models': {options}"
         assert "all-proxy-models" not in options, f"team key edit offered the raw sentinel: {options}"

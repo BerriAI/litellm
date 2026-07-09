@@ -12,11 +12,12 @@ import pytest
 from budget_client import BudgetClient, model_budget
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT, OPENAI_CHAT
 
 pytestmark = pytest.mark.e2e
 
-PRIMARY_MODEL = "claude-haiku-4-5"
-FALLBACK_MODEL = "gpt-5.5"
+PRIMARY_MODEL = ANTHROPIC_CHAT.alias
+FALLBACK_MODEL = OPENAI_CHAT.alias
 
 
 def test_budget_fallback_reroutes_anthropic_messages_to_openai(

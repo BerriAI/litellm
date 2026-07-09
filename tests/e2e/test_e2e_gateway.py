@@ -24,6 +24,7 @@ from e2e_http import (
     Success,
     UnknownApiError,
 )
+from model_matrix import OPENAI_CHAT_MINI
 from models import (
     LiteLLMParamsBody,
     ModelDeleteBody,
@@ -130,7 +131,7 @@ def test_gateway_create_model_registers_deployment_and_returns_model_id() -> Non
     gateway = Gateway(transport=transport, poll_interval=0.0)
 
     model_id = gateway.create_model(
-        "e2e-test-model", LiteLLMParamsBody(model="openai/gpt-4o-mini")
+        "e2e-test-model", LiteLLMParamsBody(model=OPENAI_CHAT_MINI.backend)
     )
 
     assert model_id == "registered-id"
@@ -182,7 +183,7 @@ def test_batch_client_create_model_registers_a_batch_mode_deployment() -> None:
     client = BatchClient(gateway=Gateway(transport=transport, poll_interval=0.0))
 
     model_id = client.create_model(
-        "e2e-batch-model", LiteLLMParamsBody(model="openai/gpt-4o-mini")
+        "e2e-batch-model", LiteLLMParamsBody(model=OPENAI_CHAT_MINI.backend)
     )
 
     assert model_id == "registered-id"

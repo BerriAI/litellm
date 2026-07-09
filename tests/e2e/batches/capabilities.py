@@ -13,6 +13,7 @@ import base64
 from dataclasses import dataclass
 from typing import Literal
 
+from model_matrix import AZURE_BATCH, BEDROCK_ANTHROPIC_CHAT, GEMINI_CHAT, OPENAI_CHAT_MINI, VERTEX_CHAT
 from models import LiteLLMParamsBody
 
 Scenario = Literal["encoded", "unified", "model_param", "provider_fallback"]
@@ -39,26 +40,26 @@ class Provider:
         match self.name:
             case "openai":
                 return LiteLLMParamsBody(
-                    model="openai/gpt-4o-mini",
+                    model=OPENAI_CHAT_MINI.backend,
                     api_key="os.environ/OPENAI_API_KEY",
                 )
             case "azure":
                 return LiteLLMParamsBody(
-                    model="azure/gpt-4.1-mini-batch",
+                    model=AZURE_BATCH.backend,
                     api_base="os.environ/AZURE_API_BASE",
                     api_key="os.environ/AZURE_API_KEY",
                     api_version="2024-07-01-preview",
                 )
             case "vertex_ai":
                 return LiteLLMParamsBody(
-                    model="vertex_ai/gemini-2.5-flash",
+                    model=VERTEX_CHAT.backend,
                     vertex_project="os.environ/VERTEXAI_PROJECT",
                     vertex_location="us-central1",
                     vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
                 )
             case "bedrock":
                 return LiteLLMParamsBody(
-                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    model=BEDROCK_ANTHROPIC_CHAT.backend,
                     s3_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                     s3_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                     s3_region_name="os.environ/AWS_REGION",
@@ -96,15 +97,15 @@ class Capability:
 
 
 PROVIDERS: tuple[Provider, ...] = (
-    Provider("openai", "openai-batch", "gpt-4o-mini", can_cancel=True, can_list=True),
-    Provider("azure", "azure-batch", "gpt-4.1-mini-batch", can_cancel=True, can_list=True),
+    Provider("openai", "openai-batch", OPENAI_CHAT_MINI.alias, can_cancel=True, can_list=True),
+    Provider("azure", "azure-batch", AZURE_BATCH.alias, can_cancel=True, can_list=True),
     Provider(
-        "vertex_ai", "vertex-batch", "gemini-2.5-flash", can_cancel=True, can_list=True
+        "vertex_ai", "vertex-batch", GEMINI_CHAT.alias, can_cancel=True, can_list=True
     ),
     Provider(
         "bedrock",
         "bedrock-batch",
-        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        BEDROCK_ANTHROPIC_CHAT.backend,
         can_cancel=False,
         can_list=False,
     ),

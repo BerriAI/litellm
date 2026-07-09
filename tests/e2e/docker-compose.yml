@@ -23,7 +23,7 @@ configs:
         allowed_fails: 5
         cooldown_time: 30
         fallbacks:
-          - gemini-2.5-flash: ["gpt-5.5", "claude-haiku-4-5"]
+          - gemini-3.5-flash: ["gpt-5.5", "claude-haiku-4-5"]
 
       finetune_settings:
         - custom_llm_provider: openai
@@ -40,9 +40,9 @@ configs:
             model: anthropic/claude-haiku-4-5
             api_key: os.environ/ANTHROPIC_API_KEY
 
-        - model_name: gemini-2.5-flash
+        - model_name: gemini-3.5-flash
           litellm_params:
-            model: gemini/gemini-2.5-flash
+            model: gemini/gemini-3.5-flash
             api_key: os.environ/GEMINI_API_KEY
 
         - model_name: openai-text-embedding-3-small

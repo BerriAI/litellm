@@ -3,8 +3,8 @@
 Run against a proxy started with the gateway config. Coverage rationale:
 SPEND_TRACKING_COVERAGE_MATRIX.md.
 
-Model names are literals from that config: chat tests hit "gemini-2.5-flash",
-embedding tests hit "openai-text-embedding-3-small".
+Model names come from model_matrix.py pins baked into that config: chat tests
+hit GEMINI_CHAT, embedding tests hit OPENAI_EMBEDDING.
 
 Every test: fresh scoped key (isolation) -> real provider call -> unwrap (hard
 fail if the proxy couldn't make a call it should) -> poll /spend/logs to a
@@ -23,6 +23,7 @@ import pytest
 
 from e2e_http import Result, Success
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT, GEMINI_CHAT, OPENAI_EMBEDDING
 from models import ChatResponse, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
@@ -65,7 +66,7 @@ def test_chat_completion_writes_nonzero_spend_row(
     chat = unwrap(
         client.chat(
             scoped_key,
-            "gemini-2.5-flash",
+            GEMINI_CHAT.alias,
             f"reply with one word {unique_marker()}",
             max_tokens=16,
         )
@@ -79,7 +80,7 @@ def test_chat_completion_writes_nonzero_spend_row(
     assert (row.spend or 0) > 0, f"chat row should cost > 0: {_summarize(rows)}"
     assert row.status == "success"
     assert row.cache_hit != "True", "fresh call must not be a cache hit"
-    assert "gemini-2.5-flash" in (row.model or "")
+    assert GEMINI_CHAT.alias in (row.model or "")
 
     prompt = row.prompt_tokens or 0
     completion = row.completion_tokens or 0
@@ -98,7 +99,7 @@ def test_streaming_chat_completion_tracks_spend(
 ) -> None:
     result = client.chat_stream(
         scoped_key,
-        "gemini-2.5-flash",
+        GEMINI_CHAT.alias,
         f"count to three {unique_marker()}",
         max_tokens=64,
     )
@@ -126,7 +127,7 @@ def test_embedding_writes_nonzero_spend_row(
     _ = unwrap(
         client.embed(
             scoped_key,
-            "openai-text-embedding-3-small",
+            OPENAI_EMBEDDING.alias,
             f"vectorize this sentence {unique_marker()}",
         )
     )
@@ -139,7 +140,7 @@ def test_embedding_writes_nonzero_spend_row(
     )
     assert (row.prompt_tokens or 0) > 0
     assert (row.completion_tokens or 0) == 0, "embeddings have no completion tokens"
-    assert "text-embedding-3-small" in (row.model or "")
+    assert OPENAI_EMBEDDING.model_id in (row.model or "")
 
 
 def test_cache_hit_is_zero_cost_and_suffixed(
@@ -150,8 +151,8 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     # populated. The marker keeps each run isolated - a fixed prompt would persist
     # in the shared response cache across runs and make both calls hit (flaky).
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
+    _ = unwrap(client.chat(scoped_key, GEMINI_CHAT.alias, prompt, max_tokens=16))
+    _ = unwrap(client.chat(scoped_key, GEMINI_CHAT.alias, prompt, max_tokens=16))
 
     rows = client.poll_logs_for_key(
         scoped_key, predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
@@ -182,7 +183,7 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
         _ = unwrap(
             client.chat(
                 scoped_key,
-                "gemini-2.5-flash",
+                GEMINI_CHAT.alias,
                 f"say hi {unique_marker()}",
                 max_tokens=16,
             )
@@ -216,7 +217,7 @@ def test_burst_of_concurrent_calls_loses_no_spend(
     def call(idx: int) -> Result[ChatResponse]:
         return client.chat(
             scoped_key,
-            "gemini-2.5-flash",
+            GEMINI_CHAT.alias,
             f"burst call {idx} {unique_marker()}",
             max_tokens=16,
         )
@@ -265,7 +266,7 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
         _ = unwrap(
             client.chat(
                 scoped_key,
-                "gemini-2.5-flash",
+                GEMINI_CHAT.alias,
                 f"page fodder {unique_marker()}",
                 max_tokens=16,
             )
@@ -305,7 +306,7 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     tag = f"e2e-spend-{unique_marker()}"
     _ = unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", "tagged request", tags=[tag], max_tokens=16
+            scoped_key, GEMINI_CHAT.alias, "tagged request", tags=[tag], max_tokens=16
         )
     )
 
@@ -327,7 +328,7 @@ def test_tag_spend_matches_sum_of_tagged_logs(
         _ = unwrap(
             client.chat(
                 scoped_key,
-                "gemini-2.5-flash",
+                GEMINI_CHAT.alias,
                 f"hi {unique_marker()}",
                 tags=[tag],
                 max_tokens=16,
@@ -359,7 +360,7 @@ def test_end_user_spend_attributed_on_row(
 ) -> None:
     customer = resources.customer(f"e2e-cust-{unique_marker()}")
     _ = unwrap(
-        client.chat(scoped_key, "gemini-2.5-flash", "hi", user=customer, max_tokens=16)
+        client.chat(scoped_key, GEMINI_CHAT.alias, "hi", user=customer, max_tokens=16)
     )
 
     rows = client.poll_logs_for_key(
@@ -381,27 +382,27 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
     sibling deployment, or collapses both calls onto one request_id fails here."""
     gemini = unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", f"one word {unique_marker()}", max_tokens=16
+            scoped_key, GEMINI_CHAT.alias, f"one word {unique_marker()}", max_tokens=16
         )
     )
     claude = unwrap(
         client.chat(
-            scoped_key, "claude-haiku-4-5", f"one word {unique_marker()}", max_tokens=16
+            scoped_key, ANTHROPIC_CHAT.alias, f"one word {unique_marker()}", max_tokens=16
         )
     )
 
     def both_models_costed(rows: list[SpendLogRow]) -> bool:
         costed = [r.model or "" for r in rows if (r.spend or 0) > 0]
-        return any("gemini-2.5-flash" in m for m in costed) and any(
-            "claude-haiku-4-5" in m for m in costed
+        return any(GEMINI_CHAT.alias in m for m in costed) and any(
+            ANTHROPIC_CHAT.alias in m for m in costed
         )
 
     rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=both_models_costed)
     gemini_row = _require_row(
-        rows, lambda r: "gemini-2.5-flash" in (r.model or ""), "for the gemini call"
+        rows, lambda r: GEMINI_CHAT.alias in (r.model or ""), "for the gemini call"
     )
     claude_row = _require_row(
-        rows, lambda r: "claude-haiku-4-5" in (r.model or ""), "for the claude call"
+        rows, lambda r: ANTHROPIC_CHAT.alias in (r.model or ""), "for the claude call"
     )
 
     assert (gemini_row.spend or 0) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
@@ -422,7 +423,7 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
 def test_failure_call_writes_failure_status_row(
     client: SpendClient, scoped_key: str
 ) -> None:
-    result = client.chat(scoped_key, "gemini-2.5-flash", "", max_tokens=1)
+    result = client.chat(scoped_key, GEMINI_CHAT.alias, "", max_tokens=1)
     if is_ok(result):
         pytest.skip("call unexpectedly succeeded; could not induce a failure row")
 
@@ -440,11 +441,11 @@ def test_failure_call_writes_failure_status_row(
 
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
     cost = client.calculate_spend(
-        "gemini-2.5-flash", "estimate the cost of this request"
+        GEMINI_CHAT.alias, "estimate the cost of this request"
     )
     assert cost > 0, (
-        "/spend/calculate returned 0 for gemini-2.5-flash; "
-        "cost map may be missing this model"
+        f"/spend/calculate returned 0 for {GEMINI_CHAT.alias}; "
+        f"cost map may be missing this model"
     )
 
 
@@ -458,7 +459,7 @@ def test_spend_logs_endpoint_returns_spend(
     call's nonzero spend must surface before the deadline."""
     unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", f"spend logs {unique_marker()}", max_tokens=16
+            scoped_key, GEMINI_CHAT.alias, f"spend logs {unique_marker()}", max_tokens=16
         )
     )
 

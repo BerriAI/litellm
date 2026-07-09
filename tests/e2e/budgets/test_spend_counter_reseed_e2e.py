@@ -28,6 +28,7 @@ from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT
 
 if TYPE_CHECKING:
     import redis
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "claude-haiku-4-5"
+MODEL = ANTHROPIC_CHAT.alias
 ACCUMULATE_CALLS = 24
 BURST = 6
 # proxy_batch_write_at (60s) flushes the spend to the DB and default_redis_ttl (20s)

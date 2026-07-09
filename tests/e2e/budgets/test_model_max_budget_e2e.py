@@ -14,11 +14,12 @@ from budget_client import BudgetClient, is_budget_block, model_budget
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
+from model_matrix import ANTHROPIC_CHAT, GEMINI_CHAT
 
 pytestmark = pytest.mark.e2e
 
-CAPPED_MODEL = "claude-haiku-4-5"
-FREE_MODEL = "gemini-2.5-flash"
+CAPPED_MODEL = ANTHROPIC_CHAT.alias
+FREE_MODEL = GEMINI_CHAT.alias
 
 
 def _call(client: BudgetClient, key: str, model: str):
