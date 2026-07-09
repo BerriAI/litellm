@@ -68,7 +68,7 @@ describe("LogDetailContent", () => {
     );
 
     expect(screen.getByText("Source")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Notion logo" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Notion logo")).toBeInTheDocument();
     expect(screen.getByText("Notion")).toBeInTheDocument();
   });
 

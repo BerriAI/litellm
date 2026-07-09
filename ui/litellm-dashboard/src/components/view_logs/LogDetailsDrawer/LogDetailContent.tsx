@@ -39,6 +39,14 @@ import { RelaySourceBadge, getRelaySource } from "../TypeBadges";
 
 const { Text } = Typography;
 
+const getObjectRequestTags = (requestTags: LogEntry["request_tags"]): Record<string, unknown> | undefined => {
+  if (!requestTags || Array.isArray(requestTags) || typeof requestTags !== "object") {
+    return undefined;
+  }
+
+  return requestTags;
+};
+
 export interface LogDetailContentProps {
   logEntry: LogEntry;
   /** When true, log details (messages/response) are still being lazy-loaded. */
@@ -56,6 +64,7 @@ export interface LogDetailContentProps {
  */
 export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
+  const requestTags = getObjectRequestTags(logEntry.request_tags);
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
   const isRelayCapture = logEntry.call_type === "litellm-relay";
@@ -112,9 +121,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Tags */}
-      {logEntry.request_tags && Object.keys(logEntry.request_tags).length > 0 && (
-        <TagsSection tags={logEntry.request_tags} />
-      )}
+      {requestTags && Object.keys(requestTags).length > 0 && <TagsSection tags={requestTags} />}
 
       {/* Request Details */}
       <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
@@ -242,7 +249,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
   );
 }
 
-function TagsSection({ tags }: { tags: Record<string, any> }) {
+function TagsSection({ tags }: { tags: Record<string, unknown> }) {
   return (
     <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
