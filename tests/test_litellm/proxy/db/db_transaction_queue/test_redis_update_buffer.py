@@ -360,6 +360,20 @@ def test_get_transaction_buffer_redis_cache_none_without_host_or_url():
     assert result is None
 
 
+def test_get_transaction_buffer_redis_cache_does_not_import_redis_when_disabled():
+    """
+    When the buffer is disabled, litellm._redis (which imports redis.asyncio) must not be
+    imported, so the proxy starts even in deployments without the redis package installed.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/32592
+    """
+    with patch.dict(sys.modules, {"litellm._redis": None}):
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={},
+        )
+    assert result is None
+
+
 def test_get_transaction_buffer_redis_cache_parses_string_flag(monkeypatch):
     """
     use_redis_transaction_buffer accepts a string value (e.g. from env/YAML); "true"
