@@ -719,6 +719,147 @@ def test_success_span_records_no_exception_event():
     assert all(e.name != ExceptionEvent.NAME for e in span.events)
 
 
+def _engine_with_event_recorder():
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    from litellm.integrations.otel.emitter import SpanEmitter
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    provider, span_exporter = providers.in_memory_provider(cfg)
+    log_exporter = InMemoryLogExporter()
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider))
+    engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg, event_recorder=recorder)
+    return engine, span_exporter, log_exporter
+
+
+def _llm_call_data(error):
+    return LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model=None,
+        response_id=None,
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=(),
+        error=error,
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+    )
+
+
+def test_operation_exception_log_event_emitted_on_failed_llm_call():
+    """A failed LLM call records the GenAI semconv ``gen_ai.client.operation.exception``
+    event on the logs signal: severity WARN, the full ``exception.*`` trio (including
+    the stacktrace, which span-side only exists under a vendor key), correlated to
+    the failed span via trace/span ids. The span-side error surface stays intact."""
+    from opentelemetry._logs.severity import SeverityNumber
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    engine, span_exporter, log_exporter = _engine_with_event_recorder()
+    engine.emit(
+        SpanRole.LLM_CALL,
+        _llm_call_data(
+            SpanError(
+                error_type="RateLimitError",
+                message="rate limited",
+                code="429",
+                stack_trace="Traceback (most recent call last) ...",
+                llm_provider="openai",
+            )
+        ),
+    )
+    (span,) = span_exporter.get_finished_spans()
+    (log,) = log_exporter.get_finished_logs()
+    record = log.log_record
+
+    assert record.attributes["event.name"] == GenAIEvent.OPERATION_EXCEPTION
+    assert record.severity_number == SeverityNumber.WARN
+    assert record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+    assert record.attributes[ExceptionEvent.MESSAGE] == "rate limited"
+    assert record.attributes[ExceptionEvent.STACKTRACE] == "Traceback (most recent call last) ..."
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
+
+    assert [e.name for e in span.events] == [ExceptionEvent.NAME]
+    assert span.attributes["error.type"] == "RateLimitError"
+
+
+def test_operation_exception_log_event_omits_absent_stacktrace():
+    from litellm.integrations.otel.model.semconv import ExceptionEvent
+
+    engine, _, log_exporter = _engine_with_event_recorder()
+    engine.emit(SpanRole.LLM_CALL, _llm_call_data(SpanError(error_type="APIError", message="boom")))
+    (log,) = log_exporter.get_finished_logs()
+
+    assert ExceptionEvent.STACKTRACE not in log.log_record.attributes
+    assert log.log_record.attributes[ExceptionEvent.MESSAGE] == "boom"
+
+
+def test_operation_exception_log_event_not_emitted_on_success():
+    engine, span_exporter, log_exporter = _engine_with_event_recorder()
+    engine.emit(SpanRole.LLM_CALL, _llm_call_data(None))
+
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert log_exporter.get_finished_logs() == ()
+
+
+def test_operation_exception_log_event_only_for_llm_call_role():
+    """The event is scoped to GenAI client operations; a failed guardrail span
+    keeps its span-side error surface but records no GenAI exception event."""
+    engine, span_exporter, log_exporter = _engine_with_event_recorder()
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData("presidio", status="failure", error=SpanError(error_type="X", message="denied")),
+    )
+    (span,) = span_exporter.get_finished_spans()
+
+    assert span.attributes["error.type"] == "X"
+    assert log_exporter.get_finished_logs() == ()
+
+
+def test_resolve_logger_provider_honors_explicit_noop_optout(monkeypatch):
+    """A ``NoOpLoggerProvider`` global is an explicit operator opt-out from the logs
+    signal: resolve to ``None`` so no recorder (and so no event) is ever built,
+    rather than emitting into a provider that drops everything."""
+    from opentelemetry import _logs
+    from opentelemetry._logs import NoOpLoggerProvider
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    tracer_provider, _ = providers.in_memory_provider(cfg)
+    monkeypatch.setattr(_logs, "get_logger_provider", lambda: NoOpLoggerProvider())
+
+    assert providers.resolve_logger_provider(cfg) is None
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider)
+    assert logger._emitter._event_recorder is None
+
+
+def test_resolve_logger_provider_reuses_operator_sdk_global(monkeypatch):
+    """Events ride an operator-configured logs pipeline rather than a second one
+    built by litellm, so they land wherever the operator's other logs land."""
+    from opentelemetry import _logs
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    operator_provider = providers.build_logger_provider(cfg, log_exporter=InMemoryLogExporter())
+    monkeypatch.setattr(_logs, "get_logger_provider", lambda: operator_provider)
+
+    assert providers.resolve_logger_provider(cfg) is operator_provider
+
+
+def test_operation_exception_event_keys_are_pinned():
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    assert GenAIEvent.OPERATION_EXCEPTION == "gen_ai.client.operation.exception"
+    assert ExceptionEvent.STACKTRACE == "exception.stacktrace"
+
+
 # --- service taxonomy: which calls become spans, and of what kind ----------- #
 
 
