@@ -467,6 +467,13 @@ async def unblock_model(
 ####################################################################################
 
 
+def _resolve_model_blocked(model_params: Deployment) -> bool:
+    root_blocked = model_params.get("blocked", None)
+    if root_blocked is not None:
+        return bool(root_blocked)
+    return bool(model_params.model_info.blocked)
+
+
 async def _add_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
@@ -487,6 +494,7 @@ async def _add_model_to_db(
         "model_info": model_params.model_info.model_dump_json(  # type: ignore
             exclude_none=True
         ),
+        "blocked": _resolve_model_blocked(model_params),
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
     }
@@ -1266,6 +1274,14 @@ async def add_new_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
+
+        if _resolve_model_blocked(model_params) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise ProxyException(
+                message="Only proxy admins can change a model's blocked flag.",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param="blocked",
+            )
 
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import sys
@@ -2796,3 +2797,163 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+
+class TestAddNewModelBlocked:
+    """`/model/new` must persist the root-level `blocked` flag onto the DB row so
+    a model can be created already paused (issue #32582). Absent flag defaults to
+    False, and toggling `blocked` stays a proxy-admin-only privilege — mirroring
+    the guard on `/model/update`."""
+
+    @staticmethod
+    def _patched_add_env(mock_prisma):
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = (
+            "litellm.proxy.management_endpoints.model_management_endpoints"
+            ".encrypt_value_helper"
+        )
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock()
+        return (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        )
+
+    @staticmethod
+    def _mock_prisma(model_id):
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="blocked-model",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+        return mock_prisma
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_persists_blocked_true(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        model_id = "blocked-add-1"
+        mock_prisma = self._mock_prisma(model_id)
+        admin = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with contextlib.ExitStack() as stack:
+            for ctx in self._patched_add_env(mock_prisma):
+                stack.enter_context(ctx)
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="blocked-model",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-4.1-nano"),
+                    model_info={"id": model_id},
+                    blocked=True,
+                ),
+                user_api_key_dict=admin,
+            )
+
+        create_kwargs = mock_prisma.db.litellm_proxymodeltable.create.await_args.kwargs
+        assert create_kwargs["data"]["blocked"] is True
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_persists_blocked_via_model_info(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+        from litellm.types.router import ModelInfo
+
+        model_id = "blocked-add-info-1"
+        mock_prisma = self._mock_prisma(model_id)
+        admin = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with contextlib.ExitStack() as stack:
+            for ctx in self._patched_add_env(mock_prisma):
+                stack.enter_context(ctx)
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="blocked-model",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-4.1-nano"),
+                    model_info=ModelInfo(id=model_id, blocked=True),
+                ),
+                user_api_key_dict=admin,
+            )
+
+        create_kwargs = mock_prisma.db.litellm_proxymodeltable.create.await_args.kwargs
+        assert create_kwargs["data"]["blocked"] is True
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_defaults_blocked_false(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        model_id = "blocked-add-2"
+        mock_prisma = self._mock_prisma(model_id)
+        admin = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with contextlib.ExitStack() as stack:
+            for ctx in self._patched_add_env(mock_prisma):
+                stack.enter_context(ctx)
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="blocked-model",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-4.1-nano"),
+                    model_info={"id": model_id},
+                ),
+                user_api_key_dict=admin,
+            )
+
+        create_kwargs = mock_prisma.db.litellm_proxymodeltable.create.await_args.kwargs
+        assert create_kwargs["data"]["blocked"] is False
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_create_blocked_model(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        model_id = "blocked-add-3"
+        mock_prisma = self._mock_prisma(model_id)
+        non_admin = UserAPIKeyAuth(
+            user_id="team-admin", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        _CHECK = (
+            "litellm.proxy.management_endpoints.model_management_endpoints"
+            ".ModelManagementAuthChecks.can_user_make_model_call"
+        )
+        with contextlib.ExitStack() as stack:
+            for ctx in self._patched_add_env(mock_prisma):
+                stack.enter_context(ctx)
+            stack.enter_context(patch(_CHECK, new=AsyncMock(return_value=None)))
+            with pytest.raises(Exception) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="blocked-model",
+                        litellm_params=LiteLLM_Params(model="openai/gpt-4.1-nano"),
+                        model_info={"id": model_id},
+                        blocked=True,
+                    ),
+                    user_api_key_dict=non_admin,
+                )
+
+        err = exc_info.value
+        assert getattr(err, "param", "") == "blocked"
+        assert "proxy admin" in getattr(err, "message", "").lower()
+        mock_prisma.db.litellm_proxymodeltable.create.assert_not_awaited()
