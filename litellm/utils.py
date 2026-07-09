@@ -8244,39 +8244,36 @@ class ProviderConfigManager:
         model: Optional[str],
         provider: LlmProviders,
     ) -> Optional[BaseLLMModelInfo]:
-        if LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIConfig()
-        elif LlmProviders.OPENAI == provider:
-            return litellm.OpenAIGPTConfig()
-        elif LlmProviders.GEMINI == provider:
-            return litellm.GeminiModelInfo()
+        # Providers whose model info is a zero-arg config with no local import.
+        simple_configs = {
+            LlmProviders.FIREWORKS_AI: litellm.FireworksAIConfig,
+            LlmProviders.OPENAI: litellm.OpenAIGPTConfig,
+            LlmProviders.GEMINI: litellm.GeminiModelInfo,
+            LlmProviders.LITELLM_PROXY: litellm.LiteLLMProxyChatConfig,
+            LlmProviders.TOPAZ: litellm.TopazModelInfo,
+            LlmProviders.ANTHROPIC: litellm.AnthropicModelInfo,
+            LlmProviders.XAI: litellm.XAIModelInfo,
+            LlmProviders.LEMONADE: litellm.LemonadeChatConfig,
+            LlmProviders.CLARIFAI: litellm.ClarifaiConfig,
+            LlmProviders.DATAROBOT: litellm.DataRobotConfig,
+        }
+        if provider in simple_configs:
+            return simple_configs[provider]()
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
 
             return VertexAIModelInfo()
-        elif LlmProviders.LITELLM_PROXY == provider:
-            return litellm.LiteLLMProxyChatConfig()
-        elif LlmProviders.TOPAZ == provider:
-            return litellm.TopazModelInfo()
-        elif LlmProviders.ANTHROPIC == provider:
-            return litellm.AnthropicModelInfo()
-        elif LlmProviders.XAI == provider:
-            return litellm.XAIModelInfo()
-        elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
+        elif provider in (LlmProviders.OLLAMA, LlmProviders.OLLAMA_CHAT):
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
 
             return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
+        elif provider in (LlmProviders.VLLM, LlmProviders.HOSTED_VLLM):
             from litellm.llms.vllm.common_utils import (
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
             )
 
             return VLLMModelInfo()
-        elif LlmProviders.LEMONADE == provider:
-            return litellm.LemonadeChatConfig()
-        elif LlmProviders.CLARIFAI == provider:
-            return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 

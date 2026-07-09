@@ -4,8 +4,11 @@ Support for OpenAI's `/v1/chat/completions` endpoint.
 Calls done in OpenAI/openai.py as DataRobot is openai-compatible.
 """
 
-from typing import Optional, Tuple
+import re
+from typing import Optional, Tuple, cast
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import ProviderSpecificModelInfo
+from litellm.utils import _get_model_info_helper
 from urllib.parse import urlparse, urlunparse
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -85,3 +88,27 @@ class DataRobotConfig(OpenAILikeChatConfig):
             str: The complete URL for the API call.
         """
         return str(api_base)  # type: ignore
+
+    def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
+        """Resolve capabilities from the provider the gateway routes to.
+
+        DataRobot has no entries in the model map; it is OpenAI-compatible and
+        addresses models as ``<inner_provider>/<model>`` (``vertex_ai/...``,
+        ``azure/...``). ``model`` arrives with the ``datarobot/`` prefix already
+        stripped by ``get_llm_provider``, so we hand off to the inner provider's
+        model info. Azure gateway names are DataRobot deployment names whose
+        version dots are spelled as dashes, so they are adapted to litellm's keys
+        (``gpt-5-1`` -> ``gpt-5.1``).
+        """
+        if "/" not in model:
+            return None
+        if model.startswith("azure/"):
+            # dashed version -> dotted (gpt-5-1 -> gpt-5.1); minor capped at 2 digits
+            # so a 4-digit date suffix (gpt-4-2024-08-06) is not misread as a version.
+            model = re.sub(r"(gpt-\d+)-(\d{1,2})(?=-|$)", r"\1.\2", model)
+        try:
+            # Read-path helper: carries all supports_* flags, and avoids the public
+            # get_model_info, which can trigger side effects (e.g. OAuth) per provider.
+            return cast(ProviderSpecificModelInfo, _get_model_info_helper(model))
+        except Exception:  # noqa: BLE001 (unmapped model -> bare Exception)
+            return None
