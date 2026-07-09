@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
 
 from litellm.llms.openrouter.image_generation.transformation import (
     QUALITY_ALIASES,
@@ -17,11 +19,13 @@ from litellm.types.utils import ImageResponse
 
 class TestOpenRouterImageGenerationTransformation:
     def setup_method(self):
+        """Set up test fixtures before each test method."""
         self.config = OpenRouterImageGenerationConfig()
         self.model = "bytedance-seed/seedream-4.5"
         self.logging_obj = MagicMock()
 
     def test_get_supported_openai_params(self):
+        """Test that get_supported_openai_params returns correct parameters."""
         supported_params = self.config.get_supported_openai_params(self.model)
 
         assert "n" in supported_params
@@ -33,6 +37,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert len(supported_params) == 6
 
     def test_map_openai_params_size_passed_directly(self):
+        """Test that map_openai_params passes size through unchanged."""
         result = self.config.map_openai_params(
             non_default_params={"size": "1024x1024"},
             optional_params={},
@@ -44,6 +49,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert "image_config" not in result
 
     def test_map_openai_params_quality_passed_directly(self):
+        """Test that map_openai_params passes quality through unchanged."""
         result = self.config.map_openai_params(
             non_default_params={"quality": "high"},
             optional_params={},
@@ -55,6 +61,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert "image_config" not in result
 
     def test_map_openai_params_quality_aliases(self):
+        """Test that dall-e-3 quality aliases are mapped (standard->low, hd->high)."""
         for alias, mapped in QUALITY_ALIASES.items():
             result = self.config.map_openai_params(
                 non_default_params={"quality": alias},
@@ -65,6 +72,7 @@ class TestOpenRouterImageGenerationTransformation:
             assert result["quality"] == mapped
 
     def test_map_openai_params_multiple(self):
+        """Test that map_openai_params correctly maps multiple parameters."""
         result = self.config.map_openai_params(
             non_default_params={"size": "1792x1024", "quality": "hd", "n": 2},
             optional_params={},
@@ -77,6 +85,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result["n"] == 2
 
     def test_map_openai_params_unsupported_drop_false(self):
+        """Test that unsupported params are passed through when drop_params=False."""
         result = self.config.map_openai_params(
             non_default_params={"size": "1024x1024", "unsupported_param": "value"},
             optional_params={},
@@ -87,6 +96,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result["unsupported_param"] == "value"
 
     def test_map_openai_params_unsupported_drop_true(self):
+        """Test that unsupported params are dropped when drop_params=True."""
         result = self.config.map_openai_params(
             non_default_params={"size": "1024x1024", "unsupported_param": "value"},
             optional_params={},
@@ -97,6 +107,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert "unsupported_param" not in result
 
     def test_get_complete_url_default(self):
+        """Test that get_complete_url returns the default OpenRouter /images URL."""
         result = self.config.get_complete_url(
             api_base=None,
             api_key="test_key",
@@ -108,6 +119,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result == "https://openrouter.ai/api/v1/images"
 
     def test_get_complete_url_with_custom_base(self):
+        """Test that get_complete_url appends /images to a custom api_base."""
         result = self.config.get_complete_url(
             api_base="https://custom.openrouter.ai/api/v1",
             api_key="test_key",
@@ -119,6 +131,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result == "https://custom.openrouter.ai/api/v1/images"
 
     def test_get_complete_url_already_complete(self):
+        """Test that get_complete_url doesn't duplicate /images."""
         result = self.config.get_complete_url(
             api_base="https://custom.openrouter.ai/api/v1/images",
             api_key="test_key",
@@ -143,6 +156,7 @@ class TestOpenRouterImageGenerationTransformation:
 
     @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
     def test_validate_environment_with_api_key(self, mock_get_secret):
+        """Test that validate_environment correctly sets authorization header."""
         result = self.config.validate_environment(
             headers={},
             model=self.model,
@@ -157,6 +171,7 @@ class TestOpenRouterImageGenerationTransformation:
 
     @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
     def test_validate_environment_with_secret_key(self, mock_get_secret):
+        """Test that validate_environment uses secret API key when api_key is None."""
         mock_get_secret.return_value = "secret_api_key"
 
         result = self.config.validate_environment(
@@ -172,6 +187,7 @@ class TestOpenRouterImageGenerationTransformation:
         mock_get_secret.assert_called_once_with("OPENROUTER_API_KEY")
 
     def test_transform_request_basic(self):
+        """Test that transform_image_generation_request creates correct request body."""
         result = self.config.transform_image_generation_request(
             model=self.model,
             prompt="A beautiful sunset over mountains",
@@ -185,6 +201,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert "messages" not in result
 
     def test_transform_request_with_optional_params(self):
+        """Test that transform_image_generation_request includes optional params."""
         result = self.config.transform_image_generation_request(
             model=self.model,
             prompt="A sunset",
@@ -206,6 +223,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result["background"] == "transparent"
 
     def test_transform_response_with_b64_images(self):
+        """Test that transform_image_generation_response correctly extracts base64 images."""
         response_data = {
             "created": 1748372400,
             "data": [
@@ -241,6 +259,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result.data[0].url is None
 
     def test_transform_response_with_url_images(self):
+        """Test that transform_image_generation_response correctly extracts URL images."""
         response_data = {
             "created": 1748372400,
             "data": [
@@ -274,6 +293,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result.data[0].b64_json is None
 
     def test_transform_response_usage_and_cost(self):
+        """Test that transform_image_generation_response correctly extracts usage and cost."""
         response_data = {
             "created": 1748372400,
             "data": [{"b64_json": "abc123"}],
@@ -316,6 +336,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result._hidden_params["model"] == "bytedance-seed/seedream-4.5"
 
     def test_transform_response_multiple_images(self):
+        """Test that transform_image_generation_response handles multiple images."""
         response_data = {
             "created": 1748372400,
             "data": [
@@ -350,6 +371,7 @@ class TestOpenRouterImageGenerationTransformation:
         assert result.data[1].b64_json == "image2data"
 
     def test_transform_response_json_parse_error(self):
+        """Test that transform_image_generation_response raises error on invalid JSON."""
         mock_response = MagicMock()
         mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
         mock_response.status_code = 500
@@ -370,7 +392,33 @@ class TestOpenRouterImageGenerationTransformation:
         assert "Error parsing OpenRouter response" in str(exc_info.value)
         assert exc_info.value.status_code == 500
 
+    def test_transform_response_transformation_error(self):
+        """Test that transform_image_generation_response handles transformation errors."""
+        response_data = {"data": "invalid_format"}  # Invalid format
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = response_data
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        with pytest.raises(OpenRouterException) as exc_info:
+            self.config.transform_image_generation_response(
+                model=self.model,
+                raw_response=mock_response,
+                model_response=ImageResponse(data=[]),
+                logging_obj=self.logging_obj,
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+        assert "Error transforming OpenRouter image generation response" in str(
+            exc_info.value
+        )
+
     def test_get_error_class(self):
+        """Test that get_error_class returns OpenRouterException."""
         error = self.config.get_error_class(
             error_message="Test error",
             status_code=400,

@@ -34,11 +34,10 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
-    AllMessageValues,
     OpenAIImageGenerationOptionalParams,
+    AllMessageValues,
 )
 from litellm.types.utils import (
     ImageObject,
@@ -46,6 +45,7 @@ from litellm.types.utils import (
     ImageUsage,
     ImageUsageInputTokensDetails,
 )
+from litellm.llms.openrouter.common_utils import OpenRouterException
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -60,7 +60,21 @@ QUALITY_ALIASES: dict[str, str] = {
 
 
 class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
+    """
+    Configuration for OpenRouter image generation.
+
+    OpenRouter exposes a dedicated, OpenAI-Images-compatible endpoint at
+    /api/v1/images, so requests and responses only need light translation
+    to and from litellm's image generation types.
+    """
+
     def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+        """
+        Get supported OpenAI parameters for OpenRouter image generation.
+
+        OpenRouter's /api/v1/images endpoint accepts the standard OpenAI
+        image generation params.
+        """
         return [
             "n",
             "quality",
@@ -77,6 +91,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        """
+        Map image generation params to OpenRouter's /api/v1/images format.
+
+        Supported params pass through unchanged, except `quality`, where the
+        dall-e-3 aliases are mapped to OpenRouter values
+        (standard -> low, hd -> high).
+        """
         supported_params = self.get_supported_openai_params(model)
 
         for key, value in non_default_params.items():
@@ -96,6 +117,18 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         response_json: dict,
         model: str,
     ) -> None:
+        """
+        Extract and set usage and cost information from OpenRouter response.
+
+        The `usage.cost` field is surfaced via the
+        `llm_provider-x-litellm-response-cost` hidden header so litellm
+        reports OpenRouter's actual response cost.
+
+        Args:
+            model_response: ImageResponse object to populate
+            response_json: Parsed JSON response from OpenRouter
+            model: The model name
+        """
         usage_data = response_json.get("usage", {})
         if usage_data:
             prompt_tokens = usage_data.get("prompt_tokens", 0)
@@ -139,6 +172,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
+        """
+        Get the complete URL for OpenRouter image generation.
+
+        Default: https://openrouter.ai/api/v1/images
+        Legacy api_base values ending in /chat/completions (from the old
+        chat-completions workaround) are rewritten to /images.
+        """
         if api_base:
             base = api_base.rstrip("/")
             if base.endswith("/images"):
@@ -178,6 +218,19 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        """
+        Transform image generation request to OpenRouter's /api/v1/images format.
+
+        Args:
+            model: The model name
+            prompt: The image generation prompt
+            optional_params: Optional parameters (size, quality, n, ...)
+            litellm_params: LiteLLM parameters
+            headers: Request headers
+
+        Returns:
+            dict: OpenAI-Images-compatible request body
+        """
         request_body: dict[str, object] = {
             "model": model,
             "prompt": prompt,
@@ -202,6 +255,26 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ImageResponse:
+        """
+        Transform OpenRouter /api/v1/images response to ImageResponse format.
+
+        Maps each `data` item's b64_json/url and sets usage/cost information.
+
+        Args:
+            model: The model name
+            raw_response: Raw HTTP response from OpenRouter
+            model_response: ImageResponse object to populate
+            logging_obj: Logging object
+            request_data: Original request data
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+            encoding: Encoding
+            api_key: API key
+            json_mode: JSON mode flag
+
+        Returns:
+            ImageResponse: Populated image response
+        """
         try:
             response_json = raw_response.json()
         except Exception as e:
@@ -239,6 +312,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
+        """Get the appropriate error class for OpenRouter errors."""
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
