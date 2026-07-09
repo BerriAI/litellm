@@ -8029,6 +8029,41 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "openrouter":
+        if text_to_speech_provider_config is None:
+            raise litellm.BadRequestError(
+                message="OpenRouter Text-to-Speech configuration not found",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        openrouter_voice = voice.strip() if isinstance(voice, str) else None
+        if openrouter_voice is None or not openrouter_voice:
+            raise litellm.BadRequestError(
+                message="'voice' is required to be passed as a string for OpenRouter TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=openrouter_voice,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAITextToSpeechConfig,

@@ -8109,6 +8109,12 @@ class ProviderConfigManager:
             )
 
             return VertexAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.audio_transcription.transformation import (
+                OpenRouterAudioTranscriptionConfig,
+            )
+
+            return OpenRouterAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8921,6 +8927,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.text_to_speech.transformation import (
+                OpenRouterTextToSpeechConfig,
+            )
+
+            return OpenRouterTextToSpeechConfig()
         return None
 
     @staticmethod

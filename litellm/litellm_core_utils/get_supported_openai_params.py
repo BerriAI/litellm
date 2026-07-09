@@ -136,6 +136,12 @@ def get_supported_openai_params(
         else:
             return litellm.AzureOpenAIConfig().get_supported_openai_params(model=_azure_detection_model)
     elif custom_llm_provider == "openrouter":
+        if request_type == "transcription":
+            from litellm.llms.openrouter.audio_transcription.transformation import (
+                OpenRouterAudioTranscriptionConfig,
+            )
+
+            return OpenRouterAudioTranscriptionConfig().get_supported_openai_params(model=model)
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vercel_ai_gateway":
         return litellm.VercelAIGatewayConfig().get_supported_openai_params(model=model)
