@@ -80,10 +80,7 @@ export default function CredentialModal({
           rules={[{ required: true, message: "Credential name is required" }]}
           initialValue={existingCredential?.credential_name}
         >
-          <TextInput
-            placeholder="Enter a friendly name for these credentials"
-            disabled={existingCredential?.credential_name ? true : false}
-          />
+          <TextInput placeholder="Enter a friendly name for these credentials" disabled={isEdit} />
         </Form.Item>
 
         <Form.Item

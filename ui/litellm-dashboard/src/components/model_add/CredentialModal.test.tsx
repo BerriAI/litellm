@@ -127,5 +127,14 @@ describe("CredentialModal", () => {
         expect(nameInput.disabled).toBe(true);
       });
     });
+
+    it("disables the name from the mode, not the credential's name value", () => {
+      renderModal({
+        mode: "edit",
+        existingCredential: { ...mockCredential, credential_name: "" },
+      });
+
+      expect((screen.getByLabelText("Credential Name:") as HTMLInputElement).disabled).toBe(true);
+    });
   });
 });
