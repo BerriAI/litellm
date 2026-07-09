@@ -558,7 +558,11 @@ async def delete_mcp_server_from_virtualkey():
     pass
 
 
-async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Optional[LiteLLM_MCPServerTable]:
+async def delete_mcp_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    invalidate_token_cache: Optional[Callable[[str, str], Awaitable[None]]] = None,
+) -> Optional[LiteLLM_MCPServerTable]:
     """
     Delete the mcp server from the db by server_id
 
@@ -569,6 +573,12 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
     caller-visible error. Each table is cleaned independently so a failure on one
     still attempts the other.
 
+    Each enumerated credential row's user also gets their cached per-user token
+    invalidated (legacy cache + v2 store, via invalidate_token_cache, defaulting
+    to the manager's shared invalidation): the caches are keyed by
+    (user_id, server_id), so without this a re-created server reusing the same
+    server_id would serve tokens minted for the deleted server until TTL.
+
     Returns the deleted mcp server record if it exists, otherwise None
     """
     deleted_server = await MCPServerRepository(prisma_client).table.delete(
@@ -577,6 +587,18 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
         },
     )
     if deleted_server is not None:
+        credential_user_ids: List[str] = []
+        try:
+            credential_rows = await prisma_client.db.litellm_mcpusercredentials.find_many(
+                where={"server_id": server_id}
+            )
+            credential_user_ids = [row.user_id for row in credential_rows]
+        except Exception as e:  # noqa: BLE001 - enumeration is best-effort; cached tokens expire by TTL
+            verbose_proxy_logger.warning(
+                "MCP server %s deleted but per-user credential enumeration failed; cached tokens expire by TTL: %s",
+                server_id,
+                e,
+            )
         for model, label in (
             (prisma_client.db.litellm_mcpusercredentials, "credential"),
             (prisma_client.db.litellm_mcpuserenvvars, "env var"),
@@ -591,6 +613,15 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
                     label,
                     e,
                 )
+        if credential_user_ids:
+            if invalidate_token_cache is None:
+                from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                    global_mcp_server_manager,
+                )
+
+                invalidate_token_cache = global_mcp_server_manager.invalidate_user_oauth_token_cache
+            for user_id in credential_user_ids:
+                await invalidate_token_cache(user_id, server_id)
     return deleted_server
 
 
@@ -1123,21 +1154,30 @@ async def purge_user_oauth_credentials_for_server(
     server_id: str,
     invalidate_token_cache: Optional[Callable[[str, str], Awaitable[None]]] = None,
 ) -> int:
-    """Delete every stored per-user OAuth credential for a server and invalidate each user's cached
+    """Delete every stored per-user OAuth token for a server and invalidate each user's cached
     token everywhere it can be served from (the legacy per-user token cache and the v2 per-user OAuth
     token store), so no user keeps a token minted for a superseded configuration. Called when a server
     update changes a mint-relevant field (see mcp_oauth_token_identity). Returns the number of rows
-    removed. A row inserted between the find and the delete is removed from the DB but cannot be
-    evicted from the caches (its user_id was never seen); that case is detected, logged, and bounded
-    by the cache TTL.
+    removed.
+
+    LiteLLM_MCPUserCredentials also stores BYOK API keys in the same column; only rows whose payload
+    decodes as an OAuth2 credential (see _decode_oauth_payload) are deleted, because a config change
+    only invalidates minted tokens, never a user's own stored key. Rows are therefore deleted per
+    (user_id, server_id) pair rather than by a blanket server_id filter. An OAuth row inserted while
+    the purge runs for a user not yet enumerated survives; a re-auth completing in the window for an
+    already-enumerated user is deleted along with the stale row (the pair delete cannot tell them
+    apart), which costs that user one extra re-auth and nothing else.
 
     invalidate_token_cache is injectable for tests; it defaults to the manager's shared
     invalidate_user_oauth_token_cache, the single invalidation point for per-user tokens."""
     repo = MCPUserCredentialsRepository(prisma_client)
     rows = await repo.table.find_many(where={"server_id": server_id})
-    if not rows:
+    oauth_rows = [row for row in rows if _decode_oauth_payload(row.credential_b64) is not None]
+    if not oauth_rows:
         return 0
-    deleted_count = await repo.table.delete_many(where={"server_id": server_id})
+    deleted_count = sum(
+        [await repo.table.delete_many(where={"user_id": row.user_id, "server_id": server_id}) for row in oauth_rows]
+    )
     if invalidate_token_cache is None:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -1145,15 +1185,15 @@ async def purge_user_oauth_credentials_for_server(
 
         invalidate_token_cache = global_mcp_server_manager.invalidate_user_oauth_token_cache
 
-    for row in rows:
+    for row in oauth_rows:
         await invalidate_token_cache(row.user_id, server_id)
-    if deleted_count != len(rows):
+    if deleted_count != len(oauth_rows):
         verbose_proxy_logger.warning(
-            "MCP server %s: purge removed %d credential row(s) but %d were enumerated; "
-            "row(s) raced in during the purge and their cached tokens will expire by TTL",
+            "MCP server %s: purge removed %d OAuth credential row(s) but %d were enumerated; "
+            "row(s) were deleted concurrently during the purge",
             server_id,
             deleted_count,
-            len(rows),
+            len(oauth_rows),
         )
     return deleted_count
 
