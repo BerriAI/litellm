@@ -131,6 +131,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   };
 
+  // The auth mode every decision must key off: the admin's in-flight form selection wins over the
+  // saved record, so authorizing, loading tools, and saving all agree with what the form shows. Paths
+  // that read only mcpServer.auth_type go stale the moment the admin switches modes in the form.
+  const getEffectiveAuthType = () => form.getFieldValue("auth_type") ?? mcpServer.auth_type;
+
   const {
     startOAuthFlow,
     status: oauthStatus,
@@ -178,8 +183,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
 
-      const effectiveAuthType = form.getFieldValue("auth_type") ?? mcpServer.auth_type;
-      if (isClientForwardedTokenMode(effectiveAuthType)) {
+      if (isClientForwardedTokenMode(getEffectiveAuthType())) {
         const browserHeldToken = {
           access_token: token.access_token,
           expires_in: token.expires_in,
@@ -388,7 +392,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         oauth2_flow: mcpServer.oauth2_flow,
         delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
       }) === "passthrough";
-    const isBrowserHeldTokenMode = isClientForwardedTokenMode(mcpServer.auth_type);
+    const isBrowserHeldTokenMode = isClientForwardedTokenMode(getEffectiveAuthType());
     if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
@@ -749,8 +753,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       const updated = await updateMCPServer(accessToken, payload);
 
       // Persist the token staged via "Authorize & Fetch" (mirrors the create flow's
-      // commit-on-submit): OBO writes the per-user token to the DB, passthrough keeps
-      // it in sessionStorage. M2M/static auth resolve server-side and need neither.
+      // commit-on-submit): OBO writes the per-user token to the DB; legacy passthrough and the
+      // client-forwarded modes (true_passthrough / oauth_delegate) keep it in sessionStorage and
+      // never in the server row. M2M/static auth resolve server-side and need neither.
       if (oauthTokenResponse?.access_token) {
         const oauthMode = getMcpOAuthMode({
           auth_type: restValues.auth_type,
@@ -767,7 +772,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
             };
             await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, oauthCredentialPayload);
-          } else if (oauthMode === "passthrough") {
+          } else if (oauthMode === "passthrough" || isClientForwardedTokenMode(restValues.auth_type)) {
             const browserHeldToken = {
               access_token: oauthTokenResponse.access_token,
               expires_in: oauthTokenResponse.expires_in,

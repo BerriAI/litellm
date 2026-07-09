@@ -1173,6 +1173,76 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "persists the staged token to sessionStorage on save for the %s mode",
+    async (authType) => {
+      // Regression: the save path classified the staged token with getMcpOAuthMode, which returns
+      // null for the client-forwarded modes, so setToken was never called and the browser-held
+      // token was dropped on save; the create form's submit path already committed it.
+      mockOauth.tokenResponse = { access_token: "cf-tok", expires_in: 1800, token_type: "bearer" };
+      vi.mocked(networking.updateMCPServer).mockResolvedValue({
+        ...interactiveOAuthServer,
+        auth_type: authType,
+      });
+
+      render(
+        <MCPServerEdit
+          mcpServer={{ ...interactiveOAuthServer, auth_type: authType }}
+          accessToken="access-token"
+          userID="user-1"
+          onCancel={vi.fn()}
+          onSuccess={vi.fn()}
+          availableAccessGroups={[]}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+
+      await waitFor(() => {
+        expect(mockSetToken).toHaveBeenCalledWith(
+          "oauth_server_1",
+          expect.objectContaining({ access_token: "cf-tok" }),
+          "user-1",
+        );
+      });
+      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+      expect(payload.credentials).toBeUndefined();
+    },
+  );
+
+  it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
+    // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
+    // after switching the form to true_passthrough and authorizing, the fresh token was not sent as
+    // the x-mcp header until the server was saved.
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: [], error: null });
+    mockIsTokenValid.mockReturnValue(false);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "api_key" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    mockOauth.tokenResponse = { access_token: "fresh-tok", token_type: "bearer" };
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await waitFor(() => {
+      const withHeaders = vi
+        .mocked(networking.listMCPTools)
+        .mock.calls.find(([, , headers]) => headers && JSON.stringify(headers).includes("fresh-tok"));
+      expect(withHeaders).toBeTruthy();
+    });
+  });
+
   it("persists the passthrough token to sessionStorage on save after authorize", async () => {
     mockOauth.tokenResponse = { access_token: "pt-tok", expires_in: 1800, token_type: "bearer" };
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
