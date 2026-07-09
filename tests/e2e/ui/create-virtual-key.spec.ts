@@ -3,12 +3,13 @@ import { test, expect, Page } from "@playwright/test";
 const ALLOWED_MODEL = process.env.E2E_UI_ALLOWED_MODEL ?? "gemini-2.5-flash";
 const DENIED_MODEL = process.env.E2E_UI_DENIED_MODEL ?? "gpt-5.5";
 
-const adminAuth = { Authorization: `Bearer sk-1234` };
+const MASTER_KEY = process.env.LITELLM_MASTER_KEY ?? "sk-1234";
+const adminAuth = { Authorization: `Bearer ${MASTER_KEY}` };
 
 async function loginAsProxyAdmin(page: Page): Promise<void> {
   await page.goto("/ui/login");
   await page.getByPlaceholder("Enter your username").fill("admin");
-  await page.getByPlaceholder("Enter your password").fill("sk-1234");
+  await page.getByPlaceholder("Enter your password").fill(MASTER_KEY);
   await page.getByRole("button", { name: "Login", exact: true }).click();
   await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 30_000 });
 }
