@@ -1134,6 +1134,56 @@ def test_video_content_handler_uses_get_for_openai():
     assert called_url == "https://api.openai.com/v1/videos/video_abc/content"
 
 
+def test_video_content_handler_raises_on_not_ready_response():
+    """OpenAI returns 404 while video is processing; proxy must not return 200."""
+    import httpx
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+    from litellm.types.router import GenericLiteLLMParams
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+    error_body = (
+        '{"error":{"message":"Video is not ready yet, use GET /v1/videos/{video_id} to check status",'
+        '"type":"invalid_request_error","param":null,"code":null}}'
+    )
+    mock_response = httpx.Response(
+        status_code=404,
+        content=error_body.encode(),
+        request=httpx.Request(
+            "GET", "https://api.openai.com/v1/videos/video_abc/content"
+        ),
+    )
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.get.return_value = mock_response
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
+        with pytest.raises(BaseLLMException) as exc_info:
+            handler.video_content_handler(
+                video_id="video_abc",
+                video_content_provider_config=config,
+                custom_llm_provider="openai",
+                litellm_params=GenericLiteLLMParams(
+                    api_base="https://api.openai.com/v1"
+                ),
+                logging_obj=MagicMock(),
+                timeout=5.0,
+                api_key="sk-test",
+                client=mock_client,
+                _is_async=False,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert "Video is not ready yet" in exc_info.value.message
+
+
 def test_video_content_respects_api_base_and_api_key_from_kwargs():
     """Test that video_content respects api_base and api_key from kwargs (simulating database entry)."""
     from litellm.videos.main import video_content
