@@ -137,20 +137,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      setSecureItem(
-        CREATE_OAUTH_UI_STATE_KEY,
-        JSON.stringify({
-          modalVisible: isModalVisible,
-          formValues: values,
-          transportType,
-          costConfig,
-          allowedTools,
-          hasToolAllowlistInteraction,
-          searchValue,
-          aliasManuallyEdited,
-          logoUrl,
-        }),
-      );
+      const uiState = {
+        modalVisible: isModalVisible,
+        formValues: values,
+        transportType,
+        costConfig,
+        allowedTools,
+        hasToolAllowlistInteraction,
+        searchValue,
+        aliasManuallyEdited,
+        logoUrl,
+      };
+      setSecureItem(CREATE_OAUTH_UI_STATE_KEY, JSON.stringify(uiState));
     } catch (err) {
       console.warn("Failed to persist MCP create state", err);
     }
@@ -510,23 +508,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           });
           if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
-            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
+            const oauthCredentialPayload = {
               access_token: oauthTokenResponse.access_token,
               refresh_token: oauthTokenResponse.refresh_token,
               expires_in: oauthTokenResponse.expires_in,
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
-            });
+            };
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, oauthCredentialPayload);
           } else {
-            setToken(
-              response.server_id,
-              {
-                access_token: oauthTokenResponse.access_token,
-                expires_in: oauthTokenResponse.expires_in,
-                refresh_token: oauthTokenResponse.refresh_token,
-                token_type: oauthTokenResponse.token_type,
-              },
-              userID,
-            );
+            const browserHeldToken = {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            };
+            setToken(response.server_id, browserHeldToken, userID);
           }
         }
 
