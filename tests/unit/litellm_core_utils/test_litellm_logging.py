@@ -5110,6 +5110,34 @@ def test_transform_usage_objects_non_streaming_preserves_prompt_and_completion_t
     assert dumped_usage.get("total_tokens") == 150
 
 
+def test_transform_usage_objects_preserves_tokens_in_standard_logging_payload():
+    response = ResponsesAPIResponse(
+        id="resp-test-002",
+        created_at=1700000000,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+    )
+
+    logging_obj = LitellmLogging(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="responses",
+        start_time=time.time(),
+        litellm_call_id="test-usage-preservation-standard-logging",
+        function_id="test-fn-usage-standard-logging",
+    )
+    logging_obj.model_call_details["standard_logging_object"] = {}
+
+    logging_obj._transform_usage_objects(response)
+
+    standard_logging_payload = logging_obj.model_call_details["standard_logging_object"]
+    logged_usage = standard_logging_payload["response"]["usage"]
+    assert logged_usage.get("prompt_tokens") == 100
+    assert logged_usage.get("completion_tokens") == 50
+    assert logged_usage.get("total_tokens") == 150
+
+
 def test_success_handler_preserves_precomputed_cost_for_dict_response():
     """Precomputed response_cost on model_call_details must not be overwritten."""
     logging_obj = _make_dict_logging_obj()
