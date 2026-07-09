@@ -12,7 +12,7 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, NoReturn, Optional
+from typing import TYPE_CHECKING, Literal, NoReturn, Optional
 
 from fastapi import HTTPException
 from pydantic import SecretStr
@@ -23,11 +23,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
     CredError,
     NoneConfig,
+    PassthroughConfig,
     ServerSpec,
     SharedKey,
     Subject,
+    TokenExchangeConfig,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -61,8 +63,10 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
-    all shared-key), and ``oauth2`` per-user tokens (``authorization_code``); client_credentials
-    (M2M), delegated/passthrough oauth2, token exchange, and SigV4 return None and stay on v1.
+    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), ``oauth2_token_exchange``
+    (OBO), and the client-forwarded token modes ``true_passthrough`` / ``oauth_delegate``
+    (``PassthroughConfig``); client_credentials (M2M), delegated/passthrough oauth2, and SigV4
+    return None and stay on v1.
     """
     if server.is_byok:
         return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
@@ -92,9 +96,47 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 )
             # client_credentials (M2M) and delegate/passthrough oauth2 stay on v1
             return None
-        case MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
-            return None  # token exchange and SigV4 are not migrated yet -> defer to v1
+        case MCPAuth.true_passthrough | MCPAuth.oauth_delegate:
+            return ServerSpec(server_id=server.server_id, resource=resource, config=PassthroughConfig())
+        case MCPAuth.oauth2_token_exchange:
+            return _token_exchange_spec(server, resource)
+        case MCPAuth.aws_sigv4:
+            return None  # SigV4 is not migrated yet -> defer to v1
     assert_never(auth_type)
+
+
+def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+    """Build a token_exchange (OBO) spec, or defer (None) when it is not OBO-configured.
+
+    An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
+    ``token_exchange_endpoint``/``token_url`` is absent: a missing endpoint then fails closed (412) at
+    the exchanger rather than silently deferring to v1 and connecting unauthenticated, since the
+    gateway must not guess the IdP or fall back to a weaker source. Without client credentials there is
+    nothing to own, so the server stays on v1 (parity-safe). ``profile`` selects the wire dialect
+    (``rfc8693`` default, ``entra_obo`` for Microsoft Entra On-Behalf-Of); an unrecognized value
+    normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
+    forwarded only when the operator set it; a missing one is omitted, not derived.
+    """
+    endpoint = server.token_exchange_endpoint or server.token_url
+    if not server.client_id or not server.client_secret:
+        return None
+    profile: Literal["rfc8693", "entra_obo"] = (
+        "entra_obo" if server.token_exchange_profile == "entra_obo" else "rfc8693"
+    )
+    return ServerSpec(
+        server_id=server.server_id,
+        resource=resource,
+        config=TokenExchangeConfig(
+            profile=profile,
+            subject_token_type=server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
+            token_exchange_endpoint=endpoint,
+            audience=server.audience,
+            client_id=server.client_id,
+            client_secret=SecretStr(server.client_secret),
+            token_endpoint_auth_method=server.token_endpoint_auth_method,
+            scopes=tuple(server.scopes or ()),
+        ),
+    )
 
 
 def _shared_key_spec(
@@ -148,23 +190,75 @@ def raise_public(error: CredError) -> NoReturn:
     assert_never(error.tag)
 
 
-def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
+def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
+    """The server's RFC 9728 Protected Resource Metadata path, the shared anchor of both challenges.
+
+    ``root_path`` is the proxy's ``SERVER_ROOT_PATH``, resolved by the caller (the imperative shell)
+    so this stays a pure function of its inputs; ``"/"`` and ``""`` both mean no prefix. The path is
+    relative, so it resolves against the caller's own host (correct even behind a reverse proxy).
+    """
+    prefix = "" if root_path == "/" else root_path
+    name = server.alias or server.server_name or server.name or server.server_id
+    return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+
+
+def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn:
     """Raise the 401 an ``authorization_code`` server returns at egress when the user has no token.
 
-    Points at the server's RFC 9728 Protected Resource Metadata (``resource_metadata``), which names
-    the upstream authorization server the client must complete OAuth with. The URL is per-server and
-    relative, so it resolves against the caller's own host (correct even behind a reverse proxy)
-    without needing request context. The listing-phase 401 still emits the RFC 8414 ``authorization_uri``
-    form pending the format unification; both target the same server, so the difference is cosmetic.
+    Points at the server's RFC 9728 Protected Resource Metadata, which names the upstream
+    authorization server the client must complete OAuth with. The listing-phase 401 still emits the
+    RFC 8414 ``authorization_uri`` form pending the format unification; both target the same server,
+    so the difference is cosmetic.
     """
-    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
-
-    root = get_server_root_path()
-    prefix = "" if root == "/" else root
-    name = server.alias or server.server_name or server.name or server.server_id
-    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    resource_metadata = oauth_protected_resource_path(root_path, server)
     raise HTTPException(
         status_code=401,
         detail="Unauthorized",
         headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
+    )
+
+
+def raise_token_exchange_challenge(
+    server: MCPServer,
+    *,
+    root_path: str,
+    claims: str | None = None,
+) -> NoReturn:
+    """Raise the RFC 9728 / RFC 6750 challenge an OBO (``token_exchange``) server returns when the
+    caller's subject token is missing or the IdP rejected it.
+
+    Points at the server's Protected Resource Metadata, whose ``authorization_servers`` names the IdP
+    the client must SSO with to obtain a subject token; ``error="invalid_token"`` tells a
+    spec-compliant MCP client to discover that AS and retry with a fresh bearer. Mirrors
+    ``raise_user_oauth_challenge`` but for the exchange flow: there is no gateway-side browser OAuth —
+    the client re-authenticates directly with the IdP, and LiteLLM then exchanges the resulting token.
+
+    An IdP step-up rejection (Entra Conditional Access / CAE) passes its ``claims`` blob. Per the
+    Microsoft claims-challenge format the challenge then uses ``error="insufficient_claims"`` (the
+    value MSAL-family clients key on) and carries the claims base64-encoded in a ``claims`` parameter
+    the client replays to the IdP to satisfy the step-up. Without a claims blob the challenge keeps
+    ``error="invalid_token"`` and is byte-identical to the static one. Both the error value (one of
+    two literals) and the base64 claims draw from a fixed alphabet, so nothing from the IdP body
+    reaches the header unescaped.
+    """
+    resource_metadata = oauth_protected_resource_path(root_path, server)
+    encoded_claims = base64.b64encode(claims.encode()).decode() if claims else None
+    error = "insufficient_claims" if encoded_claims else "invalid_token"
+    error_description = (
+        "Step-up authentication required; satisfy the returned claims challenge with the IdP and retry"
+        if encoded_claims
+        else "Missing or invalid subject token; authenticate with the IdP and retry"
+    )
+    www_authenticate = ", ".join(
+        (
+            f'Bearer resource_metadata="{resource_metadata}"',
+            f'error="{error}"',
+            f'error_description="{error_description}"',
+            *((f'claims="{encoded_claims}"',) if encoded_claims else ()),
+        )
+    )
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": www_authenticate},
     )

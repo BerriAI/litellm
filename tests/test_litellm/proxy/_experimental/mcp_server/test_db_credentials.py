@@ -17,6 +17,7 @@ import pytest
 
 from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
+    _prepare_mcp_server_data,
     get_user_credential,
     get_user_oauth_credential,
     is_oauth_credential_expired,
@@ -27,10 +28,12 @@ from litellm.proxy._experimental.mcp_server.db import (
     store_user_credential,
     store_user_oauth_credential,
 )
+from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.types.mcp import MCPAuth, MCPTransport
 
 SALT_KEY = "test-salt-key-for-byok-credential-tests-1234"
 
@@ -722,3 +725,50 @@ async def test_refresh_user_oauth_token_defaults_to_client_secret_post(monkeypat
     assert "Authorization" not in kwargs["headers"]
     assert kwargs["data"]["client_id"] == "cid"
     assert kwargs["data"]["client_secret"] == "sec"
+
+
+def test_prepare_mcp_server_data_create_carries_token_exchange_columns():
+    """The create path (POST /v1/mcp/server) must emit token_exchange_endpoint/audience/
+    subject_token_type as top-level column values so an auth_type=oauth2_token_exchange server
+    persists via the REST API, not only via config.yaml. Dropping the fields from the request
+    model would leave them out of the prepared column data."""
+    request = NewMCPServerRequest(
+        server_name="te_write",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        audience="https://upstream.example.com",
+        subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+        token_exchange_profile="entra_obo",
+        credentials={"client_id": "te-client", "client_secret": "te-secret"},
+    )
+
+    data = _prepare_mcp_server_data(request)
+
+    assert data["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
+    assert data["audience"] == "https://upstream.example.com"
+    assert data["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
+    assert data["token_exchange_profile"] == "entra_obo"
+
+
+def test_prepare_mcp_server_data_update_carries_token_exchange_columns():
+    """The partial-update path (PUT /v1/mcp/server, exclude_unset) must carry the three
+    token-exchange columns when the caller provides them."""
+    request = UpdateMCPServerRequest(
+        server_id="te-update",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        audience="https://upstream.example.com",
+        subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+        token_exchange_profile="entra_obo",
+    )
+
+    data = _prepare_mcp_server_data(request, exclude_unset=True)
+
+    assert data["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
+    assert data["audience"] == "https://upstream.example.com"
+    assert data["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
+    assert data["token_exchange_profile"] == "entra_obo"

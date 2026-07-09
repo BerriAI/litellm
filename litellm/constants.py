@@ -508,6 +508,7 @@ LITELLM_CHAT_PROVIDERS = [
     "text-completion-codestral",
     "text-completion-inception",
     "deepseek",
+    "tencent",
     "sambanova",
     "maritalk",
     "cloudflare",
@@ -729,6 +730,7 @@ openai_compatible_providers: List = [
     "volcengine",
     "codestral",
     "deepseek",
+    "tencent",
     "deepinfra",
     "perplexity",
     "xinference",
@@ -1502,6 +1504,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "public_model_groups_links",
     "cost_discount_config",
     "cost_margin_config",
+    "budget_exceeded_throttle_percentage",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

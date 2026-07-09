@@ -1039,11 +1039,13 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    budget_fallbacks: Optional[dict[str, list[str]]] = None
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     mcp_rpm_limit: Optional[Dict[str, int]] = None
+    tag_rpm_limit: Optional[dict[str, int]] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
@@ -1069,6 +1071,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     disable_global_guardrails: Optional[bool] = None
+    throttle_on_budget_exceeded: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1136,6 +1139,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
             "budget_limits",
         ]
@@ -1252,6 +1256,14 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
@@ -1261,6 +1273,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1337,6 +1350,14 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
@@ -1346,6 +1367,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -2318,6 +2340,28 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    user_url_validation: Optional[bool] = Field(
+        None,
+        description=(
+            "Master switch for the SSRF guard applied to user-supplied URLs "
+            "(image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. "
+            "Set to False to disable DNS/IP validation entirely (not recommended)."
+        ),
+    )
+    user_url_allowed_hosts: Optional[list[str]] = Field(
+        None,
+        description=(
+            "SSRF allowlist for user-supplied URLs. Entries are `hostname` or "
+            "`hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted "
+            "hosts skip the blocked-network check in validate_url() but still "
+            "resolve DNS. Use this to permit legitimate internal targets, e.g. "
+            "an internal OpenAPI/MCP server."
+        ),
+    )
+    provider_url_destination_allowed_hosts: Optional[list[str]] = Field(
+        None,
+        description="Allowlist of hosts a request may redirect a provider call's destination URL to.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2443,6 +2487,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     request_route: Optional[str] = None
     is_session_token: bool = False
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
+    budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
@@ -3825,6 +3870,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
     "mcp_rpm_limit",
+    "tag_rpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
     "enforced_params",
@@ -3833,6 +3879,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "allowed_vector_store_indexes",
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
+    "throttle_on_budget_exceeded",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -4178,6 +4225,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "the single-team DB fallback (caller's only team membership) "
             "instead of raising. Default False preserves strict claim-based "
             "authorization."
+        ),
+    )
+    fallback_to_db_teams: bool = Field(
+        default=False,
+        description=(
+            "When True, users whose JWT contains no team claims are authenticated "
+            "using their database team memberships instead of receiving HTTP 403. "
+            "Usage is attributed to the user's first resolvable DB team, or to the "
+            "team specified via the x-litellm-team-id request header (validated "
+            "against DB membership). Requires user_id_upsert=True so that user "
+            "records exist before the fallback runs."
         ),
     )
     issuers: Optional[List[JWTIssuerConfig]] = Field(

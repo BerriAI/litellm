@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input, InputNumber, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
@@ -13,8 +13,10 @@ import {
   TRANSPORT,
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
+  MCP_OAUTH2_FLOW_INTERACTIVE,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
+import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -24,7 +26,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars, TOOL_DISPLAY_NAME_PATTERN } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -47,7 +49,12 @@ interface CreateMCPServerProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [
+  ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
+  AUTH_TYPE.OAUTH2,
+  AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+  AUTH_TYPE.AWS_SIGV4,
+];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
 const reduceStaticHeaders = (list: unknown): Record<string, string> => {
@@ -89,6 +96,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
+  const [authorizedUrl, setAuthorizedUrl] = useState<string | undefined>(undefined);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const {
@@ -110,8 +118,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
+
+  const getOAuthAuthorizationTarget = (values: Record<string, unknown>): string | undefined => {
+    const transport = values.transport || transportType;
+    const target = transport === TRANSPORT.OPENAPI ? values.spec_path : values.url;
+    return typeof target === "string" ? target : undefined;
+  };
 
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
@@ -179,7 +194,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         env: values.env,
       };
     },
-    onTokenReceived: (token) => {
+    onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
       if (token?.access_token) {
@@ -188,9 +203,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ...(token.refresh_token && { refresh_token: token.refresh_token }),
           ...(token.expires_in && { expires_in: token.expires_in }),
           ...(token.scope && { scope: token.scope }),
+          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
+          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
         };
 
         form.setFieldsValue({ credentials });
+        setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
 
         NotificationsManager.success(
           "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
@@ -200,6 +218,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
   });
+
+  const clearAuthorizedOAuthState = (values: Record<string, unknown>) => {
+    form.resetFields(["credentials", "authorization_url", "token_url", "registration_url"]);
+    form.setFieldsValue(values);
+    setOauthAccessToken(null);
+    clearTools();
+    resetOAuthFlow();
+    setAuthorizedUrl(undefined);
+  };
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -306,6 +333,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   }, [isModalVisible, prefillData, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
+    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
+      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+    );
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
+      );
+      return;
+    }
     setIsLoading(true);
     try {
       const {
@@ -378,8 +414,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             args: actualConfig.args,
             env: actualConfig.env,
           };
-
-          console.log("Parsed stdio config:", stdioFields);
         } catch (error) {
           NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
           return;
@@ -425,6 +459,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         oauth_passthrough: Boolean(oauthPassthroughRaw),
+        ...(restValues.auth_type === AUTH_TYPE.OAUTH2
+          ? {
+              oauth2_flow:
+                values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
+            }
+          : {}),
         static_headers: staticHeaders,
         env_vars: envVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
@@ -436,8 +476,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
       }
-
-      console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
         const response = isAdmin
@@ -454,7 +492,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : null,
             delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
           });
-          if (oauthMode === "obo") {
+          if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
             await storeMCPOAuthUserCredential(accessToken, response.server_id, {
               access_token: oauthTokenResponse.access_token,
@@ -519,12 +557,28 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const handleTransportChange = (value: string) => {
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
-    if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
-    } else if (value === TRANSPORT.OPENAPI) {
-      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
+    const transportValues =
+      value === "stdio"
+        ? { url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined }
+        : value === TRANSPORT.OPENAPI
+          ? { url: undefined, command: undefined, args: undefined, env: undefined }
+          : { spec_path: undefined, command: undefined, args: undefined, env: undefined };
+
+    const nextValues =
+      authorizedUrl === undefined
+        ? transportValues
+        : {
+            ...transportValues,
+            credentials: undefined,
+            authorization_url: undefined,
+            token_url: undefined,
+            registration_url: undefined,
+          };
+
+    if (authorizedUrl !== undefined) {
+      clearAuthorizedOAuthState(nextValues);
     } else {
-      form.setFieldsValue({ spec_path: undefined, command: undefined, args: undefined, env: undefined });
+      form.setFieldsValue(nextValues);
     }
   };
 
@@ -572,18 +626,45 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Clear form, tools, and OAuth state when the modal closes so a previous server's
   // authorization, credentials, or tool list never bleed into the next "Add New MCP
   // Server" session, including when a parent dismisses the modal without routing
-  // through handleCancel or handleCreate.
+  // through handleCancel or handleCreate. Only a real open -> closed transition may
+  // trigger this: on the post-OAuth-redirect remount the modal starts closed while
+  // resumeOAuthFlow's token exchange is in flight, and resetting then discards the
+  // fetched token.
+  const wasModalVisibleRef = React.useRef(isModalVisible);
   React.useEffect(() => {
-    if (!isModalVisible) {
+    const wasVisible = wasModalVisibleRef.current;
+    wasModalVisibleRef.current = isModalVisible;
+    if (!isModalVisible && wasVisible) {
       form.resetFields();
       setFormValues({});
       setOauthAccessToken(null);
       clearTools();
       resetOAuthFlow();
+      setAuthorizedUrl(undefined);
     }
   }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
+
+  const handleFormValuesChange = (changedValues: Record<string, unknown>, allValues: Record<string, unknown>) => {
+    const changedAuthorizationTarget = "url" in changedValues || "spec_path" in changedValues;
+    if (
+      changedAuthorizationTarget &&
+      authorizedUrl !== undefined &&
+      getOAuthAuthorizationTarget(allValues) !== authorizedUrl
+    ) {
+      const invalidated = {
+        credentials: undefined,
+        authorization_url: changedValues.authorization_url,
+        token_url: changedValues.token_url,
+        registration_url: changedValues.registration_url,
+      };
+      clearAuthorizedOAuthState(invalidated);
+      setFormValues({ ...allValues, ...invalidated });
+      return;
+    }
+    setFormValues(allValues);
+  };
 
   // rendering
   return (
@@ -629,7 +710,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         <Form
           form={form}
           onFinish={handleCreate}
-          onValuesChange={(_, allValues) => setFormValues(allValues)}
+          onValuesChange={handleFormValuesChange}
           layout="vertical"
           className="space-y-6"
         >
@@ -749,7 +830,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <OpenAPIFormSection
                 form={form}
                 accessToken={isModalVisible ? accessToken : null}
-                onValuesChange={(updates) => setFormValues((prev) => ({ ...prev, ...updates }))}
+                onValuesChange={(updates) =>
+                  handleFormValuesChange(updates, { ...form.getFieldsValue(true), ...updates })
+                }
                 onKeyToolsChange={setKeyTools}
                 onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
@@ -784,10 +867,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {/* Auth format hint */}
                         {getFieldValue("auth_type") && getFieldValue("auth_type") !== "none" && (
                           <div className="mb-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <InfoCircleOutlined className="mt-0.5 shrink-0" />
                             <span>
                               User keys will be sent as:{" "}
-                              <code className="font-mono bg-blue-100 px-1 rounded">
+                              <code className="font-mono bg-blue-100 px-1 rounded-sm">
                                 {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
                                 {getFieldValue("auth_type") === "token" && "Authorization: token {key}"}
                                 {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
@@ -800,7 +883,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         )}
                         {!getFieldValue("auth_type") && (
                           <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <InfoCircleOutlined className="mt-0.5 shrink-0" />
                             <span>
                               Set the <strong>Authentication Type</strong> below to specify how user keys are sent
                               (e.g., Bearer Token, API Key header).
@@ -846,6 +929,26 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </>
             )}
 
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Max Concurrent Requests (optional)
+                  <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="max_concurrent_requests"
+            >
+              <InputNumber
+                min={1}
+                precision={0}
+                placeholder="e.g. 10"
+                style={{ width: "100%" }}
+                className="rounded-lg"
+              />
+            </Form.Item>
+
             {/* Authentication - show for HTTP, SSE, and OpenAPI */}
             {transportType !== "stdio" && transportType !== "" && (
               <Collapse
@@ -865,6 +968,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="token">Token</Select.Option>
                             <Select.Option value="basic">Basic Auth</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
+                            <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                           </Select>
                         </Form.Item>
@@ -910,6 +1014,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             }}
                           />
                         )}
+
+                        {isTokenExchangeAuthType && <TokenExchangeFormFields />}
                       </>
                     ),
                   },

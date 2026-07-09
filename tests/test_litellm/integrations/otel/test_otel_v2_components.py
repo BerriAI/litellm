@@ -579,13 +579,10 @@ def _exception_event(span):
 
 
 def test_error_message_recorded_as_full_exception_event_untruncated():
-    """Regression for the Elasticsearch keyword/ignore_above:1024 truncation.
-
-    A long error message must survive intact on the standard ``exception``
-    event under ``exception.message`` — not get dropped onto a bare string
-    attribute that backends dynamic-map to a 1024-char ``keyword``. The SDK
-    must not truncate it either, so a 5000-char message stays 5000 chars.
-    """
+    """The ``exception`` event carries the full untruncated message under
+    ``exception.message`` so backends that dynamic-map unknown string span
+    attrs to ``keyword`` (e.g. Elasticsearch with a 1024-char ``ignore_above``)
+    still see it in full via the semconv-recognized event field."""
     from litellm.integrations.otel.model.semconv import Error, ExceptionEvent
 
     long_message = "boom: " + "x" * 5000
@@ -596,11 +593,104 @@ def test_error_message_recorded_as_full_exception_event_untruncated():
     assert len(event.attributes[ExceptionEvent.MESSAGE]) == len(long_message) > 1024
     assert event.attributes[ExceptionEvent.TYPE] == "litellm.APIError"
 
-    # error.type stays a low-cardinality attribute; the message does NOT become a
-    # bare string attribute (which is what got truncated).
+    # error.type stays a low-cardinality attribute; the exception EVENT field
+    # ``exception.message`` never becomes a bare string attribute.
     assert span.attributes[Error.TYPE] == "litellm.APIError"
     assert ExceptionEvent.MESSAGE not in span.attributes
     assert span.status.description == long_message
+
+
+def test_error_details_stamped_as_span_attributes_for_labels_ingest():
+    """OTel-defined keys and litellm-specific detail keys both ride span
+    attributes so backends that flatten attrs into label indexes (Elastic APM
+    ``labels.*``, Datadog span tags) render them. The exception event with the
+    full untruncated message stays alongside."""
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
+    from litellm.integrations.otel.emitter import SpanEmitter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg)
+    data = LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model=None,
+        response_id=None,
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=(),
+        error=SpanError(
+            error_type="litellm.BadRequestError",
+            message="400: violated moderation policy",
+            code="400",
+            stack_trace="File proxy_server.py line 8570 ...",
+            llm_provider="openai",
+        ),
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+
+    # OTel-defined keys (from the ``error.*`` semconv registry).
+    assert span.attributes[Error.TYPE] == "litellm.BadRequestError"
+    assert span.attributes[Error.MESSAGE] == "400: violated moderation policy"
+    # LiteLLM-specific detail keys, under the ``litellm.provider.error.*``
+    # vendor namespace, not defined by OTel semconv.
+    assert span.attributes[LiteLLMError.CODE] == "400"
+    assert span.attributes[LiteLLMError.STACK_TRACE] == "File proxy_server.py line 8570 ..."
+    assert span.attributes[LiteLLMError.LLM_PROVIDER] == "openai"
+
+    # The exception event carries the same message on the span too.
+    event = _exception_event(span)
+    assert event.attributes[ExceptionEvent.MESSAGE] == "400: violated moderation policy"
+
+
+def test_error_details_omitted_when_span_error_carries_only_message():
+    """A guardrail-shape error (message only, no code/traceback/provider) must
+    not pollute the span with empty-string detail attributes. Only the keys
+    that carry real data land."""
+    from litellm.integrations.otel.model.semconv import Error, LiteLLMError
+
+    span = _emit_error_span("guardrail rejected", error_type="ContentFilter")
+
+    assert span.attributes[Error.TYPE] == "ContentFilter"
+    assert span.attributes[Error.MESSAGE] == "guardrail rejected"
+    # LiteLLM-specific detail keys aren't stamped when the SpanError doesn't
+    # carry them.
+    assert LiteLLMError.CODE not in span.attributes
+    assert LiteLLMError.STACK_TRACE not in span.attributes
+    assert LiteLLMError.LLM_PROVIDER not in span.attributes
+
+
+def test_error_attribute_keys_are_pinned():
+    """``error.type`` and ``error.message`` come from the semconv ``error.*``
+    registry; the litellm-specific detail keys are vendor keys under
+    ``litellm.provider.error.*``. Pins the exact strings so the emitted
+    vocabulary can't drift silently."""
+    from litellm.integrations.otel.model.semconv import Error, LiteLLMError
+
+    assert Error.TYPE == "error.type"
+    assert Error.MESSAGE == "error.message"
+    assert LiteLLMError.CODE == "litellm.provider.error.code"
+    assert LiteLLMError.STACK_TRACE == "litellm.provider.error.stack_trace"
+    assert LiteLLMError.LLM_PROVIDER == "litellm.provider.error.llm_provider"
+
+
+def test_error_message_falls_back_to_error_type_when_message_absent():
+    """A ``SpanError(error_type=..., message=None)`` still renders on the span:
+    the resolved message is the error_type, and it lands on ``error.message``,
+    the exception event, and the span-status description in lockstep so a
+    single-source-of-truth view isn't inconsistent."""
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent
+
+    span = _emit_error_span(message=None, error_type="RateLimitError")
+
+    assert span.attributes[Error.MESSAGE] == "RateLimitError"
+    assert _exception_event(span).attributes[ExceptionEvent.MESSAGE] == "RateLimitError"
+    assert span.status.description == "RateLimitError"
 
 
 def test_success_span_records_no_exception_event():
