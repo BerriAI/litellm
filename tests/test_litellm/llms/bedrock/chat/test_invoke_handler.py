@@ -1,6 +1,7 @@
+import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,11 +12,101 @@ sys.path.insert(
 import litellm
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
+    BedrockError,
     BedrockLLM,
     make_call,
     make_sync_call,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+def _mock_event(body: dict) -> MagicMock:
+    """Build a botocore-style event whose 200 body is the given ConverseStream JSON."""
+    event = MagicMock()
+    event.to_response_dict.return_value = {
+        "status_code": 200,
+        "headers": {},
+        "body": json.dumps(body).encode(),
+    }
+    return event
+
+
+def _decode_events_sync(decoder: AWSEventStreamDecoder, bodies: list[dict]):
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [_mock_event(b) for b in bodies]
+    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+        return list(decoder.iter_bytes(iter([b"raw"])))
+
+
+async def _decode_events_async(decoder: AWSEventStreamDecoder, bodies: list[dict]):
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [_mock_event(b) for b in bodies]
+
+    async def _aiter():
+        yield b"raw"
+
+    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+        return [chunk async for chunk in decoder.aiter_bytes(_aiter())]
+
+
+_TRUNCATED_TOOL_CALL_STREAM = [
+    {"messageStart": {"role": "assistant"}},
+    {"start": {"toolUse": {"toolUseId": "tooluse_abc", "name": "shell"}}, "contentBlockIndex": 0},
+    {"delta": {"toolUse": {"input": '{"command": ["cat",".glia/project.md"]'}}, "contentBlockIndex": 0},
+]
+
+_COMPLETE_TOOL_CALL_STREAM = _TRUNCATED_TOOL_CALL_STREAM + [
+    {"delta": {"toolUse": {"input": "}"}}, "contentBlockIndex": 0},
+    {"contentBlockIndex": 0},
+    {"stopReason": "tool_use"},
+    {"usage": {"inputTokens": 10641, "outputTokens": 48, "totalTokens": 10689}, "metrics": {"latencyMs": 100}},
+]
+
+
+def test_converse_stream_without_message_stop_raises_sync():
+    """A ConverseStream that ends mid-tool-call without a terminal messageStop
+    (stopReason) event must surface as an error, not be silently completed with a
+    fabricated finish_reason and a synthesized usage chunk. Regression for #32686."""
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-opus-4-1-20250805-v1:0")
+    with pytest.raises(BedrockError) as exc_info:
+        _decode_events_sync(decoder, _TRUNCATED_TOOL_CALL_STREAM)
+    assert exc_info.value.status_code == 500
+    assert "messageStop" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_without_message_stop_raises_async():
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-opus-4-1-20250805-v1:0")
+    with pytest.raises(BedrockError) as exc_info:
+        await _decode_events_async(decoder, _TRUNCATED_TOOL_CALL_STREAM)
+    assert exc_info.value.status_code == 500
+    assert "messageStop" in exc_info.value.message
+
+
+def test_converse_stream_with_message_stop_does_not_raise_sync():
+    """A well-formed ConverseStream ending in messageStop + metadata must not raise."""
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-opus-4-1-20250805-v1:0")
+    chunks = _decode_events_sync(decoder, _COMPLETE_TOOL_CALL_STREAM)
+    finish_reasons = [
+        c.choices[0].finish_reason for c in chunks if hasattr(c, "choices") and c.choices and c.choices[0].finish_reason
+    ]
+    assert "tool_calls" in finish_reasons
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_with_message_stop_does_not_raise_async():
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-opus-4-1-20250805-v1:0")
+    chunks = await _decode_events_async(decoder, _COMPLETE_TOOL_CALL_STREAM)
+    assert any(hasattr(c, "choices") and c.choices and c.choices[0].finish_reason == "tool_calls" for c in chunks)
+
+
+def test_non_converse_invoke_stream_end_without_stop_reason_does_not_raise():
+    """The messageStop guard is Converse-only; a non-Converse invoke text stream
+    (e.g. cohere) that never routes through converse_chunk_parser must not be
+    affected by the incomplete-stream check."""
+    decoder = AWSEventStreamDecoder(model="cohere.command-text-v14")
+    chunks = _decode_events_sync(decoder, [{"text": "hello"}, {"text": " world"}])
+    assert [c["text"] for c in chunks] == ["hello", " world"]
 
 
 def test_transform_thinking_blocks_with_redacted_content():
