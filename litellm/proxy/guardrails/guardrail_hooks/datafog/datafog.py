@@ -296,6 +296,20 @@ class DataFogGuardrail(CustomGuardrail):
 
         return (new_items if changed else input_value), counts
 
+    def _scan_top_level_prompt_fields(self, data: dict) -> tuple[dict, dict[str, int]]:
+        counts: dict[str, int] = {}
+        new_data = data
+        for field_name in ("instructions", "system"):
+            if field_name not in data:
+                continue
+            new_value, field_counts = self._process_content(data[field_name])
+            if field_counts:
+                if new_data is data:
+                    new_data = dict(data)
+                new_data[field_name] = new_value
+                _merge_counts(counts, field_counts)
+        return new_data, counts
+
     def _handle_engine_error(self, exc: Exception) -> None:
         """Apply the fail policy without leaking scanned text.
 
@@ -345,6 +359,11 @@ class DataFogGuardrail(CustomGuardrail):
         if input_counts:
             new_data = {**new_data, "input": new_input}
             _merge_counts(total_counts, input_counts)
+
+        new_prompt_data, prompt_counts = self._scan_top_level_prompt_fields(new_data)
+        if prompt_counts:
+            new_data = new_prompt_data
+            _merge_counts(total_counts, prompt_counts)
 
         if not total_counts:
             return data, {}
