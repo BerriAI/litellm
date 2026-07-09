@@ -232,6 +232,51 @@ export const generateDailyWithKeysData = (
   return dailyKeyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
 };
 
+type MetricTotals = Record<string, number>;
+type KeyEntry = { metrics?: MetricTotals };
+type ModelEntry = { api_key_breakdown?: Record<string, KeyEntry> };
+
+const emptyMetricTotals = (): MetricTotals => Object.fromEntries(METRIC_KEYS.map((metric) => [metric, 0]));
+
+const sumKeyTotalsAcrossModels = (models: Record<string, ModelEntry>): Record<string, MetricTotals> => {
+  const keyTotals: Record<string, MetricTotals> = {};
+  Object.values(models).forEach((modelData) => {
+    Object.entries(modelData.api_key_breakdown || {}).forEach(([apiKey, keyData]) => {
+      const totals = keyTotals[apiKey] || (keyTotals[apiKey] = emptyMetricTotals());
+      const metrics = keyData.metrics || {};
+      METRIC_KEYS.forEach((metric) => {
+        totals[metric] += metrics[metric] || 0;
+      });
+    });
+  });
+  return keyTotals;
+};
+
+const aggregateEntityModelMetrics = (
+  entityApiKeys: Record<string, KeyEntry>,
+  models: Record<string, ModelEntry>,
+  keyTotalsAcrossModels: Record<string, MetricTotals>,
+): Record<string, MetricTotals> => {
+  const entityModels: Record<string, MetricTotals> = {};
+  Object.entries(entityApiKeys).forEach(([apiKey, entityKeyData]) => {
+    const keyTotals = keyTotalsAcrossModels[apiKey];
+    if (!keyTotals) return;
+    const entityKeyMetrics = entityKeyData.metrics || {};
+
+    Object.entries(models).forEach(([model, modelData]) => {
+      const modelKeyMetrics = modelData.api_key_breakdown?.[apiKey]?.metrics;
+      if (!modelKeyMetrics) return;
+      const bucket = entityModels[model] || (entityModels[model] = emptyMetricTotals());
+      METRIC_KEYS.forEach((metric) => {
+        const keyTotal = keyTotals[metric];
+        const entityShare = keyTotal > 0 ? (entityKeyMetrics[metric] || 0) / keyTotal : 0;
+        bucket[metric] += (modelKeyMetrics[metric] || 0) * entityShare;
+      });
+    });
+  });
+  return entityModels;
+};
+
 export const generateDailyWithModelsData = (
   spendData: EntitySpendData,
   entityLabel: string,
@@ -240,65 +285,32 @@ export const generateDailyWithModelsData = (
   const dailyModelBreakdown: any[] = [];
 
   spendData.results.forEach((day) => {
-    const dailyEntityModels: { [key: string]: { [key: string]: any } } = {};
+    const models = day.breakdown.models || {};
+    const keyTotalsAcrossModels = sumKeyTotalsAcrossModels(models);
 
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, entityData]: [string, any]) => {
-      if (!dailyEntityModels[entity]) {
-        dailyEntityModels[entity] = {};
-      }
-
-      Object.entries(day.breakdown.models || {}).forEach(([model, modelData]: [string, any]) => {
-        const entityApiKeys = entityData.api_key_breakdown || {};
-        const modelApiKeys = modelData.api_key_breakdown || {};
-
-        Object.keys(entityApiKeys).forEach((apiKey) => {
-          const keyMetrics = modelApiKeys[apiKey]?.metrics;
-          if (!keyMetrics) return;
-
-          if (!dailyEntityModels[entity][model]) {
-            dailyEntityModels[entity][model] = {
-              spend: 0,
-              requests: 0,
-              successful: 0,
-              failed: 0,
-              tokens: 0,
-              promptTokens: 0,
-              completionTokens: 0,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
-            };
-          }
-          dailyEntityModels[entity][model].spend += keyMetrics.spend || 0;
-          dailyEntityModels[entity][model].requests += keyMetrics.api_requests || 0;
-          dailyEntityModels[entity][model].successful += keyMetrics.successful_requests || 0;
-          dailyEntityModels[entity][model].failed += keyMetrics.failed_requests || 0;
-          dailyEntityModels[entity][model].tokens += keyMetrics.total_tokens || 0;
-          dailyEntityModels[entity][model].promptTokens += keyMetrics.prompt_tokens || 0;
-          dailyEntityModels[entity][model].completionTokens += keyMetrics.completion_tokens || 0;
-          dailyEntityModels[entity][model].cacheReadInputTokens += keyMetrics.cache_read_input_tokens || 0;
-          dailyEntityModels[entity][model].cacheCreationInputTokens += keyMetrics.cache_creation_input_tokens || 0;
-        });
-      });
-    });
-
-    Object.entries(dailyEntityModels).forEach(([entity, models]) => {
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const entityModels = aggregateEntityModelMetrics(
+        entityData.api_key_breakdown || {},
+        models,
+        keyTotalsAcrossModels,
+      );
 
-      Object.entries(models).forEach(([model, metrics]: [string, any]) => {
+      Object.entries(entityModels).forEach(([model, metrics]) => {
         dailyModelBreakdown.push({
           Date: day.date,
           [entityLabel]: alias,
           [`${entityLabel} ID`]: id,
           Model: model,
           "Spend ($)": formatNumberWithCommas(metrics.spend, 4),
-          Requests: metrics.requests,
-          Successful: metrics.successful,
-          Failed: metrics.failed,
-          "Total Tokens": metrics.tokens,
-          "Prompt Tokens": metrics.promptTokens,
-          "Completion Tokens": metrics.completionTokens,
-          "Cache Read Input Tokens": metrics.cacheReadInputTokens,
-          "Cache Creation Input Tokens": metrics.cacheCreationInputTokens,
+          Requests: metrics.api_requests,
+          Successful: metrics.successful_requests,
+          Failed: metrics.failed_requests,
+          "Total Tokens": metrics.total_tokens,
+          "Prompt Tokens": metrics.prompt_tokens,
+          "Completion Tokens": metrics.completion_tokens,
+          "Cache Read Input Tokens": metrics.cache_read_input_tokens,
+          "Cache Creation Input Tokens": metrics.cache_creation_input_tokens,
         });
       });
     });
