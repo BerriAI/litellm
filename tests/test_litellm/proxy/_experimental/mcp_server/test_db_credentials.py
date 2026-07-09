@@ -11,6 +11,7 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -61,6 +62,94 @@ def _legacy_row(payload: str):
     row.user_id = "alice"
     row.server_id = "srv-1"
     return row
+
+
+def _identity_server(**overrides):
+    base = dict(
+        url="https://up.example.com/mcp",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+        registration_url="https://idp.example.com/register",
+        credentials={"client_id": "cid", "client_secret": "csec", "scopes": ["a"]},
+        server_name="srv",
+        description="d",
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"url": "https://other.example.com/mcp"},
+        {"auth_type": "oauth_delegate"},
+        {"oauth2_flow": "client_credentials"},
+        {"authorization_url": "https://other.example.com/authorize"},
+        {"token_url": "https://other.example.com/token"},
+        {"registration_url": "https://other.example.com/register"},
+        {"credentials": {"client_id": "new", "client_secret": "csec", "scopes": ["a"]}},
+        {"credentials": {"client_id": "cid", "client_secret": "rotated", "scopes": ["a"]}},
+        {"credentials": {"client_id": "cid", "client_secret": "csec", "scopes": ["b"]}},
+    ],
+)
+def test_mcp_oauth_token_identity_changes_on_mint_relevant_fields(overrides):
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    assert mcp_oauth_token_identity(_identity_server()) != mcp_oauth_token_identity(_identity_server(**overrides))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"server_name": "renamed"},
+        {"description": "changed"},
+    ],
+)
+def test_mcp_oauth_token_identity_stable_on_non_mint_fields(overrides):
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    assert mcp_oauth_token_identity(_identity_server()) == mcp_oauth_token_identity(_identity_server(**overrides))
+
+
+@pytest.mark.asyncio
+async def test_purge_user_oauth_credentials_for_server_deletes_rows_and_cache(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import oauth2_token_cache
+    from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
+
+    r1 = MagicMock(user_id="alice", server_id="srv-1")
+    r2 = MagicMock(user_id="bob", server_id="srv-1")
+    prisma = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[r1, r2])
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+
+    cache_deletes = []
+    monkeypatch.setattr(
+        oauth2_token_cache.mcp_per_user_token_cache,
+        "delete",
+        AsyncMock(side_effect=lambda uid, sid: cache_deletes.append((uid, sid))),
+    )
+
+    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1")
+
+    assert purged == 2
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once()
+    assert set(cache_deletes) == {("alice", "srv-1"), ("bob", "srv-1")}
+
+
+@pytest.mark.asyncio
+async def test_purge_user_oauth_credentials_for_server_noop_when_empty():
+    from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+
+    purged = await purge_user_oauth_credentials_for_server(prisma, "srv-1")
+
+    assert purged == 0
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_not_awaited()
 
 
 def _stored_value(prisma) -> str:

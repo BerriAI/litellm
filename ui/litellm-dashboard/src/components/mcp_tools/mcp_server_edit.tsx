@@ -5,6 +5,7 @@ import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/rea
 import {
   AUTH_TYPE,
   isClientForwardedTokenMode,
+  getOAuthAuthorizationIdentity,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -15,7 +16,7 @@ import {
   oauth2FlowToFormValue,
 } from "./types";
 import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential } from "../networking";
-import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
+import { getToken, isTokenValid, removeToken, setToken } from "@/utils/mcpTokenStore";
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
@@ -136,11 +137,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   // that read only mcpServer.auth_type go stale the moment the admin switches modes in the form.
   const getEffectiveAuthType = () => form.getFieldValue("auth_type") ?? mcpServer.auth_type;
 
+  // The OAuth authorization identity (see getOAuthAuthorizationIdentity) captured when a token is fetched
+  // in this edit session; undefined when none is held. If a mint-relevant field later diverges from it,
+  // the held token (hook response + sessionStorage) is discarded so the admin must re-authorize.
+  const authorizedIdentityRef = React.useRef<string | undefined>(undefined);
+
   const {
     startOAuthFlow,
     status: oauthStatus,
     error: oauthError,
     tokenResponse: oauthTokenResponse,
+    reset: resetOAuthFlow,
   } = useMcpOAuthFlow({
     accessToken,
     getCredentials: () => form.getFieldValue("credentials"),
@@ -183,6 +190,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
 
+      authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
       if (isClientForwardedTokenMode(getEffectiveAuthType())) {
         const browserHeldToken = {
           access_token: token.access_token,
@@ -205,6 +213,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       };
 
       form.setFieldsValue({ credentials });
+      // Re-capture after writing credentials so the token is not invalidated by its own credential write.
+      authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
 
       NotificationsManager.success(
         "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
@@ -377,6 +387,39 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     fetchTools();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token]);
+
+  // Invalidate a token authorized in this edit session once any mint-relevant field diverges from the
+  // identity it was minted against (url, auth_type, oauth_flow_type, client creds/scopes, or the
+  // authorization/token/registration endpoints — see getOAuthAuthorizationIdentity). Discards the hook
+  // token (resetOAuthFlow, which re-runs fetchTools to prompt a fresh authorize), the sessionStorage
+  // token (removeToken, browser-held modes), and the fetched token/DCR client in form.credentials + the
+  // discovered endpoint fields; the admin's in-flight edit is re-applied so it is never wiped. Only fires
+  // when a token was actually authorized here (ref set), so a token already valid for the saved server on
+  // mount is left untouched. Driven from onValuesChange (user input only), never programmatic resets.
+  const CLEARED_ON_INVALIDATION = ["credentials", "authorization_url", "token_url", "registration_url"] as const;
+  const clearHeldOAuthToken = (changedValues: Record<string, unknown> = {}) => {
+    authorizedIdentityRef.current = undefined;
+    if (mcpServer.server_id) {
+      removeToken(mcpServer.server_id, userID);
+    }
+    resetOAuthFlow();
+    form.resetFields([...CLEARED_ON_INVALIDATION]);
+    const preserved = Object.fromEntries(
+      CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
+    );
+    if (Object.keys(preserved).length > 0) {
+      form.setFieldsValue(preserved);
+    }
+  };
+
+  const handleFormValuesChange = (changedValues: Record<string, unknown>) => {
+    if (
+      authorizedIdentityRef.current !== undefined &&
+      getOAuthAuthorizationIdentity(form.getFieldsValue(true)) !== authorizedIdentityRef.current
+    ) {
+      clearHeldOAuthToken(changedValues);
+    }
+  };
 
   const fetchTools = async () => {
     if (!accessToken || !mcpServer.server_id) return;
@@ -805,7 +848,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       </TabList>
       <TabPanels className="mt-6">
         <TabPanel>
-          <Form form={form} onFinish={handleSave} initialValues={initialValues} layout="vertical">
+          <Form
+            form={form}
+            onFinish={handleSave}
+            onValuesChange={handleFormValuesChange}
+            initialValues={initialValues}
+            layout="vertical"
+          >
             <Form.Item
               label="MCP Server Name"
               name="server_name"

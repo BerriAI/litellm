@@ -1070,6 +1070,50 @@ async def list_user_oauth_credentials(
     return results
 
 
+def mcp_oauth_token_identity(server: Any) -> tuple[Any, ...]:
+    """The upstream-OAuth-token-determining fields of an MCP server: the resource/audience (url), the
+    OAuth mode/grant (auth_type, oauth2_flow), the authorization-server endpoints, and the OAuth client +
+    scopes. Mirrors the dashboard's getOAuthAuthorizationIdentity. When any of these change on a server
+    update, previously stored per-user tokens were minted for the old identity and are stale. Excludes
+    transport and delegate_auth_to_upstream, which do not affect what token is minted (RFC 8707/8693)."""
+    creds = getattr(server, "credentials", None)
+    creds_dict: Dict[str, Any] = creds if isinstance(creds, dict) else {}
+    return (
+        getattr(server, "url", None),
+        getattr(server, "auth_type", None),
+        getattr(server, "oauth2_flow", None),
+        getattr(server, "authorization_url", None),
+        getattr(server, "token_url", None),
+        getattr(server, "registration_url", None),
+        creds_dict.get("client_id"),
+        creds_dict.get("client_secret"),
+        creds_dict.get("scopes"),
+    )
+
+
+async def purge_user_oauth_credentials_for_server(prisma_client: PrismaClient, server_id: str) -> int:
+    """Delete every stored per-user OAuth credential for a server and drop each from the per-user token
+    cache, so no user keeps a token minted for a superseded configuration. Called when a server update
+    changes a mint-relevant field (see mcp_oauth_token_identity). Returns the number of rows removed."""
+    repo = MCPUserCredentialsRepository(prisma_client)
+    rows = await repo.table.find_many(where={"server_id": server_id})
+    if not rows:
+        return 0
+    await repo.table.delete_many(where={"server_id": server_id})
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+        mcp_per_user_token_cache,
+    )
+
+    for row in rows:
+        try:
+            await mcp_per_user_token_cache.delete(row.user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; the DB delete is authoritative
+            verbose_proxy_logger.warning(
+                "Failed to drop cached MCP OAuth token for user=%s server=%s: %s", row.user_id, server_id, exc
+            )
+    return len(rows)
+
+
 async def refresh_user_oauth_token(
     prisma_client: PrismaClient,
     user_id: str,
