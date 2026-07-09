@@ -221,8 +221,12 @@ if (!URL.revokeObjectURL) {
 }
 
 // Mock ResizeObserver for components that use it (recharts, Tremor UI components).
-// JSDOM has no layout, so like a real browser's initial notification after observe(),
-// the mock immediately reports a fixed 800x400 box; recharts needs this to render at all.
+// JSDOM has no layout, so for observers inside a shadcn ChartContainer ([data-slot="chart"])
+// the mock immediately reports a fixed 800x400 box; recharts renders nothing until it
+// observes a size. Scoped to chart subtrees only: firing for every observer re-enters
+// React mid-effect for tremor/headlessui consumers whose tests assume the old no-op
+// (chart text would duplicate getByText targets, popover clicks go stale). Widen or
+// drop the scoping once tremor is gone.
 const MOCK_RESIZE_BOX = { inlineSize: 800, blockSize: 400 };
 const MOCK_RESIZE_RECT: DOMRectReadOnly = {
   width: 800,
@@ -241,6 +245,7 @@ global.ResizeObserver = class ResizeObserver {
     this.callback = callback;
   }
   observe(target: Element) {
+    if (!target.closest('[data-slot="chart"]')) return;
     const entry: ResizeObserverEntry = {
       target,
       contentRect: MOCK_RESIZE_RECT,
