@@ -99,6 +99,31 @@ def test_transform_request_reads_pinned_version_from_registry():
         global_agent_registry.agent_list = original_agents
 
 
+def test_transform_request_registry_agent_without_pinned_version_uses_0_3():
+    """An agent whose card omits ``protocolVersion`` keeps the legacy 0.3 method."""
+    try:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+        from litellm.types.agents import AgentResponse
+    except ImportError:
+        import pytest
+
+        pytest.skip("Registry not available (not in proxy context)")
+
+    agent = AgentResponse(
+        agent_id="legacy-id",
+        agent_name="legacy-agent",
+        agent_card_params={"url": "http://agent.example.com:9999"},
+        litellm_params={},
+    )
+    original_agents = global_agent_registry.agent_list.copy()
+    global_agent_registry.register_agent(agent)
+    try:
+        request = A2AConfig().transform_request("legacy-agent", _MESSAGES, {}, {}, {})
+        assert request["method"] == "message/send"
+    finally:
+        global_agent_registry.agent_list = original_agents
+
+
 def test_transform_response_extracts_text_from_v1_message():
     """Regression for #32609: text must be extracted from a 1.0 protobuf-JSON
     message result whose parts carry no ``kind`` field."""
