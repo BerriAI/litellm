@@ -535,14 +535,13 @@ class RouterBudgetLimiting(CustomLogger):
                 "Pushing Redis Increment Pipeline for queue: %s",
                 self.redis_increment_operation_queue,
             )
-            if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
-                )
-
+            queue_to_push = self.redis_increment_operation_queue
             self.redis_increment_operation_queue = []
+
+            if len(queue_to_push) > 0:
+                await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=queue_to_push,
+                )
 
         except Exception as e:
             verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
