@@ -61,6 +61,24 @@ def _summary(counts: dict[str, int]) -> str:
     return ", ".join(f"{etype} x{n}" for etype, n in sorted(counts.items()))
 
 
+def _merge_counts(total_counts: dict[str, int], counts: dict[str, int]) -> None:
+    for etype, n in counts.items():
+        total_counts[etype] = total_counts.get(etype, 0) + n
+
+
+def _get_field(container: Any, field_name: str) -> Any:
+    if isinstance(container, dict):
+        return container.get(field_name)
+    return getattr(container, field_name, None)
+
+
+def _set_field(container: Any, field_name: str, value: Any) -> None:
+    if isinstance(container, dict):
+        container[field_name] = value
+    else:
+        setattr(container, field_name, value)
+
+
 class DataFogGuardrail(CustomGuardrail):
     """Offline PII guardrail powered by the datafog library."""
 
@@ -109,6 +127,124 @@ class DataFogGuardrail(CustomGuardrail):
             return new_parts, counts
         return content, counts
 
+    def _process_tool_payload(self, payload: Any) -> tuple[Any, dict[str, int]]:
+        """Redact text inside supported tool/function argument payloads."""
+        if isinstance(payload, str):
+            return _redact_text(payload, self.entity_types, self.locales)
+        if not isinstance(payload, (list, dict)):
+            return payload, {}
+
+        counts: dict[str, int] = {}
+        changed = False
+        new_payload = list(payload) if isinstance(payload, list) else dict(payload)
+        stack = [(payload, new_payload)]
+        seen = {id(payload)}
+
+        while stack:
+            original_container, new_container = stack.pop()
+            if isinstance(original_container, list):
+                items = enumerate(original_container)
+            else:
+                items = original_container.items()
+
+            for key, value in items:
+                if isinstance(value, str):
+                    redacted, value_counts = _redact_text(value, self.entity_types, self.locales)
+                    if value_counts:
+                        new_container[key] = redacted
+                        changed = True
+                        _merge_counts(counts, value_counts)
+                elif isinstance(value, list):
+                    if id(value) in seen:
+                        continue
+                    seen.add(id(value))
+                    new_value = list(value)
+                    new_container[key] = new_value
+                    stack.append((value, new_value))
+                elif isinstance(value, dict):
+                    if id(value) in seen:
+                        continue
+                    seen.add(id(value))
+                    new_value = dict(value)
+                    new_container[key] = new_value
+                    stack.append((value, new_value))
+
+        return (new_payload if changed else payload), counts
+
+    def _scan_argument_mapping(self, mapping: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+        counts: dict[str, int] = {}
+        new_mapping = dict(mapping)
+        changed = False
+        for field_name in ("arguments", "input"):
+            payload = mapping.get(field_name)
+            if not isinstance(payload, (str, list, dict)):
+                continue
+            new_payload, payload_counts = self._process_tool_payload(payload)
+            if payload_counts:
+                new_mapping[field_name] = new_payload
+                changed = True
+                _merge_counts(counts, payload_counts)
+        return (new_mapping if changed else mapping), counts
+
+    def _scan_argument_container(self, container: Any, *, redact: bool) -> dict[str, int]:
+        """Scan supported argument fields on a dict/object container."""
+        counts: dict[str, int] = {}
+        for field_name in ("arguments", "input"):
+            payload = _get_field(container, field_name)
+            if not isinstance(payload, (str, list, dict)):
+                continue
+            new_payload, payload_counts = self._process_tool_payload(payload)
+            if payload_counts:
+                if redact:
+                    _set_field(container, field_name, new_payload)
+                _merge_counts(counts, payload_counts)
+        return counts
+
+    def _scan_request_tool_calls(self, tool_calls: Any) -> tuple[Any, dict[str, int]]:
+        if not isinstance(tool_calls, list):
+            return tool_calls, {}
+        counts: dict[str, int] = {}
+        new_tool_calls = []
+        changed = False
+        for tool_call in tool_calls:
+            if isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
+                new_function, function_counts = self._scan_argument_mapping(tool_call["function"])
+                if function_counts:
+                    new_tool_calls.append({**tool_call, "function": new_function})
+                    changed = True
+                    _merge_counts(counts, function_counts)
+                    continue
+            new_tool_calls.append(tool_call)
+        return (new_tool_calls if changed else tool_calls), counts
+
+    def _scan_message(self, message: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+        counts: dict[str, int] = {}
+        new_message = dict(message)
+        changed = False
+
+        if "content" in message:
+            new_content, content_counts = self._process_content(message["content"])
+            if content_counts:
+                new_message["content"] = new_content
+                changed = True
+                _merge_counts(counts, content_counts)
+
+        function_call = message.get("function_call")
+        if isinstance(function_call, dict):
+            new_function_call, function_counts = self._scan_argument_mapping(function_call)
+            if function_counts:
+                new_message["function_call"] = new_function_call
+                changed = True
+                _merge_counts(counts, function_counts)
+
+        new_tool_calls, tool_counts = self._scan_request_tool_calls(message.get("tool_calls"))
+        if tool_counts:
+            new_message["tool_calls"] = new_tool_calls
+            changed = True
+            _merge_counts(counts, tool_counts)
+
+        return (new_message if changed else message), counts
+
     def _handle_engine_error(self, exc: Exception) -> None:
         """Apply the fail policy without leaking scanned text.
 
@@ -139,17 +275,62 @@ class DataFogGuardrail(CustomGuardrail):
         total_counts: dict[str, int] = {}
         new_messages = []
         for message in messages:
-            if isinstance(message, dict) and "content" in message:
-                new_content, counts = self._process_content(message["content"])
-                new_messages.append({**message, "content": new_content})
-                for etype, n in counts.items():
-                    total_counts[etype] = total_counts.get(etype, 0) + n
+            if isinstance(message, dict):
+                new_message, counts = self._scan_message(message)
+                new_messages.append(new_message)
+                _merge_counts(total_counts, counts)
             else:
                 new_messages.append(message)
 
         if not total_counts:
             return data, {}
         return {**data, "messages": new_messages}, total_counts
+
+    def _scan_response_content(self, container: Any, *, redact: bool) -> dict[str, int]:
+        content = _get_field(container, "content")
+        if content is None:
+            return {}
+        new_content, counts = self._process_content(content)
+        if counts and redact:
+            _set_field(container, "content", new_content)
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "tool_use":
+                    input_counts = self._scan_argument_container(part, redact=redact)
+                    _merge_counts(counts, input_counts)
+        return counts
+
+    def _scan_response_tool_calls(self, message: Any, *, redact: bool) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        function_call = _get_field(message, "function_call")
+        if function_call is not None:
+            _merge_counts(counts, self._scan_argument_container(function_call, redact=redact))
+
+        tool_calls = _get_field(message, "tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                function = _get_field(tool_call, "function")
+                if function is not None:
+                    _merge_counts(counts, self._scan_argument_container(function, redact=redact))
+        return counts
+
+    def _scan_response_message(self, message: Any, *, redact: bool) -> dict[str, int]:
+        counts = self._scan_response_content(message, redact=redact)
+        _merge_counts(counts, self._scan_response_tool_calls(message, redact=redact))
+        return counts
+
+    def _scan_responses_api_output(self, response: Any, *, redact: bool) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        output = _get_field(response, "output")
+        if not isinstance(output, list):
+            return counts
+        for item in output:
+            item_type = _get_field(item, "type")
+            if item_type == "message":
+                _merge_counts(counts, self._scan_response_content(item, redact=redact))
+            elif item_type in {"function_call", "custom_tool_call"}:
+                _merge_counts(counts, self._scan_argument_container(item, redact=redact))
+        return counts
 
     def _raise_block(self, total_counts: dict[str, int]) -> None:
         """Reject with HTTP 400 so the block is classified as a guardrail
@@ -236,29 +417,19 @@ class DataFogGuardrail(CustomGuardrail):
         """
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return response
-        choices = getattr(response, "choices", None)
-        if not choices:
-            return response
         response_counts: dict[str, int] = {}
         try:
-            skipped_parts = 0
-            for choice in choices:
-                message = getattr(choice, "message", None)
-                if message is not None and isinstance(message.content, str):
-                    redacted, counts = _redact_text(message.content, self.entity_types, self.locales)
-                    if counts:
-                        for etype, n in counts.items():
-                            response_counts[etype] = response_counts.get(etype, 0) + n
-                        if self.action != "block":
-                            message.content = redacted
-                elif message is not None and message.content is not None:
-                    skipped_parts += 1
-            if skipped_parts:
-                verbose_proxy_logger.debug(
-                    "DataFog guardrail: %d non-text response parts not scanned",
-                    skipped_parts,
-                )
-        except Exception as exc:  # noqa: BLE001
+            redact = self.action != "block"
+            choices = getattr(response, "choices", None)
+            if choices:
+                for choice in choices:
+                    message = getattr(choice, "message", None)
+                    if message is not None:
+                        _merge_counts(response_counts, self._scan_response_message(message, redact=redact))
+            _merge_counts(response_counts, self._scan_responses_api_output(response, redact=redact))
+            if isinstance(response, dict):
+                _merge_counts(response_counts, self._scan_response_content(response, redact=redact))
+        except Exception as exc:  # noqa: BLE001  # engine failures are handled by the configured fail policy
             self._handle_engine_error(exc)
             return response
         if response_counts:
