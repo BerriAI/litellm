@@ -10,7 +10,6 @@ cooldown state stays correct.
 import os
 import sys
 import time
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -79,13 +78,6 @@ def test_failure_handler_runs_cooldown_callback_on_each_attempt():
         assert logging_obj.should_run_logging(event_type="sync_failure") is False
     finally:
         litellm.failure_callback = original_failure_callback
-
-
-def test_deployment_callback_on_failure_is_internal_callback():
-    logging_obj = _make_logging_obj()
-    mock_cb = MagicMock()
-    mock_cb.__name__ = "deployment_callback_on_failure"
-    assert logging_obj._is_internal_litellm_proxy_callback(mock_cb) is True
 
 
 @pytest.mark.asyncio

@@ -3131,7 +3131,6 @@ class Logging(LiteLLMLoggingBaseClass):
             "_PROXY",
             "_service_logger.ServiceLogging",
             "sync_deployment_callback_on_success",
-            "deployment_callback_on_failure",
         ]
         if isinstance(cb, str):
             return False
