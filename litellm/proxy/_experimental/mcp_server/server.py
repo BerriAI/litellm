@@ -336,6 +336,8 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
+        _caller_authorization_fans_out,
+        _client_forwarded_authorization_headers,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
@@ -1444,6 +1446,35 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    def _client_has_per_server_auth_header(
+        server: MCPServer,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+    ) -> bool:
+        """True if the request carries a per-server ``x-mcp-{alias}-authorization``
+        header for this server. This is the multi-server binding: it names one
+        upstream, so it is unambiguously the caller's upstream token regardless of
+        auth mode (never the LiteLLM admission credential).
+
+        Resolves through the same ``lookup_mcp_server_auth_in_headers`` egress uses, so
+        the connect gate and egress agree on which per-server header names match: a
+        dashboard client sends ``x-mcp-{sanitize_mcp_alias_for_header(alias)}-authorization``,
+        and matching only the raw alias here would 401 a token egress would forward.
+        """
+        if not mcp_server_auth_headers:
+            return False
+        from litellm.proxy._experimental.mcp_server.utils import (
+            lookup_mcp_server_auth_in_headers,
+        )
+
+        server_headers = lookup_mcp_server_auth_in_headers(
+            mcp_server_auth_headers, alias=server.alias, server_name=server.server_name
+        )
+        if isinstance(server_headers, str):
+            return bool(server_headers.strip())
+        if isinstance(server_headers, dict):
+            return any(isinstance(hk, str) and hk.lower() == "authorization" for hk in server_headers)
+        return False
+
     def _client_has_passthrough_authorization(
         server: MCPServer,
         oauth2_headers: Optional[Dict[str, str]],
@@ -1461,24 +1492,7 @@ if MCP_AVAILABLE:
             for k in oauth2_headers.keys():
                 if k.lower() == "authorization":
                     return True
-        if mcp_server_auth_headers:
-            for key in (server.alias, server.server_name, server.name):
-                if not key:
-                    continue
-                server_headers = None
-                for k, v in mcp_server_auth_headers.items():
-                    if k.lower() == key.lower():
-                        server_headers = v
-                        break
-                if server_headers is None:
-                    continue
-                if isinstance(server_headers, str) and server_headers.strip():
-                    return True
-                if isinstance(server_headers, dict):
-                    for hk in server_headers.keys():
-                        if hk.lower() == "authorization":
-                            return True
-        return False
+        return _client_has_per_server_auth_header(server, mcp_server_auth_headers)
 
     async def _get_user_oauth_extra_headers_from_db(
         server: MCPServer,
@@ -1533,8 +1547,16 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]],
         raw_headers: Optional[Dict[str, str]],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        scope_servers: Optional[list[MCPServer]] = None,
     ) -> Tuple[Optional[Union[Dict[str, str], str]], Optional[Dict[str, str]]]:
-        """Build auth and extra headers for a server."""
+        """Build auth and extra headers for a server.
+
+        ``scope_servers`` is the full server list a fan-out handler iterates. Passing it lets the
+        client-forwarded token modes withhold the caller's request-wide ``Authorization`` when
+        another server in the scope would also receive it (``_caller_authorization_fans_out``);
+        explicitly-addressed operations leave it None. Per-server ``x-mcp-{alias}-authorization``
+        headers are unaffected — they bind one token to one server and are the multi-server shape.
+        """
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers:
             from litellm.proxy._experimental.mcp_server.utils import (
@@ -1548,6 +1570,16 @@ if MCP_AVAILABLE:
             )
 
         extra_headers: Optional[Dict[str, str]] = None
+        is_client_forwarded_mode = server.is_true_passthrough or server.is_oauth_delegate
+        # In a multi-server listing scope the request-wide Authorization can only carry one token,
+        # so it is withheld from a client-forwarded server when another server in scope also consumes
+        # it (RFC 9700 cross-resource replay); such scopes must bind per-server via
+        # x-mcp-{alias}-authorization. The decision is computed once so BOTH the forwarding branch and
+        # the extra_headers copy loop below honor it — otherwise a server that lists Authorization in
+        # extra_headers would re-copy the withheld bearer from raw_headers and replay it anyway.
+        withhold_forwarded_authorization = is_client_forwarded_mode and _caller_authorization_fans_out(
+            server, scope_servers
+        )
         if server.auth_type == MCPAuth.oauth2:
             # For OAuth2 M2M servers, upstream Authorization must come from
             # client_credentials token fetch, never from caller headers.
@@ -1566,6 +1598,14 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
+        elif is_client_forwarded_mode:
+            if not withhold_forwarded_authorization:
+                extra_headers = _client_forwarded_authorization_headers(
+                    mcp_server=server,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -1586,7 +1626,9 @@ if MCP_AVAILABLE:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if header.lower() == "authorization" and strip_caller_authorization:
+                if header.lower() == "authorization" and (
+                    strip_caller_authorization or withhold_forwarded_authorization
+                ):
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
@@ -1790,6 +1832,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
+                    scope_servers=allowed_mcp_servers,
                 )
 
                 # Prefer server-stored per-user OAuth when configured, so a stale
@@ -1976,6 +2019,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+                scope_servers=allowed_mcp_servers,
             )
 
             try:
@@ -2028,6 +2072,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+                scope_servers=allowed_mcp_servers,
             )
 
             try:
@@ -2078,6 +2123,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
+                scope_servers=allowed_mcp_servers,
             )
 
             try:
@@ -3582,6 +3628,41 @@ if MCP_AVAILABLE:
                     headers={"www-authenticate": www_authenticate},
                 )
 
+            if (
+                server
+                and server.is_oauth_delegate
+                and len(mcp_servers or []) == 1
+                and _get_forwarded_auth_from_scope(scope) is None
+                and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
+            ):
+                www_authenticate = _get_passthrough_www_authenticate(
+                    scope=scope,
+                    server_name=server_name,
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": www_authenticate},
+                )
+
+            if (
+                server
+                and server.is_true_passthrough
+                and len(mcp_servers or []) == 1
+                and not _scope_has_authorization_header(scope)
+                and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
+            ):
+                upstream_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", "")
+                if upstream_status == 401 and upstream_www_authenticate:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": upstream_www_authenticate},
+                    )
+
+    def _scope_has_authorization_header(scope: Scope) -> bool:
+        return any(key.lower() == b"authorization" for key, _ in scope.get("headers", []))
+
     def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
         """Return the upstream-bound ``Authorization`` header value, or None.
 
@@ -3609,7 +3690,7 @@ if MCP_AVAILABLE:
         url: str,
         auth_header: str,
         timeout: float = 5.0,
-    ) -> tuple:
+    ) -> tuple[int, Optional[str]]:
         """JSON-RPC initialize-probe the upstream URL to check whether the token is accepted.
 
         Uses POST so StreamableHTTP MCP servers run the same auth path as a
@@ -3639,8 +3720,8 @@ if MCP_AVAILABLE:
             },
         }
         probe_headers = {
-            "Authorization": auth_header,
             "Accept": "application/json, text/event-stream",
+            **({"Authorization": auth_header} if auth_header else {}),
         }
         try:
             resp = await client.post(

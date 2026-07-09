@@ -1302,11 +1302,15 @@ async def _build_oauth_protected_resource_response(
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
-    For pass-through MCP servers (``MCPServer.is_oauth_passthrough``), the
-    gateway proxies the upstream's own ``oauth-protected-resource`` metadata
-    so that standards-compliant MCP clients discover the **upstream** IdP
-    instead of the gateway. The ``resource`` field is rewritten to the
-    gateway's own URL so clients present the bearer token back to the gateway.
+    For pass-through MCP servers, the gateway proxies the upstream's own
+    ``oauth-protected-resource`` metadata so standards-compliant MCP clients
+    discover the **upstream** IdP instead of the gateway. For ``true_passthrough``
+    and ``oauth_delegate`` the metadata is returned verbatim (``resource`` stays
+    the upstream): the caller's token is forwarded to and validated by the
+    upstream, so its audience must be the upstream — rewriting it to the gateway
+    would make a strict IdP (e.g. Entra) refuse to mint it or the upstream reject
+    it. Only the legacy ``is_oauth_passthrough`` opt-in rewrites ``resource`` to
+    the gateway's own URL so clients present the bearer token back to the gateway.
 
     Args:
         request: FastAPI Request object
@@ -1347,7 +1351,9 @@ async def _build_oauth_protected_resource_response(
 
     # Pass-through branch: proxy the upstream's own metadata so discovery
     # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
-    if mcp_server is not None and mcp_server.is_oauth_passthrough:
+    if mcp_server is not None and (
+        mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate or mcp_server.is_true_passthrough
+    ):
         try:
             upstream_metadata = await fetch_upstream_oauth_protected_resource(mcp_server)
         except Exception as exc:
@@ -1363,8 +1369,9 @@ async def _build_oauth_protected_resource_response(
             )
 
         if upstream_metadata is not None:
-            response = {**upstream_metadata, "resource": resource_url}
-            return response
+            if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+                return upstream_metadata
+            return {**upstream_metadata, "resource": resource_url}
 
         # Upstream responded but with non-200 or non-dict payload. For
         # pass-through servers the gateway is NOT the authorization server,
