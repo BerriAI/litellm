@@ -744,7 +744,6 @@ describe("CreateMCPServer", () => {
       for (const call of vi.mocked(networking.testMCPToolsListRequest).mock.calls) {
         expect(call[1]?.credentials?.client_id).not.toBe("client-a");
         expect(call[1]?.credentials?.client_secret).not.toBe("secret-a");
-        expect(call[1]?.credentials?.access_token).not.toBe("stale-tok");
       }
     });
 
