@@ -28,7 +28,14 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
   return (
     <div className="flex items-center gap-3">
       <div className="w-[300px]">
-        <ModelSelector accessToken={accessToken || ""} value={model} onChange={onModelChange} showLabel={false} />
+        <ModelSelector
+          accessToken={accessToken || ""}
+          value={model}
+          onChange={onModelChange}
+          showLabel={false}
+          allowClear={true}
+          placeholder="No model (use calling agent's model)"
+        />
       </div>
 
       <button

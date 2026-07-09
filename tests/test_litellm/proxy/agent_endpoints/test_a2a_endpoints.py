@@ -1916,6 +1916,205 @@ async def test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers()
     ), "authenticated team id must not be overridden by forwarded client headers"
 
 
+def test_resolve_model_and_provider_resolves_bare_alias():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_model_and_provider
+
+    model_list = [
+        {
+            "model_name": "gemini-flash",
+            "litellm_params": {"model": "gemini/gemini-flash-latest"},
+        }
+    ]
+    params, provider = _resolve_model_and_provider(
+        {"model": "gemini-flash"}, model_list
+    )
+    assert params["model"] == "gemini/gemini-flash-latest"
+    assert provider == "gemini"
+
+
+def test_resolve_model_and_provider_keeps_explicit_provider():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_model_and_provider
+
+    params, provider = _resolve_model_and_provider(
+        {"model": "anything", "custom_llm_provider": "openai"}, None
+    )
+    assert provider == "openai"
+    assert params["model"] == "anything"
+
+
+def test_resolve_model_and_provider_derives_provider_from_prefixed_model():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_model_and_provider
+
+    params, provider = _resolve_model_and_provider(
+        {"model": "anthropic/claude-x"}, None
+    )
+    assert provider == "anthropic"
+
+
+def test_resolve_model_and_provider_leaves_unknown_alias_unresolved():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_model_and_provider
+
+    params, provider = _resolve_model_and_provider({"model": "mystery"}, [])
+    assert provider is None
+    assert params["model"] == "mystery"
+
+
+@pytest.mark.asyncio
+async def test_delegate_to_agent_rejects_target_outside_whitelist():
+    """Security regression: the target id is model-supplied (prompt-injectable)
+    and send_message bypasses the endpoint auth gate, so an agent id outside the
+    auth-filtered whitelist must be refused before any dispatch or registry
+    lookup."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _DelegationContext,
+        _delegate_to_agent,
+    )
+
+    send_message = AsyncMock()
+    get_agent = MagicMock()
+
+    reply = await _delegate_to_agent(
+        target_id="evil-agent",
+        message="hi",
+        context=_DelegationContext(
+            allowed_agent_ids={"allowed-agent"},
+            get_agent=get_agent,
+            user_api_key_auth=None,
+            send_message=send_message,
+        ),
+    )
+
+    assert "not available" in reply
+    send_message.assert_not_awaited()
+    get_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delegate_to_agent_does_not_dispatch_when_target_missing():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _DelegationContext,
+        _delegate_to_agent,
+    )
+
+    send_message = AsyncMock()
+
+    reply = await _delegate_to_agent(
+        target_id="known",
+        message="hi",
+        context=_DelegationContext(
+            allowed_agent_ids={"known"},
+            get_agent=lambda _id: None,
+            user_api_key_auth=None,
+            send_message=send_message,
+        ),
+    )
+
+    assert "not found" in reply
+    send_message.assert_not_awaited()
+
+
+def test_scope_auth_to_agent_binds_agent_id_without_mutating_caller():
+    """The agent's MCP object_permission is only enforced when agent_id is set on
+    the auth, so the bridge must receive a copy bound to the agent; the shared
+    caller auth must not be mutated."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _scope_auth_to_agent
+
+    caller = UserAPIKeyAuth(api_key="sk-x", user_id="u")
+    scoped = _scope_auth_to_agent(caller, "agent-123")
+
+    assert scoped.agent_id == "agent-123"
+    assert caller.agent_id != "agent-123"
+
+
+@pytest.mark.asyncio
+async def test_delegate_to_agent_refuses_target_with_guardrails():
+    """A target with proxy-side guardrails must not be reachable via delegation:
+    this path bypasses the guardrail/post-call enforcement a direct call runs, so
+    it is refused rather than returning output a guardrail would have blocked."""
+    from types import SimpleNamespace
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _DelegationContext,
+        _delegate_to_agent,
+    )
+
+    send_message = AsyncMock()
+    guarded = SimpleNamespace(
+        agent_id="guarded",
+        agent_card_params={"url": "http://x"},
+        litellm_params={"guardrails": ["pii-mask"]},
+    )
+
+    reply = await _delegate_to_agent(
+        target_id="guarded",
+        message="hi",
+        context=_DelegationContext(
+            allowed_agent_ids={"guarded"},
+            get_agent=lambda _id: guarded,
+            user_api_key_auth=None,
+            send_message=send_message,
+        ),
+    )
+
+    assert "cannot be called indirectly" in reply
+    send_message.assert_not_awaited()
+
+
+_MCP_OBJ_PERM = (
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+    "MCPRequestHandler._get_agent_object_permission"
+)
+_ACCESS_GROUPS = (
+    "litellm.proxy.agent_endpoints.auth.agent_permission_handler."
+    "AgentRequestHandler._get_agents_from_access_groups"
+)
+
+
+@pytest.mark.asyncio
+async def test_source_agent_targets_unrestricted_without_object_permission():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _source_agent_allowed_targets,
+    )
+
+    with patch(_MCP_OBJ_PERM, new_callable=AsyncMock, return_value=None):
+        assert await _source_agent_allowed_targets(MagicMock()) is None
+
+
+@pytest.mark.asyncio
+async def test_source_agent_targets_intersect_agents_and_access_groups():
+    """Regression: delegation must be limited to the source agent's own allowed
+    agents (object_permission.agents + access-group agents), not just the caller's."""
+    from types import SimpleNamespace
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _source_agent_allowed_targets,
+    )
+
+    obj_perm = SimpleNamespace(agents=["a", "b"], agent_access_groups=["grp"])
+    with (
+        patch(_MCP_OBJ_PERM, new_callable=AsyncMock, return_value=obj_perm),
+        patch(_ACCESS_GROUPS, new_callable=AsyncMock, return_value=["c"]),
+    ):
+        assert await _source_agent_allowed_targets(MagicMock()) == {"a", "b", "c"}
+
+
+@pytest.mark.asyncio
+async def test_source_agent_targets_empty_permission_is_unrestricted():
+    from types import SimpleNamespace
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _source_agent_allowed_targets,
+    )
+
+    obj_perm = SimpleNamespace(agents=[], agent_access_groups=[])
+    with (
+        patch(_MCP_OBJ_PERM, new_callable=AsyncMock, return_value=obj_perm),
+        patch(_ACCESS_GROUPS, new_callable=AsyncMock, return_value=[]),
+    ):
+        assert await _source_agent_allowed_targets(MagicMock()) is None
+
+
 def _agent(protocol_version):
     agent = MagicMock()
     agent.agent_card_params = (

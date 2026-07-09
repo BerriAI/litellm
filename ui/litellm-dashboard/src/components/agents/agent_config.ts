@@ -152,6 +152,25 @@ export const AGENT_FORM_CONFIG: {
         label: "Make Public",
         type: "switch",
       },
+      {
+        name: "prompt_id",
+        label: "Prompt",
+        type: "select",
+        placeholder: "Select a stored prompt to apply (optional)",
+        tooltip: "The agent answers in this prompt's persona. Create prompts under Experimental > Prompts.",
+      },
+      {
+        name: "enable_mcp_tools",
+        label: "Enable MCP Tools",
+        type: "switch",
+        tooltip: "Let the agent call the MCP tools it is entitled to, executing them in a loop.",
+      },
+      {
+        name: "enable_agent_calls",
+        label: "Enable Agent-to-Agent Calls",
+        type: "switch",
+        tooltip: "Let the agent delegate to other agents it can access (agents-as-tools over A2A).",
+      },
     ],
   },
   cost: {
@@ -281,6 +300,9 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
 
   if (values.model) params.model = values.model;
   if (values.make_public !== undefined) params.make_public = values.make_public;
+  if (values.prompt_id) params.prompt_id = values.prompt_id;
+  if (values.enable_mcp_tools !== undefined) params.enable_mcp_tools = values.enable_mcp_tools;
+  if (values.enable_agent_calls !== undefined) params.enable_agent_calls = values.enable_agent_calls;
   if (values.cost_per_query) params.cost_per_query = parseFloat(values.cost_per_query);
   if (values.input_cost_per_token) params.input_cost_per_token = parseFloat(values.input_cost_per_token);
   if (values.output_cost_per_token) params.output_cost_per_token = parseFloat(values.output_cost_per_token);
@@ -339,6 +361,9 @@ export const parseAgentForForm = (agent: any) => {
     documentationUrl: agent.agent_card_params?.documentationUrl,
     supportsAuthenticatedExtendedCard: agent.agent_card_params?.supportsAuthenticatedExtendedCard,
     model: agent.litellm_params?.model,
+    prompt_id: agent.litellm_params?.prompt_id,
+    enable_mcp_tools: agent.litellm_params?.enable_mcp_tools,
+    enable_agent_calls: agent.litellm_params?.enable_agent_calls,
     make_public: agent.litellm_params?.make_public,
     cost_per_query: agent.litellm_params?.cost_per_query,
     input_cost_per_token: agent.litellm_params?.input_cost_per_token,

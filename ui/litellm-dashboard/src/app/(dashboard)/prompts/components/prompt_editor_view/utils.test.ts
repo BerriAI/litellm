@@ -200,6 +200,22 @@ describe("convertToDotPrompt", () => {
     expect(result).toContain("Assistant: Hi there");
     expect(result).toContain("User: How are you?");
   });
+
+  it("omits the model line when no model is set so the calling agent's model is used", () => {
+    const prompt: PromptType = {
+      name: "test",
+      model: "",
+      config: {},
+      tools: [],
+      developerMessage: "",
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    const result = convertToDotPrompt(prompt);
+    expect(result).not.toContain("model:");
+    expect(result.startsWith("---")).toBe(true);
+    expect(result).toContain("User: Hello");
+  });
 });
 
 describe("parseExistingPrompt", () => {
@@ -225,6 +241,27 @@ User: Hello world`,
     expect(result.name).toBe("test-prompt");
     expect(result.model).toBe("gpt-4");
     expect(result.messages).toEqual([{ role: "user", content: "Hello world" }]);
+  });
+
+  it("returns an empty model when the frontmatter has none so the agent model is used", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          dotprompt_content: `---
+input:
+  schema:
+output:
+  format: text
+---
+
+User: Hello world`,
+        },
+        prompt_id: "no-model-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.model).toBe("");
   });
 
   it("should parse with config parameters", () => {

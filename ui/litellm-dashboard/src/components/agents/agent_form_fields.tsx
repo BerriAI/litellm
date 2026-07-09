@@ -11,13 +11,18 @@ const { Panel } = Collapse;
 interface AgentFormFieldsProps {
   showAgentName?: boolean;
   visiblePanels?: string[];
+  promptOptions?: string[];
 }
 
 /**
  * Reusable form fields component for agent forms
  * Uses shared configuration from agent_config.ts
  */
-const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true, visiblePanels }) => {
+const AgentFormFields: React.FC<AgentFormFieldsProps> = ({
+  showAgentName = true,
+  visiblePanels,
+  promptOptions = [],
+}) => {
   const shouldShow = (key: string) => !visiblePanels || visiblePanels.includes(key);
   return (
     <>
@@ -188,8 +193,21 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                 label={field.label}
                 name={field.name}
                 valuePropName={field.type === "switch" ? "checked" : undefined}
+                tooltip={field.tooltip}
               >
-                {field.type === "switch" ? <Switch /> : <Input placeholder={field.placeholder} />}
+                {field.type === "switch" ? (
+                  <Switch />
+                ) : field.type === "select" ? (
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder={field.placeholder}
+                    options={promptOptions.map((id) => ({ label: id, value: id }))}
+                    optionFilterProp="label"
+                  />
+                ) : (
+                  <Input placeholder={field.placeholder} />
+                )}
               </Form.Item>
             ))}
           </Panel>
