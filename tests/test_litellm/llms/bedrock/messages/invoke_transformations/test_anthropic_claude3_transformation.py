@@ -1945,6 +1945,43 @@ def test_bedrock_invoke_transform_preserves_opus_4_8_mid_conversation_system_mes
     assert "anthropic_beta" not in result
 
 
+def test_bedrock_invoke_transform_hoists_only_opus_4_8_system_prefix(
+    local_model_cost_map,
+):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    mid_conversation_system = {
+        "role": "system",
+        "content": "Use the new constraint.",
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "system", "content": "Stable system prefix."},
+            {"role": "user", "content": "Continue."},
+            mid_conversation_system,
+        ],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": "Existing top-level system prompt.",
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "Continue."},
+        mid_conversation_system,
+    ]
+    assert result["system"] == [
+        {"type": "text", "text": "Existing top-level system prompt."},
+        {"type": "text", "text": "Stable system prefix."},
+    ]
+
+
 def test_bedrock_invoke_transform_merges_system_role_into_existing_system():
     """A ``role: "system"`` message is appended to any pre-existing top-level
     ``system`` content rather than replacing it."""
