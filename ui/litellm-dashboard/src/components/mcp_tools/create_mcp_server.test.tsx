@@ -532,7 +532,7 @@ describe("CreateMCPServer", () => {
         });
       });
 
-      vi.mocked(networking.createMCPServer).mockResolvedValue({
+      const keptAppServer = {
         server_id: "kept-app-server",
         server_name: "CF_Keep_Server",
         alias: "CF_Keep_Server",
@@ -543,7 +543,8 @@ describe("CreateMCPServer", () => {
         created_by: "user-1",
         updated_at: "2024-01-01T00:00:00Z",
         updated_by: "user-1",
-      });
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(keptAppServer);
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
@@ -583,7 +584,7 @@ describe("CreateMCPServer", () => {
       // into a mode that now persists credentials onto the server row.
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
-      vi.mocked(networking.createMCPServer).mockResolvedValue({
+      const switchedServer = {
         server_id: "switched-server",
         server_name: "Switch_Server",
         alias: "Switch_Server",
@@ -594,7 +595,8 @@ describe("CreateMCPServer", () => {
         created_by: "user-1",
         updated_at: "2024-01-01T00:00:00Z",
         updated_by: "user-1",
-      });
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(switchedServer);
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
