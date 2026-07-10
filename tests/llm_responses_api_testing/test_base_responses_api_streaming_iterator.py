@@ -28,7 +28,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
+    OutputItemDoneEvent,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -168,6 +170,48 @@ class TestBaseResponsesAPIStreamingIterator:
 
             # Verify the response was updated on the event
             assert result.response == updated_response
+
+    def test_process_chunk_backfills_empty_completed_output_from_output_item_done(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        output_item = BaseLiteLLMOpenAIResponseObject(
+            type="message",
+            role="assistant",
+            content=[{"type": "output_text", "text": "ok"}],
+        )
+        output_item_done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=output_item,
+        )
+        completed_response = Mock(spec=ResponsesAPIResponse)
+        completed_response.output = []
+        completed_event = Mock(spec=ResponseCompletedEvent)
+        completed_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        completed_event.response = completed_response
+        mock_config.transform_streaming_response.side_effect = [
+            output_item_done,
+            completed_event,
+        ]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(json.dumps({"type": "response.output_item.done"}))
+        iterator._process_chunk(
+            json.dumps({"type": "response.completed", "response": {"output": []}})
+        )
+
+        assert completed_response.output == [output_item.model_dump()]
+        assert iterator.completed_response is completed_event
 
     def test_process_chunk_with_delta_event_no_id_update(self):
         """
