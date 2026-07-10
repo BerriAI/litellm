@@ -95,6 +95,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
         self._cached_reasoning_item_id: str | None = None
+        self._sent_reasoning_summary_part_added_event: bool = False
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
@@ -749,6 +750,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             event.__dict__["sequence_number"] = self._sequence_number
             self._pending_response_events.append(event)
+            if not self._sent_reasoning_summary_part_added_event:
+                self._sent_reasoning_summary_part_added_event = True
+                self._pending_response_events.append(
+                    BaseLiteLLMOpenAIResponseObject(
+                        type="response.reasoning_summary_part.added",
+                        item_id=self._cached_reasoning_item_id,
+                        summary_index=0,
+                    )
+                )
             return
 
         # Tool-first
@@ -993,6 +1003,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
                 item_id=self._reasoning_item_id or self._cached_reasoning_item_id or item_id,
                 output_index=0,
+                summary_index=0,
                 delta=reasoning_content,
             )
 
