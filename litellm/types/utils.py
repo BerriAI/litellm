@@ -2523,6 +2523,22 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     the client is driving a stateful session. Absent for stateless calls.
     """
 
+    mcp_auth_mode: Optional[str]
+    """
+    The server's auth_type for this call (e.g. `true_passthrough`, `oauth_delegate`,
+    `oauth2`). For the client-forwarded token modes this records that the caller's own
+    upstream token was relayed, so an audit can attribute a relayed request to its mode
+    without logging any credential.
+    """
+
+    mcp_server_resource: Optional[str]
+    """
+    The upstream MCP server resource identifier (scheme + host + path) the tool call was
+    forwarded to. Redacted for logging: userinfo, query string, and fragment are stripped so an
+    upstream URL carrying an embedded token or secret query parameter never reaches log metadata.
+    Records which upstream received a relayed request; never a credential.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """

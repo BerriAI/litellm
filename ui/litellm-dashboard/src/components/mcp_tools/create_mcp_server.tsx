@@ -14,8 +14,11 @@ import {
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
+  isClientForwardedTokenMode,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
+import TruePassthroughWarning from "./TruePassthroughWarning";
+import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -134,20 +137,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      setSecureItem(
-        CREATE_OAUTH_UI_STATE_KEY,
-        JSON.stringify({
-          modalVisible: isModalVisible,
-          formValues: values,
-          transportType,
-          costConfig,
-          allowedTools,
-          hasToolAllowlistInteraction,
-          searchValue,
-          aliasManuallyEdited,
-          logoUrl,
-        }),
-      );
+      const uiState = {
+        modalVisible: isModalVisible,
+        formValues: values,
+        transportType,
+        costConfig,
+        allowedTools,
+        hasToolAllowlistInteraction,
+        searchValue,
+        aliasManuallyEdited,
+        logoUrl,
+      };
+      setSecureItem(CREATE_OAUTH_UI_STATE_KEY, JSON.stringify(uiState));
     } catch (err) {
       console.warn("Failed to persist MCP create state", err);
     }
@@ -182,7 +183,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         description: values.description,
         url,
         transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
-        auth_type: AUTH_TYPE.OAUTH2,
+        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
@@ -197,23 +198,36 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
-      if (token?.access_token) {
-        const credentials = {
-          access_token: token.access_token,
-          ...(token.refresh_token && { refresh_token: token.refresh_token }),
-          ...(token.expires_in && { expires_in: token.expires_in }),
-          ...(token.scope && { scope: token.scope }),
-          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
-          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
-        };
-
-        form.setFieldsValue({ credentials });
-        setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
-
-        NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
-        );
+      if (!token?.access_token) {
+        return;
       }
+
+      if (isClientForwardedTokenMode(form.getFieldValue("auth_type"))) {
+        // Browser-only modes: the token is held in local state (oauthAccessToken) for tool preview
+        // and committed to sessionStorage on submit; it must never be written into form.credentials,
+        // which would persist it as server-level credentials on the created server row. Mirrors the
+        // edit form's onTokenReceived early return.
+        NotificationsManager.success(
+          "Token held for this browser session. Tools can now be previewed and configured; nothing will be saved to LiteLLM.",
+        );
+        return;
+      }
+
+      const credentials = {
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+        ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
+        ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
+      };
+
+      form.setFieldsValue({ credentials });
+      setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
+
+      NotificationsManager.success(
+        "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
+      );
     },
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
@@ -494,23 +508,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           });
           if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
-            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
+            const oauthCredentialPayload = {
               access_token: oauthTokenResponse.access_token,
               refresh_token: oauthTokenResponse.refresh_token,
               expires_in: oauthTokenResponse.expires_in,
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
-            });
+            };
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, oauthCredentialPayload);
           } else {
-            setToken(
-              response.server_id,
-              {
-                access_token: oauthTokenResponse.access_token,
-                expires_in: oauthTokenResponse.expires_in,
-                refresh_token: oauthTokenResponse.refresh_token,
-                token_type: oauthTokenResponse.token_type,
-              },
-              userID,
-            );
+            const browserHeldToken = {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            };
+            setToken(response.server_id, browserHeldToken, userID);
           }
         }
 
@@ -970,8 +982,24 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                            <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
+                            <Select.Option value="oauth_delegate">
+                              OAuth Delegate (client-supplied upstream token)
+                            </Select.Option>
                           </Select>
                         </Form.Item>
+
+                        <TruePassthroughWarning authType={authType} />
+
+                        <PassthroughAuthorizeSection
+                          authType={authType}
+                          oauthFlow={{
+                            startOAuthFlow,
+                            status: oauthStatus,
+                            error: oauthError,
+                            tokenResponse: oauthTokenResponse,
+                          }}
+                        />
 
                         {shouldShowAuthValueField && (
                           <Form.Item

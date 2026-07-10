@@ -2,17 +2,14 @@
 
 DeepSeek's reasoner defaults thinking ON and surfaces the chain as
 ``message.reasoning_content``. Two documented ways to disable it are
-``reasoning_effort="none"`` and ``thinking={"type": "disabled"}``. Today the
-DeepSeek param mapper (``litellm/llms/deepseek/chat/transformation.py``
-``map_openai_params``) drops both without forwarding any disable signal, so the
-outbound body carries no ``thinking`` key and DeepSeek keeps thinking on; the
-response still comes back with ``reasoning_content``. That is the product gap
-tracked by LIT-3686 / GH #27453.
+``reasoning_effort="none"`` and ``thinking={"type": "disabled"}``. The DeepSeek
+param mapper (``litellm/llms/deepseek/chat/transformation.py``
+``map_openai_params``) forwards both as ``thinking={"type": "disabled"}`` so the
+outbound body carries a real disable signal and ``deepseek-reasoner`` returns no
+``reasoning_content``. This is the behavior tracked by LIT-3686 / GH #27453.
 
 The control case proves the model and path work (reasoning is returned when
-nothing asks to disable it), so the two disable assertions are meaningful. Those
-two are marked xfail(strict) until the mapper forwards a real disable signal; an
-xpass then alerts that the fix landed.
+nothing asks to disable it), so the two disable assertions are meaningful.
 
 Requires DEEPSEEK_API_KEY on the proxy (tests/e2e/.env). No skip gate: once the
 proxy is up, a failure here is real, per the suite's hard-fail contract.
@@ -74,13 +71,6 @@ class TestDeepSeekReasoningDisable:
             f"disable param, so the disable assertions below can't be trusted: {response}"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "LIT-3686 / GH #27453: DeepSeek reasoning_effort='none' and "
-            "thinking type='disabled' are silently dropped; reasoning not disabled"
-        ),
-    )
     def test_reasoning_effort_none_disables_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -103,13 +93,6 @@ class TestDeepSeekReasoningDisable:
             f"is still present: {response}"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "LIT-3686 / GH #27453: DeepSeek reasoning_effort='none' and "
-            "thinking type='disabled' are silently dropped; reasoning not disabled"
-        ),
-    )
     def test_thinking_disabled_disables_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:

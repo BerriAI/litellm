@@ -833,6 +833,39 @@ class TestMCPServerManager:
         assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
         assert spec.config.profile == "entra_obo"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    async def test_build_from_table_discovers_upstream_oauth_for_client_forwarded_modes(self, auth_type):
+        """The gateway's relayed authorize flow (used by the browser-only Authorize) needs the
+        upstream's authorization_url on the registry entry, and these rows never persist one, so
+        the DB build must discover it the same way oauth2 rows do."""
+        from types import SimpleNamespace
+
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="cf-db-1",
+            alias="cf_db",
+            description="client-forwarded from db",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = SimpleNamespace(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            scopes=None,
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)) as mock_discovery:
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        mock_discovery.assert_awaited_once()
+        assert built.authorization_url == "https://idp.example.com/authorize"
+        assert built.token_url == "https://idp.example.com/token"
+
     async def _capture_subject_token(self, call) -> Optional[str]:
         """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
         into ``_create_mcp_client``."""
