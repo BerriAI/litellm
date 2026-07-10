@@ -266,6 +266,36 @@ async def test_health_services_endpoint_sqs(status, error_message):
 
 
 @pytest.mark.asyncio
+async def test_health_services_endpoint_webhook_returns_structured_response():
+    """
+    Regression test: the /health/services webhook branch called
+    proxy_logging_obj.budget_alerts() but had no return statement, so
+    execution fell through to the end of the function and returned None
+    (serialized as JSON null with HTTP 200) instead of a structured
+    {"status": ..., "message": ...} dict like every other service branch.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        key_alias="test-key-alias",
+        team_id="test-team",
+    )
+    mock_budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.budget_alerts",
+        mock_budget_alerts,
+    ):
+        result = await health_services_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            service="webhook",
+        )
+
+    mock_budget_alerts.assert_awaited_once()
+    assert result == {"status": "success", "message": "Mock webhook alert sent"}
+
+
+@pytest.mark.asyncio
 async def test_health_license_endpoint_with_active_license():
     license_data = {
         "expiration_date": "2099-01-01",

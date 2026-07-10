@@ -332,6 +332,7 @@ async def health_services_endpoint(
                 type="user_budget",
                 user_info=user_info,
             )
+            return {"status": "success", "message": "Mock webhook alert sent"}
         elif service == "sqs":
             from litellm.integrations.sqs import SQSLogger
 
