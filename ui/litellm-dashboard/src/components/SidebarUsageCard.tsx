@@ -1,10 +1,10 @@
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { getDaysUntilExpiration } from "@/utils/licenseUtils";
-import { cn } from "@/lib/cva.config";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/ui/meter";
 import { useQuery } from "@tanstack/react-query";
 import { Award, ChevronDown, Loader2 } from "lucide-react";
-import { useState } from "react";
 import { getRemainingUsers } from "./networking";
 
 interface SidebarUsageCardProps {
@@ -13,7 +13,7 @@ interface SidebarUsageCardProps {
   onExpandRail: () => void;
 }
 
-interface Meter {
+interface MeterData {
   label: string;
   used: number;
   total: number;
@@ -35,24 +35,21 @@ const meterBarClass = (pct: number): string => {
   return "bg-sidebar-primary";
 };
 
-const Meter = ({ label, used, total }: Meter) => {
+const UsageMeter = ({ label, used, total }: MeterData) => {
   const pct = total > 0 ? (used / total) * 100 : 0;
   return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="text-xs text-muted-foreground">{label}</span>
+    <Meter value={used} max={total} aria-valuetext={`${used.toLocaleString()} of ${total.toLocaleString()}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <MeterLabel>{label}</MeterLabel>
         <span className="text-xs font-medium tabular-nums">
           <span className="text-foreground">{used.toLocaleString()}</span>
           <span className="text-muted-foreground"> / {total.toLocaleString()}</span>
         </span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full transition-[width] duration-300", meterBarClass(pct))}
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
-      </div>
-    </div>
+      <MeterTrack>
+        <MeterIndicator className={meterBarClass(pct)} />
+      </MeterTrack>
+    </Meter>
   );
 };
 
@@ -66,7 +63,7 @@ const remainingUsersQuery = (accessToken: string | null) => ({
   staleTime: 5 * 60 * 1000,
 });
 
-const buildMeters = (data: RemainingUsage | null): Meter[] => {
+const buildMeters = (data: RemainingUsage | null): MeterData[] => {
   if (!data) return [];
   return [
     ...(data.total_users != null ? [{ label: "Seats", used: data.total_users_used, total: data.total_users }] : []),
@@ -82,7 +79,6 @@ const buildMeters = (data: RemainingUsage | null): Meter[] => {
  */
 export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail }: SidebarUsageCardProps) {
   const disableUsageIndicator = useDisableUsageIndicator();
-  const [open, setOpen] = useState(true);
   const licenseInfo = useLicenseInfo(accessToken).data ?? null;
   const { data: usageData, isLoading } = useQuery(remainingUsersQuery(accessToken));
   const data = usageData ?? null;
@@ -111,12 +107,8 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
   const meters = buildMeters(data);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-sidebar-border bg-sidebar">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent"
-      >
+    <Collapsible defaultOpen className="overflow-hidden rounded-xl border border-sidebar-border bg-sidebar">
+      <CollapsibleTrigger className="group/usage flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent">
         <span className="flex size-[26px] flex-none items-center justify-center rounded-md bg-sidebar-primary/10 text-sidebar-primary">
           <Award className="size-4" strokeWidth={1.75} />
         </span>
@@ -124,22 +116,18 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
           <span className="block text-[13px] font-semibold text-foreground">Enterprise usage</span>
           <span className="block truncate text-[11px] text-muted-foreground">{subtitle}</span>
         </span>
-        <ChevronDown
-          className={cn("size-4 flex-none text-muted-foreground transition-transform", !open && "-rotate-90")}
-        />
-      </button>
+        <ChevronDown className="size-4 flex-none -rotate-90 text-muted-foreground transition-transform group-data-[panel-open]/usage:rotate-0" />
+      </CollapsibleTrigger>
 
-      {open && (
-        <div className="flex flex-col gap-3 px-3 pt-0.5 pb-3">
-          {isLoading && meters.length === 0 ? (
-            <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" /> Loading…
-            </div>
-          ) : (
-            meters.map((m) => <Meter key={m.label} {...m} />)
-          )}
-        </div>
-      )}
-    </div>
+      <CollapsibleContent className="flex flex-col gap-3 px-3 pt-0.5 pb-3">
+        {isLoading && meters.length === 0 ? (
+          <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> Loading…
+          </div>
+        ) : (
+          meters.map((m) => <UsageMeter key={m.label} {...m} />)
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

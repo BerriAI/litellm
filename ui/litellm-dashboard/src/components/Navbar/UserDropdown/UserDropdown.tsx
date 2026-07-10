@@ -21,6 +21,7 @@ import {
 import type { MenuProps } from "antd";
 import { Button, Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } from "antd";
 import { ChevronsUpDown } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/cva.config";
 import React, { useEffect, useState } from "react";
 
@@ -249,13 +250,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
           aria-haspopup="menu"
           title={collapsed ? displayName : undefined}
         >
-          <span
-            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white shadow-inner ring-1 ring-black/5"
-            style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}
-            aria-hidden
-          >
-            {initials}
-          </span>
+          <Avatar className="size-[30px] shadow-inner ring-1 ring-black/5" aria-hidden>
+            <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
+              {initials}
+            </AvatarFallback>
+          </Avatar>
           {!collapsed && (
             <>
               <span className="min-w-0 flex-1 leading-tight">
@@ -273,13 +272,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
           aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
           aria-haspopup="menu"
         >
-          <span
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white shadow-inner ring-1 ring-black/5"
-            style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}
-            aria-hidden
-          >
-            {initials}
-          </span>
+          <Avatar className="shadow-inner ring-1 ring-black/5" aria-hidden>
+            <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
+              {initials}
+            </AvatarFallback>
+          </Avatar>
           <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
             {displayName}
           </span>
