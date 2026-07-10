@@ -25,6 +25,7 @@ import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/n
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
+import CoordinationRedisSettings from "./coordination_redis_settings";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -264,6 +265,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Tab>Cache Analytics</Tab>
           <Tab>Cache Health</Tab>
           <Tab>Cache Settings</Tab>
+          <Tab>Coordination Redis</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -382,6 +384,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </TabPanel>
         <TabPanel>
           <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabPanel>
+        <TabPanel>
+          <CoordinationRedisSettings />
         </TabPanel>
       </TabPanels>
     </TabGroup>
