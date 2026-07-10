@@ -201,6 +201,7 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
         "token_url",
         "registration_url",
         "oauth2_flow",
+        "dcr_bridge",
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
@@ -223,6 +224,20 @@ async def test_auth_type_switch_keeps_explicitly_provided_flow_fields():
 
     assert data_dict["token_exchange_endpoint"] == "https://idp.example.com/oauth2/token"
     assert data_dict["token_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_auth_type_switch_to_client_forwarded_keeps_explicit_dcr_bridge():
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        auth_type="true_passthrough",
+        dcr_bridge=True,
+    )
+
+    data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
+
+    assert data_dict["dcr_bridge"] is True
+    assert data_dict["oauth2_flow"] is None
 
 
 @pytest.mark.asyncio
@@ -256,6 +271,7 @@ async def test_unchanged_auth_type_does_not_clear_flow_fields():
         "token_url",
         "registration_url",
         "oauth2_flow",
+        "dcr_bridge",
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
