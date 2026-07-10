@@ -995,6 +995,12 @@ class TestSigV4BuildFromTable:
         table_record.instructions = None
         table_record.source_url = None
         table_record.submitted_by = None
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
+        table_record.token_exchange_profile = None
+        table_record.timeout = None
+        table_record.max_concurrent_requests = None
 
         manager = MCPServerManager()
 
@@ -1058,6 +1064,12 @@ class TestSigV4BuildFromTable:
         table_record.instructions = None
         table_record.source_url = None
         table_record.submitted_by = "user-submitter"
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
+        table_record.token_exchange_profile = None
+        table_record.timeout = None
+        table_record.max_concurrent_requests = None
 
         manager = MCPServerManager()
 

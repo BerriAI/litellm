@@ -2570,7 +2570,7 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
+        def fake_create_tool_function(path, method, operation, base_url):
             def _f():
                 return None
 
@@ -2583,7 +2583,7 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
+            def register_tool(self, name, description, input_schema, handler):
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(
