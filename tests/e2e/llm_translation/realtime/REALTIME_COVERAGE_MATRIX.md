@@ -43,7 +43,7 @@ at call time. The provider table below is the source of truth; edit `PROVIDERS` 
 | gemini | `gemini-realtime` | `gemini/gemini-3.1-flash-live-preview` |
 | vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025` |
 
-Bedrock and xai (`xai/grok-4-1-fast-non-reasoning`) are supported by the proxy but
+Bedrock and xai (`xai/grok-4-1-fast`) are supported by the proxy but
 kept commented out in `PROVIDERS` until they pass end-to-end here; re-enable them by
 uncommenting their entry.
 
