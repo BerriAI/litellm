@@ -190,7 +190,7 @@ async def create_fallback(
 
 
 @router.get(
-    "/fallback/{model}",
+    "/fallback/{model:path}",
     tags=["Fallback Management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=FallbackGetResponse,
@@ -247,7 +247,7 @@ async def get_fallback(
 
 
 @router.delete(
-    "/fallback/{model}",
+    "/fallback/{model:path}",
     tags=["Fallback Management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=FallbackDeleteResponse,
