@@ -37,7 +37,7 @@ def test_muse_spark_1_1_model_info():
     assert info["supports_minimal_reasoning_effort"] is True
     assert info["supports_xhigh_reasoning_effort"] is True
 
-    assert info["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]
+    assert info["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
     assert info["supported_modalities"] == ["text", "image", "video"]
     assert info["supported_output_modalities"] == ["text"]
 

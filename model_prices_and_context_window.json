@@ -25671,7 +25671,8 @@
         "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/responses"
+            "/v1/responses",
+            "/v1/messages"
         ],
         "supported_modalities": [
             "text",

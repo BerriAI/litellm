@@ -123,6 +123,75 @@ class TestMetaReasoningParams:
         assert "reasoning_effort" not in params
 
 
+class TestMetaAnthropicMessages:
+    def test_meta_resolves_native_messages_config(self):
+        from litellm.llms.openai_like.messages.transformation import (
+            JSONProviderAnthropicMessagesConfig,
+        )
+
+        cfg = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="muse-spark-1.1", provider=litellm.LlmProviders.META
+        )
+        assert isinstance(cfg, JSONProviderAnthropicMessagesConfig)
+
+    def test_json_provider_without_messages_endpoint_resolves_none(self):
+        cfg = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="some-model", provider=litellm.LlmProviders.PINSTRIPES
+        )
+        assert cfg is None
+
+    def test_complete_url_defaults_to_meta_base(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        from litellm.llms.openai_like.messages.transformation import (
+            JSONProviderAnthropicMessagesConfig,
+        )
+
+        provider = JSONProviderRegistry.get("meta")
+        assert provider is not None
+        cfg = JSONProviderAnthropicMessagesConfig(provider)
+
+        url = cfg.get_complete_url(
+            api_base=None,
+            api_key="sk-test",
+            model="muse-spark-1.1",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == "https://api.meta.ai/v1/messages"
+
+        override_url = cfg.get_complete_url(
+            api_base="https://custom.meta.ai/v1",
+            api_key="sk-test",
+            model="muse-spark-1.1",
+            optional_params={},
+            litellm_params={},
+        )
+        assert override_url == "https://custom.meta.ai/v1/messages"
+
+    def test_api_key_resolved_from_env(self, monkeypatch):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        from litellm.llms.openai_like.messages.transformation import (
+            JSONProviderAnthropicMessagesConfig,
+        )
+
+        monkeypatch.setenv("META_API_KEY", "sk-env-key")
+        provider = JSONProviderRegistry.get("meta")
+        assert provider is not None
+        cfg = JSONProviderAnthropicMessagesConfig(provider)
+
+        headers, _ = cfg.validate_anthropic_messages_environment(
+            headers={},
+            model="muse-spark-1.1",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+        assert headers["authorization"] == "Bearer sk-env-key"
+        assert headers["anthropic-version"] == "2023-06-01"
+
+
 class TestMuseSparkModelInfo:
     def test_muse_spark_pricing_and_capabilities(self):
         info = litellm.get_model_info("meta/muse-spark-1.1")
