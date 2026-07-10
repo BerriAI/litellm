@@ -539,12 +539,10 @@ def _require_s256_pkce(
         return code_challenge, code_challenge_method
     raise HTTPException(
         status_code=400,
-        detail={
-            "error": (
-                "This server requires PKCE: send code_challenge with "
-                "code_challenge_method=S256 on the authorization request"
-            )
-        },
+        detail=(
+            "This server requires PKCE: send code_challenge with "
+            "code_challenge_method=S256 on the authorization request"
+        ),
     )
 
 
@@ -701,7 +699,8 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="code is required for authorization_code grant",
             )
-        if _dcr_bridge_relays_client_registration(mcp_server) and not redirect_uri:
+        bridge_token_relay = _dcr_bridge_relays_client_registration(mcp_server)
+        if bridge_token_relay and not redirect_uri:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -710,9 +709,7 @@ async def exchange_token_with_server(
                 ),
             )
         proxy_base_url = get_request_base_url(request)
-        resolved_redirect_uri = (
-            redirect_uri if _dcr_bridge_relays_client_registration(mcp_server) else f"{proxy_base_url}/callback"
-        )
+        resolved_redirect_uri = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
