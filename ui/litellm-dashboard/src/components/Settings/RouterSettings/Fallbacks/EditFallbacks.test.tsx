@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditFallbacks, { Fallbacks } from "./EditFallbacks";
@@ -53,9 +53,8 @@ describe("EditFallbacks", () => {
     const onClose = vi.fn();
     setup({ onChange, onClose });
 
-    const firstFallbackRow = (await screen.findByText("gpt-3.5-turbo")).closest("div.group") as HTMLElement;
-    const removeButton = within(firstFallbackRow).getByRole("button");
-    await user.click(removeButton);
+    await screen.findByText("gpt-3.5-turbo");
+    await user.click(screen.getByTestId("remove-fallback-gpt-3.5-turbo"));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -70,8 +69,8 @@ describe("EditFallbacks", () => {
     const onChange = vi.fn().mockResolvedValue(undefined);
     setup({ fallbackEntry: { "gpt-4": ["gpt-3.5-turbo"] }, onChange });
 
-    const row = (await screen.findByText("gpt-3.5-turbo")).closest("div.group") as HTMLElement;
-    await user.click(within(row).getByRole("button"));
+    await screen.findByText("gpt-3.5-turbo");
+    await user.click(screen.getByTestId("remove-fallback-gpt-3.5-turbo"));
 
     const saveButton = screen.getByRole("button", { name: /save changes/i });
     expect(saveButton).toBeDisabled();

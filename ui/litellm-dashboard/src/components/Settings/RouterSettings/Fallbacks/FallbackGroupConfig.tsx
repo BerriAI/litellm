@@ -184,6 +184,7 @@ export function FallbackGroupConfig({
 
                     <button
                       type="button"
+                      data-testid={`remove-fallback-${modelValue}`}
                       onClick={() => removeFallback(index)}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
                     >

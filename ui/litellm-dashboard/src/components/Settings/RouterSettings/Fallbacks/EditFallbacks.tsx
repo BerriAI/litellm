@@ -62,10 +62,6 @@ export default function EditFallbacks({
     if (!primaryModel) {
       return;
     }
-    if (group.fallbackModels.length === 0) {
-      NotificationManager.error("Add at least one fallback model, or delete the entry instead.");
-      return;
-    }
 
     const updatedFallbacks = (value || []).map((entry) =>
       primaryModel in entry ? { ...entry, [primaryModel]: group.fallbackModels } : entry,
@@ -97,7 +93,7 @@ export default function EditFallbacks({
           Cancel
         </Button>
         <Button
-          type="default"
+          type="primary"
           icon={<Pencil className="w-4 h-4" />}
           onClick={handleSave}
           disabled={isSaving || group.fallbackModels.length === 0}
