@@ -5,15 +5,35 @@ has no dead/skipped cells. `provider` is litellm's custom_llm_provider, used to
 route provider-fallback calls to /{provider}/v1/... and to assert the raw batch id
 shape (the only scenario whose id is not re-encoded by the proxy). Operations that
 a provider does not support (Bedrock: no cancel, no list) are gated per row.
+
+Credential refs use ``os.environ/NAME`` so the proxy loads secrets from its own
+process env (docker compose env_file, or K8s/EKS secret mounts). Field names match
+what the proxy keeps when resolving model credentials for files/batches
+(``aws_*`` + ``gcs_bucket_name`` / ``s3_bucket_name``), not the s3_* aliases the
+credential round-trip drops.
 """
 
 from __future__ import annotations
 
 import base64
+import os
 from dataclasses import dataclass
 from typing import Literal
 
 from models import LiteLLMParamsBody
+
+
+def _env_ref(*names: str) -> str:
+    """Pick the first set env var and return an ``os.environ/NAME`` ref for the proxy.
+
+    Docker/K8s may expose the batch bucket as either ``AWS_BATCH_S3_BUCKET`` or
+    ``AWS_S3_BUCKET_NAME``; the gateway must have the same name populated.
+    """
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value.strip() != "":
+            return f"os.environ/{name}"
+    return f"os.environ/{names[0]}"
 
 Scenario = Literal["encoded", "unified", "model_param", "provider_fallback"]
 
@@ -55,14 +75,19 @@ class Provider:
                     vertex_project="os.environ/VERTEXAI_PROJECT",
                     vertex_location="us-central1",
                     vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
+                    gcs_bucket_name="os.environ/GCS_BUCKET_NAME",
+                    bucket_name="os.environ/GCS_BUCKET_NAME",
                 )
             case "bedrock":
                 return LiteLLMParamsBody(
                     model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                    aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                    aws_region_name="os.environ/AWS_REGION",
+                    s3_region_name="os.environ/AWS_REGION",
+                    s3_bucket_name=_env_ref("AWS_BATCH_S3_BUCKET", "AWS_S3_BUCKET_NAME"),
                     s3_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                     s3_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-                    s3_region_name="os.environ/AWS_REGION",
-                    s3_bucket_name="os.environ/AWS_BATCH_S3_BUCKET",
                     aws_batch_role_arn="os.environ/AWS_BATCH_ROLE_ARN",
                 )
             case _:

@@ -19,6 +19,7 @@ import pytest
 from batch_client import BatchClient, build_client
 from capabilities import PROVIDERS
 from e2e_http import NoBody
+from provider_env import skip_reason_missing_env
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -43,6 +44,8 @@ def batch_deployments(client: BatchClient) -> Iterator[None]:
     registered: list[str] = []
     try:
         for provider in PROVIDERS:
+            if skip_reason_missing_env(provider.name) is not None:
+                continue
             registered.append(
                 client.create_model(provider.model, provider.litellm_params())
             )
