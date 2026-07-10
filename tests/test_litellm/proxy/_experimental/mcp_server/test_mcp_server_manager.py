@@ -3328,8 +3328,34 @@ class TestMCPServerManager:
         assert store.invalidations == [("alice", "srv-1")]
 
     @pytest.mark.asyncio
+    async def test_invalidate_user_oauth_token_cache_drops_legacy_cache_too(self):
+        """A per-user token can be served from the legacy per-user token cache as well as the v2
+        store; the shared invalidation must evict both, or the path not evicted keeps serving a
+        token minted for a replaced credential row until its TTL."""
+
+        class _Store:
+            async def fetch(self, user_id: str, server_id: str):
+                return None
+
+            async def invalidate(self, user_id: str, server_id: str) -> None:
+                return None
+
+        class _LegacyCache:
+            def __init__(self) -> None:
+                self.deletes: list[tuple[str, str]] = []
+
+            async def delete(self, user_id: str, server_id: str) -> None:
+                self.deletes.append((user_id, server_id))
+
+        legacy_cache = _LegacyCache()
+        manager = MCPServerManager(per_user_oauth_token_store=_Store(), per_user_token_cache=legacy_cache)
+        await manager.invalidate_user_oauth_token_cache("alice", "srv-1")
+        assert legacy_cache.deletes == [("alice", "srv-1")]
+
+    @pytest.mark.asyncio
     async def test_invalidate_user_oauth_token_cache_swallows_store_errors(self):
-        """A cache-drop failure must not fail the credential write that triggered it."""
+        """A cache-drop failure must not fail the credential write that triggered it, and the
+        legacy cache must still be evicted after the v2 store drop fails."""
 
         class _Store:
             async def fetch(self, user_id: str, server_id: str):
@@ -3338,7 +3364,35 @@ class TestMCPServerManager:
             async def invalidate(self, user_id: str, server_id: str) -> None:
                 raise RuntimeError("redis down")
 
-        manager = MCPServerManager(per_user_oauth_token_store=_Store())
+        class _LegacyCache:
+            def __init__(self) -> None:
+                self.deletes: list[tuple[str, str]] = []
+
+            async def delete(self, user_id: str, server_id: str) -> None:
+                self.deletes.append((user_id, server_id))
+
+        legacy_cache = _LegacyCache()
+        manager = MCPServerManager(per_user_oauth_token_store=_Store(), per_user_token_cache=legacy_cache)
+        await manager.invalidate_user_oauth_token_cache("alice", "srv-1")
+        assert legacy_cache.deletes == [("alice", "srv-1")]
+
+    @pytest.mark.asyncio
+    async def test_invalidate_user_oauth_token_cache_swallows_legacy_cache_errors(self):
+        """The legacy cache drop is best-effort like the v2 drop: a failure must be logged, never
+        raised into the credential write that triggered the invalidation."""
+
+        class _Store:
+            async def fetch(self, user_id: str, server_id: str):
+                return None
+
+            async def invalidate(self, user_id: str, server_id: str) -> None:
+                return None
+
+        class _RaisingLegacyCache:
+            async def delete(self, user_id: str, server_id: str) -> None:
+                raise RuntimeError("redis down")
+
+        manager = MCPServerManager(per_user_oauth_token_store=_Store(), per_user_token_cache=_RaisingLegacyCache())
         await manager.invalidate_user_oauth_token_cache("alice", "srv-1")
 
     @pytest.mark.asyncio

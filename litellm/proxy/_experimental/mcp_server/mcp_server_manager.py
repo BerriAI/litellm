@@ -57,7 +57,11 @@ from litellm.proxy._experimental.mcp_server.elicitation_handler import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
-from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
+from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+    MCPPerUserTokenCache,
+    mcp_per_user_token_cache,
+    resolve_mcp_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
     Ok,
@@ -799,10 +803,12 @@ class MCPServerManager:
         self,
         cred_provider: Optional[UpstreamCredentialProvider] = None,
         per_user_oauth_token_store: Optional[InvalidatableOAuthTokenStore] = None,
+        per_user_token_cache: Optional[MCPPerUserTokenCache] = None,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
+        self._per_user_token_cache = per_user_token_cache or mcp_per_user_token_cache
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
@@ -4053,16 +4059,25 @@ class MCPServerManager:
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
 
     async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
-        """Drop the v2 chain's cached token for ``(user_id, server_id)`` after the credential row
-        changes (re-auth, revoke), so the next resolve reads the new row instead of serving the
-        replaced token until its cache TTL. Best-effort: a cache-drop failure is logged, never
-        raised, because the DB write already succeeded and the TTL remains the backstop.
+        """Drop every cached token for ``(user_id, server_id)`` after the credential row changes
+        (re-auth, revoke, config-change purge): the v2 chain's cache and the legacy per-user token
+        cache, so the next resolve reads the new row instead of serving the replaced token until its
+        cache TTL, whichever path resolves it. This is the single invalidation point for per-user
+        OAuth tokens; callers must not evict individual caches directly. Best-effort: a cache-drop
+        failure is logged, never raised, because the DB write already succeeded and the TTL remains
+        the backstop.
         """
         try:
             await self._per_user_oauth_token_store.invalidate(user_id, server_id)
         except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
             verbose_logger.warning(
                 "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
+        try:
+            await self._per_user_token_cache.delete(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to drop legacy cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
 
     async def _resolve_oauth2_headers_for_tool_call(
