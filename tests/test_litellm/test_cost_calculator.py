@@ -183,8 +183,7 @@ def test_openrouter_qwen36_plus_model_info():
 @pytest.mark.parametrize(
     "model",
     [
-        "github_copilot/mai-code-1-flash",
-        "github_copilot/mai-code-1-flash-internal",
+        "github_copilot/mai-code-1-flash-picker",
     ],
 )
 def test_github_copilot_mai_code_1_flash_pricing(model):
@@ -195,11 +194,11 @@ def test_github_copilot_mai_code_1_flash_pricing(model):
 
     assert model_info is not None, f"Missing model pricing entry: {model}"
     assert model_info["litellm_provider"] == "github_copilot"
-    assert model_info["mode"] == "chat"
+    assert model_info["mode"] == "responses"
     assert model_info["input_cost_per_token"] == 7.5e-07
     assert model_info["cache_read_input_token_cost"] == 7.5e-08
     assert model_info["output_cost_per_token"] == 4.5e-06
-    assert model_info["supported_endpoints"] == ["/v1/chat/completions"]
+    assert model_info["supported_endpoints"] == ["/v1/responses"]
 
     prompt_usd, completion_usd = cost_per_token(
         model=model,
