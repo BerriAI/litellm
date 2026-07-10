@@ -212,6 +212,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 import litellm
+import litellm._redis
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
@@ -3549,6 +3550,22 @@ def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
         )
 
 
+def _build_redis_usage_cache_from_environment() -> RedisCache | None:
+    """
+    Builds a standalone RedisCache from REDIS_* environment variables.
+
+    Lets the proxy's coordination Redis (cross-pod tpm/rpm rate limits, spend
+    tracking, pod lock manager) run when the response-cache backend is not a
+    plain Redis KV cache (e.g. a semantic cache, disk, or s3).
+
+    Returns None when no Redis host or url is set in the environment.
+    """
+    redis_env_kwargs = litellm._redis._redis_kwargs_from_environment()
+    if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
+        return None
+    return RedisCache(**redis_env_kwargs)
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -3763,9 +3780,21 @@ class ProxyConfig:
 
         litellm.cache = Cache(**cache_params)
 
-        if litellm.cache is not None and isinstance(litellm.cache.cache, (RedisCache, RedisClusterCache)):
+        cache_backend = litellm.cache.cache if litellm.cache is not None else None
+        if isinstance(cache_backend, (RedisCache, RedisClusterCache)):
             ## INIT PROXY REDIS USAGE CLIENT ##
-            redis_usage_cache = litellm.cache.cache
+            redis_usage_cache = cache_backend
+        elif redis_usage_cache is None:
+            redis_usage_cache = _build_redis_usage_cache_from_environment()
+            if redis_usage_cache is not None:
+                verbose_proxy_logger.info(
+                    "Cache backend %s is not a Redis KV cache; built a standalone "
+                    "Redis from REDIS_* environment variables for usage tracking, "
+                    "rate limiting, and cross-pod coordination.",
+                    type(cache_backend).__name__,
+                )
+
+        if redis_usage_cache is not None:
             spend_counter_cache.attach_redis_cache(
                 redis_usage_cache,
                 default_redis_ttl=litellm.default_redis_ttl,
@@ -7277,7 +7306,6 @@ class ProxyStartupEvent:
         Returns None when the buffer is disabled, or when no Redis host or url
         is set in the environment.
         """
-        from litellm._redis import _redis_kwargs_from_environment
         from litellm.secret_managers.main import str_to_bool
 
         _use_redis_transaction_buffer: bool | str | None = general_settings.get("use_redis_transaction_buffer", False)
@@ -7287,11 +7315,7 @@ class ProxyStartupEvent:
         if not _use_redis_transaction_buffer:
             return None
 
-        redis_env_kwargs = _redis_kwargs_from_environment()
-        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
-            return None
-
-        return RedisCache(**redis_env_kwargs)
+        return _build_redis_usage_cache_from_environment()
 
     @classmethod
     async def _initialize_semantic_tool_filter(
