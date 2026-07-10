@@ -3,6 +3,7 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
 import json
+import logging
 import os
 import re
 import sys
@@ -611,6 +612,72 @@ class TestToolPermissionGuardrail:
 
         assert excinfo.value.status_code == 400
         assert excinfo.value.detail.get("detection_message") == "blocked Read by policy"
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_no_tools_logs_at_debug(self, caplog):
+        user_api_key_dict = UserAPIKeyAuth()
+        cache = DualCache(default_in_memory_ttl=1)
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+                await self.guardrail.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=cache,
+                    data={},
+                    call_type="completion",
+                )
+
+        matching = [r for r in caplog.records if "not running guardrail" in r.message]
+        assert matching, "expected the no-tools message to be logged"
+        assert all(r.levelno == logging.DEBUG for r in matching)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_denied_tool_logs_at_info(self, caplog):
+        data = {"tools": [{"type": "function", "function": {"name": "Read"}}]}
+        user_api_key_dict = UserAPIKeyAuth()
+        cache = DualCache(default_in_memory_ttl=1)
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+                with pytest.raises(HTTPException):
+                    await self.guardrail.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        cache=cache,
+                        data=data,
+                        call_type="completion",
+                    )
+
+        matching = [
+            r
+            for r in caplog.records
+            if r.message.startswith("Tool Permission Guardrail:")
+            and "denied by rule" in r.message
+        ]
+        assert matching, "expected the denied-by-rule message to be logged"
+        assert all(r.levelno == logging.INFO for r in matching)
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_denied_tool_logs_at_info(self, caplog):
+        tool_call = {"function": {"name": "Read", "arguments": "{}"}, "type": "function"}
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["test-tool-permission"]}
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+                with pytest.raises(GuardrailRaisedException):
+                    await self.guardrail.async_post_call_success_hook(
+                        data=data, user_api_key_dict=user_api_key_dict, response=response
+                    )
+
+        matching = [
+            r
+            for r in caplog.records
+            if r.message.startswith("Tool Permission Guardrail:")
+            and "denied by rule" in r.message
+        ]
+        assert matching, "expected the denied-by-rule message to be logged"
+        assert all(r.levelno == logging.INFO for r in matching)
 
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_rewrite_mode(self):
