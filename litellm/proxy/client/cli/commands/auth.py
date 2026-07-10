@@ -599,7 +599,13 @@ def logout(ctx: click.Context):
     token_data = load_token()
     refresh_token = token_data.get("refresh_token") if token_data else None
     if refresh_token:
-        base_url = ctx.obj["base_url"]
+        # Revoke against the server the token was actually issued for,
+        # unless the caller explicitly overrode --base-url -- otherwise this
+        # silently targets the CLI's localhost:4000 default for anyone not
+        # running against a local proxy, and revocation does nothing.
+        base_url = (
+            ctx.obj["base_url"] if ctx.obj.get("base_url_explicit") else token_data.get("base_url")
+        ) or ctx.obj["base_url"]
         try:
             requests.post(
                 f"{base_url}/sso/cli/logout",

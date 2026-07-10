@@ -463,6 +463,32 @@ class TestLogoutCommand:
             )
             mock_clear.assert_called_once()
 
+    def test_logout_revokes_against_stored_origin_not_cli_default(self):
+        """Bare `lite logout` (no --base-url) must revoke against the server
+        the token was actually issued for, not the CLI's localhost:4000
+        default -- otherwise revocation silently no-ops for every real
+        (non-localhost) deployment."""
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "https://litellm-proxy.corp.com",
+                    "refresh_token": "sk-refresh-abc",
+                },
+            ),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
+
+            assert result.exit_code == 0
+            mock_post.assert_called_once_with(
+                "https://litellm-proxy.corp.com/sso/cli/logout",
+                headers={"Authorization": "Bearer sk-refresh-abc"},
+                timeout=5,
+            )
+            mock_clear.assert_called_once()
+
     def test_logout_clears_local_token_even_if_revoke_fails(self):
         """The proxy being unreachable must not block clearing the local token."""
         import requests

@@ -2287,9 +2287,28 @@ async def cli_refresh_token(
 
     presented_token = _require_cli_refresh_token(user_api_key_dict)
 
+    if prisma_client is None:
+        # Fail closed: minting without DB access means the presented token
+        # can never be marked consumed, so it would stay valid forever.
+        raise HTTPException(status_code=500, detail="DB not connected, cannot refresh CLI token")
+
     user_id = user_api_key_dict.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid CLI refresh token")
+
+    # Atomically consume the presented token before minting anything else.
+    # Whichever concurrent request's update actually flips blocked from
+    # False/None to True is the only one that proceeds; the other gets
+    # count=0 and is rejected -- closing the window where two requests
+    # racing on the same refresh token could both mint a fresh pair.
+    repo = VerificationTokenRepository(prisma_client)
+    consumed = await repo.table.update_many(
+        where={"token": presented_token, "OR": [{"blocked": False}, {"blocked": None}]},
+        data={"blocked": True},
+    )
+    user_api_key_cache.delete_cache(key=presented_token)
+    if consumed.count == 0:
+        raise HTTPException(status_code=401, detail="CLI refresh token already used or revoked")
 
     user_db_obj = await get_user_object(
         user_id=user_id,
@@ -2322,13 +2341,6 @@ async def cli_refresh_token(
         team_alias=team_alias,
         max_budget=max_budget,
     )
-
-    if prisma_client is not None:
-        await VerificationTokenRepository(prisma_client).table.update(
-            where={"token": presented_token},
-            data={"blocked": True},
-        )
-        user_api_key_cache.delete_cache(key=presented_token)
 
     return {"key": new_jwt, "refresh_token": new_refresh_token}
 

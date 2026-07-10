@@ -7415,7 +7415,9 @@ class TestCLIRefreshTokenFlow:
             user_id="user-1", user_role="internal_user", models=["gpt-4"]
         )
         mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update = AsyncMock()
+        mock_repo_instance.table.update_many = AsyncMock(
+            return_value=MagicMock(count=1)
+        )
         mock_cache = MagicMock()
 
         with (
@@ -7455,12 +7457,72 @@ class TestCLIRefreshTokenFlow:
             max_budget=None,
         )
 
-        # The presented (now-consumed) refresh token must be blocked, not
-        # left valid -- this is what makes it single-use.
-        mock_repo_instance.table.update.assert_called_once_with(
-            where={"token": "hashed-old-refresh"}, data={"blocked": True}
+        # The presented (now-consumed) refresh token must be blocked
+        # atomically via update_many (not a plain update) -- this is what
+        # makes it single-use and race-safe.
+        mock_repo_instance.table.update_many.assert_called_once_with(
+            where={
+                "token": "hashed-old-refresh",
+                "OR": [{"blocked": False}, {"blocked": None}],
+            },
+            data={"blocked": True},
         )
         mock_cache.delete_cache.assert_called_once_with(key="hashed-old-refresh")
+
+    @pytest.mark.asyncio
+    async def test_cli_refresh_token_rejects_replay_of_consumed_token(self):
+        """Concurrent replay: a refresh token already consumed by another
+        request (update_many affects 0 rows) must be rejected outright, not
+        silently mint a second credential pair from the same token."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
+
+        refresh_key = UserAPIKeyAuth(
+            token="hashed-already-consumed",
+            user_id="user-1",
+            metadata={"cli_refresh": True},
+        )
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.table.update_many = AsyncMock(
+            return_value=MagicMock(count=0)
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
+                return_value=mock_repo_instance,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(side_effect=AssertionError("must not mint after losing the race")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_refresh_token(user_api_key_dict=refresh_key)
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_cli_refresh_token_fails_closed_when_db_unavailable(self):
+        """Without DB access the presented token can never be marked
+        consumed, so refresh must refuse outright rather than silently
+        minting a fresh pair while leaving the old token valid forever."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
+
+        refresh_key = UserAPIKeyAuth(
+            token="hashed-refresh",
+            user_id="user-1",
+            metadata={"cli_refresh": True},
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_refresh_token(user_api_key_dict=refresh_key)
+
+        assert exc_info.value.status_code == 500
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rejects_deleted_user(self):
@@ -7473,10 +7535,18 @@ class TestCLIRefreshTokenFlow:
             user_id="deleted-user",
             metadata={"cli_refresh": True},
         )
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.table.update_many = AsyncMock(
+            return_value=MagicMock(count=1)
+        )
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
+                return_value=mock_repo_instance,
+            ),
             patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=None),
