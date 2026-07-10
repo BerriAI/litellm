@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
 from opentelemetry.context import Context, attach, get_current
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 
@@ -40,14 +41,17 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.metrics import (
     GenAIMetricRecorder,
     create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
+    get_event_logger,
     get_meter,
     get_tracer,
+    resolve_logger_provider,
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
@@ -104,7 +108,7 @@ class OpenTelemetryV2(CustomLogger):
         config: OpenTelemetryV2Config | None = None,
         callback_name: str | None = None,
         tracer_provider: TracerProvider | None = None,
-        logger_provider: Any | None = None,  # reserved for OTel logs
+        logger_provider: LoggerProvider | None = None,
         meter_provider: Any | None = None,
         **kwargs: Any,
     ) -> None:
@@ -117,7 +121,12 @@ class OpenTelemetryV2(CustomLogger):
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
         self._metric_filter_error_logged = False
-        self._emitter = SpanEmitter(self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names))
+        self._emitter = SpanEmitter(
+            self.tracer,
+            self.config,
+            mappers=resolve_mappers(self.config.mapper_names),
+            event_recorder=self._init_events(logger_provider),
+        )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
@@ -135,6 +144,22 @@ class OpenTelemetryV2(CustomLogger):
         provider = resolve_meter_provider(self.config, meter_provider)
         meter = get_meter(provider, LITELLM_TRACER_NAME)
         return GenAIMetricRecorder(create_genai_metrics(meter), self.callback_name)
+
+    def _init_events(self, logger_provider: LoggerProvider | None) -> "GenAIEventRecorder | None":
+        """Create the GenAI event recorder when events are enabled, else ``None``.
+
+        ``logger_provider`` is an explicit override (tests inject one); otherwise the
+        provider is resolved from the OTel global so an operator-configured logs
+        pipeline receives the events, building and registering one only when no
+        global provider is set. A ``None`` resolution means the operator opted out
+        of the logs signal, so no recorder is built.
+        """
+        if not self.config.enable_events:
+            return None
+        provider = resolve_logger_provider(self.config, logger_provider)
+        if provider is None:
+            return None
+        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME))
 
     # ====================================================================== #
     #  Proxy global registration

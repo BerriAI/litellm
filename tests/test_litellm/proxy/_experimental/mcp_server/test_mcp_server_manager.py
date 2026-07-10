@@ -6679,6 +6679,67 @@ class TestMCPToolsListAuthSurfacing:
         assert await manager._get_tools_from_server(server) == []
 
     @pytest.mark.asyncio
+    async def test_get_tools_from_server_suppresses_upstream_challenge_for_dcr_bridge(self):
+        """A dcr_bridge server must never relay the upstream's own WWW-Authenticate: it points
+        clients at the upstream protected-resource metadata, which fails the RFC 9728 resource
+        match against the gateway URL they dialed. Stripping it makes the single-server route
+        fabricate the gateway well-known challenge, whose content is the bridge facade."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        manager = MCPServerManager()
+        bridge_server = MCPServer(
+            server_id="bridge-srv",
+            name="bridge-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+            dcr_bridge=True,
+        )
+        upstream_challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, upstream_challenge))
+        manager._create_mcp_client = AsyncMock(return_value=client)
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(bridge_server)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate is None
+        assert exc_info.value.server_name == "bridge-srv"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_suppresses_resolver_challenge_for_dcr_bridge(self):
+        """The client-build-time HTTPException conversion path applies the same suppression."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        manager = MCPServerManager()
+        bridge_server = MCPServer(
+            server_id="bridge-srv",
+            name="bridge-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth_delegate,
+            dcr_bridge=True,
+        )
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(
+                status_code=401,
+                detail="Unauthorized",
+                headers={"WWW-Authenticate": 'Bearer resource_metadata="https://upstream.example/prm"'},
+            )
+        )
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(bridge_server)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate is None
+
+    @pytest.mark.asyncio
     async def test_aggregate_list_tools_absorbs_unauthenticated_server(self):
         from litellm.proxy._experimental.mcp_server.exceptions import (
             MCPUpstreamAuthError,

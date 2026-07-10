@@ -2151,6 +2151,41 @@ class PluginConfig(LiteLLMPydanticObjectBase):
     )
 
 
+class CoordinationRedisNode(LiteLLMPydanticObjectBase):
+    """A single startup node of a cluster-mode Redis used for proxy coordination."""
+
+    host: str = Field(description="hostname of the cluster node")
+    port: int = Field(description="port of the cluster node")
+
+
+class CoordinationRedisParams(LiteLLMPydanticObjectBase):
+    """
+    Connection params for the proxy's coordination Redis (cross-pod tpm/rpm rate
+    limits, spend tracking, pod lock manager, shared health checks), configured
+    independently of the response-cache backend in `litellm_settings.cache_params`.
+    """
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    host: Optional[str] = Field(None, description="Redis hostname")
+    port: Optional[int] = Field(None, description="Redis port")
+    password: Optional[str] = Field(None, description="Redis password")
+    username: Optional[str] = Field(None, description="Redis username")
+    url: Optional[str] = Field(None, description="full Redis connection url, e.g. redis://:pass@host:6379")
+    ssl: Optional[bool] = Field(None, description="connect over TLS")
+    startup_nodes: Optional[List[CoordinationRedisNode]] = Field(
+        None, description="cluster-mode startup nodes; when set a cluster client is used"
+    )
+    sentinel_nodes: Optional[List[List[Union[str, int]]]] = Field(
+        None, description="sentinel [host, port] pairs; when set a sentinel-managed client is used"
+    )
+    sentinel_password: Optional[str] = Field(None, description="password for the sentinel nodes")
+    service_name: Optional[str] = Field(None, description="sentinel service name")
+
+    def has_connection_target(self) -> bool:
+        return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2166,6 +2201,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: Optional[bool] = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: Optional[bool] = Field(None, description="load keys from azure key vault")
     master_key: Optional[str] = Field(None, description="require a key for all calls to proxy")
+    coordination_redis: Optional[CoordinationRedisParams] = Field(
+        None,
+        description=(
+            "standalone Redis for cross-pod coordination (tpm/rpm rate limits, "
+            "spend tracking, pod lock manager, shared health checks), configured "
+            "independently of the response-cache backend; takes precedence over "
+            "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
