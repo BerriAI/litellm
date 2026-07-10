@@ -3818,6 +3818,135 @@ async def test_token_non_bridge_keeps_gateway_callback():
     assert data["redirect_uri"] == "https://litellm.example.com/callback"
 
 
+def _named_as_metadata_response(server):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+            return_value=None,
+        ):
+            return _build_oauth_authorization_server_response(
+                request=_bridge_mock_request(),
+                mcp_server_name=server.server_name,
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_oauth_authorization_server_metadata_served_for_bridge_server():
+    """Bridge servers get the gateway's AS metadata (the register, authorize, and token relays),
+    which is what makes the DCR front door discoverable to standard MCP clients."""
+    result = _named_as_metadata_response(_bridge_server())
+
+    assert result["authorization_endpoint"] == "https://litellm.example.com/bridge_srv/authorize"
+    assert result["token_endpoint"] == "https://litellm.example.com/bridge_srv/token"
+    assert result["registration_endpoint"] == "https://litellm.example.com/bridge_srv/register"
+
+
+def test_oauth_authorization_server_404_for_non_bridge_client_forwarded_server():
+    """Without dcr_bridge a client-forwarded server keeps 404ing AS-metadata discovery: verbatim
+    upstream discovery is the contract and the gateway must not advertise itself as its AS."""
+    with pytest.raises(HTTPException) as exc:
+        _named_as_metadata_response(_bridge_server(dcr_bridge=None))
+
+    assert exc.value.status_code == 404
+
+
+async def _bridge_register_response(server, request_payload, persist_credentials=False):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "client_id": "upstream-issued-client",
+        "redirect_uris": request_payload.get("redirect_uris", []),
+        "token_endpoint_auth_method": "none",
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._persist_dcr_client_registration",
+            new_callable=AsyncMock,
+        ) as mock_persist,
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        response = await register_client_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            client_name=request_payload.get("client_name", ""),
+            grant_types=request_payload.get("grant_types"),
+            response_types=request_payload.get("response_types"),
+            token_endpoint_auth_method=request_payload.get("token_endpoint_auth_method"),
+            persist_credentials=persist_credentials,
+            client_redirect_uris=request_payload.get("redirect_uris"),
+        )
+    return response, mock_async_client, mock_persist
+
+
+@pytest.mark.asyncio
+async def test_register_bridge_relay_forwards_client_redirect_uris():
+    """The bridge relay arm registers the client's own redirect_uris upstream with public-client
+    defaults and relays the upstream response verbatim, so the upstream AS enforces the redirect
+    binding for that client and the auth code never transits the gateway."""
+    import json
+
+    response, mock_async_client, _ = await _bridge_register_response(
+        _bridge_server(),
+        {"client_name": "Claude", "redirect_uris": [_BRIDGE_CLIENT_REDIRECT]},
+    )
+
+    posted = mock_async_client.post.call_args.kwargs["json"]
+    assert posted["redirect_uris"] == [_BRIDGE_CLIENT_REDIRECT]
+    assert posted["grant_types"] == ["authorization_code", "refresh_token"]
+    assert posted["response_types"] == ["code"]
+    assert posted["token_endpoint_auth_method"] == "none"
+
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["client_id"] == "upstream-issued-client"
+
+
+@pytest.mark.asyncio
+async def test_register_bridge_relay_requires_redirect_uris():
+    with pytest.raises(HTTPException) as exc:
+        await _bridge_register_response(_bridge_server(), {"client_name": "Claude"})
+
+    assert exc.value.status_code == 400
+    assert "redirect_uris" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_register_bridge_relay_never_persists():
+    """Relayed registrations belong to individual clients; persisting one as the server's own DCR
+    client would hand every future caller the first client's identity."""
+    _, _, mock_persist = await _bridge_register_response(
+        _bridge_server(),
+        {"client_name": "Claude", "redirect_uris": [_BRIDGE_CLIENT_REDIRECT]},
+        persist_credentials=True,
+    )
+
+    mock_persist.assert_not_called()
+
+
 async def _exchange_persistence_attempted_for_auth_type(auth_type) -> bool:
     """Run exchange_token_with_server for a server of ``auth_type`` and report whether it attempted
     to persist the exchanged token server-side. The client-forwarded token modes must not persist:

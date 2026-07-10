@@ -2630,10 +2630,16 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
-        except MCPUpstreamAuthError:
+        except MCPUpstreamAuthError as upstream_auth_error:
             # Pass-through 401 must surface to single-server routes so the
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
+            if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
+                raise MCPUpstreamAuthError(
+                    status_code=upstream_auth_error.status_code,
+                    www_authenticate=None,
+                    server_name=upstream_auth_error.server_name,
+                ) from upstream_auth_error
             raise
         except HTTPException as e:
             # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
@@ -2643,9 +2649,10 @@ class MCPServerManager:
             # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
             if e.status_code in (401, 403):
                 headers = e.headers or {}
+                challenge_header = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
                 raise MCPUpstreamAuthError(
                     status_code=e.status_code,
-                    www_authenticate=headers.get("WWW-Authenticate") or headers.get("www-authenticate"),
+                    www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
                 ) from e
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
