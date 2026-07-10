@@ -257,6 +257,11 @@ def open_envelope(
     """
     if not is_envelope(candidate):
         return NotAnEnvelope()
+    # UTF-8 byte length is never below character length, so a character count already over the
+    # cap rejects an oversize candidate in O(1) without encoding it; the exact byte check then
+    # runs only on candidates already bounded to <= MAX_ENVELOPE_BYTES characters.
+    if len(candidate) > MAX_ENVELOPE_BYTES:
+        return MalformedPayload()
     if len(candidate.encode("utf-8", "surrogatepass")) > MAX_ENVELOPE_BYTES:
         return MalformedPayload()
     claims = _decode_claims(candidate.removeprefix(ENVELOPE_PREFIX), keys.signing_key)
