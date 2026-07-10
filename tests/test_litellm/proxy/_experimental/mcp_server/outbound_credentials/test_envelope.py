@@ -211,6 +211,16 @@ def test_missing_identity_claim_is_malformed_payload():
     assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
 
 
+@pytest.mark.parametrize("identity_claim", ["user_id", "server_id"])
+def test_signed_empty_identity_claim_is_malformed_payload_not_a_raise(identity_claim):
+    claims = _unverified_claims(_sealed_token(_full_grant()))
+    forged = _forge({**claims, identity_claim: ""})
+    assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
+    intact = open_envelope(_forge(claims), _KEYS, _NOW)
+    assert isinstance(intact, OpenedEnvelope)
+    assert intact.identity == _IDENTITY
+
+
 def test_correctly_signed_garbage_grant_blob_is_decrypt_failed():
     claims = _unverified_claims(_sealed_token(_full_grant()))
     forged = _forge({**claims, "grant": "not-a-ciphertext"})
