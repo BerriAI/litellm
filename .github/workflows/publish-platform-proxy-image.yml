@@ -1,0 +1,102 @@
+name: Publish platform proxy image
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-proxy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  PLATFORM_ECR_PUSH_ROLE_ARN: arn:aws:iam::486491621059:role/platform-managed/claude-usage-proxy-github-ecr-push
+  ECR_REPOSITORY: 486491621059.dkr.ecr.us-east-1.amazonaws.com/claude-usage-proxy
+  CLAUDE_USAGE_PROXY_REPO: bitovi/claude-usage-proxy
+  DEPLOY_BRANCH: main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.PLATFORM_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push proxy image
+        env:
+          IMAGE: ${{ env.ECR_REPOSITORY }}:${{ github.ref_name }}
+        run: |
+          docker build -f docker/Dockerfile.database -t "$IMAGE" .
+          docker push "$IMAGE"
+
+  open-deploy-pr:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Open deploy PR in claude-usage-proxy
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_USAGE_PROXY_GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "CLAUDE_USAGE_PROXY_GITHUB_TOKEN is required to open the deploy PR." >&2
+            exit 1
+          fi
+
+          git clone --depth 1 --branch "$DEPLOY_BRANCH" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${CLAUDE_USAGE_PROXY_REPO}.git" \
+            /tmp/claude-usage-proxy
+          cd /tmp/claude-usage-proxy
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="chore/release-${TAG}"
+          git checkout -b "$BRANCH"
+
+          CURRENT_TAG="$(yq -r '.image.tag // ""' deploy/values.yaml)"
+          if [ "$CURRENT_TAG" = "$TAG" ]; then
+            echo "deploy/values.yaml already has image.tag=${TAG}; skipping PR."
+            exit 0
+          fi
+
+          yq -i ".image.tag = \"${TAG}\"" deploy/values.yaml
+          git add deploy/values.yaml
+          git commit -m "chore(release): deploy ${TAG}"
+
+          git push --force-with-lease origin "HEAD:${BRANCH}"
+
+          EXISTING_PR="$(gh pr list --repo "$CLAUDE_USAGE_PROXY_REPO" --head "$BRANCH" --json number --jq '.[0].number')"
+          if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
+            echo "PR already exists: https://github.com/${CLAUDE_USAGE_PROXY_REPO}/pull/${EXISTING_PR}"
+            exit 0
+          fi
+
+          gh pr create --repo "$CLAUDE_USAGE_PROXY_REPO" \
+            --base "$DEPLOY_BRANCH" \
+            --head "$BRANCH" \
+            --title "chore(release): deploy ${TAG}" \
+            --body "$(cat <<EOF
+Updates \`deploy/values.yaml\` \`image.tag\` to \`${TAG}\` after the LiteLLM proxy image was published to platform ECR from tag \`${TAG}\` in \`bitovi/litellm\`.
+
+Merge this PR to trigger the Argo CD rollout on the platform cluster.
+EOF
+)"
