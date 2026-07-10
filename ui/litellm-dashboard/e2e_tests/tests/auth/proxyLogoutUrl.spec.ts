@@ -42,7 +42,8 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
       timeout: 30_000,
     });
     await page.goto("/ui");
-    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
+    // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
+    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
     await settingsLoaded;
 
     // Pre-condition: we start authenticated. The admin storage state carries a
