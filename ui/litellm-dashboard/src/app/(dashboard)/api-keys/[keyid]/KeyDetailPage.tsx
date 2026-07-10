@@ -6,20 +6,26 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import KeyInfoView from "@/components/templates/key_info_view";
 import { migratedHref } from "@/utils/migratedPages";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+function keyIdFromPathname(pathname: string): string {
+  const segments = pathname.replace(/\/+$/, "").split("/");
+  return decodeURIComponent(segments[segments.length - 1] ?? "");
+}
 
 export default function KeyDetailPage() {
   const router = useRouter();
-  const params = useParams();
   const { isLoading: authLoading, isAuthorized } = useAuthorized();
-
-  const rawKeyId = params?.keyid;
-  const keyId = decodeURIComponent(Array.isArray(rawKeyId) ? rawKeyId[0] : rawKeyId ?? "");
+  const [keyId] = useState(() => (typeof window === "undefined" ? "" : keyIdFromPathname(window.location.pathname)));
 
   const { data: keyData, isPending } = useKeyInfo(keyId);
   const { data: teams } = useAllTeams();
 
-  if (authLoading || !isAuthorized || isPending) {
+  if (authLoading || !isAuthorized) {
+    return <LoadingScreen />;
+  }
+  if (!keyId || isPending) {
     return <LoadingScreen />;
   }
 

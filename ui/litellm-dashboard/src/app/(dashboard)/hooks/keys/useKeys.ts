@@ -121,7 +121,7 @@ export const useKeyInfo = (keyId: string): UseQueryResult<KeyResponse | null> =>
     queryFn: async () => {
       const response: KeysResponse = await keyListCall(accessToken!, 1, 1, { keyHash: keyId, expand: "user" });
       const keys = response?.keys ?? [];
-      return keys.find((key) => key.token === keyId) ?? keys[0] ?? null;
+      return keys.find((key) => key.token === keyId) ?? null;
     },
     enabled: Boolean(accessToken && keyId),
     staleTime: 30000, // 30 seconds

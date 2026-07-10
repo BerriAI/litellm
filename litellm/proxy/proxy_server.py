@@ -604,6 +604,58 @@ from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response as StarletteResponse
+from starlette.types import Scope as StarletteScope
+
+_SPA_SHELL_PLACEHOLDER_SEGMENT = "placeholder"
+
+
+class SPAStaticFiles(StaticFiles):
+    def _looks_like_navigation(self, path: str, scope: StarletteScope) -> bool:
+        headers = dict(scope.get("headers") or [])
+        accept = headers.get(b"accept", b"").decode("latin-1")
+        if "text/html" in accept:
+            return True
+        last_segment = path.rstrip("/").rsplit("/", 1)[-1]
+        return "." not in last_segment
+
+    def _spa_shell(self, path: str) -> Optional[str]:
+        trimmed = path.strip("/")
+        segments = trimmed.split("/") if trimmed else []
+        if segments:
+            parent = "/".join(segments[:-1])
+            placeholder = (
+                f"{parent}/{_SPA_SHELL_PLACEHOLDER_SEGMENT}/index.html"
+                if parent
+                else f"{_SPA_SHELL_PLACEHOLDER_SEGMENT}/index.html"
+            )
+            if os.path.isfile(os.path.join(str(self.directory), placeholder)):
+                return placeholder
+        if os.path.isfile(os.path.join(str(self.directory), "index.html")):
+            return "index.html"
+        return None
+
+    async def _try_original(self, path: str, scope: StarletteScope) -> Optional[StarletteResponse]:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return None
+
+    async def get_response(self, path: str, scope: StarletteScope) -> StarletteResponse:
+        original = await self._try_original(path, scope)
+        if original is not None and original.status_code != 404:
+            return original
+        if self._looks_like_navigation(path, scope):
+            shell = self._spa_shell(path)
+            if shell is not None:
+                return await super().get_response(shell, scope)
+        if original is not None:
+            return original
+        raise StarletteHTTPException(status_code=404)
+
 
 from litellm.types.agents import AgentConfig
 
@@ -1694,7 +1746,7 @@ try:
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    app.mount("/ui", SPAStaticFiles(directory=ui_path, html=True), name="ui")
 
     def _restructure_ui_html_files(ui_root: str) -> None:
         """Ensure each exported HTML route is available as <route>/index.html."""
