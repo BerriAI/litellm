@@ -311,10 +311,14 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and (
-            self.is_anthropic_claude_model(model)
-            or self.is_bedrock_arn_model(model)
-            or _is_gemini_model(model, None)
+        if (
+            cache_control
+            and model
+            and (
+                self.is_anthropic_claude_model(model)
+                or self.is_bedrock_arn_model(model)
+                or _is_gemini_model(model, None)
+            )
         ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
