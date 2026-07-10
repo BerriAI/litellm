@@ -477,6 +477,11 @@ async def test_get_group_ids_from_service_principal_follows_next_link():
                 "principalId": "user-1",
                 "principalDisplayName": "User 1",
             },
+            {
+                "principalType": "Group",
+                "principalId": None,
+                "principalDisplayName": "Invalid Group",
+            },
         ],
         "@odata.nextLink": next_link,
     }
@@ -514,6 +519,27 @@ async def test_get_group_ids_from_service_principal_follows_next_link():
         "https://graph.microsoft.com/v1.0/servicePrincipals/sp-123/appRoleAssignedTo",
         next_link,
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_group_ids_from_service_principal_stops_at_page_limit():
+    response = MagicMock()
+    response.json.return_value = {
+        "value": [],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+    }
+    async_client = MagicMock()
+    async_client.get = AsyncMock(return_value=response)
+
+    group_ids, teams = await MicrosoftSSOHandler.get_group_ids_from_service_principal(
+        service_principal_id="sp-123",
+        async_client=async_client,
+        access_token="mock_token",
+    )
+
+    assert group_ids == []
+    assert teams == []
+    assert async_client.get.await_count == MicrosoftSSOHandler.MAX_GRAPH_API_PAGES
 
 
 def test_get_group_ids_from_graph_api_response():
