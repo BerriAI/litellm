@@ -8,11 +8,11 @@ vi.mock("@/components/molecules/message_manager", () => ({
 }));
 
 vi.mock("@/components/networking", () => ({
-  keyShareOnePasswordCall: vi.fn(),
+  keyShareCreateCall: vi.fn(),
 }));
 
 import MessageManager from "@/components/molecules/message_manager";
-import { keyShareOnePasswordCall } from "@/components/networking";
+import { keyShareCreateCall } from "@/components/networking";
 
 describe("CreatedKeyDisplay", () => {
   beforeEach(() => {
@@ -70,48 +70,48 @@ describe("CreatedKeyDisplay", () => {
     expect(screen.getByRole("button", { name: /copy virtual key/i })).toBeInTheDocument();
   });
 
-  it("should not show the Share on 1Password button without an accessToken", () => {
+  it("should not show the Create secure share link button without an accessToken", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-    expect(screen.queryByRole("button", { name: /share on 1password/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create secure share link/i })).not.toBeInTheDocument();
   });
 
-  it("should show the Share on 1Password button when an accessToken is provided", () => {
+  it("should show the Create secure share link button when an accessToken is provided", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" accessToken="sk-admin" />);
-    expect(screen.getByRole("button", { name: /share on 1password/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create secure share link/i })).toBeInTheDocument();
   });
 
-  it("should render the returned share link after clicking Share on 1Password", async () => {
+  it("should render the returned share link after clicking Create secure share link", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const shareResponse = {
-      share_link: "https://share.1password.com/s/abc123",
-      item_id: "item-1",
-      item_title: "vendor-key",
-      one_time_only: false,
+      share_link: "http://localhost:4000/key/share/tok_abc123",
+      token: "tok_abc123",
+      expires_at: "2026-01-01T00:00:00Z",
+      one_time_only: true,
     };
-    vi.mocked(keyShareOnePasswordCall).mockResolvedValue(shareResponse);
+    vi.mocked(keyShareCreateCall).mockResolvedValue(shareResponse);
 
     render(<CreatedKeyDisplay apiKey="sk-test-123" accessToken="sk-admin" />);
 
-    await user.click(screen.getByRole("button", { name: /share on 1password/i }));
+    await user.click(screen.getByRole("button", { name: /create secure share link/i }));
 
-    expect(keyShareOnePasswordCall).toHaveBeenCalledWith("sk-admin", "sk-test-123", {
-      expire_after: "SevenDays",
+    expect(keyShareCreateCall).toHaveBeenCalledWith("sk-admin", "sk-test-123", {
+      expire_after: "OneDay",
     });
-    const link = await screen.findByRole("link", { name: /share\.1password\.com/i });
-    expect(link).toHaveAttribute("href", "https://share.1password.com/s/abc123");
+    const link = await screen.findByRole("link", { name: /key\/share\/tok_abc123/i });
+    expect(link).toHaveAttribute("href", "http://localhost:4000/key/share/tok_abc123");
     expect(screen.getByRole("button", { name: /copy share link/i })).toBeInTheDocument();
   });
 
   it("should surface an error when share link creation fails", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    vi.mocked(keyShareOnePasswordCall).mockRejectedValue(new Error("OP_SERVICE_ACCOUNT_TOKEN not set"));
+    vi.mocked(keyShareCreateCall).mockRejectedValue(new Error("Key not found"));
 
     render(<CreatedKeyDisplay apiKey="sk-test-123" accessToken="sk-admin" />);
 
-    await user.click(screen.getByRole("button", { name: /share on 1password/i }));
+    await user.click(screen.getByRole("button", { name: /create secure share link/i }));
 
     await vi.waitFor(() => {
-      expect(MessageManager.error).toHaveBeenCalledWith(expect.stringContaining("OP_SERVICE_ACCOUNT_TOKEN not set"));
+      expect(MessageManager.error).toHaveBeenCalledWith(expect.stringContaining("Key not found"));
     });
   });
 });

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Button, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { keyShareOnePasswordCall } from "@/components/networking";
+import { keyShareCreateCall } from "@/components/networking";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
@@ -26,7 +26,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey, accessTok
   const [sharing, setSharing] = useState(false);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
-  const [expireAfter, setExpireAfter] = useState<string>("SevenDays");
+  const [expireAfter, setExpireAfter] = useState<string>("OneDay");
 
   const handleCopy = () => {
     setCopied(true);
@@ -34,18 +34,18 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey, accessTok
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleShareOnePassword = async () => {
+  const handleCreateShareLink = async () => {
     if (!accessToken) return;
     setSharing(true);
     try {
-      const result = await keyShareOnePasswordCall(accessToken, apiKey, {
+      const result = await keyShareCreateCall(accessToken, apiKey, {
         expire_after: expireAfter,
       });
       setShareLink(result.share_link);
-      MessageManager.success("1Password share link created");
+      MessageManager.success("Secure share link created");
     } catch (error) {
       MessageManager.error(
-        `Failed to create 1Password share link: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to create secure share link: ${error instanceof Error ? error.message : String(error)}`,
       );
     } finally {
       setSharing(false);
@@ -92,8 +92,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey, accessTok
               style={{ width: 120 }}
               aria-label="Share link expiry"
             />
-            <Button onClick={handleShareOnePassword} loading={sharing}>
-              Share on 1Password
+            <Button onClick={handleCreateShareLink} loading={sharing}>
+              Create secure share link
             </Button>
           </>
         )}
@@ -101,7 +101,9 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey, accessTok
 
       {shareLink && (
         <div style={{ marginTop: 16 }}>
-          <p className="text-sm text-gray-600 mb-1">1Password secure share link:</p>
+          <p className="text-sm text-gray-600 mb-1">
+            One-time secure share link (opening it reveals the key once, then it expires):
+          </p>
           <div
             style={{
               background: "#f8f8f8",

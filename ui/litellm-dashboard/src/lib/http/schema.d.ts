@@ -6828,7 +6828,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/key/share/onepassword": {
+    "/key/share": {
         parameters: {
             query?: never;
             header?: never;
@@ -6838,26 +6838,48 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Share Key Via Onepassword
-         * @description Write a virtual key into 1Password and return a secure-share link that can be
-         *     handed to an external user or vendor.
+         * Create Key Share Link
+         * @description Mint a single-use, auto-expiring link that reveals a virtual key once, so it
+         *     can be handed to an external user or vendor without pasting the raw key into
+         *     chat or email.
+         *
+         *     The plaintext `sk-...` value is encrypted with the proxy salt/master key and
+         *     held in the proxy cache only until it expires or is viewed; no external
+         *     service, credential or config is required.
          *
          *     Parameters:
-         *     - key: str - The virtual key value (must be the unhashed `sk-...` value, since
-         *       the plaintext is needed to store it in 1Password).
-         *     - title: Optional[str] - Item title in 1Password. Defaults to the key alias.
-         *     - recipients: Optional[List[str]] - Emails/domains to lock the share to. When
-         *       omitted, anyone with the link can view it (subject to 1Password account policy).
-         *     - expire_after: Optional[str] - One of OneHour, OneDay, SevenDays, FourteenDays,
-         *       ThirtyDays. Defaults to the 1Password account policy default.
-         *     - one_time_only: bool - Whether the link may only be viewed once per recipient.
-         *
-         *     Requires OP_SERVICE_ACCOUNT_TOKEN and OP_VAULT_ID to be set on the proxy.
+         *     - key: str - The unhashed `sk-...` key value to share.
+         *     - expire_after: One of OneHour, OneDay, SevenDays, FourteenDays, ThirtyDays.
+         *       Defaults to OneDay.
+         *     - one_time_only: bool - Burn the link after the first view. Defaults to true.
          *
          *     Note: This is an admin-only endpoint. Only proxy admins, team admins, or org
-         *     admins can share keys.
+         *     admins can share a given key.
          */
-        post: operations["share_key_via_onepassword_key_share_onepassword_post"];
+        post: operations["create_key_share_link_key_share_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/key/share/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reveal Key Share Link
+         * @description Public browser-facing page that reveals a shared key exactly once. The link
+         *     itself is the bearer secret, so no auth header is required (mirroring how
+         *     every secure-share product works). Returns an HTML page and a 404 when the
+         *     link is expired or already used.
+         */
+        get: operations["reveal_key_share_link_key_share__token__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -24397,37 +24419,35 @@ export interface components {
             /** Keys */
             keys?: string[] | null;
         };
-        /** KeyShareOnePasswordRequest */
-        KeyShareOnePasswordRequest: {
-            /** Expire After */
-            expire_after?: ("OneHour" | "OneDay" | "SevenDays" | "FourteenDays" | "ThirtyDays") | null;
+        /** KeyShareRequest */
+        KeyShareRequest: {
+            /**
+             * Expire After
+             * @default OneDay
+             * @enum {string}
+             */
+            expire_after: "OneHour" | "OneDay" | "SevenDays" | "FourteenDays" | "ThirtyDays";
             /** Key */
             key: string;
             /**
              * One Time Only
-             * @default false
+             * @default true
              */
             one_time_only: boolean;
-            /** Recipients */
-            recipients?: string[] | null;
-            /** Title */
-            title?: string | null;
         };
-        /** KeyShareOnePasswordResponse */
-        KeyShareOnePasswordResponse: {
-            /** Expire After */
-            expire_after?: string | null;
-            /** Item Id */
-            item_id: string;
-            /** Item Title */
-            item_title: string;
+        /** KeyShareResponse */
+        KeyShareResponse: {
             /**
-             * One Time Only
-             * @default false
+             * Expires At
+             * Format: date-time
              */
+            expires_at: string;
+            /** One Time Only */
             one_time_only: boolean;
             /** Share Link */
             share_link: string;
+            /** Token */
+            token: string;
         };
         /**
          * KeyUpdateFields
@@ -42272,7 +42292,7 @@ export interface operations {
             };
         };
     };
-    share_key_via_onepassword_key_share_onepassword_post: {
+    create_key_share_link_key_share_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -42281,7 +42301,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["KeyShareOnePasswordRequest"];
+                "application/json": components["schemas"]["KeyShareRequest"];
             };
         };
         responses: {
@@ -42291,7 +42311,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["KeyShareOnePasswordResponse"];
+                    "application/json": components["schemas"]["KeyShareResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reveal_key_share_link_key_share__token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -1187,20 +1187,20 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     grace_period: Optional[str] = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
 
 
-class KeyShareOnePasswordRequest(LiteLLMPydanticObjectBase):
+KeyShareExpiry = Literal["OneHour", "OneDay", "SevenDays", "FourteenDays", "ThirtyDays"]
+
+
+class KeyShareRequest(LiteLLMPydanticObjectBase):
     key: str
-    title: Optional[str] = None
-    recipients: Optional[List[str]] = None
-    expire_after: Optional[Literal["OneHour", "OneDay", "SevenDays", "FourteenDays", "ThirtyDays"]] = None
-    one_time_only: bool = False
+    expire_after: KeyShareExpiry = "OneDay"
+    one_time_only: bool = True
 
 
-class KeyShareOnePasswordResponse(LiteLLMPydanticObjectBase):
+class KeyShareResponse(LiteLLMPydanticObjectBase):
     share_link: str
-    item_id: str
-    item_title: str
-    expire_after: Optional[str] = None
-    one_time_only: bool = False
+    token: str
+    expires_at: datetime
+    one_time_only: bool
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):

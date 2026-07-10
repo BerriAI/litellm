@@ -881,31 +881,26 @@ export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   }
 };
 
-export interface KeyShareOnePasswordResponse {
+export interface KeyShareResponse {
   share_link: string;
-  item_id: string;
-  item_title: string;
-  expire_after?: string | null;
+  token: string;
+  expires_at: string;
   one_time_only: boolean;
 }
 
-export const keyShareOnePasswordCall = async (
+export const keyShareCreateCall = async (
   accessToken: string,
   key: string,
   options?: {
-    title?: string;
-    recipients?: string[];
     expire_after?: string;
     one_time_only?: boolean;
   },
-): Promise<KeyShareOnePasswordResponse> => {
+): Promise<KeyShareResponse> => {
   const body: Record<string, unknown> = { key };
-  if (options?.title) body.title = options.title;
-  if (options?.recipients && options.recipients.length > 0) body.recipients = options.recipients;
   if (options?.expire_after) body.expire_after = options.expire_after;
   if (options?.one_time_only !== undefined) body.one_time_only = options.one_time_only;
 
-  return await apiClient.post(`/key/share/onepassword`, { accessToken, body });
+  return await apiClient.post(`/key/share`, { accessToken, body });
 };
 
 export const userDeleteCall = async (accessToken: string, userIds: string[]) => {

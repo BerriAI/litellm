@@ -14532,50 +14532,212 @@ def test_generate_key_helper_fn_accepts_per_tag_rate_limits():
     )
 
 
-class _FakeShareResult:
+
+class _FakeShareCache:
+    """In-memory ShareSecretCache used to exercise create/reveal without Redis."""
+
     def __init__(self):
-        self.share_link = "https://share.1password.com/s/token123"
-        self.item_id = "op-item-1"
-        self.item_title = "vendor-key"
-        self.expire_after = "SevenDays"
-        self.one_time_only = True
+        self.store: dict = {}
+        self.set_calls: list = []
+        self.deleted: list = []
+
+    async def async_set_cache(self, key, value, *, ttl):
+        self.set_calls.append({"key": key, "value": value, "ttl": ttl})
+        self.store[key] = value
+
+    async def async_get_cache(self, key):
+        return self.store.get(key)
+
+    async def async_delete_cache(self, key):
+        self.deleted.append(key)
+        self.store.pop(key, None)
 
 
-class _FakeOnePasswordClient:
-    def __init__(self):
-        self.calls = []
+@pytest.mark.asyncio
+async def test_key_share_round_trip_burns_after_one_view(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+    from litellm.proxy.management_helpers.key_share import create_share, reveal_share
 
-    async def share_secret(self, title, secret_value, recipients, expire_after, one_time_only):
-        self.calls.append(
-            {
-                "title": title,
-                "secret_value": secret_value,
-                "recipients": recipients,
-                "expire_after": expire_after,
-                "one_time_only": one_time_only,
-            }
-        )
-        return _FakeShareResult()
+    cache = _FakeShareCache()
+    created = await create_share(
+        key="sk-secret-vendor-key-123456",
+        expire_after="OneDay",
+        one_time_only=True,
+        cache=cache,
+    )
+
+    assert cache.set_calls[0]["ttl"] == 24 * 60 * 60
+    assert cache.set_calls[0]["value"] != "sk-secret-vendor-key-123456"
+
+    first = await reveal_share(token=created.token, cache=cache)
+    assert first == "sk-secret-vendor-key-123456"
+
+    second = await reveal_share(token=created.token, cache=cache)
+    assert second is None
 
 
-def _patch_share_env(monkeypatch, mock_prisma_client):
-    mock_user_api_key_cache = MagicMock()
+@pytest.mark.asyncio
+async def test_key_share_multi_view_when_not_one_time(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+    from litellm.proxy.management_helpers.key_share import create_share, reveal_share
+
+    cache = _FakeShareCache()
+    created = await create_share(
+        key="sk-reusable-999999",
+        expire_after="SevenDays",
+        one_time_only=False,
+        cache=cache,
+    )
+
+    assert cache.set_calls[0]["ttl"] == 7 * 24 * 60 * 60
+    assert await reveal_share(token=created.token, cache=cache) == "sk-reusable-999999"
+    assert await reveal_share(token=created.token, cache=cache) == "sk-reusable-999999"
+    assert cache.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_reveal_share_unknown_token_returns_none():
+    from litellm.proxy.management_helpers.key_share import reveal_share
+
+    cache = _FakeShareCache()
+    assert await reveal_share(token="does-not-exist", cache=cache) is None
+
+
+def test_build_share_html_escapes_key_and_reports_expiry():
+    from litellm.proxy.management_helpers.key_share import build_share_html
+
+    expired = build_share_html(None)
+    assert "expired" in expired.lower()
+
+    page = build_share_html("sk-<script>alert(1)</script>")
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def _patch_share_env(monkeypatch, mock_prisma_client, cache=None):
+    mock_user_api_key_cache = cache if cache is not None else _FakeShareCache()
 
     def mock_hash_token(token):
         return "abcd1234" * 8
 
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", mock_hash_token)
+    return mock_user_api_key_cache
+
+
+def _admin():
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
+
+
+def _share_request(key="sk-abcdefghij1234567890"):
+    from litellm.proxy._types import KeyShareRequest
+
+    return KeyShareRequest(key=key)
 
 
 @pytest.mark.asyncio
-async def test_share_key_via_onepassword_happy_path(monkeypatch):
-    from litellm.proxy._types import KeyShareOnePasswordRequest
+async def test_create_key_share_link_happy_path(monkeypatch):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        share_key_via_onepassword,
+        create_key_share_link,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value={"token": "abcd1234" * 8, "key_alias": "vendor-key"}
+    )
+    cache = _patch_share_env(monkeypatch, mock_prisma_client)
+
+    http_request = MagicMock()
+    http_request.base_url = "http://localhost:4000/"
+
+    response = await create_key_share_link(
+        data=_share_request(),
+        http_request=http_request,
+        user_api_key_dict=_admin(),
+    )
+
+    assert response.share_link == f"http://localhost:4000/key/share/{response.token}"
+    assert response.one_time_only is True
+    assert len(cache.set_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_key_share_link_rejects_non_sk_key(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        create_key_share_link,
+    )
+
+    mock_prisma_client = AsyncMock()
+    cache = _patch_share_env(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc:
+        await create_key_share_link(
+            data=_share_request(key="not-a-real-key"),
+            http_request=MagicMock(),
+            user_api_key_dict=_admin(),
+        )
+
+    assert exc.value.code == "400"
+    assert cache.set_calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_key_share_link_missing_key_returns_404(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        create_key_share_link,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    cache = _patch_share_env(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc:
+        await create_key_share_link(
+            data=_share_request(),
+            http_request=MagicMock(),
+            user_api_key_dict=_admin(),
+        )
+
+    assert exc.value.code == "404"
+    assert cache.set_calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_key_share_link_denies_non_admin(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        create_key_share_link,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=MagicMock(team_id=None)
+    )
+    cache = _patch_share_env(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(HTTPException) as exc:
+        await create_key_share_link(
+            data=_share_request(),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user"
+            ),
+        )
+
+    assert exc.value.status_code == 403
+    assert cache.set_calls == []
+
+
+@pytest.mark.asyncio
+async def test_reveal_key_share_link_endpoint_serves_then_burns(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        create_key_share_link,
+        reveal_key_share_link,
     )
 
     mock_prisma_client = AsyncMock()
@@ -14584,116 +14746,17 @@ async def test_share_key_via_onepassword_happy_path(monkeypatch):
     )
     _patch_share_env(monkeypatch, mock_prisma_client)
 
-    fake_client = _FakeOnePasswordClient()
-    data = KeyShareOnePasswordRequest(
-        key="sk-abcdefghij1234567890",
-        recipients=["vendor@example.com"],
-        expire_after="SevenDays",
-        one_time_only=True,
+    http_request = MagicMock()
+    http_request.base_url = "http://localhost:4000/"
+    created = await create_key_share_link(
+        data=_share_request(),
+        http_request=http_request,
+        user_api_key_dict=_admin(),
     )
 
-    response = await share_key_via_onepassword(
-        data=data,
-        http_request=MagicMock(),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"
-        ),
-        onepassword_client=fake_client,
-    )
+    ok = await reveal_key_share_link(token=created.token)
+    assert ok.status_code == 200
+    assert b"sk-abcdefghij1234567890" in ok.body
 
-    assert response.share_link == "https://share.1password.com/s/token123"
-    assert response.item_id == "op-item-1"
-    assert len(fake_client.calls) == 1
-    call = fake_client.calls[0]
-    assert call["title"] == "vendor-key"
-    assert call["secret_value"] == "sk-abcdefghij1234567890"
-    assert call["recipients"] == ["vendor@example.com"]
-    assert call["expire_after"] == "SevenDays"
-    assert call["one_time_only"] is True
-
-
-@pytest.mark.asyncio
-async def test_share_key_via_onepassword_rejects_non_sk_key(monkeypatch):
-    from litellm.proxy._types import KeyShareOnePasswordRequest
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        share_key_via_onepassword,
-    )
-
-    mock_prisma_client = AsyncMock()
-    _patch_share_env(monkeypatch, mock_prisma_client)
-
-    fake_client = _FakeOnePasswordClient()
-    data = KeyShareOnePasswordRequest(key="not-a-real-key")
-
-    with pytest.raises(ProxyException) as exc:
-        await share_key_via_onepassword(
-            data=data,
-            http_request=MagicMock(),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"
-            ),
-            onepassword_client=fake_client,
-        )
-
-    assert exc.value.code == "400"
-    assert fake_client.calls == []
-
-
-@pytest.mark.asyncio
-async def test_share_key_via_onepassword_missing_key_returns_404(monkeypatch):
-    from litellm.proxy._types import KeyShareOnePasswordRequest
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        share_key_via_onepassword,
-    )
-
-    mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-        return_value=None
-    )
-    _patch_share_env(monkeypatch, mock_prisma_client)
-
-    fake_client = _FakeOnePasswordClient()
-    data = KeyShareOnePasswordRequest(key="sk-abcdefghij1234567890")
-
-    with pytest.raises(ProxyException) as exc:
-        await share_key_via_onepassword(
-            data=data,
-            http_request=MagicMock(),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"
-            ),
-            onepassword_client=fake_client,
-        )
-
-    assert exc.value.code == "404"
-    assert fake_client.calls == []
-
-
-@pytest.mark.asyncio
-async def test_share_key_via_onepassword_denies_non_admin(monkeypatch):
-    from litellm.proxy._types import KeyShareOnePasswordRequest
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        share_key_via_onepassword,
-    )
-
-    mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-        return_value=MagicMock(team_id=None)
-    )
-    _patch_share_env(monkeypatch, mock_prisma_client)
-
-    fake_client = _FakeOnePasswordClient()
-    data = KeyShareOnePasswordRequest(key="sk-abcdefghij1234567890")
-
-    with pytest.raises(HTTPException) as exc:
-        await share_key_via_onepassword(
-            data=data,
-            http_request=MagicMock(),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user"
-            ),
-            onepassword_client=fake_client,
-        )
-
-    assert exc.value.status_code == 403
-    assert fake_client.calls == []
+    burned = await reveal_key_share_link(token=created.token)
+    assert burned.status_code == 404

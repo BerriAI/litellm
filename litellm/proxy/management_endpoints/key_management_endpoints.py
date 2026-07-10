@@ -20,11 +20,11 @@ import secrets
 import traceback
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
 import yaml
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -88,8 +88,6 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 
-if TYPE_CHECKING:
-    from litellm.integrations.onepassword import OnePasswordClient
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     get_ui_settings_cached,
 )
@@ -6096,61 +6094,37 @@ async def unblock_key(
     return record
 
 
-def _get_onepassword_client() -> "OnePasswordClient":
-    """
-    FastAPI dependency that builds a cached 1Password client from the proxy
-    environment (OP_SERVICE_ACCOUNT_TOKEN + OP_VAULT_ID). Raises a 400 with a
-    clear setup message when the environment is not configured.
-    """
-    from litellm.integrations.onepassword import (
-        OnePasswordShareError,
-        get_cached_onepassword_client,
-    )
-
-    try:
-        return get_cached_onepassword_client()
-    except OnePasswordShareError as e:
-        raise ProxyException(
-            message=str(e),
-            type=ProxyErrorTypes.bad_request_error,
-            param="OP_SERVICE_ACCOUNT_TOKEN",
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
-
 @router.post(
-    "/key/share/onepassword",
+    "/key/share",
     tags=["key management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=KeyShareOnePasswordResponse,
+    response_model=KeyShareResponse,
 )
 @management_endpoint_wrapper
-async def share_key_via_onepassword(
-    data: KeyShareOnePasswordRequest,
+async def create_key_share_link(
+    data: KeyShareRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    onepassword_client: "OnePasswordClient" = Depends(_get_onepassword_client),
-) -> KeyShareOnePasswordResponse:
+) -> KeyShareResponse:
     """
-    Write a virtual key into 1Password and return a secure-share link that can be
-    handed to an external user or vendor.
+    Mint a single-use, auto-expiring link that reveals a virtual key once, so it
+    can be handed to an external user or vendor without pasting the raw key into
+    chat or email.
+
+    The plaintext `sk-...` value is encrypted with the proxy salt/master key and
+    held in the proxy cache only until it expires or is viewed; no external
+    service, credential or config is required.
 
     Parameters:
-    - key: str - The virtual key value (must be the unhashed `sk-...` value, since
-      the plaintext is needed to store it in 1Password).
-    - title: Optional[str] - Item title in 1Password. Defaults to the key alias.
-    - recipients: Optional[List[str]] - Emails/domains to lock the share to. When
-      omitted, anyone with the link can view it (subject to 1Password account policy).
-    - expire_after: Optional[str] - One of OneHour, OneDay, SevenDays, FourteenDays,
-      ThirtyDays. Defaults to the 1Password account policy default.
-    - one_time_only: bool - Whether the link may only be viewed once per recipient.
-
-    Requires OP_SERVICE_ACCOUNT_TOKEN and OP_VAULT_ID to be set on the proxy.
+    - key: str - The unhashed `sk-...` key value to share.
+    - expire_after: One of OneHour, OneDay, SevenDays, FourteenDays, ThirtyDays.
+      Defaults to OneDay.
+    - one_time_only: bool - Burn the link after the first view. Defaults to true.
 
     Note: This is an admin-only endpoint. Only proxy admins, team admins, or org
-    admins can share keys.
+    admins can share a given key.
     """
-    from litellm.integrations.onepassword import OnePasswordShareError
+    from litellm.proxy.management_helpers.key_share import create_share
     from litellm.proxy.proxy_server import (
         hash_token,
         prisma_client,
@@ -6165,7 +6139,7 @@ async def share_key_via_onepassword(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    if not is_valid_api_key(data.key) or not data.key.startswith("sk-"):
+    if not data.key.startswith("sk-") or not is_valid_api_key(data.key):
         raise ProxyException(
             message="Invalid key format. The unhashed 'sk-...' key value is required to share it.",
             type=ProxyErrorTypes.bad_request_error,
@@ -6180,7 +6154,7 @@ async def share_key_via_onepassword(
         hashed_token=hashed_token,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
-        route="/key/share/onepassword",
+        route="/key/share",
     )
 
     existing_record = await VerificationTokenRepository(prisma_client).find_by_id(hashed_token)
@@ -6192,30 +6166,46 @@ async def share_key_via_onepassword(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    title = data.title or existing_record.key_alias or f"litellm-virtual-key-{hashed_token[-8:]}"
+    created = await create_share(
+        key=data.key,
+        expire_after=data.expire_after,
+        one_time_only=data.one_time_only,
+        cache=user_api_key_cache,
+    )
 
-    try:
-        result = await onepassword_client.share_secret(
-            title=title,
-            secret_value=data.key,
-            recipients=data.recipients,
-            expire_after=data.expire_after,
-            one_time_only=data.one_time_only,
-        )
-    except OnePasswordShareError as e:
-        raise ProxyException(
-            message=str(e),
-            type=ProxyErrorTypes.bad_request_error,
-            param="key",
-            code=status.HTTP_502_BAD_GATEWAY,
-        )
+    base_url = str(http_request.base_url).rstrip("/")
+    return KeyShareResponse(
+        share_link=f"{base_url}/key/share/{created.token}",
+        token=created.token,
+        expires_at=created.expires_at,
+        one_time_only=created.one_time_only,
+    )
 
-    return KeyShareOnePasswordResponse(
-        share_link=result.share_link,
-        item_id=result.item_id,
-        item_title=result.item_title,
-        expire_after=result.expire_after,
-        one_time_only=result.one_time_only,
+
+@router.get(
+    "/key/share/{token}",
+    tags=["key management"],
+    include_in_schema=False,
+)
+async def reveal_key_share_link(token: str) -> Response:
+    """
+    Public browser-facing page that reveals a shared key exactly once. The link
+    itself is the bearer secret, so no auth header is required (mirroring how
+    every secure-share product works). Returns an HTML page and a 404 when the
+    link is expired or already used.
+    """
+    from fastapi.responses import HTMLResponse
+
+    from litellm.proxy.management_helpers.key_share import (
+        build_share_html,
+        reveal_share,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    revealed_key = await reveal_share(token=token, cache=user_api_key_cache)
+    return HTMLResponse(
+        content=build_share_html(revealed_key),
+        status_code=status.HTTP_200_OK if revealed_key is not None else status.HTTP_404_NOT_FOUND,
     )
 
 
