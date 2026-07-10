@@ -57,7 +57,11 @@ from litellm.proxy._experimental.mcp_server.elicitation_handler import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
-from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
+from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+    MCPPerUserTokenCache,
+    mcp_per_user_token_cache,
+    resolve_mcp_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
     Ok,
@@ -799,10 +803,12 @@ class MCPServerManager:
         self,
         cred_provider: Optional[UpstreamCredentialProvider] = None,
         per_user_oauth_token_store: Optional[InvalidatableOAuthTokenStore] = None,
+        per_user_token_cache: Optional[MCPPerUserTokenCache] = None,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
+        self._per_user_token_cache = per_user_token_cache or mcp_per_user_token_cache
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
@@ -1038,6 +1044,24 @@ class MCPServerManager:
                     "browser sign-in, including delegate_auth_to_upstream)."
                 )
 
+            config_dcr_bridge = server_config.get("dcr_bridge", None)
+            if config_dcr_bridge is not None and not isinstance(config_dcr_bridge, bool):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge "
+                    f"must be a boolean (got {config_dcr_bridge!r})."
+                )
+            if config_dcr_bridge and auth_type not in (
+                MCPAuth.true_passthrough,
+                MCPAuth.oauth_delegate,
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge is only "
+                    f"supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+                    "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded "
+                    "token modes; interactive oauth2 servers already run the gateway "
+                    "authorization-code flow."
+                )
+
             new_server = MCPServer(
                 server_id=server_id,
                 name=name_for_prefix,
@@ -1073,6 +1097,7 @@ class MCPServerManager:
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
+                dcr_bridge=config_dcr_bridge,
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -1448,6 +1473,7 @@ class MCPServerManager:
             available_on_public_internet=bool(getattr(mcp_server, "available_on_public_internet", True)),
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
+            dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -4053,16 +4079,25 @@ class MCPServerManager:
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
 
     async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
-        """Drop the v2 chain's cached token for ``(user_id, server_id)`` after the credential row
-        changes (re-auth, revoke), so the next resolve reads the new row instead of serving the
-        replaced token until its cache TTL. Best-effort: a cache-drop failure is logged, never
-        raised, because the DB write already succeeded and the TTL remains the backstop.
+        """Drop every cached token for ``(user_id, server_id)`` after the credential row changes
+        (re-auth, revoke, config-change purge): the v2 chain's cache and the legacy per-user token
+        cache, so the next resolve reads the new row instead of serving the replaced token until its
+        cache TTL, whichever path resolves it. This is the single invalidation point for per-user
+        OAuth tokens; callers must not evict individual caches directly. Best-effort: a cache-drop
+        failure is logged, never raised, because the DB write already succeeded and the TTL remains
+        the backstop.
         """
         try:
             await self._per_user_oauth_token_store.invalidate(user_id, server_id)
         except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
             verbose_logger.warning(
                 "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
+        try:
+            await self._per_user_token_cache.delete(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to drop legacy cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
 
     async def _resolve_oauth2_headers_for_tool_call(
@@ -4785,6 +4820,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             oauth2_flow=server.oauth2_flow,
+            dcr_bridge=server.dcr_bridge,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
@@ -4901,6 +4937,7 @@ class MCPServerManager:
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
+            dcr_bridge=server.dcr_bridge,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

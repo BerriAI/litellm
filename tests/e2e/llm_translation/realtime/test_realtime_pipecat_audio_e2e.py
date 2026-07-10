@@ -38,6 +38,13 @@ pytestmark = pytest.mark.e2e
 
 pytest.importorskip("pipecat", reason="pipecat-ai not installed")
 
+try:
+    import nltk
+
+    nltk.data.find("tokenizers/punkt_tab")
+except LookupError:
+    pytest.skip("NLTK punkt_tab data is not installed", allow_module_level=True)
+
 from pipecat.adapters.schemas.function_schema import FunctionSchema  # noqa: E402
 from pipecat.adapters.schemas.tools_schema import ToolsSchema  # noqa: E402
 from pipecat.frames.frames import (  # noqa: E402
@@ -96,7 +103,7 @@ SERVER_VAD_SETTINGS = rt_events.SessionProperties(
             noise_reduction=rt_events.InputAudioNoiseReduction(type="near_field"),
             turn_detection=rt_events.TurnDetection(
                 type="server_vad",
-                threshold=0.8,
+                threshold=0.5,
                 prefix_padding_ms=300,
                 silence_duration_ms=700,
             ),

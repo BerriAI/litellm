@@ -2533,9 +2533,10 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
 
     mcp_server_resource: Optional[str]
     """
-    The upstream MCP server resource identifier (scheme + host + path) the tool call was
-    forwarded to. Redacted for logging: userinfo, query string, and fragment are stripped so an
-    upstream URL carrying an embedded token or secret query parameter never reaches log metadata.
+    The origin (scheme + host + port) of the upstream MCP server the tool call was forwarded
+    to. Redacted for logging: userinfo, the path, the query string, and the fragment are all
+    stripped, because hosted MCP servers routinely embed the credential in the URL path and
+    this value is readable by callers via request logs.
     Records which upstream received a relayed request; never a credential.
     """
 
@@ -2697,7 +2698,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]]
-    guardrail_request: Optional[dict]
+    guardrail_request: Optional[Union[str, dict]]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: GuardrailStatus
     start_time: Optional[float]
@@ -2728,10 +2729,10 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     confidence_score: Optional[float]
     """For LLM-judge guardrails: confidence score 0.0-1.0"""
 
-    classification: Optional[dict]
+    classification: Optional[Union[str, dict]]
     """For LLM-judge guardrails: structured classification output"""
 
-    match_details: Optional[List[dict]]
+    match_details: Optional[Union[str, List[dict]]]
     """Detailed match information for each detected pattern"""
 
     patterns_checked: Optional[int]
@@ -3397,6 +3398,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
+    META = "meta"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

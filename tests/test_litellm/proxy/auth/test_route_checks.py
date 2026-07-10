@@ -2595,6 +2595,135 @@ def test_org_admin_of_multiple_orgs_can_operate_on_both():
     assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
 
 
+# ── LIT-4221: /team/update org-context resolution from team_id ────────────────
+from litellm.proxy.auth.auth_checks_organization import (
+    add_team_org_context_to_request_body,
+)
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_resolves_org_from_team():
+    """For /team/update with only team_id, the target team's org is resolved and
+    injected so the org-admin route gate can see it. This is what lets an org
+    admin update a team budget from the Hub UI, which sends team_id, not
+    organization_id (LIT-4221)."""
+
+    async def fetch(team_id: str):
+        assert team_id == "team-1"
+        return "org-1"
+
+    out = await add_team_org_context_to_request_body(
+        route="/team/update",
+        request_body={"team_id": "team-1", "max_budget": 42},
+        fetch_team_org_id=fetch,
+    )
+    assert out == {"team_id": "team-1", "max_budget": 42, "organization_id": "org-1"}
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_noop_when_org_id_already_present():
+    """If the caller already passed organization_id, no lookup happens and the
+    body is returned unchanged."""
+
+    async def fetch(team_id: str):
+        raise AssertionError("must not resolve when organization_id is present")
+
+    body = {"team_id": "team-1", "organization_id": "org-explicit"}
+    out = await add_team_org_context_to_request_body(
+        route="/team/update", request_body=body, fetch_team_org_id=fetch
+    )
+    assert out == body
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_noop_for_other_routes():
+    """Only /team/update opts into org resolution; other routes are untouched."""
+
+    async def fetch(team_id: str):
+        raise AssertionError("must not resolve for a non-opted-in route")
+
+    body = {"team_id": "team-1"}
+    out = await add_team_org_context_to_request_body(
+        route="/team/delete", request_body=body, fetch_team_org_id=fetch
+    )
+    assert out == body
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_noop_when_team_has_no_org():
+    """A standalone team (no org) resolves to None, so nothing is injected and
+    the org-admin branch stays unreachable (no blanket access)."""
+
+    async def fetch(team_id: str):
+        return None
+
+    body = {"team_id": "team-1"}
+    out = await add_team_org_context_to_request_body(
+        route="/team/update", request_body=body, fetch_team_org_id=fetch
+    )
+    assert out == body
+
+
+def test_team_update_gate_allows_org_admin_with_resolved_org():
+    """Post-resolution (organization_id present), an org admin of that org clears
+    the gate for /team/update."""
+    user_obj = _make_org_admin_user("org-1")
+    valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/team/update",
+        request=request,
+        valid_token=valid_token,
+        request_data={"team_id": "team-1", "organization_id": "org-1"},
+    )
+
+
+def test_team_update_gate_rejects_without_org_context():
+    """Without organization_id (i.e. resolution found no org, or a non-org-admin),
+    the gate still rejects /team/update — the fix adds no blanket allow. Guards
+    against re-widening the route (e.g. dropping it into self_managed_routes)."""
+    user_obj = _make_org_admin_user("org-1")
+    valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/team/update",
+            request=request,
+            valid_token=valid_token,
+            request_data={"team_id": "team-1", "max_budget": 42},
+        )
+
+
+def test_team_update_gate_rejects_cross_org_admin_with_resolved_org():
+    """Even after the target team's org is resolved, an org admin of a DIFFERENT
+    org is rejected at the gate (no cross-org escalation)."""
+    user_obj = _make_org_admin_user("org-1")
+    valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/team/update",
+            request=request,
+            valid_token=valid_token,
+            request_data={"team_id": "team-1", "organization_id": "org-2"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
     """
