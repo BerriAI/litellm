@@ -1,12 +1,12 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as networking from "../networking";
+import * as networking from "@/components/networking";
 import PolicyInfoView from "./policy_info";
-import { Policy } from "./types";
+import { Policy } from "@/components/policies/types";
 
-vi.mock("../networking");
+vi.mock("@/components/networking");
 vi.mock("./pipeline_flow_builder", () => ({
   PipelineInfoDisplay: () => <div data-testid="pipeline-info" />,
 }));

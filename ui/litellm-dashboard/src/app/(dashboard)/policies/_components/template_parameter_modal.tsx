@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Spin, Radio, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
-import { modelHubCall, enrichPolicyTemplateStream } from "../networking";
+import { modelHubCall, enrichPolicyTemplateStream } from "@/components/networking";
 
 interface TemplateParameter {
   name: string;

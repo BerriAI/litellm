@@ -1,15 +1,15 @@
 import React from "react";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as networking from "../networking";
+import * as networking from "@/components/networking";
 import AddAttachmentForm from "./add_attachment_form";
-import { Policy } from "./types";
+import { Policy } from "@/components/policies/types";
 
-vi.mock("../networking");
+vi.mock("@/components/networking");
 
-vi.mock("../molecules/notifications_manager", () => ({
+vi.mock("@/components/molecules/notifications_manager", () => ({
   default: { success: vi.fn(), fromBackend: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
