@@ -194,7 +194,7 @@ def _rewrite_batch_jsonl_model_field(
     return ("\n".join(rewritten_lines) + "\n").encode("utf-8")
 
 
-def _rewrite_batch_file_in_request(create_file_request: dict, provider_model: str) -> None:
+def _rewrite_batch_file_in_request(create_file_request: CreateFileRequest, provider_model: str) -> None:
     """Rewrite ``create_file_request["file"]``'s JSONL body.model in place.
 
     ``file`` may be raw bytes/a file-like object, or an (filename, content,
@@ -295,7 +295,7 @@ async def route_create_file(
             # body.model to the provider's own model name before uploading.
             provider_model = _resolve_provider_model_for_batch_upload(llm_router, model)
             if provider_model is not None:
-                _rewrite_batch_file_in_request(cast(dict, _create_file_request), provider_model)
+                _rewrite_batch_file_in_request(_create_file_request, provider_model)
 
         # Create the file with model credentials
         response = await litellm.acreate_file(
