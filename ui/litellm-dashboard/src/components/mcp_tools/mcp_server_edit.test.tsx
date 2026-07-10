@@ -1403,7 +1403,10 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
         screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)"),
         "org-app-client-id",
       );
-      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to keep the currently saved secret (if any)"),
+        "org-app-secret",
+      );
 
       await act(async () => {
         fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
@@ -1447,7 +1450,10 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
         screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)"),
         "org-app-client-id",
       );
-      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to keep the currently saved secret (if any)"),
+        "org-app-secret",
+      );
 
       act(() => {
         mockOauth.onTokenReceived?.({ access_token: "cf-tok", token_type: "bearer" });
