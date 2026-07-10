@@ -130,19 +130,14 @@ def _system_message_as_user(message: dict) -> dict:
     return converted
 
 
-def _system_message_can_be_merged(message: dict) -> bool:
-    """Only merge when doing so cannot discard message-level metadata."""
-    return not any(key not in {"role", "content"} for key in message)
-
-
 def map_system_message_pt(messages: list) -> list:
     """
     Convert 'system' message to 'user' message if provider doesn't support 'system' role.
 
     Enabled via `completion(...,supports_system_message=False)`
 
-    Merge into a compatible user/assistant message when no metadata would be lost.
-    Otherwise, convert the system message to a standalone user message.
+    Merge into a compatible user/assistant message. Otherwise, convert the system
+    message to a standalone user message.
     """
 
     messages = list(messages)
@@ -159,7 +154,7 @@ def map_system_message_pt(messages: list) -> list:
                     and not next_m.get("function_call")
                 )
                 merged_content = None
-                if can_merge_role and _system_message_can_be_merged(m):
+                if can_merge_role:
                     merged_content = _merge_message_content(
                         m.get("content"), next_m.get("content")
                     )

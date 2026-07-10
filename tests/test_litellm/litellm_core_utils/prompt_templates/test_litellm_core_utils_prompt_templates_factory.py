@@ -3241,7 +3241,7 @@ def test_map_system_message_pt_does_not_merge_into_tool_call_assistant(
     assert result == [{"role": "user", "content": "System"}, assistant_message]
 
 
-def test_map_system_message_pt_preserves_system_message_metadata():
+def test_map_system_message_pt_metadata_keeps_existing_merge_shape():
     messages = [
         {
             "role": "system",
@@ -3258,12 +3258,11 @@ def test_map_system_message_pt_preserves_system_message_metadata():
     assert result == [
         {
             "role": "user",
-            "content": [{"type": "text", "text": "System"}],
-            "name": "policy",
-            "cache_control": {"type": "ephemeral"},
-            "provider_extension": {"value": 1},
-        },
-        {"role": "user", "content": "User"},
+            "content": [
+                {"type": "text", "text": "System "},
+                {"type": "text", "text": "User"},
+            ],
+        }
     ]
 
 
