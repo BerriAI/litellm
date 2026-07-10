@@ -42,7 +42,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey, accessTok
       setShareLink(response.share_link);
       MessageManager.success("Secure share link created");
     } catch (error) {
-      console.error("Failed to create secure share link:", error);
+      const detail = error instanceof Error ? error.message : "Please try again.";
+      MessageManager.error(`Failed to create secure share link. ${detail}`);
     } finally {
       setSharing(false);
     }

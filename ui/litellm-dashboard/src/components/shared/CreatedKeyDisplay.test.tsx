@@ -94,16 +94,15 @@ describe("CreatedKeyDisplay", () => {
     expect(screen.getByRole("button", { name: /copy share link/i })).toBeInTheDocument();
   });
 
-  it("should not display a share link when the share call fails", async () => {
+  it("should surface an error and show no link when the share call fails", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     vi.mocked(keyShareCreateCall).mockRejectedValue(new Error("boom"));
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     render(<CreatedKeyDisplay apiKey="sk-test-123" accessToken="sk-admin" />);
     await user.click(screen.getByRole("button", { name: /securely share/i }));
 
     expect(keyShareCreateCall).toHaveBeenCalled();
+    expect(vi.mocked(MessageManager.error)).toHaveBeenCalledWith("Failed to create secure share link. boom");
     expect(screen.queryByRole("button", { name: /copy share link/i })).not.toBeInTheDocument();
-    consoleError.mockRestore();
   });
 });
