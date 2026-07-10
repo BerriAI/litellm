@@ -1,9 +1,22 @@
 "use client";
 
 import { Meter as MeterPrimitive } from "@base-ui/react/meter";
+import { type VariantProps } from "cva";
 import * as React from "react";
 
-import { cn } from "@/lib/cva.config";
+import { cn, cva } from "@/lib/cva.config";
+
+const meterIndicatorVariants = cva({
+  base: "h-full rounded-full transition-[width] duration-300",
+  variants: {
+    tone: {
+      default: "bg-primary",
+      warning: "bg-amber-500",
+      over: "bg-destructive",
+    },
+  },
+  defaultVariants: { tone: "default" },
+});
 
 const Meter = React.forwardRef<React.ComponentRef<typeof MeterPrimitive.Root>, MeterPrimitive.Root.Props>(
   ({ className, ...props }, ref) => (
@@ -55,12 +68,12 @@ MeterTrack.displayName = "MeterTrack";
 
 const MeterIndicator = React.forwardRef<
   React.ComponentRef<typeof MeterPrimitive.Indicator>,
-  MeterPrimitive.Indicator.Props
->(({ className, ...props }, ref) => (
+  MeterPrimitive.Indicator.Props & VariantProps<typeof meterIndicatorVariants>
+>(({ className, tone, ...props }, ref) => (
   <MeterPrimitive.Indicator
     ref={ref}
     data-slot="meter-indicator"
-    className={cn("h-full rounded-full bg-primary transition-[width] duration-300", className)}
+    className={cn(meterIndicatorVariants({ tone, className }))}
     {...props}
   />
 ));
