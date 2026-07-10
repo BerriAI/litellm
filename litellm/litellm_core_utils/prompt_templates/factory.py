@@ -5,7 +5,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
@@ -90,9 +90,7 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 
 def _as_content_blocks(content: Any) -> Optional[List[Any]]:
     """Return a shallowly copied block list, or None for unsupported content."""
-    if isinstance(content, list):
-        return list(content)
-    if isinstance(content, Iterable) and not isinstance(content, (str, bytes, dict)):
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
         return list(content)
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
