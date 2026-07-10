@@ -1261,7 +1261,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/agents/_components/index.tsx": {
+  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1534,7 +1534,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/index.tsx": {
+  "src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
