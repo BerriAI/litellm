@@ -22,6 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
@@ -652,6 +653,19 @@ class ModelResponseIterator:
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif "thinking" in content_block["delta"] or "signature" in content_block["delta"]:
+            if self.current_content_block_type != "thinking":
+                verbose_logger.debug(
+                    "Anthropic handler: ignoring %s on non-thinking block (active=%s)",
+                    content_block["delta"].get("type"),
+                    self.current_content_block_type,
+                )
+                return (
+                    text,
+                    tool_use,
+                    thinking_blocks,
+                    provider_specific_fields,
+                    reasoning_content,
+                )
             thinking_content = content_block["delta"].get("thinking")
             if isinstance(thinking_content, str) and thinking_content:
                 self.reasoning_content_chunks.append(thinking_content)

@@ -295,6 +295,109 @@ def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_
         )
 
 
+def test_translate_streaming_openai_chunk_mixed_content_reasoning_stays_thinking_family():
+    """
+    Regression: a single streaming chunk carrying BOTH ``content`` and
+    ``reasoning_content`` must classify as the thinking family in *both*
+    functions. Otherwise the block classifier opens a ``text`` block while the
+    delta classifier emits a ``thinking_delta``, producing illegal Anthropic SSE
+    (Anthropic SDK / Claude Code raise "Content block is not a thinking block").
+
+    Reasoning content takes priority over plain text here because the delta
+    classifier already accumulates reasoning ahead of text; the block classifier
+    must agree so the same chunk cannot open a text block and then emit a
+    thinking delta into it.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="Let me reason about this",
+                thinking_blocks=None,
+                content="partial visible answer",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+    assert block_type == "thinking"
+    assert content_block_start == {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "",
+    }
+
+    (
+        delta_type,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+    assert delta_type == "thinking_delta"
+    assert content_block_delta["type"] == "thinking_delta"
+    assert content_block_delta["thinking"] == "Let me reason about this"
+
+
+def test_translate_streaming_openai_chunk_empty_thinking_block_with_content_stays_text_family():
+    """
+    Same-family invariant edge case: a chunk with visible ``content`` and an
+    all-empty ``thinking_block`` (both ``thinking`` and ``signature`` empty) must
+    classify as ``text`` in BOTH functions. The block classifier only opens a
+    thinking block when the thinking block carries real thinking or signature
+    text; otherwise it falls through to text, matching the delta classifier which
+    accumulates the empty thinking/signature to "" and returns ``text_delta``.
+    Without this the block classifier would open a thinking block while a
+    ``text_delta`` streamed into it — the opposite-direction illegal SSE.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content="hello",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "", "signature": ""}
+                ],
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+    assert block_type == "text"
+    assert content_block_start == {"type": "text", "text": ""}
+
+    (
+        delta_type,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+    assert delta_type == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "hello"
+
+
 def test_translate_anthropic_messages_to_openai_thinking_blocks():
     """Test that tool result messages are placed before user messages in the conversation order."""
 

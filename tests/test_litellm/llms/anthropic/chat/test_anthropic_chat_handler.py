@@ -218,6 +218,70 @@ def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
     )
 
 
+def test_streaming_misplaced_thinking_delta_on_text_block_is_ignored():
+    """
+    Regression: a ``thinking_delta`` (or ``signature_delta``) that arrives while
+    the active content block is ``text`` must be ignored, not accumulated into
+    reasoning. A well-behaved provider never does this, but a misordered upstream
+    stream (or a re-ordered pass-through) could, and silently promoting the text
+    block to a thinking block corrupts the reconstructed message and can leak an
+    unsigned "thinking" field the client never asked for.
+    """
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Visible answer. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "leaked reasoning"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "leaked_sig"},
+        },
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+
+    assert reasoning_content == ""
+    assert thinking_blocks == ()
+    assert model_response_iterator.reasoning_content_chunks == []
+    # The misplaced thinking/signature deltas (parsed_chunks[2], [3]) must not
+    # surface thinking_blocks in provider_specific_fields.
+    for parsed in parsed_chunks[2:]:
+        psf = parsed.choices[0].delta.provider_specific_fields
+        assert not (psf and "thinking_blocks" in psf)
+    # The legitimate text delta is still emitted.
+    text_out = "".join(
+        getattr(chunk.choices[0].delta, "content", None) or "" for chunk in parsed_chunks
+    )
+    assert text_out == "Visible answer. "
+
+
 def test_handle_json_mode_chunk_response_format_tool():
     model_response_iterator = ModelResponseIterator(
         streaming_response=MagicMock(), sync_stream=True, json_mode=True

@@ -13,6 +13,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _CombinedChunkSplitter,
@@ -202,3 +204,253 @@ def test_split_clears_reasoning_and_thinking_on_finish_chunk():
     assert content_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
     assert finish_chunk.choices[0].delta.reasoning_content is None
     assert finish_chunk.choices[0].delta.thinking_blocks is None
+
+
+# ---------------------------------------------------------------------------
+# Block/delta same-family invariant regressions.
+#
+# Every ``thinking_delta``/``signature_delta`` the wrapper emits must sit inside
+# an active ``thinking`` content block, every ``text_delta`` inside a ``text``
+# block, and every ``input_json_delta`` inside a ``tool_use`` block. Before the
+# Layer 1 classifier was aligned, a chunk carrying reasoning could open a text
+# block while streaming a thinking delta into it, which Anthropic SDK / Claude
+# Code reject with "Content block is not a thinking block".
+# ---------------------------------------------------------------------------
+
+
+class _AsyncStream:
+    """Minimal async iterator over pre-built chunks for the async wrapper path."""
+
+    def __init__(self, items):
+        self._it = iter(items)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+def _reasoning_chunk(text: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(reasoning_content=text, content=None),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _signature_chunk(signature: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    thinking_blocks=[
+                        {"type": "thinking", "thinking": None, "signature": signature}
+                    ],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _text_chunk(text: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=text),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _finish_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+
+def _mixed_chunk(content: str, reasoning: str) -> ModelResponseStream:
+    """A single chunk carrying BOTH visible content and reasoning_content."""
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content, reasoning_content=reasoning),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _assert_same_family_invariant(events: list) -> str:
+    """Walk emitted wrapper events and assert the block/delta same-family
+    invariant, returning the concatenated text-block payload.
+
+    Fails if any content_block_start is not preceded by a stop for the previous
+    block, or if a delta lands in a block of the wrong family.
+    """
+    active_type = None
+    text_payload = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        etype = event.get("type")
+        if etype == "content_block_start":
+            assert active_type is None, (
+                f"content_block_start for {event['content_block']['type']} without a "
+                f"preceding content_block_stop (active={active_type})"
+            )
+            active_type = event["content_block"]["type"]
+        elif etype == "content_block_stop":
+            assert active_type is not None, "content_block_stop with no active block"
+            active_type = None
+        elif etype == "content_block_delta":
+            delta_type = event["delta"]["type"]
+            assert active_type is not None, f"{delta_type} with no active block"
+            if delta_type in ("thinking_delta", "signature_delta"):
+                assert active_type == "thinking", (
+                    f"{delta_type} emitted inside a {active_type} block "
+                    f"(must be a thinking block)"
+                )
+            elif delta_type == "text_delta":
+                assert active_type == "text", (
+                    f"text_delta emitted inside a {active_type} block"
+                )
+                text_payload.append(event["delta"]["text"])
+            elif delta_type == "input_json_delta":
+                assert active_type == "tool_use", (
+                    f"input_json_delta emitted inside a {active_type} block"
+                )
+    return "".join(text_payload)
+
+
+def test_mixed_reasoning_text_sequence_keeps_deltas_in_same_family_sync():
+    """A stream mixing reasoning, signature, and text chunks must keep every
+    thinking/signature delta inside a thinking block and every text delta inside
+    a text block, and must not drop the visible text payload."""
+    chunks = [
+        _reasoning_chunk("Let me think. "),
+        _signature_chunk("sig-1"),
+        _text_chunk("Here is the answer."),
+        _finish_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = list(wrapper)
+
+    text = _assert_same_family_invariant(events)
+    assert text == "Here is the answer."
+
+
+@pytest.mark.asyncio
+async def test_mixed_reasoning_text_sequence_keeps_deltas_in_same_family_async():
+    """Async path mirrors the sync invariant; the proxy serves the async
+    iterator so it must uphold the same family invariant."""
+    chunks = [
+        _reasoning_chunk("Let me think. "),
+        _signature_chunk("sig-1"),
+        _text_chunk("Here is the answer."),
+        _finish_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(chunks), model="claude-x"
+    )
+    events = [event async for event in wrapper]
+
+    text = _assert_same_family_invariant(events)
+    assert text == "Here is the answer."
+
+
+def test_thinking_text_thinking_alternation_legal_ordering_sync():
+    """thinking -> text -> thinking alternation: each thinking-family delta must
+    open (and close) its own thinking block with legal stop/start ordering, and
+    the intervening text must survive in a text block."""
+    chunks = [
+        _reasoning_chunk("First thought. "),
+        _text_chunk("Visible answer."),
+        _reasoning_chunk("Second thought."),
+        _finish_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = list(wrapper)
+
+    text = _assert_same_family_invariant(events)
+    assert text == "Visible answer."
+
+    # Two distinct thinking blocks must have opened (one per reasoning run).
+    thinking_starts = [
+        e
+        for e in events
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_start"
+        and e["content_block"]["type"] == "thinking"
+    ]
+    assert len(thinking_starts) == 2
+
+
+@pytest.mark.asyncio
+async def test_thinking_text_thinking_alternation_legal_ordering_async():
+    """Async counterpart of the thinking/text/thinking alternation."""
+    chunks = [
+        _reasoning_chunk("First thought. "),
+        _text_chunk("Visible answer."),
+        _reasoning_chunk("Second thought."),
+        _finish_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(chunks), model="claude-x"
+    )
+    events = [event async for event in wrapper]
+
+    text = _assert_same_family_invariant(events)
+    assert text == "Visible answer."
+
+    thinking_starts = [
+        e
+        for e in events
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_start"
+        and e["content_block"]["type"] == "thinking"
+    ]
+    assert len(thinking_starts) == 2
+
+
+def test_single_chunk_with_both_content_and_reasoning_opens_thinking_block_sync():
+    """Scenario A1: one chunk carrying BOTH content and reasoning_content.
+
+    Before the classifier was aligned, the block classifier opened a ``text``
+    block for this chunk while the delta classifier emitted a ``thinking_delta``
+    into it — an illegal Anthropic SSE pairing. The thinking delta must land in a
+    thinking block; the visible text arrives on its own follow-up chunk.
+    """
+    chunks = [
+        _mixed_chunk("visible ", "reasoning bit"),
+        _text_chunk("answer."),
+        _finish_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = list(wrapper)
+
+    # The invariant helper raises if any thinking_delta lands in a text block.
+    _assert_same_family_invariant(events)
+
+    thinking_deltas = [
+        e
+        for e in events
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_delta"
+        and e["delta"].get("type") == "thinking_delta"
+    ]
+    assert any(d["delta"]["thinking"] == "reasoning bit" for d in thinking_deltas)
