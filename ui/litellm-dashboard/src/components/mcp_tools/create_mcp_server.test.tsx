@@ -202,8 +202,8 @@ describe("CreateMCPServer", () => {
         await waitFor(() => {
           expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
         });
-        expect(screen.getByText("OAuth Client ID (optional, not saved)")).toBeInTheDocument();
-        expect(screen.getByText("OAuth Client Secret (optional, not saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client ID (optional, saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional, saved)")).toBeInTheDocument();
       },
     );
 
@@ -1584,6 +1584,21 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
       expect(screen.queryByText("Gateway-hosted sign-in (DCR bridge)")).not.toBeInTheDocument();
     });
     expect(getDcrToggle()).not.toBeInTheDocument();
+  });
+
+  it("renders the toggle between the OAuth client fields and the Authorize button", async () => {
+    await setupHttpServerForm();
+
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    const toggle = getDcrToggle() as HTMLElement;
+    const secretInput = screen.getByPlaceholderText("Leave blank for public clients / PKCE");
+    const authorizeButton = screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" });
+    expect(secretInput.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(authorizeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it.each([
