@@ -788,6 +788,50 @@ class TestToolPermissionGuardrail:
             f"got: {chunks[0].choices[0].delta.content!r}"
         )
 
+    @pytest.mark.asyncio
+    async def test_async_post_call_streaming_iterator_hook_denied_tool_logs_at_info(
+        self, caplog
+    ):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        stream_chunk = ModelResponseStream(
+            id="chatcmpl-denied",
+            created=1700000000,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[],
+        )
+
+        async def _fake_stream():
+            yield stream_chunk
+
+        tool_call = {"function": {"name": "Read", "arguments": "{}"}, "type": "function"}
+        assembled = ModelResponse(
+            choices=[Choices(message={"tool_calls": [tool_call]})]
+        )
+
+        with patch("litellm.main.stream_chunk_builder", return_value=assembled):
+            with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+                async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    response=_fake_stream(),
+                    request_data={},
+                ):
+                    pass
+
+        matching = [
+            r
+            for r in caplog.records
+            if r.message.startswith("Tool Permission Guardrail:")
+            and "denied by rule" in r.message
+        ]
+        assert matching, "expected the denied-by-rule message to be logged"
+        assert all(r.levelno == logging.INFO for r in matching)
+
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
         tool_call = ChatCompletionMessageToolCall(
