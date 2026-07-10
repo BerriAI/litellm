@@ -8028,6 +8028,16 @@ class ProviderConfigManager:
                 )
 
                 return GithubCopilotAnthropicMessagesConfig()
+
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        json_provider = JSONProviderRegistry.get(provider.value)
+        if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
+            from litellm.llms.openai_like.messages.transformation import (
+                JSONProviderAnthropicMessagesConfig,
+            )
+
+            return JSONProviderAnthropicMessagesConfig(json_provider)
         return None
 
     @staticmethod
