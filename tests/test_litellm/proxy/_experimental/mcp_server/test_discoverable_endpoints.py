@@ -754,6 +754,90 @@ async def test_register_client_persist_discriminator_oauth2_persists():
 
 
 @pytest.mark.asyncio
+async def test_register_client_persists_only_to_its_own_row_when_another_server_shares_the_url():
+    """A fresh server must mint and persist its OWN DCR client even when another server row with
+    the same upstream URL already holds one: both the reuse lookup and the persist are keyed by
+    server_id, never by URL, so OAuth client identity is not transferable between server entries.
+    If either side ever falls back to a URL match, this fails: the fresh server would skip the
+    upstream registration (adopting the sibling's client) or persist onto the wrong row."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    shared_url = "https://provider.example/mcp"
+    fresh_server = MCPServer(
+        server_id="server-b",
+        name="server-b",
+        server_name="server-b",
+        alias="server-b",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        url=shared_url,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+        registration_url="https://provider.example/oauth/register",
+    )
+    sibling_row_with_client = MagicMock(server_id="server-a", url=shared_url)
+    sibling_row_with_client.credentials = {"client_id": "client-a-do-not-adopt"}
+    own_row_without_client = MagicMock(server_id="server-b", url=shared_url)
+    own_row_without_client.credentials = {}
+    rows_by_server_id = {"server-a": sibling_row_with_client, "server-b": own_row_without_client}
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"client_id": "fresh-client-b", "token_endpoint_auth_method": "none"}
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    mock_update = AsyncMock(return_value=MagicMock())
+
+    async def _get_row(prisma_client, server_id):
+        return rows_by_server_id.get(server_id)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
+        ),
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch("litellm.proxy._experimental.mcp_server.db.get_mcp_server", new=AsyncMock(side_effect=_get_row)),
+        patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=mock_update),
+        patch.object(global_mcp_server_manager, "update_server", new=AsyncMock()),
+    ):
+        response = await register_client_with_server(
+            request=mock_request,
+            mcp_server=fresh_server,
+            client_name="Litellm Proxy",
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            token_endpoint_auth_method="none",
+            persist_credentials=True,
+        )
+
+    mock_async_client.post.assert_called_once()
+    body = json.loads(response.body.decode("utf-8"))
+    assert body["client_id"] == "fresh-client-b"
+
+    mock_update.assert_called_once()
+    update_data = mock_update.call_args.kwargs["data"]
+    assert update_data.server_id == "server-b"
+    assert update_data.credentials["client_id"] == "fresh-client-b"
+
+
+@pytest.mark.asyncio
 async def test_register_client_does_not_clobber_token_url_when_absent():
     """When the in-memory server has no token_url, the DCR persist must omit it from the
     partial update rather than passing None, so exclude_unset leaves the token_url column
