@@ -4362,6 +4362,122 @@ async def test_register_bridge_relay_never_persists():
     mock_persist.assert_not_called()
 
 
+_BRIDGE_MASTER_KEY = "sk-bridge-producer-master-key-0123456789abcdef"
+
+
+async def _exchange_for_bridge_server(server, upstream_body, user_id):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = upstream_body
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new=AsyncMock(return_value=user_id),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        return await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+
+@pytest.mark.asyncio
+async def test_oauth_delegate_bridge_token_exchange_mints_envelope_not_raw_token():
+    """A dcr_bridge oauth_delegate token exchange returns a gateway-bound envelope, not the raw
+    upstream token: the response access_token opens (under the same master-key-derived keys and the
+    server_id) to the caller's identity and the upstream Authorization, and the raw upstream token
+    never appears in the bearer the client receives."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        BridgeEnvelopeAdmitted,
+        envelope_keys_from_master_key,
+        resolve_bridge_envelope,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
+    response = await _exchange_for_bridge_server(server, upstream, user_id="user-77")
+
+    body = json.loads(response.body)
+    token = body["access_token"]
+    assert body["token_type"] == "Bearer"
+    assert body["expires_in"] > 0
+    assert token.startswith("llm_env_")
+    assert "UPSTREAM-SECRET-TOKEN" not in token
+    assert "refresh_token" not in body
+
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = resolve_bridge_envelope(token, keys, datetime.now(timezone.utc), server.server_id)
+    assert isinstance(opened, BridgeEnvelopeAdmitted)
+    assert opened.identity.user_id == "user-77"
+    assert opened.upstream_authorization.get_secret_value() == "Bearer UPSTREAM-SECRET-TOKEN"
+
+
+@pytest.mark.asyncio
+async def test_oauth_delegate_bridge_token_exchange_fails_closed_without_litellm_identity():
+    """Without a resolvable litellm identity on the token request, the exchange must not mint an
+    identity-less envelope; it returns an OAuth invalid_request so the client sends a credential."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
+
+    with pytest.raises(HTTPException) as exc:
+        await _exchange_for_bridge_server(server, upstream, user_id=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_true_passthrough_bridge_token_exchange_returns_raw_upstream_token():
+    """Only oauth_delegate mints. A true_passthrough dcr_bridge server relays the raw upstream token
+    to the client, since that mode has no litellm identity to bind and the caller owns the token."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough)
+    upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
+    response = await _exchange_for_bridge_server(server, upstream, user_id="user-77")
+
+    body = json.loads(response.body)
+    assert body["access_token"] == "UPSTREAM-SECRET-TOKEN"
+    assert not body["access_token"].startswith("llm_env_")
+
+
+@pytest.mark.asyncio
+async def test_non_bridge_oauth_delegate_token_exchange_returns_raw_upstream_token():
+    """An oauth_delegate server without dcr_bridge keeps the pre-change contract: the raw upstream
+    token is returned, so flag-off behavior is byte-identical."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, dcr_bridge=None)
+    upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
+    response = await _exchange_for_bridge_server(server, upstream, user_id="user-77")
+
+    body = json.loads(response.body)
+    assert body["access_token"] == "UPSTREAM-SECRET-TOKEN"
+
+
 async def _exchange_persistence_attempted_for_auth_type(auth_type) -> bool:
     """Run exchange_token_with_server for a server of ``auth_type`` and report whether it attempted
     to persist the exchanged token server-side. The client-forwarded token modes must not persist:
