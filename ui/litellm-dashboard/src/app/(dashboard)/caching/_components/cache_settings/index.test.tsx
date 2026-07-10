@@ -63,10 +63,11 @@ describe("CacheSettings", () => {
     });
   });
 
-  describe("when the redis type is semantic", () => {
+  describe("when semantic caching is enabled", () => {
     it("should reveal the semantic fields", async () => {
       getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "semantic" } });
       renderSettings();
+      await screen.findByText("Semantic Caching");
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
