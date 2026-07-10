@@ -217,6 +217,61 @@ def test_async_log_failure_event_marks_error_status():
     assert span.attributes["error.type"] == "RateLimitError"
 
 
+def _logger_with_events(enable_events):
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=enable_events)
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=span_exporter)
+    log_exporter = InMemoryLogExporter()
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider, logger_provider=logger_provider)
+    return logger, span_exporter, log_exporter
+
+
+def test_enable_events_records_operation_exception_through_failure_callback():
+    """With ``enable_events`` on, a real failure callback records the GenAI
+    ``gen_ai.client.operation.exception`` log event, carrying the traceback from
+    the standard logging payload and correlated to the LLM-call span."""
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    logger, span_exporter, log_exporter = _logger_with_events(enable_events=True)
+    payload = _payload(
+        status="failure",
+        error_information={
+            "error_class": "RateLimitError",
+            "error_message": "429 rate limited",
+            "traceback": "Traceback (most recent call last) ...",
+        },
+    )
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+
+    (span,) = span_exporter.get_finished_spans()
+    (log,) = log_exporter.get_finished_logs()
+    record = log.log_record
+    assert record.attributes["event.name"] == GenAIEvent.OPERATION_EXCEPTION
+    assert record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+    assert record.attributes[ExceptionEvent.MESSAGE] == "429 rate limited"
+    assert record.attributes[ExceptionEvent.STACKTRACE] == "Traceback (most recent call last) ..."
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
+
+
+def test_events_off_by_default_records_no_log_event_on_failure():
+    """``enable_events`` defaults to off: even with a logs pipeline injected, a
+    failure records only the span-side error surface, no log event."""
+    logger, span_exporter, log_exporter = _logger_with_events(enable_events=False)
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "RateLimitError", "error_message": "429"},
+    )
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert log_exporter.get_finished_logs() == ()
+    assert OpenTelemetryV2Config(exporter="in_memory").enable_events is False
+
+
 def test_sync_log_event_is_noop():
     """V2 closes the span async-only; the sync callback runs out-of-context, so
     it no-ops (the span stays open on the carrier until the async callback)."""
