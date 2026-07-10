@@ -305,7 +305,7 @@ def resolve_proxy_model_from_batch_input_file(
                 return proxy_model_id
 
         return None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a failed model resolution must never break batch cost tracking
         verbose_proxy_logger.warning(f"Could not resolve proxy model from batch input file {input_file_id!r}: {e}")
         return None
 
@@ -370,5 +370,5 @@ def store_batch_managed_object(
         verbose_proxy_logger.info(
             f"Stored batch managed object: unified_object_id={unified_object_id}, batch_id={model_object_id}"
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a failed managed-object store must never break batch creation
         verbose_proxy_logger.error(f"Error storing batch managed object: {e}")
