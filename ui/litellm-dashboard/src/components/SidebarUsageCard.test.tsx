@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SidebarUsageCard from "./SidebarUsageCard";
+import type { LicenseInfo } from "./networking";
 
 vi.mock("./networking", () => ({ getRemainingUsers: vi.fn() }));
 
@@ -12,12 +13,23 @@ vi.mock("@/app/(dashboard)/hooks/useDisableUsageIndicator", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/license/useLicenseInfo", () => ({
-  useLicenseInfo: vi.fn(() => ({ data: null })),
+  useLicenseInfo: vi.fn(),
 }));
 
 import { getRemainingUsers } from "./networking";
+import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 
 const mockGetRemainingUsers = vi.mocked(getRemainingUsers);
+const mockUseLicenseInfo = vi.mocked(useLicenseInfo);
+
+const licenseResult = (data: LicenseInfo | null) => ({ data }) as unknown as ReturnType<typeof useLicenseInfo>;
+const ACTIVE_LICENSE: LicenseInfo = {
+  has_license: true,
+  license_type: null,
+  expiration_date: null,
+  allowed_features: [],
+  limits: { max_users: null, max_teams: null },
+};
 
 const renderWithClient = (ui: React.ReactElement) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -55,6 +67,7 @@ describe("SidebarUsageCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetRemainingUsers.mockResolvedValue(SEATS_DATA);
+    mockUseLicenseInfo.mockReturnValue(licenseResult(ACTIVE_LICENSE));
   });
 
   it("renders an expanded seat meter reporting value and range when data loads", async () => {
@@ -101,6 +114,18 @@ describe("SidebarUsageCard", () => {
     renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
 
     await waitFor(() => expect(screen.queryByText("Enterprise usage")).not.toBeInTheDocument());
+  });
+
+  it("renders nothing without an enterprise license even when seat limits exist", async () => {
+    mockUseLicenseInfo.mockReturnValue(licenseResult(null));
+
+    const { container } = renderWithClient(
+      <SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />,
+    );
+
+    await waitFor(() => expect(mockGetRemainingUsers).toHaveBeenCalled());
+    expect(screen.queryByText("Enterprise usage")).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="meter"]')).toBeNull();
   });
 
   it("shows a collapsed rail button that expands the sidebar", async () => {

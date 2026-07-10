@@ -1,6 +1,7 @@
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { getDaysUntilExpiration } from "@/utils/licenseUtils";
+import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/ui/meter";
 import { useQuery } from "@tanstack/react-query";
@@ -29,10 +30,10 @@ const formatExpiration = (daysRemaining: number | null): string => {
   return `${Math.floor(daysRemaining / 30)} months remaining`;
 };
 
-const meterBarClass = (pct: number): string => {
-  if (pct > 100) return "bg-destructive";
-  if (pct >= 90) return "bg-amber-500";
-  return "bg-sidebar-primary";
+const meterTone = (pct: number): "default" | "warning" | "over" => {
+  if (pct > 100) return "over";
+  if (pct >= 80) return "warning";
+  return "default";
 };
 
 const UsageMeter = ({ label, used, total }: MeterData) => {
@@ -47,7 +48,7 @@ const UsageMeter = ({ label, used, total }: MeterData) => {
         </span>
       </div>
       <MeterTrack>
-        <MeterIndicator className={meterBarClass(pct)} />
+        <MeterIndicator tone={meterTone(pct)} />
       </MeterTrack>
     </Meter>
   );
@@ -85,20 +86,21 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
 
   const hasData = data !== null && (data.total_users !== null || data.total_teams !== null);
   const noUsableData = !isLoading && !hasData;
-  if (disableUsageIndicator || !accessToken || noUsableData) {
+  const noLicensedUsage = !licenseInfo?.has_license || noUsableData;
+  if (disableUsageIndicator || !accessToken || noLicensedUsage) {
     return null;
   }
 
   if (collapsed) {
     return (
-      <button
-        type="button"
+      <Button
+        variant="outline"
         onClick={onExpandRail}
         title="Enterprise usage"
-        className="flex h-9 w-full items-center justify-center rounded-lg border border-sidebar-border bg-sidebar text-sidebar-primary transition-colors hover:bg-sidebar-accent"
+        className="h-9 w-full rounded-lg border-sidebar-border bg-sidebar text-sidebar-primary shadow-none hover:bg-sidebar-accent hover:text-sidebar-primary"
       >
         <Award className="size-[18px]" strokeWidth={1.75} />
-      </button>
+      </Button>
     );
   }
 

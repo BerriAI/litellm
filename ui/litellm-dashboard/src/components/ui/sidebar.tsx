@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { type VariantProps } from "cva";
 
 import { cn, cva } from "@/lib/cva.config";
@@ -158,13 +159,12 @@ const sidebarMenuButtonVariants = cva({
   defaultVariants: { isActive: false, size: "default" },
 });
 
-type SidebarMenuButtonProps = React.ComponentPropsWithoutRef<"button"> & VariantProps<typeof sidebarMenuButtonVariants>;
+type SidebarMenuButtonProps = ButtonPrimitive.Props & VariantProps<typeof sidebarMenuButtonVariants>;
 
 const SidebarMenuButton = React.forwardRef<HTMLButtonElement, SidebarMenuButtonProps>(
   ({ className, isActive, size, ...props }, ref) => (
-    <button
+    <ButtonPrimitive
       ref={ref}
-      type="button"
       data-slot="sidebar-menu-button"
       data-active={isActive || undefined}
       className={cn(sidebarMenuButtonVariants({ isActive, size, className }))}
