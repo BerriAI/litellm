@@ -22,6 +22,13 @@ from .commands.users import users
 from .interface import interactive_shell
 
 
+def _normalize_base_url(base_url: str) -> str:
+    """Strip trailing slashes so URL joins like f"{base_url}/sso/cli/start" don't
+    produce a double slash. Any path prefix (e.g. http://host/gateway) is preserved.
+    """
+    return base_url.rstrip("/") if base_url else base_url
+
+
 def print_version(base_url: str, api_key: Optional[str]):
     """Print CLI and server version info."""
     click.echo(f"LiteLLM Proxy CLI Version: {litellm_version}")
@@ -49,7 +56,7 @@ def print_version(base_url: str, api_key: Optional[str]):
     callback=lambda ctx, param, value: (
         (
             print_version(
-                ctx.params.get("base_url") or "http://localhost:4000",
+                _normalize_base_url(ctx.params.get("base_url") or "http://localhost:4000"),
                 ctx.params.get("api_key"),
             )
             or ctx.exit()
@@ -75,6 +82,8 @@ def print_version(base_url: str, api_key: Optional[str]):
 def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
+
+    base_url = _normalize_base_url(base_url)
 
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
