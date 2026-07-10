@@ -1,5 +1,6 @@
 import type {
   ColumnDef,
+  ColumnFiltersState,
   ExpandedState,
   OnChangeFn,
   PaginationState,
@@ -13,6 +14,7 @@ import type * as React from "react";
 
 export type SortingMode = "none" | "client" | "server";
 export type PaginationMode = "none" | "client" | "server";
+export type FilterMode = "none" | "client" | "server";
 export type ColumnResizeMode = "onEnd" | "onChange";
 export type DataTableSize = "compact" | "default";
 export type ColumnPinnedSide = "left" | "right";
@@ -24,6 +26,7 @@ export interface DataTableProps<TData extends RowData, TValue> {
 
   isLoading?: boolean;
   loadingMessage?: string;
+  skeletonRowCount?: number;
   noDataMessage?: React.ReactNode;
 
   sortingMode?: SortingMode;
@@ -37,6 +40,14 @@ export interface DataTableProps<TData extends RowData, TValue> {
   onPaginationChange?: OnChangeFn<PaginationState>;
   rowCount?: number;
   pageSizeOptions?: number[];
+
+  filterMode?: FilterMode;
+  columnFilters?: ColumnFiltersState;
+  onColumnFiltersChange?: OnChangeFn<ColumnFiltersState>;
+  defaultColumnFilters?: ColumnFiltersState;
+
+  globalFilter?: string;
+  onGlobalFilterChange?: OnChangeFn<string>;
 
   enableColumnResizing?: boolean;
   columnResizeMode?: ColumnResizeMode;

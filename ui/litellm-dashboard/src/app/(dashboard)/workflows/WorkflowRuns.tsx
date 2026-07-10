@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Button, Collapse, Drawer, Empty, Spin, Tooltip, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
-import type { ColumnDef } from "@tanstack/react-table";
+import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
 import { proxyBaseUrl } from "@/components/networking";
-import { DataTable } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DataTableFilterDrawer,
+  DataTableFilterField,
+  DataTableToolbar,
+} from "@/components/shared/DataTable";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const { Text } = Typography;
 
@@ -58,6 +65,9 @@ const STATUS_DOT: Record<RunStatus, string> = {
   completed: "#22c55e",
   failed: "#ef4444",
 };
+
+const RUN_STATUS_OPTIONS: RunStatus[] = ["pending", "running", "paused", "completed", "failed"];
+const FILTER_ALL = "__all__";
 
 const EVENT_COLOR: Record<string, { bar: string; border: string; text: string }> = {
   "step.started": { bar: "#f0fdf4", border: "#86efac", text: "#16a34a" },
@@ -482,6 +492,9 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
   const [messages, setMessages] = useState<WorkflowRunMessage[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const fetchRuns = useCallback(async () => {
     if (!accessToken) return;
@@ -547,7 +560,9 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
     () => [
       {
         id: "run",
+        accessorFn: (row) => `${runTitle(row)} ${row.run_id}`,
         header: "Run",
+        meta: { title: "Run" },
         cell: ({ row }) => {
           const run = row.original;
           return (
@@ -564,13 +579,18 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       {
         accessorKey: "workflow_type",
         header: "Type",
+        meta: { title: "Type" },
+        filterFn: "includesString",
         cell: ({ row }) => (
           <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{row.original.workflow_type}</span>
         ),
       },
       {
         id: "status",
+        accessorKey: "status",
         header: "Status",
+        meta: { title: "Status" },
+        filterFn: "equalsString",
         cell: ({ row }) => {
           const run = row.original;
           return (
@@ -586,6 +606,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       {
         accessorKey: "created_at",
         header: "Created",
+        meta: { title: "Created" },
         cell: ({ row }) => <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(row.original.created_at)}</span>,
       },
     ],
@@ -603,28 +624,11 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       }}
     >
       {/* page header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: "#18181b" }}>Workflow Runs</div>
-          <div style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>
-            Durable state tracking for agents and automated workflows
-          </div>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 600, color: "#18181b" }}>Workflow Runs</div>
+        <div style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>
+          Durable state tracking for agents and automated workflows
         </div>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={fetchRuns}
-          loading={loadingRuns}
-          style={{ color: "#71717a", borderColor: "#e4e4e7" }}
-        >
-          Refresh
-        </Button>
       </div>
 
       <DataTable
@@ -641,8 +645,63 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         }
         paginationMode="client"
         pageSizeOptions={[50, 100]}
+        filterMode="client"
+        columnFilters={columnFilters}
+        onColumnFiltersChange={setColumnFilters}
+        globalFilter={globalFilter}
+        onGlobalFilterChange={setGlobalFilter}
         onRowClick={fetchRunDetail}
         size="compact"
+        toolbar={(table) => (
+          <>
+            <DataTableToolbar
+              table={table}
+              searchValue={globalFilter}
+              onSearchChange={setGlobalFilter}
+              searchPlaceholder="Search runs…"
+              onRefresh={fetchRuns}
+              isRefreshing={loadingRuns}
+              onOpenFilters={() => setFiltersOpen(true)}
+            />
+            <DataTableFilterDrawer
+              table={table}
+              open={filtersOpen}
+              onOpenChange={setFiltersOpen}
+              title="Filters"
+              description="Narrow down workflow runs"
+            >
+              {({ get, set }) => (
+                <>
+                  <DataTableFilterField label="Status">
+                    <Select
+                      value={(get("status") as string) || FILTER_ALL}
+                      onValueChange={(value) => set("status", value === FILTER_ALL ? "" : value)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={FILTER_ALL}>All statuses</SelectItem>
+                        {RUN_STATUS_OPTIONS.map((status) => (
+                          <SelectItem key={status} value={status} className="capitalize">
+                            {status}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </DataTableFilterField>
+                  <DataTableFilterField label="Type">
+                    <Input
+                      value={(get("workflow_type") as string) ?? ""}
+                      onChange={(event) => set("workflow_type", event.target.value)}
+                      placeholder="Filter by type…"
+                    />
+                  </DataTableFilterField>
+                </>
+              )}
+            </DataTableFilterDrawer>
+          </>
+        )}
       />
 
       {/* detail drawer */}
