@@ -1021,3 +1021,42 @@ def test_passthrough_batch_retrieve_kwargs_includes_azure_api_version(monkeypatc
     assert kwargs["api_base"] == "https://example.openai.azure.com"
     assert kwargs["api_version"] == "2024-10-21"
     assert kwargs["model"] == "gpt-4o-mini"
+
+
+class TestResolveJobRoutingPassthroughCodec:
+    """_resolve_job_routing must decode the passthrough-codec unified_object_id
+    that managed_id_rewriter._mint_or_reuse_object mints (and persists to
+    LiteLLM_ManagedObjectTable) when passthrough_managed_object_ids=True.
+
+    store_batch_managed_object deliberately skips persisting its own
+    (differently-formatted) row in that configuration, so this is the only
+    row CheckBatchCost's poller ever sees for such batches — if this decode
+    ever regressed, CheckBatchCost would silently stop cost-tracking every
+    passthrough batch under that config."""
+
+    def _instance(self, router):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
+
+        return CheckBatchCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=MagicMock(),
+            llm_router=router,
+        )
+
+    def test_decodes_managed_id_rewriter_minted_id(self):
+        from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+            new_managed_id,
+        )
+
+        router = MagicMock()
+        router.has_model_id.return_value = False
+        instance = self._instance(router)
+
+        job = MagicMock()
+        job.unified_object_id = new_managed_id("azure", "batch_20260223-0518.234")
+
+        result = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("azure", "batch_20260223-0518.234")
