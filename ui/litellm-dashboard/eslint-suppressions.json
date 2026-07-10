@@ -66,17 +66,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/add_margin_form.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/add_margin_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/add_provider_form.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/add_provider_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/cost_tracking_settings.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/cost_tracking_settings.tsx": {
     "no-nested-ternary": {
       "count": 2
     },
@@ -84,62 +84,62 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/how_it_works.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/how_it_works.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_cost_results.test.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_cost_results.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_export_dropdown.test.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_export_dropdown.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/use_multi_cost_estimate.ts": {
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/use_multi_cost_estimate.ts": {
     "no-restricted-syntax": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/provider_discount_table.test.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/provider_discount_table.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/provider_discount_table.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/provider_discount_table.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/provider_display_helpers.test.ts": {
+  "src/app/(dashboard)/cost-tracking/_components/provider_display_helpers.test.ts": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/provider_margin_table.tsx": {
+  "src/app/(dashboard)/cost-tracking/_components/provider_margin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/use_discount_config.ts": {
+  "src/app/(dashboard)/cost-tracking/_components/use_discount_config.ts": {
     "no-restricted-syntax": {
       "count": 2
     }
   },
-  "src/app/(dashboard)/cost-tracking/components/use_margin_config.ts": {
+  "src/app/(dashboard)/cost-tracking/_components/use_margin_config.ts": {
     "no-restricted-syntax": {
       "count": 2
     }
@@ -559,12 +559,12 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/add_prompt_form.tsx": {
+  "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/index.tsx": {
+  "src/app/(dashboard)/prompts/_components/index.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -575,17 +575,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/DeveloperMessageCard.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/DeveloperMessageCard.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/ModelConfigCard.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/ModelConfigCard.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/PromptCodeSnippets.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PromptCodeSnippets.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -596,32 +596,32 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/PromptEditorHeader.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PromptEditorHeader.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/PromptMessagesCard.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PromptMessagesCard.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/PublishModal.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PublishModal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/ToolsCard.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/ToolsCard.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/VersionHistorySidePanel.test.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/VersionHistorySidePanel.test.tsx": {
     "max-nested-callbacks": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/VersionHistorySidePanel.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/VersionHistorySidePanel.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -629,22 +629,22 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/conversation_panel/MessageInput.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/MessageInput.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/conversation_panel/index.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_editor_view/conversation_panel/useConversation.ts": {
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/useConversation.ts": {
     "no-restricted-syntax": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_info.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_info.tsx": {
     "no-nested-ternary": {
       "count": 3
     },
@@ -655,7 +655,7 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/prompts/components/prompt_table.tsx": {
+  "src/app/(dashboard)/prompts/_components/prompt_table.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
