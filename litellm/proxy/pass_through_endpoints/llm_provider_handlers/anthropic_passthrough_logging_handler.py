@@ -20,7 +20,6 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
-    BasePassthroughLoggingHandler,
     get_actual_model_id_from_router,
     store_batch_managed_object,
 )
@@ -29,7 +28,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import (
     Choices,
-    LiteLLMBatch,
     Message,
     ModelResponse,
     TextCompletionResponse,
