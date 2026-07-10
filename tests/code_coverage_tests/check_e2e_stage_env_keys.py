@@ -1,13 +1,15 @@
-"""Fail if tests/e2e references os.environ/KEY that stage gateway does not mount.
+"""Fail if tests/e2e uses os.environ/KEY missing from stage litellm-secrets.yaml.
 
-Stage mounts provider credentials via ExternalSecret litellm-provider-keys
-(litellm-ops). E2e provisions deployments with os.environ/KEY so the gateway
-must have KEY in its env. This check keeps PRs from adding a ref without
-updating the allowlist (and, by convention, litellm-ops + ASM).
+Source of truth is litellm-ops ExternalSecret litellm-provider-keys in
+apps/overlays/berrie-litellm-stage/litellm-secrets.yaml (mounted on the stage
+gateway). E2e PRs that add a new os.environ ref without a matching secretKey
+there must fail CI.
 """
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -39,6 +41,10 @@ SKIP_DIR_NAMES = frozenset(
     }
 )
 
+DEFAULT_SECRETS_REL = Path(
+    "apps/overlays/berrie-litellm-stage/litellm-secrets.yaml"
+)
+
 
 def repo_root() -> Path:
     cwd = Path.cwd()
@@ -47,21 +53,46 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def load_stage_keys(path: Path) -> frozenset[str]:
-    keys: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        keys.add(stripped)
+def resolve_secrets_yaml(explicit: Path | None) -> Path:
+    if explicit is not None:
+        return explicit
+    env = os.environ.get("LITELLM_OPS_SECRETS_YAML")
+    if env:
+        return Path(env)
+    root = repo_root()
+    candidates = (
+        root / "litellm-ops" / DEFAULT_SECRETS_REL,
+        root.parent / "litellm-ops" / DEFAULT_SECRETS_REL,
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError(
+        "could not find litellm-ops stage litellm-secrets.yaml; pass "
+        "--secrets-yaml or set LITELLM_OPS_SECRETS_YAML. Expected path: "
+        f"litellm-ops/{DEFAULT_SECRETS_REL}"
+    )
+
+
+def extract_provider_secret_keys(secrets_yaml: Path) -> frozenset[str]:
+    text = secrets_yaml.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^kind: ExternalSecret\nmetadata:\n  name: litellm-provider-keys\n.*?^(?:---|\Z)",
+        text,
+    )
+    if not match:
+        raise ValueError(
+            f"ExternalSecret litellm-provider-keys not found in {secrets_yaml}"
+        )
+    keys = set(re.findall(r"(?m)^\s+- secretKey: ([A-Z][A-Z0-9_]+)\s*$", match.group(0)))
+    if not keys:
+        raise ValueError(f"no secretKey entries under litellm-provider-keys in {secrets_yaml}")
     return frozenset(keys)
 
 
 def collect_refs(e2e_root: Path, root: Path) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
-    for path in sorted(e2e_root.rglob("*")):
-        if not path.is_file() or path.suffix != ".py":
-            continue
+    for path in sorted(e2e_root.rglob("*.py")):
         if any(part in SKIP_DIR_NAMES for part in path.parts):
             continue
         try:
@@ -82,30 +113,44 @@ def _line_no(text: str, index: int) -> int:
     return text.count("\n", 0, index) + 1
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--secrets-yaml",
+        type=Path,
+        default=None,
+        help="Path to litellm-ops stage litellm-secrets.yaml",
+    )
+    args = parser.parse_args(argv)
+
     root = repo_root()
-    allowlist_path = root / "tests" / "e2e" / "stage_gateway_env_keys.txt"
     e2e_root = root / "tests" / "e2e"
-    if not allowlist_path.is_file():
-        print(f"missing allowlist: {allowlist_path}", file=sys.stderr)
-        return 1
     if not e2e_root.is_dir():
         print(f"missing e2e tree: {e2e_root}", file=sys.stderr)
         return 1
 
-    allowed = load_stage_keys(allowlist_path) | HARNESS_ONLY_KEYS
+    try:
+        secrets_yaml = resolve_secrets_yaml(args.secrets_yaml)
+        mounted = extract_provider_secret_keys(secrets_yaml)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    allowed = mounted | HARNESS_ONLY_KEYS
     refs = collect_refs(e2e_root, root)
     missing = sorted(key for key in refs if key not in allowed)
     if not missing:
         print(
-            f"ok: {len(refs)} os.environ refs under tests/e2e are covered by "
-            f"{allowlist_path.name} (+ harness-only keys)"
+            f"ok: {len(refs)} os.environ refs under tests/e2e are keys on "
+            f"ExternalSecret litellm-provider-keys in {secrets_yaml} "
+            f"({len(mounted)} mounted keys + harness-only)"
         )
         return 0
 
     print(
-        "e2e references os.environ/KEY that are not in "
-        f"{allowlist_path.relative_to(root)} (stage gateway env contract):\n",
+        "e2e references os.environ/KEY that are not secretKey entries on "
+        "ExternalSecret litellm-provider-keys in litellm-ops "
+        f"({secrets_yaml}):\n",
         file=sys.stderr,
     )
     for key in missing:
@@ -115,11 +160,10 @@ def main() -> int:
         if len(refs[key]) > 5:
             print(f"    ... +{len(refs[key]) - 5} more", file=sys.stderr)
     print(
-        "\nAdd the key to tests/e2e/stage_gateway_env_keys.txt and mount it on "
-        "stage via litellm-ops "
-        "apps/overlays/berrie-litellm-stage/litellm-secrets.yaml "
-        "(ExternalSecret litellm-provider-keys) plus the ASM JSON "
-        "berrie-litellm-stage-provider-keys, then restart gateway/backend.",
+        "\nAdd each missing key as a secretKey under litellm-provider-keys in "
+        "litellm-ops apps/overlays/berrie-litellm-stage/litellm-secrets.yaml, "
+        "put the value in ASM berrie-litellm-stage-provider-keys, merge ops, "
+        "wait for Argo/ESO, and restart gateway/backend. Then re-run this check.",
         file=sys.stderr,
     )
     return 1
