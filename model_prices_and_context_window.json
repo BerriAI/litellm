@@ -13206,6 +13206,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-haiku-4-5": {
@@ -13225,6 +13226,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4": {
@@ -13244,6 +13246,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4-1": {
@@ -13263,6 +13266,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4-5": {
@@ -13282,6 +13286,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "supports_output_config": true
     },
@@ -13302,6 +13307,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-1": {
@@ -13321,6 +13327,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-5": {
@@ -13340,6 +13347,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-2-5-flash": {
@@ -13357,6 +13365,7 @@
         "output_dbu_cost_per_token": 3.5714e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-2-5-pro": {
@@ -13374,6 +13383,7 @@
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-gemma-3-12b": {
