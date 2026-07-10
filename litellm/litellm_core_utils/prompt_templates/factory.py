@@ -5,6 +5,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
@@ -87,33 +88,82 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 
+def _as_content_blocks(content: Any) -> list[Any] | None:
+    """Return a shallowly copied block list, or None for unsupported content."""
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+        return list(content)
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return None
+
+
+def _merge_message_content(first_content: Any, second_content: Any) -> Any | None:
+    """Merge known message content types, preserving structured content blocks."""
+    if first_content is None or second_content is None:
+        return None
+    if isinstance(first_content, str) and isinstance(second_content, str):
+        return f"{first_content} {second_content}"
+
+    first_blocks = _as_content_blocks(first_content)
+    second_blocks = _as_content_blocks(second_content)
+    if first_blocks is None or second_blocks is None:
+        return None
+    if first_blocks and second_blocks:
+        last_block = first_blocks[-1]
+        if (
+            isinstance(last_block, dict)
+            and last_block.get("type") == "text"
+            and isinstance(last_block.get("text"), str)
+        ):
+            last_block = dict(last_block)
+            last_block["text"] += " "
+            first_blocks[-1] = last_block
+        else:
+            first_blocks.append({"type": "text", "text": " "})
+    return first_blocks + second_blocks
+
+
+def _system_message_as_user(message: dict) -> dict:
+    """Convert a system message while preserving message-level metadata."""
+    converted = dict(message)
+    converted["role"] = "user"
+    return converted
+
+
 def map_system_message_pt(messages: list) -> list:
     """
     Convert 'system' message to 'user' message if provider doesn't support 'system' role.
 
     Enabled via `completion(...,supports_system_message=False)`
 
-    If next message is a user message or assistant message -> merge system prompt into it
-
-    if next message is system -> append a user message instead of the system message
+    Merge into a compatible user/assistant message. Otherwise, convert the system
+    message to a standalone user message.
     """
 
+    messages = list(messages)
     new_messages = []
     for i, m in enumerate(messages):
         if m["role"] == "system":
             if i < len(messages) - 1:  # Not the last message
                 next_m = messages[i + 1]
                 next_role = next_m["role"]
-                if next_role == "user" or next_role == "assistant":  # Next message is a user or assistant message
-                    # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
-                elif next_role == "system":  # Next message is a system message
-                    # Append a user message instead of the system message
-                    new_message = {"role": "user", "content": m["content"]}
-                    new_messages.append(new_message)
+                can_merge_role = next_role == "user" or (
+                    next_role == "assistant"
+                    and next_m.get("content") is not None
+                    and not next_m.get("tool_calls")
+                    and not next_m.get("function_call")
+                )
+                merged_content = None
+                if can_merge_role:
+                    merged_content = _merge_message_content(m.get("content"), next_m.get("content"))
+                if merged_content is not None:
+                    next_m = dict(next_m)
+                    next_m["content"] = merged_content
+                    messages[i + 1] = next_m
+                else:
+                    new_messages.append(_system_message_as_user(m))
             else:  # Last message
-                new_message = {"role": "user", "content": m["content"]}
-                new_messages.append(new_message)
+                new_messages.append(_system_message_as_user(m))
         else:  # Not a system message
             new_messages.append(m)
 
