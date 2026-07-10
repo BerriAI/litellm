@@ -10,7 +10,6 @@ token-endpoint and admission wiring live in their respective call sites.
 """
 
 import hashlib
-import hmac
 from datetime import datetime
 from functools import lru_cache
 from typing import Literal, TypeAlias
@@ -31,7 +30,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
 
 _SIGNING_KEY_DOMAIN = b"litellm-mcp-bridge:envelope-signing:"
 _ENCRYPTION_KEY_DOMAIN = b"litellm-mcp-bridge:envelope-encryption:"
-_BEARER_PREFIX = "bearer "
 
 # scrypt work factors (RFC 7914). n=2**15 with r=8/p=1 costs ~50ms and ~32MB per derivation, which
 # makes offline guessing of a candidate master key memory-hard rather than a bare hash comparison.
@@ -123,8 +121,9 @@ BridgeEnvelopeResult: TypeAlias = NotBridgeEnvelope | BridgeEnvelopeAdmitted | B
 
 
 def _strip_bearer(value: str) -> str:
-    if value[: len(_BEARER_PREFIX)].lower() == _BEARER_PREFIX:
-        return value[len(_BEARER_PREFIX) :]
+    parts = value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1]
     return value
 
 
@@ -153,8 +152,9 @@ def resolve_bridge_envelope(
     opened envelope whose sealed ``server_id`` does not match is rejected as
     ``BridgeEnvelopeInvalid``. Binding here (rather than leaving it to the caller) prevents
     replaying an envelope minted for one server against another, which would forward the
-    first server's upstream credential across a server boundary. The comparison is constant
-    time so a mismatch does not leak the expected id through timing.
+    first server's upstream credential across a server boundary. ``server_id`` is not a
+    secret (the caller targets that server), so a plain equality check is sufficient and,
+    unlike ``hmac.compare_digest`` on ``str``, does not raise on a non-ASCII server_id.
     """
     candidate = _strip_bearer(authorization_value)
     if not is_envelope(candidate):
@@ -162,7 +162,7 @@ def resolve_bridge_envelope(
     opened = open_envelope(candidate, keys, now)
     if not isinstance(opened, OpenedEnvelope):
         return BridgeEnvelopeInvalid()
-    if not hmac.compare_digest(opened.identity.server_id, expected_server_id):
+    if opened.identity.server_id != expected_server_id:
         return BridgeEnvelopeInvalid()
     grant = opened.grant
     upstream_authorization = f"{grant.token_type} {grant.access_token.get_secret_value()}"

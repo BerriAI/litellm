@@ -150,6 +150,26 @@ def test_resolve_matching_server_binding_is_admitted():
     assert isinstance(result, BridgeEnvelopeAdmitted)
 
 
+def test_resolve_non_ascii_server_id_stays_total_and_does_not_raise():
+    """The server-binding check must not raise on a non-ASCII server_id (an admin can register a
+    unicode server_id); it stays total and returns a typed result. A matching non-ASCII id admits,
+    a mismatching one is BridgeEnvelopeInvalid, and neither raises."""
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    unicode_identity = EnvelopeIdentity(user_id=_IDENTITY.user_id, server_id="srv-café")
+    token = _sealed_token(keys, identity=unicode_identity)
+    assert isinstance(resolve_bridge_envelope(token, keys, _NOW, "srv-café"), BridgeEnvelopeAdmitted)
+    assert isinstance(resolve_bridge_envelope(token, keys, _NOW, "srv-cafe"), BridgeEnvelopeInvalid)
+
+
+def test_resolve_strips_bearer_with_extra_whitespace():
+    """A Bearer scheme separated by extra spaces or a tab still yields the envelope, so a client
+    using non-minimal but legal whitespace is not misclassified as a non-envelope."""
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    token = _sealed_token(keys)
+    for header in (f"Bearer  {token}", f"Bearer\t{token}", f"  Bearer {token}"):
+        assert isinstance(resolve_bridge_envelope(header, keys, _NOW, _SERVER_ID), BridgeEnvelopeAdmitted)
+
+
 def test_admitted_result_repr_never_leaks_upstream_token():
     keys = envelope_keys_from_master_key(_MASTER_KEY)
     result = resolve_bridge_envelope(_sealed_token(keys), keys, _NOW, _SERVER_ID)
