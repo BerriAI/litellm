@@ -1,83 +1,71 @@
 "use client";
-import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useKeys, KeyListCallOptions } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   PaginationState,
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Badge,
-  Button,
-  Icon,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-} from "@tremor/react";
+import { Badge, Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text } from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
-import React, { useEffect, useDeferredValue, useMemo, useState } from "react";
+import { Button as AntButton, Popover, Skeleton, Typography } from "antd";
+import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
+import React, { useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
-import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 
-interface VirtualKeysTableProps {
-  teams: Team[] | null;
-  organizations: Organization[] | null;
-  onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
-  currentSort?: {
-    sortBy: string;
-    sortOrder: "asc" | "desc";
-  };
-}
+type KeyFilterState = {
+  "Team ID": string;
+  "Organization ID": string;
+  "Key Alias": string;
+  "User ID": string;
+  "Key Hash": string;
+};
 
-/**
- * VirtualKeysTable – a new table for keys that mimics the table styling used in view_logs.
- * The team selector and filtering have been removed so that all keys are shown.
- */
+const DEFAULT_KEY_FILTERS: KeyFilterState = {
+  "Team ID": "",
+  "Organization ID": "",
+  "Key Alias": "",
+  "User ID": "",
+  "Key Hash": "",
+};
 
-export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort }: VirtualKeysTableProps) {
-  const { data: fetchedOrganizations } = useOrganizations();
-  const resolvedOrganizations = fetchedOrganizations ?? organizations ?? [];
+type KeyListFilterOptions = Pick<
+  KeyListCallOptions,
+  "teamID" | "organizationID" | "selectedKeyAlias" | "userID" | "keyHash"
+>;
+
+const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
+  teamID: filters["Team ID"].trim() || undefined,
+  organizationID: filters["Organization ID"].trim() || undefined,
+  selectedKeyAlias: filters["Key Alias"].trim() || undefined,
+  userID: filters["User ID"].trim() || undefined,
+  keyHash: filters["Key Hash"].trim() || undefined,
+});
+
+export function VirtualKeysTable() {
+  const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
+  const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = React.useState<SortingState>(() => {
-    if (currentSort) {
-      return [
-        {
-          id: currentSort.sortBy,
-          desc: currentSort.sortOrder === "desc",
-        },
-      ];
-    }
-    return [
-      {
-        id: "created_at",
-        desc: true,
-      },
-    ];
-  });
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = React.useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
   });
+  const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
+  const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
 
-  // Extract sort parameters from sorting state
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
 
@@ -88,27 +76,17 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     isError,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, {
+    ...toKeyListFilters(debouncedFilters),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
-  // Use the filter logic hook
+  const keyList = useMemo(() => keys?.keys ?? [], [keys]);
 
-  const {
-    filters,
-    filteredKeys,
-    filteredTotalCount,
-    allTeams,
-    allOrganizations,
-    handleFilterChange,
-    handleFilterReset,
-  } = useFilterLogic({
-    keys: keys?.keys || [],
-    teams,
-    organizations,
-  });
+  const { data: fetchedTeams, isLoading: isTeamsLoading } = useAllTeams();
+  const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
   // Defer the transition so the button stays in loading state until the table
   // has rendered with the new data (mirrors the spend-logs pattern)
@@ -119,23 +97,23 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     refetch();
   };
 
-  const totalCount = filteredTotalCount ?? keys?.total_count ?? 0;
+  const handleFilterChange = (newFilters: Record<string, string>) => {
+    setFilters({
+      "Team ID": newFilters["Team ID"] || "",
+      "Organization ID": newFilters["Organization ID"] || "",
+      "Key Alias": newFilters["Key Alias"] || "",
+      "User ID": newFilters["User ID"] || "",
+      "Key Hash": newFilters["Key Hash"] || "",
+    });
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  };
 
-  // Add a useEffect to call refresh when a key is created
-  useEffect(() => {
-    if (refetch) {
-      const handleStorageChange = () => {
-        refetch();
-      };
+  const handleFilterReset = () => {
+    setFilters(DEFAULT_KEY_FILTERS);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  };
 
-      // Listen for storage events that might indicate a key was created
-      window.addEventListener("storage", handleStorageChange);
-
-      return () => {
-        window.removeEventListener("storage", handleStorageChange);
-      };
-    }
-  }, [refetch]);
+  const totalCount = keys?.total_count ?? 0;
 
   const columns: ColumnDef<KeyResponse>[] = useMemo(
     () => [
@@ -157,23 +135,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         header: "Key ID",
         size: 100,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={value}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-                onClick={() => setSelectedKey(info.row.original)}
-              >
-                {value ?? "-"}
-              </Button>
-            </Tooltip>
-          );
-        },
+        cell: (info) => <IdCell value={info.getValue() as string} onClick={() => setSelectedKey(info.row.original)} />,
       },
       {
         id: "key_alias",
@@ -199,22 +161,14 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         cell: ({ row }) => {
           const key = row.original;
           if (key.blocked !== true) {
-            return (
-              <Tag color="green" data-testid={`key-status-${key.token_id}`}>
-                Active
-              </Tag>
-            );
+            return <StatusBadge tone="success" label="Active" dataTestId={`key-status-${key.token_id}`} />;
           }
           const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
           const reason = isScimBlocked
             ? "Blocked by SCIM (external identity provider deactivated or deleted the owning user)."
             : "Blocked. Requests using this key will be rejected with 401.";
           return (
-            <Tooltip title={reason}>
-              <Tag color="red" data-testid={`key-status-${key.token_id}`}>
-                Blocked
-              </Tag>
-            </Tooltip>
+            <StatusBadge tone="error" label="Blocked" tooltip={reason} dataTestId={`key-status-${key.token_id}`} />
           );
         },
       },
@@ -235,7 +189,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         cell: (info) => {
           const teamId = info.getValue() as string | null;
           if (!teamId) return "-";
-          const team = teams?.find((t) => t.team_id === teamId);
+          const team = allTeams.find((t) => t.team_id === teamId);
           const displayValue = team?.team_alias || teamId;
           const width = info.cell.column.getSize();
           return (
@@ -335,10 +289,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         header: "Created At",
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "-";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" />,
       },
       {
         id: "created_by",
@@ -406,10 +357,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         header: "Updated At",
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "last_active",
@@ -427,16 +375,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         ),
         size: 130,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          if (!value) return "Unknown";
-          const date = new Date(value as string);
-          return (
-            <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
-              <span>{date.toLocaleDateString()}</span>
-            </Tooltip>
-          );
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
       },
       {
         id: "expires",
@@ -444,10 +383,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         header: "Expires",
         size: 120,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "spend",
@@ -455,7 +391,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         header: "Spend (USD)",
         size: 100,
         enableSorting: true,
-        cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
+        cell: (info) => <MoneyCell value={info.getValue() as number} decimals={4} />,
       },
       {
         id: "max_budget",
@@ -465,10 +401,15 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         enableSorting: true,
         cell: (info) => {
           const maxBudget = info.getValue() as number | null;
-          if (maxBudget === null) {
-            return "Unlimited";
+          if (maxBudget !== null) {
+            return `$${formatNumberWithCommas(maxBudget)}`;
           }
-          return `$${formatNumberWithCommas(maxBudget)}`;
+          const teamId = info.row.original.team_id;
+          const team = allTeams.find((t) => t.team_id === teamId);
+          if (team?.max_budget != null) {
+            return `$${formatNumberWithCommas(team.max_budget)} (Team)`;
+          }
+          return "Unlimited";
         },
       },
       {
@@ -477,10 +418,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         header: "Budget Reset",
         size: 130,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
       },
       {
         id: "models",
@@ -584,7 +522,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         },
       },
     ],
-    [teams, resolvedOrganizations],
+    [allTeams, resolvedOrganizations],
   );
 
   const filterOptions: FilterOption[] = [
@@ -592,6 +530,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       name: "Team ID",
       label: "Team ID",
       isSearchable: true,
+      loading: isTeamsLoading,
       searchFn: async (searchText: string) => {
         if (!allTeams || allTeams.length === 0) return [];
 
@@ -611,10 +550,11 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       name: "Organization ID",
       label: "Organization ID",
       isSearchable: true,
+      loading: isOrgsLoading,
       searchFn: async (searchText: string) => {
-        if (!allOrganizations || allOrganizations.length === 0) return [];
+        if (!resolvedOrganizations || resolvedOrganizations.length === 0) return [];
 
-        const filteredOrgs = allOrganizations.filter(
+        const filteredOrgs = resolvedOrganizations.filter(
           (org) => org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false,
         );
 
@@ -638,13 +578,13 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     {
       name: "Key Hash",
-      label: "Key Hash",
+      label: "Key ID",
       isSearchable: false,
     },
   ];
 
   const table = useReactTable({
-    data: filteredKeys,
+    data: keyList,
     columns: columns.filter((col) => col.id !== "expander"),
     columnResizeMode: "onChange",
     columnResizeDirection: "ltr",
@@ -655,44 +595,15 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     onSortingChange: (updaterOrValue) => {
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
-      if (newSorting && newSorting.length > 0) {
-        const sortState = newSorting[0];
-        const sortBy = sortState.id;
-        const sortOrder = sortState.desc ? "desc" : "asc";
-        // Update filters state without triggering debouncedSearch
-        // The useKeys hook will automatically refetch with the new sort parameters
-        handleFilterChange(
-          {
-            ...filters,
-            "Sort By": sortBy,
-            "Sort Order": sortOrder,
-          },
-          true, // skipDebounce - let useKeys handle the API call with correct page size
-        );
-        onSortChange?.(sortBy, sortOrder);
-      }
+      setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
     },
     onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     enableSorting: true,
-    manualSorting: false,
+    manualSorting: true,
     manualPagination: true,
     pageCount: Math.ceil(totalCount / tablePagination.pageSize),
   });
-
-  // Update local sorting state when currentSort prop changes
-  React.useEffect(() => {
-    if (currentSort) {
-      setSorting([
-        {
-          id: currentSort.sortBy,
-          desc: currentSort.sortOrder === "desc",
-        },
-      ]);
-    }
-  }, [currentSort]);
 
   const { pageIndex, pageSize } = table.getState().pagination;
   const start = pageIndex * pageSize + 1;
@@ -706,7 +617,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           onClose={() => setSelectedKey(null)}
           keyData={selectedKey}
           teams={allTeams}
-          onDelete={refetch}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
@@ -860,7 +770,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                           </div>
                         </TableCell>
                       </TableRow>
-                    ) : filteredKeys.length > 0 ? (
+                    ) : keyList.length > 0 ? (
                       table.getRowModel().rows.map((row) => (
                         <TableRow key={row.id} className="h-8">
                           {row.getVisibleCells().map((cell) => (

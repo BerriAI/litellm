@@ -5,7 +5,8 @@ import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels
 import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
-import MCPServerEdit from "./mcp_server_edit";
+import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { getSecureItem } from "@/utils/secureStorage";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -21,6 +22,25 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
+  initialTabIndex?: number;
+}
+
+// True when this render is the return from the edit-settings OAuth redirect for this
+// server: the edit form wrote its UI-state snapshot before redirecting. Used to open
+// the editing Settings tab on first render instead of defaulting to Overview.
+function isReturningFromEditOAuth(isProxyAdmin: boolean, serverId: string): boolean {
+  if (typeof window === "undefined" || !isProxyAdmin) {
+    return false;
+  }
+  const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
+  if (!stored) {
+    return false;
+  }
+  try {
+    return JSON.parse(stored)?.serverId === serverId;
+  } catch {
+    return false;
+  }
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -32,11 +52,15 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
+  initialTabIndex = 0,
 }) => {
-  const [editing, setEditing] = useState(isEditing);
+  // Open the editing Settings tab on first render when returning from the edit OAuth
+  // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
+  const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
+  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -65,7 +89,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const getTransportBadge = (transport: string) => {
     const label = transport.toUpperCase();
     return (
-      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
+      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded-sm border bg-gray-50 text-gray-700 border-gray-200">
         {label}
       </span>
     );
@@ -73,7 +97,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
   const getAuthBadge = (authType: string) => {
     return (
-      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
+      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded-sm border bg-gray-50 text-gray-700 border-gray-200">
         {authType}
       </span>
     );
@@ -99,7 +123,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             }`}
           />
           {mcpServer.alias && mcpServer.server_name && mcpServer.alias !== mcpServer.server_name && (
-            <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 font-mono">
+            <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600 border border-gray-200 font-mono">
               {mcpServer.alias}
             </span>
           )}
@@ -163,7 +187,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   {hasToken && isProxyAdmin && (
                     <button
                       onClick={() => setShowFullUrl(!showFullUrl)}
-                      className="p-1 hover:bg-gray-100 rounded flex-shrink-0"
+                      className="p-1 hover:bg-gray-100 rounded-sm shrink-0"
                     >
                       <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                     </button>
@@ -210,6 +234,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 <MCPServerEdit
                   mcpServer={mcpServer}
                   accessToken={accessToken}
+                  userID={userID}
                   onCancel={() => setEditing(false)}
                   onSuccess={handleSuccess}
                   availableAccessGroups={availableAccessGroups}
@@ -241,7 +266,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       {hasToken && (
                         <button
                           onClick={() => setShowFullUrl(!showFullUrl)}
-                          className="p-1 hover:bg-gray-100 rounded flex-shrink-0"
+                          className="p-1 hover:bg-gray-100 rounded-sm shrink-0"
                         >
                           <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                         </button>
@@ -345,7 +370,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                           {mcpServer.mcp_access_groups.map((group: any, index: number) => (
                             <span
                               key={index}
-                              className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200"
+                              className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-gray-100 text-gray-700 border border-gray-200"
                             >
                               {typeof group === "string" ? group : group?.name ?? ""}
                             </span>
@@ -364,14 +389,14 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                           {mcpServer.allowed_tools.map((tool: string, index: number) => (
                             <span
                               key={index}
-                              className="inline-flex items-center text-xs font-mono font-medium px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200"
+                              className="inline-flex items-center text-xs font-mono font-medium px-2 py-0.5 rounded-sm bg-blue-50 text-blue-700 border border-blue-200"
                             >
                               {tool}
                             </span>
                           ))}
                         </div>
                       ) : (
-                        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
+                        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-green-50 text-green-700 border border-green-200">
                           All tools enabled
                         </span>
                       )}

@@ -2502,19 +2502,34 @@ async def test_bedrock_image_url_sync_client():
         mock_post.assert_called_once()
 
 
-def test_bedrock_error_handling_streaming():
+@pytest.mark.parametrize(
+    "exception_type, expected_status_code",
+    [
+        ("internalServerException", 500),
+        ("serviceUnavailableException", 503),
+        ("modelTimeoutException", 408),
+        ("modelStreamErrorException", 424),
+        ("validationException", 400),
+    ],
+)
+def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
+    """Bedrock event-stream error events arrive with botocore's hard-coded
+    status_code=400; the decoder must surface the modeled HTTP status instead
+    (e.g. internalServerException -> 500). For 5xx this is what makes the error
+    retryable downstream; for all types it replaces the misleading 400 with the
+    true code. Regression for #24608."""
     from litellm.llms.bedrock.chat.invoke_handler import (
         AWSEventStreamDecoder,
         BedrockError,
     )
-    from unittest.mock import patch, Mock
+    from unittest.mock import Mock
 
     event = Mock()
     event.to_response_dict = Mock(
         return_value={
             "status_code": 400,
             "headers": {
-                ":exception-type": "serviceUnavailableException",
+                ":exception-type": exception_type,
                 ":content-type": "application/json",
                 ":message-type": "exception",
             },
@@ -2525,11 +2540,10 @@ def test_bedrock_error_handling_streaming():
     decoder = AWSEventStreamDecoder(
         model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
     )
-    with pytest.raises(Exception) as e:
+    with pytest.raises(BedrockError) as e:
         decoder._parse_message_from_event(event)
-    assert isinstance(e.value, BedrockError)
     assert "Bedrock is unable to process your request." in e.value.message
-    assert e.value.status_code == 400
+    assert e.value.status_code == expected_status_code
 
 
 @pytest.mark.parametrize(
@@ -2712,6 +2726,10 @@ def test_bedrock_top_k_param(model, expected_params):
         data = json.loads(mock_post.call_args.kwargs["data"])
         if "mistral" in model:
             assert data["top_k"] == 2
+        elif expected_params == {}:
+            # Models that don't support top_k produce no additionalModelRequestFields;
+            # the empty block is now omitted entirely rather than sent as `{}`.
+            assert "additionalModelRequestFields" not in data
         else:
             assert data["additionalModelRequestFields"] == expected_params
 
@@ -3059,8 +3077,6 @@ async def test_bedrock_max_completion_tokens(model: str):
 
         assert request_body == {
             "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
-            "additionalModelRequestFields": {},
-            "system": [],
             "inferenceConfig": {"maxTokens": 10},
         }
 

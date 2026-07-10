@@ -51,9 +51,7 @@ class GetBlogPosts:
     @staticmethod
     def load_local_blog_posts() -> List[Dict[str, str]]:
         """Load the bundled local backup blog posts."""
-        content = json.loads(
-            files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8")
-        )
+        content = json.loads(files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8"))
         return content.get("posts", [])
 
     @staticmethod
@@ -117,8 +115,7 @@ class GetBlogPosts:
         """Return True if posts is a non-empty list."""
         if not isinstance(posts, list) or len(posts) == 0:
             verbose_logger.warning(
-                "LiteLLM: Parsed RSS feed has no valid posts. "
-                "Falling back to local backup.",
+                "LiteLLM: Parsed RSS feed has no valid posts. Falling back to local backup.",
             )
             return False
         return True
@@ -144,8 +141,7 @@ class GetBlogPosts:
             posts = cls.parse_rss_to_posts(xml_text)
         except Exception as e:
             verbose_logger.warning(
-                "LiteLLM: Failed to fetch blog posts from %s: %s. "
-                "Falling back to local backup.",
+                "LiteLLM: Failed to fetch blog posts from %s: %s. Falling back to local backup.",
                 url,
                 str(e),
             )

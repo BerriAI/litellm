@@ -88,9 +88,7 @@ async def list_policies(version_status: Optional[str] = None):
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        policies = await get_policy_registry().get_all_policies_from_db(
-            prisma_client, version_status=version_status
-        )
+        policies = await get_policy_registry().get_all_policies_from_db(prisma_client, version_status=version_status)
         return PolicyListDBResponse(policies=policies, total_count=len(policies))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policies: {e}")
@@ -260,11 +258,7 @@ async def update_policy_version_status(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating version status: {e}")
-        if (
-            "invalid status" in str(e).lower()
-            or "only draft" in str(e).lower()
-            or "cannot promote" in str(e).lower()
-        ):
+        if "invalid status" in str(e).lower() or "only draft" in str(e).lower() or "cannot promote" in str(e).lower():
             raise HTTPException(status_code=400, detail=str(e))
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
@@ -358,9 +352,7 @@ async def get_policy(policy_id: str):
             prisma_client=prisma_client,
         )
         if result is None:
-            raise HTTPException(
-                status_code=404, detail=f"Policy with ID {policy_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Policy with ID {policy_id} not found")
         return result
     except HTTPException:
         raise
@@ -406,9 +398,7 @@ async def update_policy(
             prisma_client=prisma_client,
         )
         if existing is None:
-            raise HTTPException(
-                status_code=404, detail=f"Policy with ID {policy_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Policy with ID {policy_id} not found")
         if getattr(existing, "version_status", "production") != "draft":
             raise HTTPException(
                 status_code=400,
@@ -464,9 +454,7 @@ async def delete_policy(policy_id: str):
             prisma_client=prisma_client,
         )
         if existing is None:
-            raise HTTPException(
-                status_code=404, detail=f"Policy with ID {policy_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Policy with ID {policy_id} not found")
 
         result = await get_policy_registry().delete_policy_from_db(
             policy_id=policy_id,
@@ -520,9 +508,7 @@ async def get_resolved_guardrails(policy_id: str):
             prisma_client=prisma_client,
         )
         if policy is None:
-            raise HTTPException(
-                status_code=404, detail=f"Policy with ID {policy_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Policy with ID {policy_id} not found")
 
         # Resolve guardrails
         resolved = await get_policy_registry().resolve_guardrails_from_db(
@@ -653,12 +639,8 @@ async def list_policy_attachments():
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        attachments = await get_attachment_registry().get_all_attachments_from_db(
-            prisma_client
-        )
-        return PolicyAttachmentListResponse(
-            attachments=attachments, total_count=len(attachments)
-        )
+        attachments = await get_attachment_registry().get_all_attachments_from_db(prisma_client)
+        return PolicyAttachmentListResponse(attachments=attachments, total_count=len(attachments))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policy attachments: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -713,22 +695,34 @@ async def create_policy_attachment(
     }
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
         # Verify the policy has a production version (attachments resolve against production)
-        policies = await get_policy_registry().get_all_policies_from_db(
-            prisma_client, version_status="production"
-        )
+        policies = await get_policy_registry().get_all_policies_from_db(prisma_client, version_status="production")
         policy_names = {p.policy_name for p in policies}
         if request.policy_name not in policy_names:
             raise HTTPException(
                 status_code=404,
                 detail=f"Policy '{request.policy_name}' not found. Create the policy first.",
             )
+
+        # Reject concrete team/key/model scope entries that don't resolve to a real
+        # entity. Wildcard patterns are allowed through (they may match zero today).
+        scope_errors = await PolicyValidator(
+            prisma_client=prisma_client, llm_router=llm_router
+        ).find_invalid_scope_entries(
+            policy_name=request.policy_name,
+            teams=request.teams,
+            keys=request.keys,
+            models=request.models,
+        )
+        if scope_errors:
+            raise HTTPException(status_code=400, detail=" | ".join(e.message for e in scope_errors))
 
         created_by = user_api_key_dict.user_id
         result = await get_attachment_registry().add_attachment_to_db(

@@ -1,11 +1,22 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
-import { listMCPTools, callMCPTool } from "../networking";
+import { resolveLogoSrc } from "@/lib/assetPaths";
+import {
+  isClientForwardedTokenMode,
+  MCPTool,
+  MCPToolsViewerProps,
+  MCPContent,
+  CallMCPToolResponse,
+  getMcpOAuthMode,
+} from "./types";
+import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
-import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
+import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
+import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
+import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
+import { setSecureItem } from "@/utils/secureStorage";
 
 import { Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
@@ -31,23 +42,30 @@ const MCPToolsViewer = ({
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // Only PKCE passthrough uses a browser-held session token (sessionStorage,
-  // cleared on tab/browser close) and a user-facing auth gate. OBO uses the
-  // backend-stored per-user token and M2M uses the backend's own service token,
-  // so neither needs a gate — they list tools with just the LiteLLM key.
-  const isPassthrough = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream }) === "passthrough";
+  // PKCE passthrough holds a browser-side session token (sessionStorage) and
+  // gates tool listing behind it. authorization_code uses a backend-stored
+  // per-user token that the user must establish once via an interactive login;
+  // we gate on whether that DB credential exists. M2M uses the backend's own
+  // service token and needs no gate.
+  const oauthMode = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream });
+  const isPassthrough = oauthMode === "passthrough";
+  // The client-forwarded token modes gate the same way as PKCE passthrough: the
+  // browser session token (established via the browser-only Authorize in the
+  // create/edit forms, or right here) is the upstream credential.
+  const usesBrowserHeldToken = isPassthrough || isClientForwardedTokenMode(auth_type);
+  const isAuthorizationCode = oauthMode === "authorization_code";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
-    isPassthrough && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
+    usesBrowserHeldToken && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
 
   // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
   useEffect(() => {
-    if (!isPassthrough) {
+    if (!usesBrowserHeldToken) {
       setOauthToken(null);
       return;
     }
     setOauthToken(isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null);
-  }, [serverId, userID, isPassthrough]);
+  }, [serverId, userID, usesBrowserHeldToken]);
 
   const {
     startOAuthFlow,
@@ -61,6 +79,34 @@ const MCPToolsViewer = ({
     onSuccess: setOauthToken,
   });
 
+  // authorization_code servers list tools using a per-user token the backend stores in the DB;
+  // check whether the current user has a valid one so we can prompt them to
+  // authorize when they don't (otherwise the backend silently returns no tools).
+  const {
+    data: authorizationCodeCredStatus,
+    isLoading: isLoadingAuthorizationCodeCred,
+    isError: isAuthorizationCodeCredError,
+    refetch: refetchAuthorizationCodeCred,
+  } = useQuery({
+    queryKey: ["mcpOauthUserCredStatus", serverId, userID],
+    queryFn: () => getMCPOAuthUserCredentialStatus(accessToken ?? "", serverId),
+    enabled: !!accessToken && isAuthorizationCode,
+    staleTime: 30000,
+  });
+
+  // A stored credential is sufficient: the backend proactively refreshes an
+  // expired or near-expiry token from the stored refresh_token on the next list
+  // call, so the user only needs to authorize when no credential row exists. If
+  // the status check itself fails we can't confirm a credential, so surface the
+  // Authorize gate rather than a silent empty tool list; re-authorizing only
+  // overwrites the user's own row, so it is safe when a credential did exist.
+  const hasAuthorizationCodeCred = !!authorizationCodeCredStatus?.has_credential;
+  const authorizationCodeNeedsAuth =
+    isAuthorizationCode &&
+    !isLoadingAuthorizationCodeCred &&
+    (isAuthorizationCodeCredError || (!!authorizationCodeCredStatus && !hasAuthorizationCodeCred));
+  const authorizationCodeStatusLoading = isAuthorizationCode && isLoadingAuthorizationCodeCred;
+
   // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
 
@@ -73,18 +119,9 @@ const MCPToolsViewer = ({
     // The backend's _get_mcp_server_auth_headers_from_headers() picks up the
     // x-mcp-{alias}-{header} pattern and forwards it to the upstream MCP server.
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
-    // Passthrough only: OBO/M2M tokens are attached server-side, not from the browser.
-    if (isPassthrough && oauthToken) {
-      if (serverAlias) {
-        const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
-        if (safeAlias) {
-          customHeaders[`x-mcp-${safeAlias}-authorization`] = `Bearer ${oauthToken}`;
-        } else {
-          customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-        }
-      } else {
-        customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-      }
+    // Passthrough only: authorization_code/token_exchange/M2M tokens are attached server-side, not from the browser.
+    if (usesBrowserHeldToken && oauthToken) {
+      Object.assign(customHeaders, buildMcpPassthroughAuthHeader(serverAlias, oauthToken));
     }
 
     // Add passthrough headers with server-specific prefix
@@ -135,8 +172,11 @@ const MCPToolsViewer = ({
       }
       return result;
     },
-    // For OAuth servers, block the query until a session token is available
-    enabled: !!accessToken && (!isPassthrough || oauthToken !== null),
+    // Passthrough blocks until a browser session token exists; authorization_code blocks until
+    // the user has a valid DB credential (else the backend returns no tools).
+    enabled:
+      !!accessToken &&
+      (usesBrowserHeldToken ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true),
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
@@ -144,6 +184,33 @@ const MCPToolsViewer = ({
       return failureCount < 2;
     },
   });
+
+  // authorization_code authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
+  // and the chat "Connect" button, but persists the token to the per-user DB.
+  const onAuthorizationCodeAuthSuccess = useCallback(() => {
+    refetchAuthorizationCodeCred();
+    refetchTools();
+  }, [refetchAuthorizationCodeCred, refetchTools]);
+
+  const {
+    startOAuthFlow: startDbOAuthFlow,
+    status: dbOAuthStatus,
+    error: dbOAuthError,
+  } = useUserMcpOAuthFlow({
+    accessToken: accessToken ?? "",
+    serverId,
+    serverAlias,
+    onSuccess: onAuthorizationCodeAuthSuccess,
+  });
+
+  // Stash which server started the redirect so the MCP Servers page can reopen
+  // this Tools tab on return and let the flow resume to persist the credential.
+  const startAuthorizationCodeAuthorize = useCallback(() => {
+    try {
+      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId }));
+    } catch (_) {}
+    startDbOAuthFlow();
+  }, [serverId, startDbOAuthFlow]);
 
   // If the tools query fails with 401, the cached OAuth token is invalid —
   // clear it so the auth gate is shown again and the user can re-authenticate.
@@ -186,6 +253,23 @@ const MCPToolsViewer = ({
   });
 
   const toolsData = mcpToolsResponse?.tools || [];
+
+  const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
+  // authorization_code only: a 401 from the list call means the stored credential is unusable and
+  // the backend's refresh could not mint a token, so the user must re-authorize (the browser flow).
+  // token_exchange has no gateway-side authorize step, so it is not gated here.
+  const authorizationCodeTokenRejected =
+    isAuthorizationCode && (toolsError?.status ?? toolsError?.response?.status) === 401;
+
+  // An auth gate replaces the tool list when the user must authenticate first:
+  // passthrough needs a browser token; authorization_code needs a stored DB credential or a
+  // still-valid one — a 401 from the list call means the backend has none even
+  // after attempting a refresh, so re-authorization is required.
+  const authGateActive =
+    (usesBrowserHeldToken && !oauthToken) || authorizationCodeNeedsAuth || authorizationCodeTokenRejected;
+  // Treat authorization_code credential-status loading as "tools loading" so the empty state
+  // doesn't flash before we know whether the user needs to authorize.
+  const toolsAreaLoading = isLoadingTools || authorizationCodeStatusLoading;
 
   // Filter tools based on search term
   const filteredTools = toolsData.filter((tool: MCPTool) => {
@@ -246,7 +330,7 @@ const MCPToolsViewer = ({
                               });
                             }}
                             prefix={<KeyOutlined className="text-gray-400" />}
-                            className="rounded"
+                            className="rounded-sm"
                           />
                         </div>
                       ))}
@@ -287,8 +371,8 @@ const MCPToolsViewer = ({
                   )}
                 </Text>
 
-                {/* OAuth Auth Gate — shown when token is absent for OAuth servers */}
-                {isPassthrough && !oauthToken && (
+                {/* Passthrough auth gate — browser session token absent */}
+                {usesBrowserHeldToken && !oauthToken && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
                     <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
@@ -306,8 +390,33 @@ const MCPToolsViewer = ({
                   </div>
                 )}
 
+                {/* Auth gate (authorization_code or token_exchange) — shown when there is no credential
+                    row for this user, or when the list call returns 401 (no valid token and the
+                    server-side refresh could not mint one, e.g. an expired token
+                    with no usable refresh token). A refreshable token is refreshed
+                    on the list call and never trips this gate. */}
+                {(authorizationCodeNeedsAuth || authorizationCodeTokenRejected) && (
+                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
+                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Authenticate with the upstream provider to view available tools
+                    </p>
+                    <AntdButton
+                      size="small"
+                      type="primary"
+                      loading={dbOAuthStatus === "authorizing" || dbOAuthStatus === "exchanging"}
+                      onClick={startAuthorizationCodeAuthorize}
+                      disabled={!accessToken}
+                    >
+                      Authorize
+                    </AntdButton>
+                    {dbOAuthError && <p className="text-xs text-red-500 mt-2">{dbOAuthError}</p>}
+                  </div>
+                )}
+
                 {/* Search Bar — only shown when tools are loaded */}
-                {!isPassthrough || oauthToken ? (
+                {!authGateActive ? (
                   <>
                     {toolsData.length > 0 && (
                       <div className="mb-3">
@@ -324,7 +433,7 @@ const MCPToolsViewer = ({
                     )}
 
                     {/* Loading State */}
-                    {isLoadingTools && (
+                    {toolsAreaLoading && (
                       <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
                         <div className="relative mb-3">
                           <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
@@ -335,7 +444,7 @@ const MCPToolsViewer = ({
                     )}
 
                     {/* Error State */}
-                    {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
+                    {(mcpToolsResponse?.error || mcpToolsError) && !toolsAreaLoading && !toolsData.length && (
                       <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
                         <p className="font-medium">
                           Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
@@ -344,7 +453,7 @@ const MCPToolsViewer = ({
                     )}
 
                     {/* No Tools State */}
-                    {!isLoadingTools &&
+                    {!toolsAreaLoading &&
                       !mcpToolsResponse?.error &&
                       !mcpToolsError &&
                       (!toolsData || toolsData.length === 0) && (
@@ -370,7 +479,7 @@ const MCPToolsViewer = ({
                       )}
 
                     {/* Tools List */}
-                    {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
+                    {!toolsAreaLoading && !mcpToolsResponse?.error && toolsData.length > 0 && (
                       <>
                         {filteredTools.length === 0 ? (
                           <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
@@ -390,7 +499,7 @@ const MCPToolsViewer = ({
                             {filteredTools.map((tool: MCPTool) => (
                               <div
                                 key={tool.name}
-                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
+                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-xs ${
                                   selectedTool?.name === tool.name
                                     ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                                     : "border-gray-200 bg-white hover:border-gray-300"
@@ -404,9 +513,9 @@ const MCPToolsViewer = ({
                                 <div className="flex items-start space-x-2">
                                   {tool.mcp_info.logo_url && (
                                     <img
-                                      src={tool.mcp_info.logo_url}
+                                      src={resolveLogoSrc(tool.mcp_info.logo_url)}
                                       alt={`${tool.mcp_info.server_name} logo`}
-                                      className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
+                                      className="w-4 h-4 object-contain shrink-0 mt-0.5"
                                     />
                                   )}
                                   <div className="flex-1 min-w-0">

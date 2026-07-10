@@ -64,9 +64,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     and extract images from chat responses.
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for OpenRouter image generation.
 
@@ -224,17 +222,15 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                     model_response._hidden_params = {}
                 if "additional_headers" not in model_response._hidden_params:
                     model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"][
-                    "llm_provider-x-litellm-response-cost"
-                ] = float(cost)
+                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                    cost
+                )
 
             cost_details = usage_data.get("cost_details", {})
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(
-                    cost_details
-                )
+                model_response._hidden_params["response_cost_details"].update(cost_details)
 
         model_response._hidden_params["model"] = response_json.get("model", model)
 

@@ -1,6 +1,5 @@
 import asyncio
 import os
-import ssl
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -541,6 +540,92 @@ class TestExecuteSessionOperationSurfacesTransportError:
 
         result = await client._execute_session_operation(transport_ctx, _op)
         assert result == "done"
+
+
+class TestMCPClientResolvedAuth:
+    """A pre-resolved httpx.Auth is attached to the upstream client's auth= slot."""
+
+    @pytest.mark.asyncio
+    async def test_resolved_auth_feeds_the_auth_slot(self):
+        resolved = httpx.Auth()
+        client = MCPClient(
+            server_url="https://upstream.example.com", resolved_auth=resolved
+        )
+        http_client = client._create_httpx_client_factory()()
+        try:
+            assert http_client.auth is resolved
+        finally:
+            await http_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_resolved_auth_takes_precedence_over_aws_auth(self):
+        resolved = httpx.Auth()
+        client = MCPClient(
+            server_url="https://upstream.example.com",
+            resolved_auth=resolved,
+            aws_auth=httpx.Auth(),
+        )
+        http_client = client._create_httpx_client_factory()()
+        try:
+            assert http_client.auth is resolved
+        finally:
+            await http_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_without_resolved_auth_falls_back_to_aws_auth(self):
+        aws = httpx.Auth()
+        client = MCPClient(server_url="https://upstream.example.com", aws_auth=aws)
+        http_client = client._create_httpx_client_factory()()
+        try:
+            assert http_client.auth is aws
+        finally:
+            await http_client.aclose()
+
+
+def _all_logged_messages(mock_logger):
+    return " ".join(
+        str(call.args[0])
+        for level in ("info", "debug", "warning", "error", "exception")
+        for call in getattr(mock_logger, level).call_args_list
+        if call.args
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_tool_does_not_log_arguments():
+    from mcp.types import CallToolRequestParams
+
+    secret = "ssn-123-45-6789"
+    client = MCPClient(server_url="http://test-server")
+    client.run_with_session = AsyncMock(return_value=MagicMock())
+    params = CallToolRequestParams(
+        name="search_tool", arguments={"input": secret, "model": "gpt-5-mini"}
+    )
+
+    with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
+        await client.call_tool(params)
+
+    logged = _all_logged_messages(mock_logger)
+    assert "search_tool" in logged
+    assert secret not in logged
+    assert "gpt-5-mini" not in logged
+
+
+@pytest.mark.asyncio
+async def test_get_prompt_does_not_log_arguments():
+    from mcp.types import GetPromptRequestParams
+
+    secret = "ssn-987-65-4321"
+    client = MCPClient(server_url="http://test-server")
+    client.run_with_session = AsyncMock(return_value=MagicMock())
+    params = GetPromptRequestParams(name="my_prompt", arguments={"input": secret})
+
+    with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
+        await client.get_prompt(params)
+
+    logged = _all_logged_messages(mock_logger)
+    assert "my_prompt" in logged
+    assert secret not in logged
 
 
 if __name__ == "__main__":

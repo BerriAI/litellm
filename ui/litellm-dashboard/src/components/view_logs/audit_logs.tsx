@@ -3,7 +3,8 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
 import { ReloadOutlined, LoadingOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import moment from "moment";
+import { resolveLogoSrc } from "@/lib/assetPaths";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
@@ -20,7 +21,7 @@ interface AuditLogsProps {
   premiumUser: boolean;
 }
 
-const asset_logos_folder = "../ui/assets/";
+const asset_logos_folder = "/ui/assets/";
 export const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
 
 const TABLE_NAME_DISPLAY: Record<string, string> = {
@@ -94,11 +95,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       dataIndex: "updated_at",
       key: "updated_at",
       width: 200,
-      render: (val: string) => (
-        <span className="font-mono text-xs whitespace-nowrap">
-          {moment.utc(val).local().format("MMM D, YYYY HH:mm:ss")}
-        </span>
-      ),
+      render: (val: string) => <DateCell value={val} />,
     },
     {
       title: "Action",
@@ -122,7 +119,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       title: "Object ID",
       dataIndex: "object_id",
       key: "object_id",
-      render: (val: string) => <span className="font-mono text-xs">{val}</span>,
+      render: (val: string) => <IdCell value={val} variant="plain" truncate={false} />,
     },
     {
       title: "Changed By",
@@ -136,7 +133,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       dataIndex: "changed_by_api_key",
       key: "changed_by_api_key",
       width: 140,
-      render: (val: string) => (val ? <span className="font-mono text-xs">{val.slice(0, 12)}…</span> : "—"),
+      render: (val: string) => <IdCell value={val} variant="plain" />,
     },
   ];
 
@@ -151,7 +148,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
           Here&apos;s a preview of what Audit Logs offer:
         </p>
         <img
-          src={auditLogsPreviewImg}
+          src={resolveLogoSrc(auditLogsPreviewImg)}
           alt="Audit Logs Preview"
           style={{
             maxWidth: "100%",
@@ -173,7 +170,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
 
   return (
     <>
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow-sm">
         {/* Header */}
         <div className="border-b px-6 py-4">
           <div className="flex items-center justify-between mb-4">

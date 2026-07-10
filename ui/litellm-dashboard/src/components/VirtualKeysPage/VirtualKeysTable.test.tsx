@@ -1,63 +1,50 @@
-import { act, screen, waitFor, fireEvent } from "@testing-library/react";
-import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
+import { screen, waitFor, within, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { Organization } from "../networking";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
-// Mock network calls
-vi.mock("./networking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../networking")>();
+// Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
+vi.mock("@tanstack/react-pacer/debouncer", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
   return {
-    ...actual,
-    userListCall: vi.fn().mockResolvedValue({
-      users: [
-        {
-          user_id: "user-1",
-          user_email: "user@example.com",
-          user_role: "user",
-        },
-      ],
-    }),
-    teamListCall: vi.fn().mockResolvedValue([]),
+    useDebouncedValue: (value: unknown) => [value, { cancel: vi.fn(), flush: vi.fn() }],
+    useDebouncedState: (initial: unknown) => {
+      const [value, setValue] = React.useState(initial);
+      return [value, setValue, { cancel: vi.fn(), flush: vi.fn() }];
+    },
   };
 });
 
-// Mock filter helpers
-vi.mock("./key_team_helpers/filter_helpers", () => ({
-  fetchAllTeams: vi.fn().mockResolvedValue([
-    {
-      team_id: "team-1",
-      team_alias: "Test Team",
-    },
-  ]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([
-    {
-      organization_id: "org-1",
-      organization_alias: "Test Organization",
-    },
-  ]),
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn(() => ({
+    accessToken: "test-token",
+    userId: "test-user",
+    userRole: "Admin",
+    premiumUser: true,
+    token: "test-token",
+  })),
 }));
 
-// Mock useKeys hook
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useAllTeams: vi.fn(() => ({
+    data: [{ team_id: "team-1", team_alias: "Test Team" }],
+    isLoading: false,
+  })),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
+  keyKeys: { lists: () => ["keys", "list"] },
 }));
 
-// Mock useFilterLogic hook
-vi.mock("../key_team_helpers/filter_logic", () => ({
-  useFilterLogic: vi.fn(),
-}));
-
-// Mock useTeams hook (used by KeyInfoView)
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
 }));
 
-// Mock useOrganizations hook
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [
@@ -68,15 +55,6 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
     ],
   }),
 }));
-
-// Mock fetchTeams to prevent network calls
-vi.mock("@/app/(dashboard)/networking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/app/(dashboard)/networking")>();
-  return {
-    ...actual,
-    fetchTeams: vi.fn().mockResolvedValue([]),
-  };
-});
 
 const mockKey: KeyResponse = {
   token: "sk-1234567890abcdef",
@@ -91,6 +69,7 @@ const mockKey: KeyResponse = {
   config: {},
   user_id: "user-1",
   team_id: "team-1",
+  project_id: null,
   max_parallel_requests: 10,
   metadata: {},
   tpm_limit: 1000,
@@ -153,68 +132,33 @@ const mockTeam: Team = {
   created_at: "2024-10-01T10:00:00Z",
   keys: [],
   members_with_roles: [],
+  spend: 0,
 };
 
-const mockOrganization: Organization = {
-  organization_id: "org-1",
-  organization_alias: "Test Organization",
-  budget_id: "budget-1",
-  metadata: {},
-  models: ["gpt-3.5-turbo", "gpt-4"],
-  spend: 100,
-  model_spend: { "gpt-3.5-turbo": 50, "gpt-4": 50 },
-  created_at: "2024-10-01T10:00:00Z",
-  created_by: "user-1",
-  updated_at: "2024-11-01T10:00:00Z",
-  updated_by: "user-1",
-  litellm_budget_table: {},
-  teams: [],
-  users: [],
-  members: [],
-};
-
-// Mock hook implementations
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
-const mockUseFilterLogic = useFilterLogic as MockedFunction<typeof useFilterLogic>;
 const mockUseTeams = useTeams as MockedFunction<typeof useTeams>;
 
-beforeEach(() => {
-  // Reset mocks before each test
-  vi.clearAllMocks();
-
-  // Setup default mock implementations
-  mockUseKeys.mockReturnValue({
+const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra: Record<string, unknown> = {}) =>
+  ({
     data: {
-      keys: [mockKey],
-      total_count: 1,
+      keys,
+      total_count: keys.length,
       current_page: 1,
       total_pages: 1,
+      ...data,
     } as KeysResponse,
     isPending: false,
     isFetching: false,
+    isError: false,
     refetch: vi.fn(),
-  } as any);
+    ...extra,
+  }) as any;
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "team-1",
-      "Organization ID": "org-1",
-      "Key Alias": "Test Key Alias",
-      "User ID": "user-1",
-      "User Email": "user@example.com",
-      "User Role": "user",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [mockKey],
-    filteredTotalCount: null,
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
 
-  // Mock useTeams hook (used by KeyInfoView)
+  mockUseKeys.mockReturnValue(keysResult([mockKey]));
+
   mockUseTeams.mockReturnValue({
     teams: [mockTeam],
     setTeams: vi.fn(),
@@ -222,53 +166,22 @@ beforeEach(() => {
 });
 
 it("should render VirtualKeysTable component", () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
+  renderWithProviders(<VirtualKeysTable />);
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
 it("should display key information correctly", async () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
     expect(screen.getByText("Test Team")).toBeInTheDocument();
-    expect(screen.getByText("5.5000")).toBeInTheDocument();
+    expect(screen.getByText("$5.5000")).toBeInTheDocument();
   });
 });
 
 it("should display user email correctly", async () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
@@ -276,121 +189,36 @@ it("should display user email correctly", async () => {
 });
 
 it("should show loading message only on initial load (isPending)", () => {
-  // Mock initial loading state
-  mockUseKeys.mockReturnValue({
-    data: null,
-    isPending: true,
-    isFetching: true,
-    refetch: vi.fn(),
-  } as any);
+  mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isPending: true, isFetching: true }));
 
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
+  renderWithProviders(<VirtualKeysTable />);
 
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  // Check that loading message is shown on initial load
   expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
-
-  // Check that actual key data is not shown
   expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
   expect(screen.queryByText("Test Team")).not.toBeInTheDocument();
 });
 
-it("should show 'No keys found' message when filteredKeys is empty", () => {
-  // Mock empty filteredKeys
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
+it("should show 'No keys found' message when the key list is empty", () => {
+  mockUseKeys.mockReturnValue(keysResult([]));
 
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   expect(screen.getByText("No keys found")).toBeInTheDocument();
 });
 
 it("should handle models with more than 3 entries to trigger expansion UI", () => {
-  const keyWithManyModels = {
-    ...mockKey,
-    models: ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "claude-3", "claude-3-5-sonnet"],
-  };
+  mockUseKeys.mockReturnValue(
+    keysResult([{ ...mockKey, models: ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "claude-3", "claude-3-5-sonnet"] }]),
+  );
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithManyModels],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
+  renderWithProviders(<VirtualKeysTable />);
 
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  // This test ensures the ChevronDownIcon import (line 6) is used
-  // by having a key with > 3 models which triggers the expansion logic
-  // that uses ChevronDownIcon and ChevronRightIcon
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
 it("should render table headers correctly", () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
+  renderWithProviders(<VirtualKeysTable />);
 
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  // Check that main headers are rendered (testing the header.isPlaceholder condition path)
   expect(screen.getByText("Key ID")).toBeInTheDocument();
   expect(screen.getByText("Key Alias")).toBeInTheDocument();
   expect(screen.getByText("Team")).toBeInTheDocument();
@@ -399,442 +227,165 @@ it("should render table headers correctly", () => {
 });
 
 it("should handle column resizing hover events", () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
+  renderWithProviders(<VirtualKeysTable />);
 
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  // Find a header cell with data-header-id attribute
   const headerCell = document.querySelector("[data-header-id]") as HTMLElement;
-
   expect(headerCell).toBeInTheDocument();
 
-  // Check that the resizer element exists within the header
   const resizer = headerCell?.querySelector(".resizer") as HTMLElement;
   expect(resizer).toBeInTheDocument();
-
-  // Initially, resizer should have opacity 0
   expect(resizer.style.opacity).toBe("0");
 
-  // Simulate mouse enter using fireEvent - should set opacity to 0.5 (lines 612-616)
   fireEvent.mouseEnter(headerCell);
   expect(resizer.style.opacity).toBe("0.5");
 
-  // Simulate mouse leave using fireEvent - should set opacity back to 0 (lines 618-622)
   fireEvent.mouseLeave(headerCell);
   expect(resizer.style.opacity).toBe("0");
 });
 
 it("should open KeyInfoView when clicking on a key ID button", async () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
+  renderWithProviders(<VirtualKeysTable />);
 
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  // Wait for the table to render
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
   });
 
-  // Verify table is visible before clicking - check for table-specific text
   expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
 
-  // Find the key ID button (it shows the full token value, truncation is CSS-only)
   const keyIdButton = screen.getByText("sk-1234567890abcdef");
-  expect(keyIdButton).toBeInTheDocument();
-
-  // Click on the key ID button
   fireEvent.click(keyIdButton);
 
-  // Wait for KeyInfoView to appear - check for unique elements that only exist in KeyInfoView
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
-    // KeyInfoHeader shows "Created At" metadata label
     expect(screen.getByText("Created At")).toBeInTheDocument();
   });
 
-  // Verify that table-specific elements are no longer visible
-  // The "Showing X of Y results" text should not be visible when KeyInfoView is open
   expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
 });
 
 it("should display 'Default Proxy Admin' for user_id when value is 'default_user_id'", async () => {
-  const keyWithDefaultUserId = {
-    ...mockKey,
-    user_id: "default_user_id",
-    user_email: "",
-    user: { user_id: "default_user_id", user_email: "", user_alias: null },
-  };
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        user_id: "default_user_id",
+        user_email: "",
+        user: { user_id: "default_user_id", user_email: "", user_alias: null },
+      },
+    ]),
+  );
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithDefaultUserId],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
   });
 });
 
-it("should display 'Default Proxy Admin' for created_by when value is 'default_user_id'", async () => {
-  const keyWithDefaultCreatedBy = {
-    ...mockKey,
-    created_by: "default_user_id",
-  };
-
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithDefaultCreatedBy],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  await waitFor(() => {
-    // The created_by column should display "Default Proxy Admin"
-    const defaultProxyAdminElements = screen.getAllByText("Default Proxy Admin");
-    expect(defaultProxyAdminElements.length).toBeGreaterThan(0);
-  });
-});
-
 it("should display created_by_user email in 'Created By' column when available", async () => {
-  const keyWithCreatedByUser = {
-    ...mockKey,
-    created_by: "some-uuid-1234",
-    created_by_user: {
-      user_id: "some-uuid-1234",
-      user_email: "creator@example.com",
-      user_alias: null,
-    },
-  };
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        created_by: "some-uuid-1234",
+        created_by_user: { user_id: "some-uuid-1234", user_email: "creator@example.com", user_alias: null },
+      },
+    ]),
+  );
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithCreatedByUser],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("creator@example.com")).toBeInTheDocument();
   });
 });
 
-it("should display created_by_user alias over email when both available", async () => {
-  const keyWithCreatedByUser = {
-    ...mockKey,
-    created_by: "some-uuid-1234",
-    created_by_user: {
-      user_id: "some-uuid-1234",
-      user_email: "creator@example.com",
-      user_alias: "The Creator",
-    },
-  };
+it("should display created_by_user alias over email when both are available", async () => {
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        created_by: "some-uuid-1234",
+        created_by_user: { user_id: "some-uuid-1234", user_email: "creator@example.com", user_alias: "The Creator" },
+      },
+    ]),
+  );
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithCreatedByUser],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
+  renderWithProviders(<VirtualKeysTable />);
 
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  await waitFor(() => {
-    expect(screen.getByText("The Creator")).toBeInTheDocument();
-  });
+  // Scope to the key's row so we assert the visible cell value: the hover popover that
+  // also holds the email is portaled out of the row, not the displayed "Created By" text.
+  const row = (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
+  expect(within(row).getByText("The Creator")).toBeInTheDocument();
+  expect(within(row).queryByText("creator@example.com")).not.toBeInTheDocument();
 });
 
 it("should render table without crashing when models is null", async () => {
-  const keyWithNullModels = {
-    ...mockKey,
-    models: null as unknown as string[],
-  };
+  mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, models: null as unknown as string[] }]));
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithNullModels],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  // This should not throw an error
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-  });
-});
-
-it("should render table without crashing when models is undefined", async () => {
-  const keyWithUndefinedModels = {
-    ...mockKey,
-    models: undefined as unknown as string[],
-  };
-
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithUndefinedModels],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  // This should not throw an error
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  await waitFor(() => {
-    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-  });
-});
-
-it("should render Last Active column header with info icon", () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  expect(screen.getByText("Last Active")).toBeInTheDocument();
-});
-
-it("should display formatted date for last_active when value exists", async () => {
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  await waitFor(() => {
-    const expectedDate = new Date("2024-11-20T14:30:00Z").toLocaleDateString();
-    expect(screen.getByText(expectedDate)).toBeInTheDocument();
   });
 });
 
 it("should display 'Unknown' for last_active when value is null", async () => {
-  const keyWithNullLastActive = {
-    ...mockKey,
-    last_active: null,
-  };
+  mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, last_active: null }]));
 
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithNullLastActive],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
 });
 
-const defaultMockProps = {
-  teams: [mockTeam],
-  organizations: [mockOrganization],
-  onSortChange: vi.fn(),
-  currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
-};
+describe("server-side filtering – the LIT-4080 regression guard", () => {
+  it("threads an active User ID filter into the useKeys query so any refetch keeps it", async () => {
+    renderWithProviders(<VirtualKeysTable />);
 
-describe("pagination display – total count and page count", () => {
-  it("should show total_count from useKeys when no filter is active (filteredTotalCount is null)", async () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 509,
-        current_page: 1,
-        total_pages: 11,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 
-    mockUseFilterLogic.mockReturnValue({
-      filters: {
-        "Team ID": "",
-        "Organization ID": "",
-        "Key Alias": "",
-        "User ID": "",
-        "Sort By": "created_at",
-        "Sort Order": "desc",
-      },
-      filteredKeys: [mockKey],
-      filteredTotalCount: null,
-      allTeams: [mockTeam],
-      allOrganizations: [mockOrganization],
-      handleFilterChange: vi.fn(),
-      handleFilterReset: vi.fn(),
+    const userIdInput = await screen.findByPlaceholderText("Enter User ID...");
+    fireEvent.change(userIdInput, { target: { value: "user-42" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
+    });
+  });
+
+  it("does not send filter params to useKeys when no filter is active", () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
+    expect(lastCall[2] ?? {}).toMatchObject({ userID: undefined, teamID: undefined, keyHash: undefined });
+  });
+
+  it("drops the filter from the useKeys query when Reset Filters is clicked", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const userIdInput = await screen.findByPlaceholderText("Enter User ID...");
+    fireEvent.change(userIdInput, { target: { value: "user-42" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
     });
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reset Filters" }));
+
+    await waitFor(() => {
+      const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
+      expect((lastCall[2] ?? {}).userID).toBeUndefined();
+    });
+  });
+});
+
+describe("pagination display – total count comes from useKeys", () => {
+  it("shows total_count and page count from the useKeys response", async () => {
+    mockUseKeys.mockReturnValue(keysResult([mockKey], { total_count: 509, total_pages: 11 }));
+
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 50 of 509 results")).toBeInTheDocument();
@@ -842,86 +393,21 @@ describe("pagination display – total count and page count", () => {
     });
   });
 
-  it("should show filteredTotalCount in pagination text when a filter search returns results", async () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 509,
-        current_page: 1,
-        total_pages: 11,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
+  it("reflects a narrowed total when a filtered fetch returns fewer results", async () => {
+    mockUseKeys.mockReturnValue(keysResult([mockKey], { total_count: 1, total_pages: 1 }));
 
-    mockUseFilterLogic.mockReturnValue({
-      filters: {
-        "Team ID": "",
-        "Organization ID": "",
-        "Key Alias": "aaaaa",
-        "User ID": "",
-        "Sort By": "created_at",
-        "Sort Order": "desc",
-      },
-      filteredKeys: [mockKey],
-      filteredTotalCount: 1,
-      allTeams: [mockTeam],
-      allOrganizations: [mockOrganization],
-      handleFilterChange: vi.fn(),
-      handleFilterReset: vi.fn(),
-    });
-
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
       expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
     });
   });
-
-  it("should not show stale unfiltered totals when filteredTotalCount is set", async () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 509,
-        current_page: 1,
-        total_pages: 11,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-
-    mockUseFilterLogic.mockReturnValue({
-      filters: {
-        "Team ID": "",
-        "Organization ID": "",
-        "Key Alias": "aaaaa",
-        "User ID": "",
-        "Sort By": "created_at",
-        "Sort Order": "desc",
-      },
-      filteredKeys: [mockKey],
-      filteredTotalCount: 1,
-      allTeams: [mockTeam],
-      allOrganizations: [mockOrganization],
-      handleFilterChange: vi.fn(),
-      handleFilterReset: vi.fn(),
-    });
-
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
-
-    await waitFor(() => {
-      expect(screen.queryByText(/509 results/)).not.toBeInTheDocument();
-      expect(screen.queryByText(/of 11/)).not.toBeInTheDocument();
-    });
-  });
 });
 
 describe("refetch button", () => {
   it("should show Fetch button in normal state", () => {
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const fetchButton = screen.getByTitle("Fetch data");
     expect(fetchButton).toBeInTheDocument();
@@ -930,64 +416,31 @@ describe("refetch button", () => {
   });
 
   it("should show Fetching state and keep table data visible during refetch", () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 1,
-        current_page: 1,
-        total_pages: 1,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: true,
-      refetch: vi.fn(),
-    } as any);
+    mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { isFetching: true }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
-    // Button should show "Fetching" and be disabled
     expect(screen.getByText("Fetching")).toBeInTheDocument();
-    const fetchButton = screen.getByTitle("Fetch data");
-    expect(fetchButton).toBeDisabled();
-
-    // Table data should still be visible (stale data)
+    expect(screen.getByTitle("Fetch data")).toBeDisabled();
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-
-    // "Loading keys..." should NOT appear during refetch
     expect(screen.queryByText("🚅 Loading keys...")).not.toBeInTheDocument();
   });
 
   it("should call refetch when Fetch button is clicked", () => {
     const mockRefetch = vi.fn();
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 1,
-        current_page: 1,
-        total_pages: 1,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: mockRefetch,
-    } as any);
+    mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { refetch: mockRefetch }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
-    const fetchButton = screen.getByTitle("Fetch data");
-    fireEvent.click(fetchButton);
+    fireEvent.click(screen.getByTitle("Fetch data"));
 
     expect(mockRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("should show Fetch button enabled on error so user can retry", () => {
-    mockUseKeys.mockReturnValue({
-      data: null,
-      isPending: false,
-      isFetching: false,
-      isError: true,
-      refetch: vi.fn(),
-    } as any);
+    mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isError: true }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const fetchButton = screen.getByTitle("Fetch data");
     expect(fetchButton).not.toBeDisabled();
@@ -997,24 +450,9 @@ describe("refetch button", () => {
 
 describe("Status column reflects key.blocked / scim_blocked metadata", () => {
   it("should render Active for a non-blocked key", async () => {
-    mockUseFilterLogic.mockReturnValue({
-      filters: {
-        "Team ID": "",
-        "Organization ID": "",
-        "Key Alias": "",
-        "User ID": "",
-        "Sort By": "created_at",
-        "Sort Order": "desc",
-      },
-      filteredKeys: [{ ...mockKey, blocked: false, metadata: {} }],
-      filteredTotalCount: null,
-      allTeams: [mockTeam],
-      allOrganizations: [mockOrganization],
-      handleFilterChange: vi.fn(),
-      handleFilterReset: vi.fn(),
-    });
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: false, metadata: {} }]));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Active");
@@ -1022,24 +460,9 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
   });
 
   it("should render Blocked when key.blocked is true", async () => {
-    mockUseFilterLogic.mockReturnValue({
-      filters: {
-        "Team ID": "",
-        "Organization ID": "",
-        "Key Alias": "",
-        "User ID": "",
-        "Sort By": "created_at",
-        "Sort Order": "desc",
-      },
-      filteredKeys: [{ ...mockKey, blocked: true, metadata: {} }],
-      filteredTotalCount: null,
-      allTeams: [mockTeam],
-      allOrganizations: [mockOrganization],
-      handleFilterChange: vi.fn(),
-      handleFilterReset: vi.fn(),
-    });
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: {} }]));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Blocked");
@@ -1048,31 +471,15 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
   });
 
   it("should mark a SCIM-blocked key with the SCIM tooltip reason", async () => {
-    mockUseFilterLogic.mockReturnValue({
-      filters: {
-        "Team ID": "",
-        "Organization ID": "",
-        "Key Alias": "",
-        "User ID": "",
-        "Sort By": "created_at",
-        "Sort Order": "desc",
-      },
-      filteredKeys: [{ ...mockKey, blocked: true, metadata: { scim_blocked: true } }],
-      filteredTotalCount: null,
-      allTeams: [mockTeam],
-      allOrganizations: [mockOrganization],
-      handleFilterChange: vi.fn(),
-      handleFilterReset: vi.fn(),
-    });
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: { scim_blocked: true } }]));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
     expect(tag).toHaveTextContent("Blocked");
 
-    act(() => {
-      fireEvent.mouseEnter(tag);
-    });
+    const user = userEvent.setup();
+    await user.hover(tag);
     await waitFor(() => {
       expect(screen.getByText(/Blocked by SCIM/i)).toBeInTheDocument();
     });

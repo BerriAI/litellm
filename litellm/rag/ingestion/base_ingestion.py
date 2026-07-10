@@ -42,6 +42,8 @@ class BaseRAGIngestion(ABC):
     vector stores, so it overrides the embedding step to be a no-op.
     """
 
+    supports_existing_file_id: bool = False
+
     def __init__(
         self,
         ingest_options: RAGIngestOptions,
@@ -58,9 +60,7 @@ class BaseRAGIngestion(ABC):
             ingest_options.get("chunking_strategy") or {"type": "auto"},
         )
         self.embedding_config = ingest_options.get("embedding")
-        self.vector_store_config: Dict[str, Any] = cast(
-            Dict[str, Any], ingest_options.get("vector_store") or {}
-        )
+        self.vector_store_config: Dict[str, Any] = cast(Dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
 
         # Load credentials from litellm_credential_name if provided in vector_store config
@@ -80,9 +80,7 @@ class BaseRAGIngestion(ABC):
 
         credential_name = self.vector_store_config.get("litellm_credential_name")
         if credential_name and litellm.credential_list:
-            credential_values = CredentialAccessor.get_credential_values(
-                credential_name
-            )
+            credential_values = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 return
             for key, value in credential_values.items():
@@ -127,9 +125,7 @@ class BaseRAGIngestion(ABC):
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get(
-                "content-type", "application/octet-stream"
-            )
+            content_type = response.headers.get("content-type", "application/octet-stream")
             return filename, file_content, content_type, None
 
         if file_id:
@@ -182,7 +178,9 @@ class BaseRAGIngestion(ABC):
         # Extract text from pages
         if hasattr(ocr_response, "pages") and ocr_response.pages:  # type: ignore
             return "\n\n".join(
-                page.markdown for page in ocr_response.pages if hasattr(page, "markdown")  # type: ignore
+                page.markdown
+                for page in ocr_response.pages
+                if hasattr(page, "markdown")  # type: ignore
             )
 
         return None
@@ -280,6 +278,7 @@ class BaseRAGIngestion(ABC):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in vector store.
@@ -292,6 +291,7 @@ class BaseRAGIngestion(ABC):
             content_type: MIME type
             chunks: Text chunks (if chunking was done locally)
             embeddings: Embeddings (if embedding was done locally)
+            existing_file_id: Provider file ID supplied by the caller, if any
 
         Returns:
             Tuple of (vector_store_id, file_id)
@@ -326,6 +326,12 @@ class BaseRAGIngestion(ABC):
         )
 
         try:
+            if existing_file_id and not self.supports_existing_file_id:
+                raise ValueError(
+                    f"{self.__class__.__name__} does not support ingesting an existing file_id. "
+                    "Upload file data or provide file_url instead."
+                )
+
             # Step 2: OCR (optional)
             extracted_text = await self.ocr(
                 file_content=file_content,
@@ -349,6 +355,7 @@ class BaseRAGIngestion(ABC):
                 content_type=content_type,
                 chunks=chunks,
                 embeddings=embeddings,
+                existing_file_id=existing_file_id,
             )
 
             return RAGIngestResponse(

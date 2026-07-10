@@ -17,7 +17,9 @@ How it works:
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
+import litellm
 import litellm.constants as _c
+from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -70,34 +72,20 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             None,
         )
         if advisor_tool is None:
-            raise ValueError(
-                f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list"
-            )
+            raise ValueError(f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list")
         advisor_model: str = advisor_tool.get("model") or ""
         if not advisor_model:
-            raise ValueError(
-                "advisor tool definition must include a 'model' field specifying the advisor model"
-            )
+            raise ValueError("advisor tool definition must include a 'model' field specifying the advisor model")
         _raw_max_uses = advisor_tool.get("max_uses")
-        max_uses: int = (
-            ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
-        )
-        # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
-        # If not set in the tool definition, litellm resolves from env vars.
-        advisor_api_key: Optional[str] = advisor_tool.get("api_key")
-        advisor_api_base: Optional[str] = advisor_tool.get("api_base")
+        max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
+        advisor_api_key, advisor_api_base = _resolve_advisor_credentials(advisor_tool)
 
         # Build the synthetic tool definition the provider will receive.
         synthetic_advisor_tool = _make_synthetic_advisor_tool()
 
         # Executor tools = all original tools with advisor replaced by the synthetic one.
         executor_tools: List[Dict] = [
-            (
-                synthetic_advisor_tool
-                if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
-                else t
-            )
-            for t in (tools or [])
+            (synthetic_advisor_tool if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE else t) for t in (tools or [])
         ]
 
         # Strip prior advisor blocks from history, preserving advice text as context.
@@ -105,9 +93,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             [dict(m) for m in messages], replace_with_text=True
         )
 
-        parent_request_id: str = str(
-            kwargs.pop("litellm_call_id", None) or uuid.uuid4()
-        )
+        parent_request_id: str = str(kwargs.pop("litellm_call_id", None) or uuid.uuid4())
         metadata_base: Dict = dict(kwargs.pop("metadata", None) or {})
         iteration = 0
 
@@ -144,9 +130,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 )
 
             # --- Build advisor context ---
-            advisor_messages = _build_advisor_context(
-                current_messages, executor_response, advisor_use_block
-            )
+            advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
             advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
@@ -181,6 +165,63 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 # ---------------------------------------------------------------------------
 
 
+def _allow_client_side_advisor_credentials() -> bool:
+    """Whether a caller-supplied advisor api_base/api_key may be honored.
+
+    Gated on the proxy's ``allow_client_side_credentials`` opt-in. When the
+    interceptor runs outside the proxy (SDK use), there is no admin boundary
+    to protect, so client-supplied routing is allowed.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except (ImportError, ModuleNotFoundError):
+        return True
+    return general_settings.get("allow_client_side_credentials") is True
+
+
+def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[Optional[str], Optional[str]]:
+    """Resolve the (api_key, api_base) override for the advisor sub-call.
+
+    A caller-supplied ``api_base`` is only honored alongside a caller-supplied
+    ``api_key``: without one, ``AnthropicModelInfo.get_auth_header()`` falls
+    back to the proxy's own Anthropic credentials, which would then be sent to
+    the caller-chosen ``api_base``. A caller-supplied ``api_base`` is also
+    required to be https with TLS verification on, and SSRF-validated so it
+    can't target a private/internal/cloud-metadata address, mirroring
+    ``proxy.auth.auth_utils.check_complete_credentials``. https with TLS
+    verification is required because ``validate_url`` only rewrites the
+    connection to a DNS-pinned IP for http, or for https with
+    ``litellm.ssl_verify`` disabled; otherwise it returns the URL unchanged
+    and relies on certificate validation to block DNS rebinding, so this
+    closes the same gap without threading the pinned URL through the whole
+    ``anthropic_messages()`` call chain.
+    """
+    if not _allow_client_side_advisor_credentials():
+        return None, None
+    api_key: Optional[str] = advisor_tool.get("api_key")
+    api_base: Optional[str] = advisor_tool.get("api_base")
+    if api_base is None:
+        return api_key, None
+    if not api_key:
+        raise ValueError(
+            "advisor tool definition sets 'api_base' without 'api_key'. A "
+            "caller-supplied api_base is only honored alongside a "
+            "caller-supplied api_key, so the proxy's own credentials are "
+            "never sent to a caller-chosen destination."
+        )
+    if not api_base.startswith("https://"):
+        raise ValueError(f"advisor tool definition sets 'api_base'={api_base!r}, which must use the https scheme.")
+    if getattr(litellm, "ssl_verify", True) is False:
+        raise ValueError(
+            "advisor tool definition sets 'api_base' but the proxy has TLS verification "
+            "disabled (litellm.ssl_verify=False), so a caller-supplied api_base can't be "
+            "safely validated against DNS rebinding."
+        )
+    if getattr(litellm, "user_url_validation", True):
+        validate_url(api_base)
+    return api_key, api_base
+
+
 def _make_synthetic_advisor_tool() -> Dict:
     """Build a regular tool definition the executor provider can understand."""
     return {
@@ -205,11 +246,7 @@ def _find_advisor_tool_use(response: Any) -> Optional[Dict]:
     if not isinstance(content, list):
         return None
     for block in content:
-        if (
-            isinstance(block, dict)
-            and block.get("type") == "tool_use"
-            and block.get("name") == "advisor"
-        ):
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "advisor":
             return block
     return None
 
@@ -219,11 +256,7 @@ def _extract_response_text(response: Any) -> str:
     content = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
         return ""
-    parts = [
-        b.get("text", "")
-        for b in content
-        if isinstance(b, dict) and b.get("type") == "text"
-    ]
+    parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
     return "\n".join(parts).strip()
 
 
@@ -247,9 +280,7 @@ def _build_advisor_context(
     question = (advisor_use_block.get("input") or {}).get("question") or (
         "Please provide guidance on the current task."
     )
-    raw_content = (
-        executor_response.get("content") if isinstance(executor_response, dict) else []
-    ) or []
+    raw_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     # Keep only text blocks — strip tool_use and provider-specific fields.
     executor_text_blocks = [
         {k: v for k, v in block.items() if k not in _PROVIDER_SPECIFIC_KEYS}
@@ -273,9 +304,7 @@ def _inject_advisor_turn(
     Append the executor's response (as an assistant turn) and the advisor
     result (as a user tool_result turn) so the executor can continue.
     """
-    executor_content = (
-        executor_response.get("content") if isinstance(executor_response, dict) else []
-    ) or []
+    executor_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     tool_use_id = advisor_use_block.get("id", "")
     return [
         *messages,
@@ -302,9 +331,7 @@ def _inject_max_uses_error(
     Inject a max_uses_exceeded error tool_result so the executor continues
     without further advisor calls (mirrors Anthropic's server-side behaviour).
     """
-    executor_content = (
-        executor_response.get("content") if isinstance(executor_response, dict) else []
-    ) or []
+    executor_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     tool_use_id = advisor_use_block.get("id", "")
     return [
         *messages,

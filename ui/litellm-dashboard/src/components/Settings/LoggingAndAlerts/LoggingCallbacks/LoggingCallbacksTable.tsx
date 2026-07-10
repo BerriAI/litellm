@@ -3,6 +3,7 @@ import type { TableProps } from "antd";
 import { Table } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
+import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { AlertingObject } from "./types";
 
@@ -48,7 +49,6 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       key: "name",
       render: (_: string, record: CallbackRow) => {
         const id = record.name;
-        console.log("availableCallbacks", availableCallbacks);
         const displayName = availableCallbacks[id]?.ui_callback_name || id;
         return <div className="font-medium text-gray-800">{displayName}</div>;
       },
@@ -57,19 +57,13 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700">Mode</span>,
       key: "mode",
       render: (_: unknown, record: CallbackRow) => {
-        const mode = record.mode || "success";
+        // Backend sends `type` (success | failure); legacy in-memory rows
+        // from add-callback flow set `mode`. Read both so newly-added rows
+        // and server-fetched rows both render correctly.
+        const mode = record.type || record.mode || "success";
         const label = CALLBACK_MODES.find((m) => m.value === mode)?.label || mode;
-        const badgeClass =
-          mode === "success"
-            ? "bg-green-100 text-green-800"
-            : mode === "failure"
-              ? "bg-red-100 text-red-800"
-              : "bg-blue-100 text-blue-800";
-        return (
-          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
-            {label}
-          </span>
-        );
+        const tone: StatusTone = mode === "success" ? "success" : mode === "failure" ? "error" : "info";
+        return <StatusBadge tone={tone} label={label} />;
       },
       width: 240,
     },
@@ -109,7 +103,10 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
             <Table
               columns={columns}
               dataSource={callbacks as CallbackRow[]}
-              rowKey={(record) => record.name}
+              // `generic_api` can appear as both a success and a failure
+              // callback simultaneously — keying by `name` alone produced
+              // duplicate React keys. Compose with type to keep keys unique.
+              rowKey={(record) => `${record.name}-${record.type || record.mode || "success"}`}
               pagination={false}
               rowClassName={() => "hover:bg-gray-50"}
             />

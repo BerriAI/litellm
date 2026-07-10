@@ -79,9 +79,7 @@ class ServiceLogging(CustomLogger):
         if callback == "otel":
             from litellm.proxy.proxy_server import open_telemetry_logger
 
-            if open_telemetry_logger is not None and _is_otel_logger(
-                open_telemetry_logger
-            ):
+            if open_telemetry_logger is not None and _is_otel_logger(open_telemetry_logger):
                 return open_telemetry_logger
         return None
 
@@ -142,9 +140,7 @@ class ServiceLogging(CustomLogger):
                 )
             )
 
-    def service_failure_hook(
-        self, service: ServiceTypes, duration: float, error: Exception, call_type: str
-    ):
+    def service_failure_hook(self, service: ServiceTypes, duration: float, error: Exception, call_type: str):
         """
         [TODO] Not implemented for sync calls yet. V0 is focused on async monitoring (used by proxy).
         """
@@ -186,9 +182,7 @@ class ServiceLogging(CustomLogger):
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
-                await self.prometheusServicesLogger.async_service_success_hook(
-                    payload=payload
-                )
+                await self.prometheusServicesLogger.async_service_success_hook(payload=payload)
             elif callback == "datadog" or isinstance(callback, DataDogLogger):
                 await self.init_datadog_logger_if_none()
                 await self.dd_logger.async_service_success_hook(
@@ -205,10 +199,7 @@ class ServiceLogging(CustomLogger):
                 # here is what hid those calls from traces entirely. The OTel
                 # logger decides what to do with a missing parent — legacy V1
                 # no-ops, V2 emits a root span (and skips metrics-only pings).
-                if (
-                    _otel_logger_to_use is not None
-                    and id(_otel_logger_to_use) not in emitted_otel_logger_ids
-                ):
+                if _otel_logger_to_use is not None and id(_otel_logger_to_use) not in emitted_otel_logger_ids:
                     emitted_otel_logger_ids.add(id(_otel_logger_to_use))
                     await _otel_logger_to_use.async_service_success_hook(
                         payload=payload,
@@ -249,9 +240,7 @@ class ServiceLogging(CustomLogger):
         from litellm.proxy.proxy_server import open_telemetry_logger
 
         if not hasattr(self, "otel_logger"):
-            if open_telemetry_logger is not None and isinstance(
-                open_telemetry_logger, OpenTelemetry
-            ):
+            if open_telemetry_logger is not None and isinstance(open_telemetry_logger, OpenTelemetry):
                 self.otel_logger: OpenTelemetry = open_telemetry_logger
             else:
                 verbose_logger.warning(
@@ -319,10 +308,7 @@ class ServiceLogging(CustomLogger):
 
                 # See the success hook: no parent gate, so background failures
                 # are traced too. V1 no-ops without a parent; V2 emits a root.
-                if (
-                    _otel_logger_to_use is not None
-                    and id(_otel_logger_to_use) not in emitted_otel_logger_ids
-                ):
+                if _otel_logger_to_use is not None and id(_otel_logger_to_use) not in emitted_otel_logger_ids:
                     emitted_otel_logger_ids.add(id(_otel_logger_to_use))
                     await _otel_logger_to_use.async_service_failure_hook(
                         payload=payload,
@@ -361,9 +347,7 @@ class ServiceLogging(CustomLogger):
                 pass
             else:
                 raise Exception(
-                    "Duration={} is not a float or timedelta object. type={}".format(
-                        _duration, type(_duration)
-                    )
+                    "Duration={} is not a float or timedelta object. type={}".format(_duration, type(_duration))
                 )  # invalid _duration value
             # Batch polling callbacks (check_batch_cost) don't include call_type in kwargs.
             # Use .get() to avoid KeyError.

@@ -18,11 +18,34 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
-from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
+from litellm.constants import (
+    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so adaptive-thinking detection reads this
+    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
+    ``main`` copy lacks until merge."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -65,6 +88,87 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
 
     # Second chunk should be forwarded unchanged
     assert collected[1] == b"raw-bytes"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_appends_error_event_when_stream_truncates_mid_tool_use():
+    """
+    Regression test for LIT-3724: Bedrock invoke streams that go silent
+    mid tool_use (no content_block_stop / message_delta / message_stop)
+    used to be closed as a successful SSE stream, handing clients
+    unterminated tool-call JSON with HTTP 200. The stream must now end
+    with an Anthropic-protocol `error` SSE event.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _truncated_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "tooluse_1", "name": "write", "input": {}},
+        }
+        yield {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path": "/builder/docs/QUAL'},
+        }
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _truncated_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "write the file"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_truncated_tool_use",
+            function_id="test_bedrock_sse_wrapper_truncated_tool_use",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    assert len(collected) == 4
+    error_event = collected[-1].decode()
+    assert error_event.startswith("event: error\n")
+    error_payload = json.loads(error_event.split("data: ", 1)[1])
+    assert error_payload["type"] == "error"
+    assert error_payload["error"]["type"] == "api_error"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_no_error_event_when_stream_ends_with_message_stop():
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _complete_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}}
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
+        yield {"type": "content_block_stop", "index": 0}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}
+        yield {"type": "message_stop"}
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _complete_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_complete_stream",
+            function_id="test_bedrock_sse_wrapper_complete_stream",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    assert len(collected) == 6
+    assert collected[-1].startswith(b"event: message_stop\n")
+    assert not any(chunk.startswith(b"event: error\n") for chunk in collected)
 
 
 @pytest.mark.asyncio
@@ -388,7 +492,9 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
 
 
-def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled():
+def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
+    local_model_cost_map,
+):
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -467,7 +573,7 @@ def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_o
     assert result["tools"][0]["type"] == "custom"
 
 
-def test_remove_ttl_from_cache_control_processes_tools():
+def test_remove_ttl_from_cache_control_processes_tools(local_model_cost_map):
     """
     Ensure _remove_ttl_from_cache_control also sanitizes cache_control on tools.
 
@@ -513,7 +619,7 @@ def test_remove_ttl_from_cache_control_processes_tools():
     assert "ttl" not in request["system"][0]["cache_control"]
 
 
-def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
+def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5(local_model_cost_map):
     """
     For Claude 4.5+ models, ttl in ["5m", "1h"] should be preserved on tools,
     just like it is for system and messages.
@@ -539,7 +645,7 @@ def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
     }
 
     cfg._remove_ttl_from_cache_control(
-        request, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        request, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
 
     # Both tools and system should preserve ttl for Claude 4.5
@@ -624,9 +730,9 @@ def test_bedrock_messages_strips_output_config():
             headers={},
         )
 
-    assert (
-        "output_config" not in result
-    ), "output_config should be stripped for models that don't support it"
+    assert "output_config" not in result, (
+        "output_config should be stripped for models that don't support it"
+    )
     assert result.get("max_tokens") == 4096
 
 
@@ -659,9 +765,9 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
             headers={},
         )
 
-    assert (
-        "output_config" in result
-    ), "output_config should be preserved for supported models"
+    assert "output_config" in result, (
+        "output_config should be preserved for supported models"
+    )
     assert result["output_config"] == {"effort": "high"}
     assert result.get("max_tokens") == 4096
 
@@ -1038,7 +1144,7 @@ def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     ],
 )
 def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
-    reasoning_effort, expected_effort
+    local_model_cost_map, reasoning_effort, expected_effort
 ):
     """``reasoning_effort`` maps to ``thinking`` + ``output_config.effort`` on /v1/messages."""
     from unittest.mock import patch
@@ -1204,9 +1310,9 @@ def test_bedrock_messages_strips_context_management():
         headers={},
     )
 
-    assert (
-        "context_management" not in result
-    ), "context_management should be stripped — Bedrock Invoke rejects it"
+    assert "context_management" not in result, (
+        "context_management should be stripped — Bedrock Invoke rejects it"
+    )
     assert result.get("max_tokens") == 4096
 
 
@@ -1353,12 +1459,12 @@ def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
     )
 
     betas = result.get("anthropic_beta") or []
-    assert (
-        "advisor-tool-2026-03-01" not in betas
-    ), "user-provided beta not in the Bedrock mapping must be dropped"
-    assert (
-        "context-1m-2025-08-07" in betas
-    ), "user-provided beta that IS in the Bedrock mapping should survive"
+    assert "advisor-tool-2026-03-01" not in betas, (
+        "user-provided beta not in the Bedrock mapping must be dropped"
+    )
+    assert "context-1m-2025-08-07" in betas, (
+        "user-provided beta that IS in the Bedrock mapping should survive"
+    )
 
 
 def test_bedrock_messages_renames_user_provided_aliased_beta_header():
@@ -1383,12 +1489,12 @@ def test_bedrock_messages_renames_user_provided_aliased_beta_header():
     )
 
     betas = result.get("anthropic_beta") or []
-    assert (
-        "advanced-tool-use-2025-11-20" not in betas
-    ), "Anthropic-direct spelling should be rewritten, not forwarded verbatim"
-    assert (
-        "tool-search-tool-2025-10-19" in betas
-    ), "user-provided beta should be renamed to the Bedrock-side spelling"
+    assert "advanced-tool-use-2025-11-20" not in betas, (
+        "Anthropic-direct spelling should be rewritten, not forwarded verbatim"
+    )
+    assert "tool-search-tool-2025-10-19" in betas, (
+        "user-provided beta should be renamed to the Bedrock-side spelling"
+    )
 
 
 @pytest.mark.asyncio
@@ -1648,3 +1754,510 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         custom_llm_provider="bedrock",
     )
     assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-opus-4-8",
+        "global.anthropic.claude-opus-4-7-v1:0",
+        "us.anthropic.claude-fable-5",
+        "global.anthropic.claude-fable-5",
+    ],
+)
+def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(
+    local_model_cost_map, model
+):
+    """clear_thinking_20251015 without a top-level ``thinking`` field must inject
+    ``thinking.type=adaptive`` plus ``output_config.effort`` on adaptive-thinking
+    models (Opus 4.7/4.8, Fable 5). The legacy ``thinking.type=enabled`` shape is
+    rejected by Bedrock for these models (issue #29188). Detection is sourced from
+    the cost-map ``supports_adaptive_thinking`` flag; the versioned Bedrock id
+    (``-v1:0``) resolves to its suffix-less cost-map entry."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model=model
+    )
+
+    assert changed is True
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"]["effort"] == "low"
+
+
+def test_bedrock_clear_thinking_converts_legacy_enabled_budget_to_effort():
+    """A legacy ``thinking.type=enabled`` with a budget on an adaptive model is
+    translated to ``adaptive`` + ``output_config.effort`` derived from the budget
+    rather than forwarded as the rejected ``enabled`` shape."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        },
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="us.anthropic.claude-opus-4-8"
+    )
+
+    assert changed is True
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"]["effort"] == "high"
+
+
+def test_resolve_clear_thinking_budget_tokens_honors_explicit_zero():
+    """A truthiness guard would treat an explicit ``budget_tokens=0`` as missing
+    and silently substitute the Bedrock minimum. The resolver must honor ``0``
+    and only fall back to the minimum when the caller omits the budget."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    assert cfg._resolve_clear_thinking_budget_tokens(0) == 0
+    assert (
+        cfg._resolve_clear_thinking_budget_tokens(None)
+        == BEDROCK_MIN_THINKING_BUDGET_TOKENS
+    )
+    assert cfg._resolve_clear_thinking_budget_tokens(12000) == 12000
+
+
+def test_bedrock_clear_thinking_keeps_enabled_for_non_adaptive_models():
+    """Non-adaptive extended-thinking models (e.g. Opus 4.5) still use the legacy
+    ``thinking.type=enabled`` + ``budget_tokens`` shape, which they accept."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+    )
+
+    assert changed is True
+    assert request["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    }
+    assert "output_config" not in request
+
+
+def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
+    """End-to-end: a Claude Code clear_thinking payload (no ``thinking`` field) on
+    Opus 4.8 must produce a Bedrock Invoke body with adaptive thinking and an
+    effort, never ``thinking.type.enabled``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"]["effort"] == "low"
+
+
+def test_bedrock_invoke_transform_normalizes_system_role_message_into_system():
+    """Bedrock Invoke rejects ``role: "system"`` entries in ``messages`` on some
+    Claude aliases; they must be moved into the top-level ``system`` field
+    (Anthropic Messages carries that content there)."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "system", "content": "You are a careful assistant."},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert all(m.get("role") != "system" for m in result["messages"])
+    assert result["messages"] == [{"role": "user", "content": "hi"}]
+    assert result["system"] == [
+        {"type": "text", "text": "You are a careful assistant."}
+    ]
+
+
+def test_bedrock_invoke_transform_merges_system_role_into_existing_system():
+    """A ``role: "system"`` message is appended to any pre-existing top-level
+    ``system`` content rather than replacing it."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "system", "content": "Follow the user's formatting."},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": "Base system prompt.",
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "hi"}]
+    assert result["system"] == [
+        {"type": "text", "text": "Base system prompt."},
+        {"type": "text", "text": "Follow the user's formatting."},
+    ]
+
+
+def test_bedrock_invoke_transform_merges_list_content_system_role_into_system():
+    """A ``role: "system"`` message whose content is a list of content blocks is
+    merged block-by-block into the top-level ``system`` field, preserving any
+    pre-existing system blocks."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Be terse."},
+                {"type": "text", "text": "Cite sources."},
+            ],
+        },
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": [{"type": "text", "text": "Base."}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "hi"}]
+    assert result["system"] == [
+        {"type": "text", "text": "Base."},
+        {"type": "text", "text": "Be terse."},
+        {"type": "text", "text": "Cite sources."},
+    ]
+
+
+def test_as_system_content_blocks_handles_each_shape():
+    """``_as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
+    a string -> a single text block, a list -> a shallow copy, and any other value
+    (e.g. a bare content-block dict) -> wrapped in a single-element list."""
+    block = {"type": "text", "text": "x"}
+    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(None) == []
+    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [
+        {"type": "text", "text": "hello"}
+    ]
+    blocks = [block]
+    out = AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(blocks)
+    assert out == blocks and out is not blocks
+    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [
+        block
+    ]
+
+
+@pytest.mark.parametrize(
+    "budget_tokens,expected_effort",
+    [
+        (0, "low"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 1, "low"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET, "medium"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET - 1, "medium"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET - 1, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET, "xhigh"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET * 2, "xhigh"),
+    ],
+)
+def test_effort_from_thinking_budget_tiers(budget_tokens, expected_effort):
+    """The budget -> effort mapping pins each tier boundary so a shifted threshold
+    is caught."""
+    assert (
+        AmazonAnthropicClaudeMessagesConfig._effort_from_thinking_budget(budget_tokens)
+        == expected_effort
+    )
+
+
+def test_inject_adaptive_thinking_preserves_existing_effort():
+    """When the request already carries an ``output_config.effort`` we keep it
+    rather than overwriting with the budget-derived tier."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {"output_config": {"effort": "max", "other": "keep"}}
+
+    cfg._inject_adaptive_thinking_for_clear_thinking(
+        request, budget_tokens=24000, model="us.anthropic.claude-fable-5"
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "max", "other": "keep"}
+
+
+def test_bedrock_clear_thinking_noops_when_thinking_already_adaptive():
+    """An incoming ``thinking.type=adaptive`` is already valid for clear_thinking;
+    the helper must leave the request untouched and report no change."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "thinking": {"type": "adaptive"},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="us.anthropic.claude-fable-5"
+    )
+
+    assert changed is False
+    assert request["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in request
+
+
+def test_bedrock_clear_thinking_replaces_disabled_thinking_on_adaptive_model():
+    """A ``thinking.type=disabled`` (or any non-enabled/adaptive shape) is invalid
+    for clear_thinking on Bedrock; it must be replaced with a usable config. On an
+    adaptive model that means ``thinking.type=adaptive`` + ``output_config.effort``."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "thinking": {"type": "disabled"},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="us.anthropic.claude-fable-5"
+    )
+
+    assert changed is True
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"]["effort"] == "low"
+
+
+def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
+    """A caller-supplied ``thinking.type=enabled`` on a non-adaptive extended-thinking
+    model (Opus 4.5) is already accepted by Bedrock, so the helper leaves it as-is
+    and does not convert it to the adaptive shape."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "thinking": {"type": "enabled", "budget_tokens": 8000},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+    )
+
+    assert changed is False
+    assert request["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert "output_config" not in request
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    reload_beta_headers_config()
+
+
+def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: Bedrock InvokeModel supports automatic tool-call clearing via
+    ``clear_tool_uses_20250919`` under the ``context-management-2025-06-27``
+    beta. Before the LIT-3393 fix, the transformation stripped this edit (only
+    ``compact_20260112`` survived) AND the beta was filtered out by
+    ``filter_and_transform_beta_headers`` for ``bedrock``, producing a Bedrock
+    400 ``"context_management: Extra inputs are not permitted"``.
+
+    Post-fix, the edit must reach the body and the beta must reach
+    ``anthropic_beta``.
+
+    AWS docs ("Automatic tool call clearing (Beta)"):
+    https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "clear_tool_uses_20250919"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("context_management") == {
+        "edits": [{"type": "clear_tool_uses_20250919"}]
+    }, "clear_tool_uses_20250919 edit must reach Bedrock InvokeModel body"
+    assert "context-management-2025-06-27" in result.get("anthropic_beta", []), (
+        "context-management-2025-06-27 beta must reach the InvokeModel body so "
+        "the tool-call-clearing edit is accepted"
+    )
+
+
+def test_bedrock_messages_preserves_mixed_compact_and_clear_tool_uses_edits(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: a request mixing ``compact_20260112`` and
+    ``clear_tool_uses_20250919`` must keep BOTH edits and emit BOTH
+    anthropic-beta values (``compact-2026-01-12`` + ``context-management-2025-06-27``).
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "compact_20260112"},
+                {"type": "clear_tool_uses_20250919"},
+            ]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-6-20250929-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    cm = result.get("context_management")
+    assert cm is not None
+    edit_types = sorted(e.get("type") for e in cm["edits"])
+    assert edit_types == ["clear_tool_uses_20250919", "compact_20260112"]
+
+    betas = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in betas
+    assert "context-management-2025-06-27" in betas
+
+
+def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: ``clear_thinking_20251015`` remains LiteLLM-internal (consumed via
+    thinking-injection) and MUST be stripped from the body, while
+    ``clear_tool_uses_20250919`` (officially supported on Bedrock InvokeModel)
+    survives in the same request.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "clear_thinking_20251015", "keep": "all"},
+                {"type": "clear_tool_uses_20250919"},
+            ]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    cm = result.get("context_management")
+    assert cm is not None
+    assert [e.get("type") for e in cm["edits"]] == [
+        "clear_tool_uses_20250919"
+    ], "clear_thinking_20251015 must still be stripped (LiteLLM-internal)"
+
+    betas = result.get("anthropic_beta", [])
+    assert "context-management-2025-06-27" in betas
+    # ``compact-2026-01-12`` was not requested.
+    assert "compact-2026-01-12" not in betas
+
+
+def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: ``anthropic_beta_headers_config.json`` previously mapped
+    ``bedrock.context-management-2025-06-27`` to ``null``, so
+    ``filter_and_transform_beta_headers`` dropped the header even when the
+    transformation tried to set it. This regression guard locks the bundled
+    mapping in place.
+
+    Pinned to the bundled local config via ``LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS``
+    so the assertion is not subject to whatever the upstream remote currently
+    serves or what previous tests left in the module cache.
+    """
+    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+
+    out = filter_and_transform_beta_headers(
+        ["context-management-2025-06-27"],
+        provider="bedrock",
+    )
+    assert out == ["context-management-2025-06-27"]
+
+    # Bedrock_converse genuinely lacks it per AWS docs; this guard prevents
+    # an accidental flip there.
+    out_converse = filter_and_transform_beta_headers(
+        ["context-management-2025-06-27"],
+        provider="bedrock_converse",
+    )
+    assert out_converse == []
+

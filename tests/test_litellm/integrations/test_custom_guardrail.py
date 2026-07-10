@@ -84,6 +84,112 @@ class TestCustomGuardrailDeploymentHook:
         assert result["messages"] == mock_result["messages"]
         assert result["messages"] != original_messages
 
+    @pytest.mark.asyncio
+    async def test_deployment_hook_skips_when_pre_call_already_ran(self):
+        """The deployment hook must not re-run async_pre_call_hook once the proxy
+        pre-call loop has already run it for this request."""
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {},
+        }
+
+        guardrail.mark_pre_call_hook_ran(kwargs)
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_deployment_hook_runs_when_not_marked(self):
+        """Without the proxy marker (direct-SDK usage) the deployment hook is the
+        only execution path and must still run the guardrail exactly once."""
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {},
+        }
+
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 1
+
+    def test_mark_pre_call_hook_ran_uses_litellm_metadata(self):
+        """The marker is recorded in litellm_metadata when that is the metadata
+        bucket in use, and is then visible to the skip check."""
+        from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+
+        guardrail = CustomGuardrail(guardrail_name="g1")
+        kwargs = {"litellm_metadata": {}}
+
+        guardrail.mark_pre_call_hook_ran(kwargs)
+
+        assert kwargs["litellm_metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY]
+        assert guardrail._pre_call_hook_already_ran(kwargs) is True
+
+    @pytest.mark.asyncio
+    async def test_deployment_hook_ignores_forged_caller_marker(self):
+        """A direct-SDK caller controls request metadata but cannot know the
+        per-process token, so a hand-crafted marker must not suppress a
+        requested guardrail in async_pre_call_deployment_hook."""
+        from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {PRE_CALL_EXECUTED_GUARDRAILS_KEY: ["g1"]},
+        }
+
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 1
+
 
 class TestCustomGuardrailShouldRunGuardrail:
 
@@ -256,6 +362,54 @@ class TestCustomGuardrailShouldRunGuardrail:
         assert (
             result is False
         ), "Admin config in metadata must be respected when other metadata key is empty"
+
+    def test_should_run_guardrail_key_disable_global_not_overruled_by_team_guardrail_list(
+        self,
+    ):
+        """Key disable_global_guardrails must take precedence over the guardrail
+        appearing in the team's explicit guardrails list."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Key disabled globals; team added the same guardrail to its explicit list
+        # (simulates what _add_guardrails_from_key_or_team_metadata produces).
+        data_key_disabled_team_listed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_metadata": {"disable_global_guardrails": True},
+                "guardrails": ["global_guardrail"],
+            },
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_key_disabled_team_listed,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is False
+        ), "Key disable_global_guardrails must win over team's explicit guardrail list"
+
+        # Complementary: key NOT disabled, team added guardrail → should run
+        data_key_enabled_team_listed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_metadata": {},
+                "guardrails": ["global_guardrail"],
+            },
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_key_enabled_team_listed,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is True
+        ), "Guardrail in team's explicit list should run when key has not disabled globals"
 
     def test_should_run_guardrail_with_opted_out_global_guardrails(self):
         """Test that per-guardrail opt-out only works from admin metadata"""
@@ -677,6 +831,173 @@ class TestGuardrailSensitiveFieldStripping:
         serialized = json.dumps(request_data)
         assert "secret_fields" not in serialized
         assert "sk-secret" not in serialized
+
+
+class TestGuardrailResponseCredentialMasking:
+    """LIT-4314 issue B regression: credentials embedded in guardrail_response
+    (via team callback_vars flowing through data["metadata"]) must be masked at
+    the construction seam so every downstream sink (SpendLogs, OTel, Langfuse,
+    custom loggers) sees masked values rather than plaintext.
+    """
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def test_callback_vars_api_key_is_masked(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        plaintext_key = "lsv2_pt_abcdef1234567890"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata_snapshot": {
+                    "callback_vars": {
+                        "langsmith_api_key": plaintext_key,
+                        "langsmith_project": "proj-name",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]
+
+        masked_key = logged["metadata_snapshot"]["callback_vars"]["langsmith_api_key"]
+        assert masked_key != plaintext_key
+        assert "*" in masked_key
+        assert plaintext_key not in json.dumps(request_data)
+
+        assert logged["model"] == "gpt-4o-mini"
+        assert logged["messages"] == [{"role": "user", "content": "hi"}]
+        assert (
+            logged["metadata_snapshot"]["callback_vars"]["langsmith_project"]
+            == "proj-name"
+        )
+
+    def test_nested_user_api_key_auth_metadata_is_masked(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        token_value = "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "evaluated_metadata": {
+                    "user_api_key_auth": {
+                        "token": token_value,
+                        "api_key": token_value,
+                        "metadata": {
+                            "callback_vars": {
+                                "langsmith_api_key": "lsv2_pt_super_secret_value_1234",
+                            }
+                        },
+                    }
+                }
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        serialized = json.dumps(request_data)
+        assert token_value not in serialized
+        assert "lsv2_pt_super_secret_value_1234" not in serialized
+
+    def test_secret_fields_pop_still_runs(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4",
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-live-should-not-appear",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        serialized = json.dumps(request_data)
+        assert "secret_fields" not in serialized
+        assert "sk-live-should-not-appear" not in serialized
+
+    def test_match_and_regex_redaction_still_runs(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "filters": [{"regex": r"\d{3}-\d{2}-\d{4}", "action": "BLOCKED"}]
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
+
+    def test_scalar_types_pass_through_unchanged(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "flagged": True,
+                "score": 0.94,
+                "tokens_used": 42,
+                "categories": ["pii", "toxicity"],
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]
+        assert logged["flagged"] is True
+        assert logged["score"] == 0.94
+        assert logged["tokens_used"] == 42
+        assert logged["categories"] == ["pii", "toxicity"]
+
+    def test_masking_reveals_prefix_and_suffix(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        plaintext = "lsv2_pt_abcdef1234567890"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "metadata_snapshot": {
+                    "callback_vars": {"langsmith_api_key": plaintext}
+                }
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        masked = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]["metadata_snapshot"]["callback_vars"]["langsmith_api_key"]
+        assert masked != plaintext
+        assert masked.startswith(plaintext[:4])
+        assert masked.endswith(plaintext[-4:])
 
 
 class TestCustomGuardrailPassthroughSupport:

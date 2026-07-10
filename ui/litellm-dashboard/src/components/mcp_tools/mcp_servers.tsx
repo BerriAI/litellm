@@ -21,6 +21,7 @@ import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
+import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "../networking";
 
@@ -71,6 +72,23 @@ const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
+// Server id stashed by the Tools tab before an OBO OAuth redirect, read once at
+// mount so the redirect returns straight to that server's Tools tab.
+const readToolsOAuthServerId = (): string | null => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const stored = getSecureItem(TOOLS_OAUTH_UI_STATE_KEY);
+    if (!stored) {
+      return null;
+    }
+    return JSON.parse(stored)?.serverId ?? null;
+  } catch {
+    return null;
+  }
+};
+
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
@@ -103,7 +121,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  // Server whose Tools tab should be reopened after an OBO OAuth redirect; read
+  // once from sessionStorage so the restored server selection is correct on the
+  // first render. Cleared when the user navigates back to the list (handleBack)
+  // so a later visit to the same server defaults to Overview, not the Tools tab.
+  const [toolsTabServerId, setToolsTabServerId] = useState<string | null>(readToolsOAuthServerId);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(toolsTabServerId);
   const [editServer, setEditServer] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>("all");
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
@@ -175,6 +198,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
     } catch (err) {
       console.error("Failed to restore MCP edit view state", err);
+    }
+  }, []);
+
+  // The restored server id was consumed by the initializer above; remove the
+  // one-shot sessionStorage key so a full page reload doesn't reopen the Tools
+  // tab (removeItem only, no setState).
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.removeItem(TOOLS_OAUTH_UI_STATE_KEY);
+      } catch {
+        // ignore storage errors
+      }
     }
   }, []);
 
@@ -338,11 +374,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleBack = React.useCallback(() => {
     setEditServer(false);
     setSelectedServerId(null);
+    // Drop the post-redirect one-shot so re-selecting that server opens Overview.
+    setToolsTabServerId(null);
     refetch();
   }, [refetch]);
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
   }
 
@@ -420,13 +457,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </div>
         <div className="flex items-center gap-2">
           {isAdminRole(userRole) && (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
               + Add New MCP Server
             </Button>
           )}
           {!isAdminRole(userRole) && (
             <Button
-              className="flex-shrink-0"
+              className="shrink-0"
               onClick={() => {
                 setPrefillData(null);
                 setModalVisible(true);
@@ -459,8 +496,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>All Servers</Tab>
             <Tab>Toolsets</Tab>
             <Tab>Connect</Tab>
-            <Tab>Semantic Filter</Tab>
-            <Tab>Network Settings</Tab>
+            {isAdminRole(userRole) && <Tab>Semantic Filter</Tab>}
+            {isAdminRole(userRole) && <Tab>Network Settings</Tab>}
             {isAdminRole(userRole) && (
               <Tab>
                 <span className="flex items-center gap-2">
@@ -483,6 +520,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 userID={userID}
                 userRole={userRole}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
             ) : (
               <div className="w-full h-full">
@@ -613,12 +651,16 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPConnect />
           </TabPanel>
-          <TabPanel>
-            <MCPSemanticFilterSettings accessToken={accessToken} />
-          </TabPanel>
-          <TabPanel>
-            <MCPNetworkSettings accessToken={accessToken} />
-          </TabPanel>
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPSemanticFilterSettings accessToken={accessToken} />
+            </TabPanel>
+          )}
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPNetworkSettings accessToken={accessToken} />
+            </TabPanel>
+          )}
           {isAdminRole(userRole) && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />

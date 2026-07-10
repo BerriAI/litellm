@@ -146,9 +146,7 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
         self.num_retries = num_retries
         self.response = response or httpx.Response(
             status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
             self.message, response=self.response, body=None
@@ -192,9 +190,7 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         self.num_retries = num_retries
         self.response = response or httpx.Response(
             status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
             self.message, response=self.response, body=None
@@ -347,9 +343,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
             method="POST",
             url="https://api.openai.com/v1",
         )
-        super().__init__(
-            request=request
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(request=request)  # Call the base class constructor with the parameters it needs
         self.status_code = exception_status_code or 408
         self.message = "litellm.Timeout: {}".format(message)
         self.model = model
@@ -438,9 +432,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
-        category: Union[str, RateLimitErrorCategory] = (
-            RateLimitErrorCategory.VENDOR_RATE_LIMIT
-        ),
+        category: Union[str, RateLimitErrorCategory] = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         headers: Optional[Dict[str, str]] = None,
         detail: Any = None,
@@ -452,16 +444,12 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.category = (
-            category.value if isinstance(category, RateLimitErrorCategory) else category
-        )
+        self.category = category.value if isinstance(category, RateLimitErrorCategory) else category
         # Which dimension was exceeded — request count, token count, parallel
         # requests, budget, max iterations. None when the source didn't
         # classify the failure (e.g. legacy vendor 429 with no header hints).
         self.rate_limit_type: Optional[str] = (
-            rate_limit_type.value
-            if isinstance(rate_limit_type, RateLimitType)
-            else rate_limit_type
+            rate_limit_type.value if isinstance(rate_limit_type, RateLimitType) else rate_limit_type
         )
         # Headers explicitly attached to the error (e.g. retry-after,
         # rate_limit_type, reset_at). Preserved across the proxy boundary so
@@ -476,12 +464,8 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         # headers stay reachable on `e.response.headers` for callers that
         # explicitly want them; only the proxy-supplied `headers=` kwarg
         # makes it onto `self.headers`.
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
-        self.headers: Optional[Dict[str, str]] = (
-            {k: str(v) for k, v in headers.items()} if headers else None
-        )
+        _response_headers = getattr(response, "headers", None) if response is not None else None
+        self.headers: Optional[Dict[str, str]] = {k: str(v) for k, v in headers.items()} if headers else None
         # Mirrors FastAPI HTTPException.detail so the same instance can be
         # serialized through both the ProxyException and HTTPException paths.
         self.detail = detail if detail is not None else self.message
@@ -664,9 +648,7 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
+        _response_headers = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -714,9 +696,7 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
+        _response_headers = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -764,9 +744,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
+        _response_headers = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -915,9 +893,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
 
 
 class JSONSchemaValidationError(APIResponseValidationError):
-    def __init__(
-        self, model: str, llm_provider: str, raw_response: str, schema: str
-    ) -> None:
+    def __init__(self, model: str, llm_provider: str, raw_response: str, schema: str) -> None:
         self.raw_response = raw_response
         self.schema = schema
         self.model = model
@@ -953,9 +929,7 @@ class UnsupportedParamsError(BadRequestError):
         self.litellm_debug_info = litellm_debug_info
         response = response or httpx.Response(
             status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -1005,10 +979,7 @@ class BudgetExceededError(Exception):
         # to match the normalization RateLimitError.__init__ performs.
         self.category: str = RateLimitErrorCategory.LITELLM_RATE_LIMIT.value
         self.rate_limit_type: str = RateLimitType.BUDGET.value
-        message = (
-            message
-            or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
-        )
+        message = message or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
         self.message = message
         super().__init__(message)
 
@@ -1022,9 +993,7 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         self.response = httpx.Response(
             status_code=400,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
             message=self.message, response=self.response, body=None
@@ -1061,9 +1030,7 @@ class LiteLLMUnknownProvider(BadRequestError):
         self.message = LiteLLMCommonStrings.llm_provider_not_provided.value.format(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        super().__init__(
-            self.message, model=model, llm_provider=custom_llm_provider, response=None
-        )
+        super().__init__(self.message, model=model, llm_provider=custom_llm_provider, response=None)
 
     def __str__(self):
         return self.message
@@ -1198,27 +1165,19 @@ class ModifyResponseException(Exception):
         request_data: Dict[str, Any],
         guardrail_name: Optional[str] = None,
         detection_info: Optional[Dict[str, Any]] = None,
+        original_response: Optional[Any] = None,
     ):
         self.message = message
         self.model = model
         self.request_data = request_data
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        # The LLM response that was blocked (post-call). Carries the real token
+        # usage the upstream call consumed, so the synthetic block response can
+        # report it instead of discarding it. None for pre-call blocks (the LLM
+        # was never invoked).
+        self.original_response = original_response
         super().__init__(message)
-
-
-class GuardrailInterventionNormalStringError(
-    Exception
-):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-    def __str__(self):
-        return self.message
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class SensitiveDataRouteException(Exception):
@@ -1248,8 +1207,5 @@ class SensitiveDataRouteException(Exception):
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
         self.sticky_session_routing = sticky_session_routing
-        self.message = (
-            message
-            or f"Sensitive data detected by {guardrail_name}. Routing to model: {route_to_model}"
-        )
+        self.message = message or f"Sensitive data detected by {guardrail_name}. Routing to model: {route_to_model}"
         super().__init__(self.message)

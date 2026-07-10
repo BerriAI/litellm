@@ -217,7 +217,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
 
       {/* Raw JSON (for debugging) */}
       <Section title="Raw Detection Data" defaultOpen={false}>
-        <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(detections, null, 2)}</pre>
+        <pre className="bg-gray-50 rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(detections, null, 2)}</pre>
       </Section>
     </div>
   );

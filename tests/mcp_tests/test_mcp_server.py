@@ -955,6 +955,7 @@ async def test_get_tools_from_mcp_servers():
                 add_prefix=False,
                 raw_headers=None,
                 user_api_key_auth=None,
+                oauth2_headers=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1089,7 +1090,9 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         mock_client_constructor,
     ):
         # Call list_tools
-        tools = await test_manager.list_tools(user_api_key_auth=MagicMock())
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        tools = await test_manager.list_tools(user_api_key_auth=UserAPIKeyAuth())
         # Should only return tools from server_a
         assert len(tools) == 1
         # The server should use the server_name as prefix since no alias is provided
@@ -1553,6 +1556,10 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
     mock_mcp_server.oauth2_flow = None
+    mock_mcp_server.token_exchange_endpoint = None
+    mock_mcp_server.audience = None
+    mock_mcp_server.subject_token_type = None
+    mock_mcp_server.token_exchange_profile = None
     # Additional fields used by build_mcp_server_from_table
     mock_mcp_server.extra_headers = None
     mock_mcp_server.allow_all_keys = False
@@ -1612,6 +1619,10 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
     mock_mcp_server.oauth2_flow = None
+    mock_mcp_server.token_exchange_endpoint = None
+    mock_mcp_server.audience = None
+    mock_mcp_server.subject_token_type = None
+    mock_mcp_server.token_exchange_profile = None
     # Additional fields used by build_mcp_server_from_table
     mock_mcp_server.extra_headers = None
     mock_mcp_server.allow_all_keys = False
@@ -1671,6 +1682,10 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
     mock_mcp_server.oauth2_flow = None
+    mock_mcp_server.token_exchange_endpoint = None
+    mock_mcp_server.audience = None
+    mock_mcp_server.subject_token_type = None
+    mock_mcp_server.token_exchange_profile = None
     # Additional fields used by build_mcp_server_from_table - set explicitly
     # to avoid MagicMock objects being passed to Pydantic MCPServer constructor
     mock_mcp_server.extra_headers = None
@@ -1881,10 +1896,11 @@ def test_get_server_auth_header_no_auth_headers():
 
 
 def test_create_tool_response_objects():
-    """Test _create_tool_response_objects function."""
+    """Test _create_tool_response_objects enriches mcp_info with server_id and alias."""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (
         _create_tool_response_objects,
     )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from mcp.types import Tool as MCPTool
 
     # Create mock tools
@@ -1901,20 +1917,32 @@ def test_create_tool_response_objects():
         ),
     ]
 
-    server_mcp_info = {
-        "server_name": "zapier",
+    server = MCPServer(
+        server_id="a1b2c3d4",
+        name="zapier_internal",
+        alias="zapier",
+        transport="http",
+        mcp_info={
+            "server_name": "zapier_internal",
+            "logo_url": "https://zapier.com/logo.png",
+        },
+    )
+
+    result = _create_tool_response_objects(mock_tools, server)
+
+    expected_mcp_info = {
+        "server_name": "zapier_internal",
         "logo_url": "https://zapier.com/logo.png",
+        "server_id": "a1b2c3d4",
+        "alias": "zapier",
     }
-
-    result = _create_tool_response_objects(mock_tools, server_mcp_info)
-
     assert len(result) == 2
     assert result[0].name == "send_email"
     assert result[0].description == "Send an email"
-    assert result[0].mcp_info == server_mcp_info
+    assert result[0].mcp_info == expected_mcp_info
     assert result[1].name == "create_event"
     assert result[1].description == "Create a calendar event"
-    assert result[1].mcp_info == server_mcp_info
+    assert result[1].mcp_info == expected_mcp_info
 
 
 @pytest.mark.asyncio
@@ -1928,6 +1956,8 @@ async def test_get_tools_for_single_server():
     # Create a mock server (pin allowlist fields; MagicMock auto-attrs are truthy)
     mock_server = MagicMock()
     mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.server_id = "zapier_id"
+    mock_server.alias = "zapier_alias"
     mock_server.allowed_tools = None
     mock_server.disallowed_tools = None
 
@@ -1961,7 +1991,11 @@ async def test_get_tools_for_single_server():
         # Verify the result
         assert len(result) == 1
         assert result[0].name == "send_email"
-        assert result[0].mcp_info == {"server_name": "zapier"}
+        assert result[0].mcp_info == {
+            "server_name": "zapier",
+            "server_id": "zapier_id",
+            "alias": "zapier_alias",
+        }
 
 
 @pytest.mark.asyncio

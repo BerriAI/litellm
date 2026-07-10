@@ -1459,6 +1459,26 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
     assert len(result[0]) == 1
 
 
+def test_set_stream_metadata_mirrors_non_streaming_safety_field_names():
+    safety_ratings = [
+        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
+    ]
+
+    model_response = ModelResponse()
+    VertexGeminiConfig._set_stream_metadata_on_response(
+        model_response=model_response,
+        grounding_metadata=[],
+        url_context_metadata=[],
+        safety_ratings=safety_ratings,
+        citation_metadata=[],
+    )
+
+    assert getattr(model_response, "vertex_ai_safety_ratings") == safety_ratings
+    assert getattr(model_response, "vertex_ai_safety_results") == safety_ratings
+    assert model_response._hidden_params["vertex_ai_safety_ratings"] == safety_ratings
+    assert model_response._hidden_params["vertex_ai_safety_results"] == safety_ratings
+
+
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.
@@ -2777,6 +2797,77 @@ def test_partial_json_chunk_on_first_chunk():
     assert (
         iterator.chunk_type == "accumulated_json"
     ), "Should switch to accumulated_json mode"
+
+
+def test_accumulated_json_does_not_reparse_every_fragment():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26181
+
+    handle_accumulated_json_chunk used to call json.loads on the entire
+    accumulated buffer after EVERY fragment. For a large response fragmented
+    across many chunks that is O(n^2) work in a single GIL-holding C call,
+    which freezes the asyncio event loop for seconds and kills liveness probes.
+
+    The buffer only becomes a complete JSON object on the final fragment, so a
+    correct implementation parses it ~once, not once per fragment. We assert the
+    full chunk still parses correctly AND that json.loads is not called on every
+    fragment (which is what made it quadratic).
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    text = "x" * 200_000  # no braces/brackets so only the final fragment closes
+    blob = json.dumps(
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
+    )
+    fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
+    assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
+
+    parsed = None
+    with patch("json.loads", wraps=json.loads) as spy:
+        for fragment in fragments:
+            out = iterator.handle_accumulated_json_chunk(chunk=fragment)
+            if out is not None:
+                parsed = out
+        parse_calls = spy.call_count
+
+    assert parsed is not None, "the reassembled chunk must still parse"
+    assert parsed.choices[0].delta.content == text, "content must be preserved intact"
+
+    assert parse_calls <= 2, (
+        f"json.loads was called {parse_calls} times for {len(fragments)} "
+        "fragments; the O(n^2) per-fragment re-parse has regressed"
+    )
+
+
+def test_accumulated_json_partial_fragment_returns_none_without_parsing():
+    """A fragment that cannot complete the JSON must not trigger a json.loads
+    parse of the whole growing buffer (issue #26181)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    with patch("json.loads", wraps=json.loads) as spy:
+        result = iterator.handle_accumulated_json_chunk(
+            chunk='{"candidates": [{"content": {"parts": [{"text": "partial'
+        )
+    assert result is None
+    assert spy.call_count == 0, "incomplete buffer should not be parsed"
 
 
 def test_google_ai_studio_presence_penalty_supported():
@@ -4976,3 +5067,184 @@ def test_mid_stream_429_error_raises_during_iteration():
     # Verify: 429 error is properly raised
     assert exc_info.value.status_code == 429
     assert "RESOURCE_EXHAUSTED" in str(exc_info.value.message)
+
+
+class TestModelResponseIteratorCleanup:
+    def _make_logging_obj(self):
+        from unittest.mock import Mock
+
+        obj = Mock()
+        obj.optional_params = {}
+        return obj
+
+    def test_aclose_closes_iterator_and_response(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock()
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        iterator.async_response_iterator = mock_iterator
+
+        asyncio.run(iterator.aclose())
+
+        mock_iterator.aclose.assert_awaited_once()
+        mock_response.aclose.assert_awaited_once()
+
+    def test_close_closes_iterator_and_response(self):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_iterator = MagicMock()
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=True,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        iterator.response_iterator = mock_iterator
+
+        iterator.close()
+
+        mock_iterator.close.assert_called_once()
+        mock_response.close.assert_called_once()
+
+    def test_aclose_without_response_does_not_raise(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock()
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+        )
+        iterator.async_response_iterator = mock_iterator
+
+        asyncio.run(iterator.aclose())
+
+        mock_iterator.aclose.assert_awaited_once()
+
+    def test_aclose_tolerates_iterator_error(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock(side_effect=RuntimeError("transport error"))
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        iterator.async_response_iterator = mock_iterator
+
+        asyncio.run(iterator.aclose())
+
+        mock_response.aclose.assert_awaited_once()
+
+    def test_custom_stream_wrapper_aclose_triggers_model_response_iterator_aclose(self):
+        """CustomStreamWrapper.aclose() must propagate to ModelResponseIterator.aclose()."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock()
+
+        model_response_iter = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        model_response_iter.async_response_iterator = mock_iterator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=model_response_iter,
+            model="gemini-2.0-flash",
+            custom_llm_provider="vertex_ai",
+            logging_obj=MagicMock(),
+        )
+
+        asyncio.run(wrapper.aclose())
+
+        mock_iterator.aclose.assert_awaited_once()
+        mock_response.aclose.assert_awaited_once()
+
+
+def test_process_candidates_merges_thought_signatures_and_server_side_tools():
+    """
+    thought_signatures and server_side_tool_invocations must both survive in
+    provider_specific_fields when a candidate carries the two at once; the second
+    merge must extend the dict created by the first, not replace it.
+    """
+    candidates = [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "the weather is sunny", "thoughtSignature": "sig-text"},
+                    {
+                        "toolCall": {
+                            "toolType": "google_search",
+                            "id": "tool-1",
+                            "args": {"query": "weather"},
+                        }
+                    },
+                ],
+            },
+            "finishReason": "STOP",
+        }
+    ]
+    model_response = ModelResponse()
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    fields = model_response.choices[-1].message.provider_specific_fields
+    assert fields["thought_signatures"] == ["sig-text"]
+    assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
