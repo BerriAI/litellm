@@ -5210,3 +5210,104 @@ class TestModelResponseIteratorCleanup:
 
         mock_iterator.aclose.assert_awaited_once()
         mock_response.aclose.assert_awaited_once()
+
+
+class TestAccumulatedJsonBuffer:
+    """Regression tests for the list-backed accumulated-JSON buffer.
+
+    See https://github.com/BerriAI/litellm/issues/31861: the buffer used to be
+    a plain ``str`` grown with ``+=`` on every SSE shard, which is O(n^2) in
+    total payload size and freezes the event loop on large Gemini tool-call
+    responses. Shards are now collected in a list and joined once.
+    """
+
+    def _make_iterator(self):
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        iterator = ModelResponseIterator(
+            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+        )
+        iterator.chunk_type = "accumulated_json"
+        return iterator
+
+    def test_sharded_json_accumulates_and_parses(self):
+        """A JSON object split across many shards parses on the final shard."""
+        iterator = self._make_iterator()
+        full = json.dumps(
+            {
+                "candidates": [{"content": {"parts": [{"text": "Hello world"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 2,
+                    "totalTokenCount": 7,
+                },
+            }
+        )
+        shards = [full[i : i + 7] for i in range(0, len(full), 7)]
+
+        result = None
+        for shard in shards:
+            parsed = iterator.handle_accumulated_json_chunk(chunk=shard)
+            if parsed is not None:
+                result = parsed
+
+        assert result is not None
+        assert result.choices[0].delta.content == "Hello world"
+        # Buffer is reset after a successful parse.
+        assert iterator.accumulated_json_chunks == []
+
+    def test_incomplete_buffer_returns_none_without_reset(self):
+        """Fragments that don't yet close a JSON value keep accumulating."""
+        iterator = self._make_iterator()
+
+        assert (
+            iterator.handle_accumulated_json_chunk(chunk='{"candidates": [{"content":')
+            is None
+        )
+        # Nothing parsed yet, so the shards are retained.
+        assert len(iterator.accumulated_json_chunks) == 1
+
+        # Closing token arriving in its own shard completes the value.
+        result = iterator.handle_accumulated_json_chunk(
+            chunk=' {"parts": [{"text": "hi"}]}}]}'
+        )
+        assert result is not None
+        assert result.choices[0].delta.content == "hi"
+        assert iterator.accumulated_json_chunks == []
+
+    def test_flush_parses_buffer_with_trailing_whitespace_shard(self):
+        """End-of-stream flush must never drop a complete buffer.
+
+        If the final shard is whitespace-only, the O(1) last-shard heuristic
+        returns None during streaming, but the flush (``chunk=""``) must still
+        join the buffer and parse it so no content is lost.
+        """
+        iterator = self._make_iterator()
+        iterator.accumulated_json_chunks = [
+            json.dumps({"candidates": [{"content": {"parts": [{"text": "flushed"}]}}]}),
+            "   ",
+        ]
+
+        # A whitespace-only shard mid-stream defers parsing...
+        assert iterator.handle_accumulated_json_chunk(chunk="   ") is None
+
+        # ...but the end-of-stream flush recovers the complete buffer.
+        result = iterator.handle_accumulated_json_chunk(chunk="")
+        assert result is not None
+        assert result.choices[0].delta.content == "flushed"
+        assert iterator.accumulated_json_chunks == []
+
+    def test_accumulated_json_property_backward_compat(self):
+        """The ``accumulated_json`` str property still reads/writes the buffer."""
+        iterator = self._make_iterator()
+
+        iterator.accumulated_json_chunks = ["foo", "bar"]
+        assert iterator.accumulated_json == "foobar"
+
+        # Setting a string replaces the buffer; empty string clears it.
+        iterator.accumulated_json = "baz"
+        assert iterator.accumulated_json_chunks == ["baz"]
+        iterator.accumulated_json = ""
+        assert iterator.accumulated_json_chunks == []
