@@ -118,6 +118,9 @@ jobs:
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
 
+      - name: check_e2e_stage_env_keys
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_stage_env_keys.py
+
       - name: documentation_test_env_keys
         run: uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
 

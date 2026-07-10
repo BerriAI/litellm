@@ -367,7 +367,7 @@ class FineTuningJobsResponse(BaseModel):
 
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
-    et al may be an `os.environ/FOO` reference the proxy resolves at call time.
+    et al may be an `os.environ/<NAME>` reference the proxy resolves at call time.
     `input_cost_per_token`/`output_cost_per_token` register a per-deployment custom
     pricing override; left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
