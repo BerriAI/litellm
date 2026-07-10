@@ -49,14 +49,23 @@ class ComplianceChecker:
         - ``None``            → treated as ``pre_call`` (the common default)
         - ``str``             → single mode, e.g. ``"pre_call"``
         - ``list``/``tuple``  → multi-mode guardrail, e.g. ``["pre_call", "post_call"]``
-        - ``dict``            → tag-based ``Mode``; modes live in its ``default``
-                                and per-tag values
+        - ``dict``            → tag-based ``Mode``; only its ``default`` is trusted
+                                (see below)
 
         A prior implementation compared ``g_mode == mode`` directly, which
         silently failed for the list form (a list never equals a string), so a
         single guardrail configured with ``mode: [pre_call, post_call]`` was
         counted for no mode at all and every mode-based compliance check
         reported NON-COMPLIANT.
+
+        For the tag-based ``dict`` form we deliberately look only at ``default``
+        and ignore per-tag overrides. The spend log stores the raw ``Mode`` config,
+        not which tags were active for the audited request, so unioning every tag
+        value would over-report: a guardrail like ``{"default": "pre_call",
+        "tags": {"pii": "post_call"}}`` would be counted as both pre_call and
+        post_call even though only one branch runs per request, letting a
+        pre-call compliance check pass on the strength of a post-call tag
+        override. Trusting only ``default`` is the safe, conservative reading.
         """
         if g_mode is None:
             return mode == "pre_call"
@@ -65,20 +74,14 @@ class ComplianceChecker:
         if isinstance(g_mode, (list, tuple, set)):
             return mode in g_mode
         if isinstance(g_mode, dict):
-            candidates: set = set()
-
-            def _collect(value: object) -> None:
-                if isinstance(value, str):
-                    candidates.add(value)
-                elif isinstance(value, (list, tuple, set)):
-                    candidates.update(v for v in value if isinstance(v, str))
-
-            _collect(g_mode.get("default"))
-            tags = g_mode.get("tags")
-            if isinstance(tags, dict):
-                for tag_value in tags.values():
-                    _collect(tag_value)
-            return mode in candidates
+            default = g_mode.get("default")
+            if isinstance(default, str):
+                return default == mode
+            if isinstance(default, (list, tuple, set)):
+                return mode in default
+            # No usable default (e.g. only tag overrides): fall back to the
+            # pre_call convention rather than trusting tag-specific values.
+            return mode == "pre_call"
         return False
 
     def _has_guardrail_intervention(self, guardrails: List[Dict]) -> bool:
