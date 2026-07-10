@@ -2333,6 +2333,22 @@ if MCP_AVAILABLE:
             )
             old_server_record = None
 
+        if payload.dcr_bridge and payload.auth_type is None:
+            stored_auth_type = old_server_record.auth_type if old_server_record else None
+            stored_auth_type_name = getattr(stored_auth_type, "value", stored_auth_type)
+            if stored_auth_type not in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": (
+                            "dcr_bridge is only supported for auth_type true_passthrough or "
+                            f"oauth_delegate (stored auth_type: {stored_auth_type_name!r}). Include "
+                            "the server's auth_type in the update payload or configure one of the "
+                            "client-forwarded token modes first."
+                        )
+                    },
+                )
+
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
             prisma_client,

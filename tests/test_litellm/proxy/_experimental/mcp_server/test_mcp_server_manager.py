@@ -373,6 +373,66 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.oauth2_flow is None
 
+    def _client_forwarded_config(self, auth_type, **overrides):
+        base = {
+            "url": "https://example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": auth_type,
+        }
+        base.update(overrides)
+        return {"bridgeserver": base}
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_dcr_bridge_on_gateway_managed_auth_type(self):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", dcr_bridge=True)
+            )
+
+        assert "dcr_bridge is only supported" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_non_boolean_dcr_bridge(self):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            await manager.load_servers_from_config(
+                self._client_forwarded_config(MCPAuth.true_passthrough, dcr_bridge="yes")
+            )
+
+        assert "must be a boolean" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    async def test_load_servers_from_config_accepts_dcr_bridge_on_client_forwarded_modes(self, auth_type):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._client_forwarded_config(auth_type, dcr_bridge=True))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.dcr_bridge is True
+        assert server.is_dcr_bridge is True
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_dcr_bridge_defaults_off(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._client_forwarded_config(MCPAuth.true_passthrough))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.dcr_bridge is None
+        assert server.is_dcr_bridge is False
+
     @pytest.mark.asyncio
     async def test_load_servers_from_config_coerces_cost_string_to_float(self):
         """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
