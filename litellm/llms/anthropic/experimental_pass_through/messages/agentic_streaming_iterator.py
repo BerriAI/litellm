@@ -96,9 +96,11 @@ def _handle_content_block_delta(data: Dict, content_blocks: Dict[int, Dict]) -> 
     elif delta_type == "input_json_delta":
         block["_partial_json"] = block.get("_partial_json", "") + delta.get("partial_json", "")
     elif delta_type == "thinking_delta":
-        block["thinking"] = block.get("thinking", "") + delta.get("thinking", "")
+        if block.get("type") == "thinking":
+            block["thinking"] = block.get("thinking", "") + delta.get("thinking", "")
     elif delta_type == "signature_delta":
-        block["signature"] = delta.get("signature", block.get("signature", ""))
+        if block.get("type") == "thinking":
+            block["signature"] = delta.get("signature", block.get("signature", ""))
 
 
 def _handle_content_block_stop(data: Dict, content_blocks: Dict[int, Dict]) -> None:
