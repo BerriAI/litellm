@@ -1,0 +1,79 @@
+kind: container
+
+iam:
+  oidcSubjects:
+    - repo:bitovi/litellm:ref:refs/tags/v*
+
+app:
+  name: claude-usage-proxy
+  # This repo, not claude-usage-proxy: ESO's per-app PushSecret
+  # (bitovi-platform-services charts/platform-app-resources
+  # container/github-secrets.yaml) targets whatever repo app.repo names, and
+  # THIS repo is the one that actually runs the release workflow and needs
+  # ECR_PUSH_ROLE_ARN/ECR_REPOSITORY - claude-usage-proxy builds no image and
+  # needs neither.
+  repo: bitovi/litellm
+  port: 4000
+  logLevel: info
+  healthPath: /health/liveliness
+  envSecretName: claude-usage-proxy-secrets
+  env:
+    PROXY_BASE_URL: https://llm-proxy.bitovi-tools.com
+    ALLOWED_EMAIL_DOMAINS: bitovi.com
+    LITELLM_USE_SHORT_MCP_TOOL_PREFIX: "true"
+    REDIS_HOST: claude-usage-proxy-valkey
+    REDIS_PORT: "6379"
+
+# Do not edit by hand - update-deploy-values (publish-platform-proxy-image.yml)
+# writes this on every vX.Y.Z release.
+image:
+  tag: ""
+
+ingress:
+  host: llm-proxy.bitovi-tools.com
+
+onePasswordItem:
+  enabled: true
+  itemPath: vaults/bitovi-platform/items/claude-usage-proxy-secrets
+  annotations:
+    operator.1password.io/auto-restart: "true"
+
+postgres:
+  enabled: true
+  instances: 2
+  database: litellm
+  storage:
+    size: 20Gi
+    storageClass: gp3
+  backup:
+    enabled: true
+
+bedrock:
+  enabled: true
+  serviceAccountName: claude-usage-proxy
+  serviceAccountNamespace: claude-usage-proxy
+
+database:
+  fromCnpg:
+    enabled: true
+
+configMap:
+  name: litellm-config
+  mountPath: /app/config.yaml
+  subPath: litellm_config.yaml
+
+container:
+  command:
+    - litellm
+    - --config
+    - /app/config.yaml
+    - --port
+    - "4000"
+
+replicaCount: 1
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
