@@ -851,7 +851,7 @@
       "count": 1
     }
   },
-  "src/components/AdminPanel.tsx": {
+  "src/app/(dashboard)/admin-panel/_components/AdminPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1520,7 +1520,7 @@
       "count": 1
     }
   },
-  "src/components/general_settings.tsx": {
+  "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
       "count": 3
     },
@@ -2028,7 +2028,7 @@
       "count": 1
     }
   },
-  "src/components/organizations.tsx": {
+  "src/app/(dashboard)/organizations/_components/organizations.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2371,7 +2371,7 @@
       "count": 1
     }
   },
-  "src/components/usage.tsx": {
+  "src/app/(dashboard)/old-usage/_components/usage.tsx": {
     "no-restricted-imports": {
       "count": 2
     },

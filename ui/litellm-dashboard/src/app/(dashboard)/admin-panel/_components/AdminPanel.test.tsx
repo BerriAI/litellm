@@ -8,34 +8,34 @@ const mockGetAllowedIPs = vi.fn();
 const mockAddAllowedIP = vi.fn();
 const mockDeleteAllowedIP = vi.fn();
 
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   getSSOSettings: (...args: unknown[]) => mockGetSSOSettings(...args),
   getAllowedIPs: (...args: unknown[]) => mockGetAllowedIPs(...args),
   addAllowedIP: (...args: unknown[]) => mockAddAllowedIP(...args),
   deleteAllowedIP: (...args: unknown[]) => mockDeleteAllowedIP(...args),
 }));
 
-vi.mock("./constants", () => ({
+vi.mock("@/components/constants", () => ({
   useBaseUrl: () => "http://localhost:4000",
 }));
 
-vi.mock("./Settings/AdminSettings/SSOSettings/SSOSettings", () => ({
+vi.mock("@/components/Settings/AdminSettings/SSOSettings/SSOSettings", () => ({
   default: () => <div>SSO Settings</div>,
 }));
 
-vi.mock("./Settings/AdminSettings/UISettings/UISettings", () => ({
+vi.mock("@/components/Settings/AdminSettings/UISettings/UISettings", () => ({
   default: () => <div>UI Settings</div>,
 }));
 
-vi.mock("./SCIM", () => ({
+vi.mock("@/components/SCIM", () => ({
   default: () => <div>SCIM Config</div>,
 }));
 
-vi.mock("./SSOModals", () => ({
+vi.mock("@/components/SSOModals", () => ({
   default: () => <div>SSO Modals</div>,
 }));
 
-vi.mock("./UIAccessControlForm", () => ({
+vi.mock("@/components/UIAccessControlForm", () => ({
   default: () => <div>UI Access Control Form</div>,
 }));
 
