@@ -202,8 +202,8 @@ describe("CreateMCPServer", () => {
         await waitFor(() => {
           expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
         });
-        expect(screen.getByText("OAuth Client ID (optional, saved)")).toBeInTheDocument();
-        expect(screen.getByText("OAuth Client Secret (optional, saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client ID (optional)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional)")).toBeInTheDocument();
       },
     );
 

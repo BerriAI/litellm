@@ -45,7 +45,7 @@ export default function PassthroughAuthorizeSection({
         authorize from the Tools page go through it.
       </p>
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional, saved)</span>}
+        label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional)</span>}
         name={["credentials", "client_id"]}
         extra="Only needed when the upstream does not support dynamic client registration (e.g. a pre-registered Slack app)."
       >
@@ -55,7 +55,7 @@ export default function PassthroughAuthorizeSection({
         />
       </Form.Item>
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional, saved)</span>}
+        label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional)</span>}
         name={["credentials", "client_secret"]}
       >
         <Input.Password
