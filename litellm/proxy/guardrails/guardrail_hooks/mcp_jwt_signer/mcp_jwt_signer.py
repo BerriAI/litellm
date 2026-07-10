@@ -87,12 +87,20 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import MCP_CALL_TYPES, CallTypesLiteral
 
 # Module-level singleton for the JWKS discovery endpoint to access.
 _mcp_jwt_signer_instance: Optional["MCPJWTSigner"] = None
 
-_MCP_JWT_CALL_TYPES = frozenset({"call_mcp_tool", "list_mcp_tools"})
+_MCP_JWT_CALL_TYPES = MCP_CALL_TYPES
+_MCP_SCOPE_BY_CALL_TYPE = {
+    "list_mcp_tools": "mcp:tools/list",
+    "list_mcp_prompts": "mcp:prompts/list",
+    "get_mcp_prompt": "mcp:prompts/get",
+    "list_mcp_resources": "mcp:resources/list",
+    "read_mcp_resource": "mcp:resources/read",
+    "list_mcp_resource_templates": "mcp:resources/templates/list",
+}
 
 # Simple in-memory JWKS cache: keyed by JWKS URI → (keys_list, fetched_at).
 _jwks_cache: Dict[str, tuple] = {}
@@ -606,7 +614,7 @@ class MCPJWTSigner(CustomGuardrail):
             # invocation rather than rejecting it as a tools/list-only token.
             scopes = ["mcp:tools/call"]
         else:
-            scopes = ["mcp:tools/list"]
+            scopes = [_MCP_SCOPE_BY_CALL_TYPE.get(call_type, "mcp:tools/list")]
         return " ".join(scopes)
 
     # ------------------------------------------------------------------
@@ -877,6 +885,7 @@ async def inject_mcp_jwt_headers_for_upstream(
     *,
     for_list_tools: bool = False,
     mcp_tool_name: str = "",
+    call_type: Optional[CallTypesLiteral] = None,
 ) -> Dict[str, str]:
     """
     Sign outbound MCP headers when MCPJWTSigner is configured.
@@ -899,7 +908,7 @@ async def inject_mcp_jwt_headers_for_upstream(
         "incoming_bearer_token": incoming_bearer_token,
         "extra_headers": merged,
     }
-    call_type: CallTypesLiteral = "list_mcp_tools" if for_list_tools else "call_mcp_tool"
+    resolved_call_type: CallTypesLiteral = call_type or ("list_mcp_tools" if for_list_tools else "call_mcp_tool")
     try:
         from litellm.proxy.proxy_server import (  # noqa: PLC0415
             proxy_logging_obj as _proxy_logging,
@@ -913,7 +922,7 @@ async def inject_mcp_jwt_headers_for_upstream(
         user_api_key_dict=user_api_key_dict,
         cache=shared_cache,
         data=hook_data,
-        call_type=call_type,
+        call_type=resolved_call_type,
     )
     if isinstance(result, dict) and result.get("extra_headers"):
         merged.update(result["extra_headers"])

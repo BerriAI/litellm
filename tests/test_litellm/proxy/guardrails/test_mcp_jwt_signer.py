@@ -1269,3 +1269,34 @@ async def test_inject_mcp_jwt_signs_for_tool_call_path():
     scopes = set(decoded["scope"].split())
     assert "mcp:tools/call" in scopes
     assert "mcp:tools/search_web:call" in scopes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "expected_scope"),
+    [
+        ("list_mcp_prompts", "mcp:prompts/list"),
+        ("get_mcp_prompt", "mcp:prompts/get"),
+        ("list_mcp_resources", "mcp:resources/list"),
+        ("read_mcp_resource", "mcp:resources/read"),
+        ("list_mcp_resource_templates", "mcp:resources/templates/list"),
+    ],
+)
+async def test_inject_mcp_jwt_signs_for_non_tool_mcp_operation_scopes(call_type, expected_scope):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+        inject_mcp_jwt_headers_for_upstream,
+    )
+
+    _make_signer(issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300)
+    user_dict = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+    result = await inject_mcp_jwt_headers_for_upstream(
+        user_api_key_dict=user_dict,
+        call_type=call_type,
+    )
+    assert result["Authorization"].startswith("Bearer ")
+    token = result["Authorization"].removeprefix("Bearer ")
+    decoded = _decode_unverified(token)
+    scopes = set(decoded["scope"].split())
+    assert scopes == {expected_scope}

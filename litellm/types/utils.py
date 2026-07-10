@@ -450,6 +450,11 @@ class CallTypes(str, Enum):
     #########################################################
     call_mcp_tool = "call_mcp_tool"
     list_mcp_tools = "list_mcp_tools"
+    list_mcp_prompts = "list_mcp_prompts"
+    get_mcp_prompt = "get_mcp_prompt"
+    list_mcp_resources = "list_mcp_resources"
+    read_mcp_resource = "read_mcp_resource"
+    list_mcp_resource_templates = "list_mcp_resource_templates"
 
     #########################################################
     # A2A Call Types
@@ -516,6 +521,11 @@ CallTypesLiteral = Literal[
     "avector_store_file_delete",
     "call_mcp_tool",
     "list_mcp_tools",
+    "list_mcp_prompts",
+    "get_mcp_prompt",
+    "list_mcp_resources",
+    "read_mcp_resource",
+    "list_mcp_resource_templates",
     "asend_message",
     "send_message",
     "aresponses",
@@ -525,6 +535,18 @@ CallTypesLiteral = Literal[
     "arealtime_calls",
     "acreate_realtime_transcription_session",
 ]
+
+MCP_CALL_TYPES = frozenset(
+    {
+        "call_mcp_tool",
+        "list_mcp_tools",
+        "list_mcp_prompts",
+        "get_mcp_prompt",
+        "list_mcp_resources",
+        "read_mcp_resource",
+        "list_mcp_resource_templates",
+    }
+)
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES = {
