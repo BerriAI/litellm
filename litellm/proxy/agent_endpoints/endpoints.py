@@ -134,19 +134,89 @@ def _redact_sensitive_agent_fields(
     return redacted
 
 
-def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
+def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+
+def _user_agent_writes_enabled() -> bool:
+    """XCT fork flag: allow non-admin keys to register and manage *their own*
+    agents (marketplace self-publish). Default off — upstream behavior."""
+    return os.getenv("AGENT_REGISTRY_ALLOW_USER_WRITES", "").lower() == "true"
+
+
+def _check_agent_management_permission(
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_agent: Optional[Dict[str, Any]] = None,
+) -> None:
     """
-    Raises HTTP 403 if the caller does not have permission to create, update,
-    or delete agents.  Only PROXY_ADMIN users are allowed to perform these
-    write operations.
+    Raises HTTP 403 if the caller may not perform agent write operations.
+
+    PROXY_ADMIN users may always write. When AGENT_REGISTRY_ALLOW_USER_WRITES
+    is true, an authenticated key carrying a ``user_id`` may additionally:
+      - create agents (ownership recorded via ``created_by``), and
+      - update/delete/rollback agents it created
+        (``existing_agent.created_by == user_id``).
     """
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if _is_proxy_admin(user_api_key_dict):
+        return
+    if _user_agent_writes_enabled() and user_api_key_dict.user_id:
+        if existing_agent is None:
+            return
+        if existing_agent.get("created_by") == user_api_key_dict.user_id:
+            return
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only the agent's creator or a proxy admin can modify this agent."},
+        )
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
+                user_api_key_dict.user_role
+            )
+        },
+    )
+
+
+# litellm_params keys a non-admin publisher may set; everything else
+# (routing config, credentials, header injection) is admin-only surface.
+_USER_ALLOWED_LITELLM_PARAMS = {"make_public", "is_public"}
+
+
+def _sanitize_user_agent_config(request: Mapping[str, Any]) -> Any:
+    """Strip admin-only surface from a non-admin create/update/patch payload:
+    keep only the agent identity/card plus the public-visibility flags.
+    Handles partial (PATCH) payloads — absent fields stay absent."""
+    sanitized: Dict[str, Any] = {}
+    if request.get("agent_name") is not None:
+        sanitized["agent_name"] = request.get("agent_name")
+    if request.get("agent_card_params") is not None:
+        sanitized["agent_card_params"] = request.get("agent_card_params")
+    litellm_params = {
+        k: v
+        for k, v in (request.get("litellm_params") or {}).items()
+        if k in _USER_ALLOWED_LITELLM_PARAMS
+    }
+    if litellm_params:
+        sanitized["litellm_params"] = litellm_params
+    return sanitized
+
+
+async def _check_user_agent_quota(user_api_key_dict: UserAPIKeyAuth, prisma_client: Any) -> None:
+    """Per-user cap on registered agents for non-admin publishers
+    (AGENT_REGISTRY_MAX_PER_USER, default 20)."""
+    max_per_user = int(os.getenv("AGENT_REGISTRY_MAX_PER_USER", "20"))
+    count = await AgentsRepository(prisma_client).table.count(
+        where={"created_by": user_api_key_dict.user_id}
+    )
+    if count >= max_per_user:
         raise HTTPException(
             status_code=403,
             detail={
-                "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
-                    user_api_key_dict.user_role
-                )
+                "error": f"Agent limit reached ({max_per_user}). Delete an existing agent before publishing a new one."
             },
         )
 
@@ -516,6 +586,12 @@ async def create_agent(
         # Get the user ID from the API key auth
         created_by = user_api_key_dict.user_id or "unknown"
 
+        # Non-admin self-publish (AGENT_REGISTRY_ALLOW_USER_WRITES): enforce the
+        # per-user cap and strip admin-only config surface from the payload.
+        if not _is_proxy_admin(user_api_key_dict):
+            await _check_user_agent_quota(user_api_key_dict, prisma_client)
+            request = _sanitize_user_agent_config(request)
+
         # check for naming conflicts
         existing_agent = AGENT_REGISTRY.get_agent_by_name(
             agent_name=request.get("agent_name")  # type: ignore
@@ -715,6 +791,11 @@ async def update_agent(
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
+        # Owner-or-admin: non-admin callers may only update agents they created.
+        _check_agent_management_permission(user_api_key_dict, existing_agent)
+        if not _is_proxy_admin(user_api_key_dict):
+            request = _sanitize_user_agent_config(request)
+
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
@@ -826,6 +907,11 @@ async def patch_agent(
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
+        # Owner-or-admin: non-admin callers may only patch agents they created.
+        _check_agent_management_permission(user_api_key_dict, existing_agent)
+        if not _is_proxy_admin(user_api_key_dict):
+            request = _sanitize_user_agent_config(request)
+
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
@@ -921,6 +1007,9 @@ async def delete_agent(
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found in DB.")
+
+        # Owner-or-admin: non-admin callers may only delete agents they created.
+        _check_agent_management_permission(user_api_key_dict, existing_agent)
 
         await AGENT_REGISTRY.delete_agent_from_db(agent_id=agent_id, prisma_client=prisma_client)
 
@@ -1314,7 +1403,7 @@ async def rollback_agent_endpoint(
 ):
     """Restore an agent to a prior `version_number`.
 
-    Write scope: PROXY_ADMIN only (same gate as PUT/PATCH /v1/agents/{id}).
+    Write scope: owner-or-admin (same gate as PUT/PATCH /v1/agents/{id}).
     Appends a new version row tagged `is_rollback=True` so history stays
     linear.
     """
@@ -1330,6 +1419,15 @@ async def rollback_agent_endpoint(
 
     if prisma_client is None:
         raise HTTPException(status_code=503, detail="DB not initialized")
+
+    # Owner-or-admin: non-admin callers may only roll back agents they created.
+    if not _is_proxy_admin(user_api_key_dict):
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
+            where={"agent_id": agent_id}
+        )
+        if existing_agent is None:
+            raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+        _check_agent_management_permission(user_api_key_dict, dict(existing_agent))
     await rollback_agent_to_version(
         prisma_client=prisma_client,
         agent_id=agent_id,
