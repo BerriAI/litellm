@@ -3329,3 +3329,56 @@ def test_map_system_message_pt_keeps_unmodified_message_identity():
     result = map_system_message_pt(messages)
 
     assert result[1] is unaffected
+
+
+def test_map_system_message_pt_unsupported_content_uses_standalone_fallback():
+    unsupported_content = {"type": "custom", "value": "System"}
+    messages = [
+        {"role": "system", "content": unsupported_content},
+        {"role": "user", "content": "User"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": unsupported_content},
+        {"role": "user", "content": "User"},
+    ]
+
+
+def test_map_system_message_pt_none_content_uses_standalone_fallback():
+    messages = [
+        {"role": "system", "content": None},
+        {"role": "user", "content": "User"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": None},
+        {"role": "user", "content": "User"},
+    ]
+
+
+def test_map_system_message_pt_adds_separator_after_non_text_system_block():
+    image_block = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,abc"},
+    }
+    messages = [
+        {"role": "system", "content": [image_block]},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                image_block,
+                {"type": "text", "text": " "},
+                {"type": "text", "text": "User"},
+            ],
+        }
+    ]
