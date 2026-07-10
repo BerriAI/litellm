@@ -5,13 +5,13 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
@@ -830,18 +830,20 @@ async def test_test_search_tool_connection_missing_search_provider_returns_400()
 
 
 @pytest.mark.asyncio
-async def test_test_search_tool_connection_provider_auth_failure_returns_400():
+async def test_test_search_tool_connection_provider_failure_returns_structured_error():
     admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
     mock_asearch = AsyncMock(
-        side_effect=HTTPException(status_code=400, detail="Authentication failed: Invalid API key")
+        side_effect=litellm.AuthenticationError(message="Invalid API key", llm_provider="exa_ai", model=None)
     )
 
     with patch("litellm.search.asearch", mock_asearch), _override_auth(admin_user):
         response = TestClient(app).post(
             "/search_tools/test_connection",
-            json={"litellm_params": {"search_provider": "exa", "api_key": "invalid-key"}},
+            json={"litellm_params": {"search_provider": "exa_ai", "api_key": "invalid-key"}},
         )
 
     mock_asearch.assert_awaited_once()
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Authentication failed: Invalid API key"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error"
+    assert body["error_type"] == "AuthenticationError"
