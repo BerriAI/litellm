@@ -10,7 +10,7 @@ Pydantic ValidationError (previously typed as Optional[str]).
 import json
 import os
 import sys
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -27,6 +27,7 @@ from litellm.responses.streaming_iterator import (
 from litellm.types.llms.openai import (
     ErrorEvent,
     ErrorEventError,
+    ResponseAPIUsage,
     ResponsesAPIStreamEvents,
 )
 
@@ -85,6 +86,15 @@ def test_maybe_raise_for_error_event_maps_context_length_to_400():
     with pytest.raises(litellm.APIError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 400
+
+
+def test_maybe_raise_for_error_event_maps_insufficient_quota_to_429():
+    """OpenAI returns HTTP 429 for insufficient_quota; it must not map to 400."""
+    iterator = _make_iterator()
+    chunk = _make_error_chunk("insufficient_quota", "You exceeded your current quota")
+    with pytest.raises(litellm.APIError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 429
 
 
 def test_maybe_raise_for_error_event_passes_through_normal_chunk():
@@ -171,6 +181,71 @@ def test_maybe_raise_for_error_event_null_error_obj():
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 500
     assert "Response API in-stream error" in str(exc_info.value)
+
+
+def _make_failed_chunk(error: dict, usage: ResponseAPIUsage | None = None) -> Mock:
+    mock_response_obj = Mock()
+    mock_response_obj.error = error
+    mock_response_obj.usage = usage
+    chunk = Mock()
+    chunk.type = "response.failed"
+    chunk.response = mock_response_obj
+    return chunk
+
+
+def test_handle_logging_failed_response_maps_rate_limit_to_429():
+    """The exception logged to failure handlers must carry the mapped status, not a hardcoded 500."""
+    iterator = _make_iterator()
+    iterator.completed_response = _make_failed_chunk(
+        {"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "throttled"}
+    )
+    with (
+        patch("litellm.responses.streaming_iterator.run_async_function") as mock_run_async,
+        patch("litellm.responses.streaming_iterator.executor"),
+    ):
+        iterator._handle_logging_failed_response()
+    logged_exception = mock_run_async.call_args.kwargs["exception"]
+    assert isinstance(logged_exception, litellm.APIError)
+    assert logged_exception.status_code == 429
+    assert "throttled" in str(logged_exception)
+
+
+def test_handle_logging_failed_response_records_usage_and_cost():
+    """Usage on a response.failed event must reach failure spend accounting via combined_usage_object."""
+    iterator = _make_iterator()
+    usage = ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15)
+    chunk = _make_failed_chunk(
+        {"type": "server_error", "code": "server_error", "message": "boom"},
+        usage=usage,
+    )
+    iterator.completed_response = chunk
+    iterator.logging_obj._response_cost_calculator.return_value = 0.0042
+    with (
+        patch("litellm.responses.streaming_iterator.run_async_function"),
+        patch("litellm.responses.streaming_iterator.executor"),
+    ):
+        iterator._handle_logging_failed_response()
+    combined_usage = iterator.logging_obj.model_call_details["combined_usage_object"]
+    assert isinstance(combined_usage, litellm.Usage)
+    assert combined_usage.prompt_tokens == 10
+    assert combined_usage.completion_tokens == 5
+    assert combined_usage.total_tokens == 15
+    assert iterator.logging_obj.model_call_details["response_cost"] == 0.0042
+    iterator.logging_obj._response_cost_calculator.assert_called_once_with(result=chunk.response)
+
+
+def test_handle_logging_failed_response_without_usage_skips_recording():
+    iterator = _make_iterator()
+    iterator.completed_response = _make_failed_chunk(
+        {"type": "server_error", "code": "server_error", "message": "boom"}
+    )
+    with (
+        patch("litellm.responses.streaming_iterator.run_async_function"),
+        patch("litellm.responses.streaming_iterator.executor"),
+    ):
+        iterator._handle_logging_failed_response()
+    assert "combined_usage_object" not in iterator.logging_obj.model_call_details
+    iterator.logging_obj._response_cost_calculator.assert_not_called()
 
 
 def test_sync_iterator_raises_api_error_on_error_event():

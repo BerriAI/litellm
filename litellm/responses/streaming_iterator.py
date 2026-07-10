@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
@@ -51,11 +51,35 @@ _CLIENT_ERROR_CODES: frozenset[str] = frozenset(
     (
         "invalid_request_error",
         "context_length_exceeded",
-        "insufficient_quota",
         "content_policy_violation",
         "model_not_found",
     )
 )
+
+
+def _error_event_fields(error_obj: object) -> tuple[str, Optional[str]]:
+    if isinstance(error_obj, dict):
+        raw_message = error_obj.get("message")
+        raw_code = error_obj.get("code")
+    elif error_obj is not None:
+        raw_message = getattr(error_obj, "message", None)
+        raw_code = getattr(error_obj, "code", None)
+    else:
+        raw_message = None
+        raw_code = None
+    message = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    code = raw_code if isinstance(raw_code, str) else None
+    return message, code
+
+
+def _status_code_for_error_code(error_code: Optional[str]) -> int:
+    if error_code is None:
+        return 500
+    if error_code.startswith("rate_limit") or error_code == "insufficient_quota":
+        return 429
+    if error_code in _CLIENT_ERROR_CODES:
+        return 400
+    return 500
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -338,16 +362,35 @@ class BaseResponsesAPIStreamingIterator:
         """
         response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
         error_info = getattr(response_obj, "error", None) if response_obj else None
-        error_message = "Response failed"
-        if isinstance(error_info, dict):
-            error_message = error_info.get("message", str(error_info))
+        error_message, error_code = _error_event_fields(error_info)
+        self._record_failed_response_usage(response_obj)
         exception = litellm.APIError(
-            status_code=500,
+            status_code=_status_code_for_error_code(error_code),
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
         )
         self._handle_failure(exception)
+
+    def _record_failed_response_usage(self, response_obj: Optional[Any]) -> None:
+        if response_obj is None or self.logging_obj is None:
+            return
+        usage_obj = getattr(response_obj, "usage", None)
+        if usage_obj is None:
+            return
+        try:
+            self.logging_obj.model_call_details["combined_usage_object"] = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
+            )
+        except (TypeError, ValueError) as usage_error:
+            verbose_logger.debug(
+                "could not record usage for failed responses stream: %s",
+                usage_error,
+            )
+            return
+        self.logging_obj.model_call_details["response_cost"] = (
+            self.logging_obj._response_cost_calculator(result=response_obj) or 0.0
+        )
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
         chunk_type = getattr(result, "type", None)
@@ -360,31 +403,9 @@ class BaseResponsesAPIStreamingIterator:
             else getattr(result, "error", None)
         )
 
-        if error_obj is not None and hasattr(error_obj, "message"):
-            error_message = str(getattr(error_obj, "message", "Response API in-stream error"))
-        elif error_obj is not None and isinstance(error_obj, dict):
-            error_message = str(error_obj.get("message", "Response API in-stream error"))
-        else:
-            error_message = "Response API in-stream error"
-
-        if isinstance(error_obj, dict):
-            raw = error_obj.get("code")
-            error_code: Optional[str] = raw if isinstance(raw, str) else None
-        elif error_obj is not None:
-            raw_attr = getattr(error_obj, "code", None)
-            error_code = raw_attr if isinstance(raw_attr, str) else None
-        else:
-            error_code = None
-
-        if error_code is not None and error_code.startswith("rate_limit"):
-            status_code = 429
-        elif error_code in _CLIENT_ERROR_CODES:
-            status_code = 400
-        else:
-            status_code = 500
-
+        error_message, error_code = _error_event_fields(error_obj)
         raise litellm.APIError(
-            status_code=status_code,
+            status_code=_status_code_for_error_code(error_code),
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
