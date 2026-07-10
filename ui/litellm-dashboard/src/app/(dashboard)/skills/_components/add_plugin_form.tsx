@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Modal, Form, Input, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
-import { registerClaudeCodePlugin } from "../networking";
+import { registerClaudeCodePlugin } from "@/components/networking";
 import {
   validatePluginName,
   isValidSemanticVersion,
@@ -12,8 +12,8 @@ import {
   parseSkillSource,
   isValidSubPath,
   SkillSourcePreview,
-} from "./helpers";
-import { PluginAuthor, PluginSource, SkillRegisterRequest } from "./types";
+} from "@/components/claude_code_plugins/helpers";
+import { PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
 
 const { TextArea } = Input;
 const { Option } = Select;
