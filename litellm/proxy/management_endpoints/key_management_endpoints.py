@@ -80,6 +80,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
+    validate_key_vector_stores_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -110,6 +111,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
@@ -342,13 +344,27 @@ def _personal_key_membership_check(
     if user_api_key_dict.user_role not in personal_key_generation["allowed_user_roles"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Personal key creation has been restricted by admin. Allowed roles={litellm.key_generation_settings['personal_key_generation']['allowed_user_roles']}. Your role={user_api_key_dict.user_role}",  # type: ignore
+            detail=f"Personal key creation has been restricted by admin. Allowed roles={personal_key_generation['allowed_user_roles']}. Your role={user_api_key_dict.user_role}",
         )
 
     return True
 
 
+def _object_permission_to_dict(
+    object_permission: Optional[LiteLLM_ObjectPermissionBase],
+) -> Optional[ObjectPermissionDict]:
+    if object_permission is None:
+        return None
+    return cast(ObjectPermissionDict, object_permission.model_dump(exclude_unset=True))
+
+
 def _personal_key_generation_check(user_api_key_dict: UserAPIKeyAuth, data: GenerateKeyRequest):
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=None,
+        access_group_ids=data.access_group_ids,
+    )
+
     if (
         litellm.key_generation_settings is None
         or litellm.key_generation_settings.get("personal_key_generation") is None
@@ -515,26 +531,33 @@ def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
     *,
+    allowed_routes_was_provided: bool = False,
     allow_safe_presets: bool = False,
 ) -> None:
     """
-    Only proxy admins may set `allowed_routes` on a key.
+    Require PROXY_ADMIN when `allowed_routes` is present in the request body,
+    unless the caller went through the `key_type` preset flow.
 
-    `allowed_routes` overrides the standard role-based route gate in
-    RouteChecks.non_proxy_admin_allowed_routes_check, so the field is
-    restricted to admins. Non-admins must instead use `key_type` to pick a
-    preset bucket — that path goes through `handle_key_type` and re-enters
-    this function with `allow_safe_presets=True`, which lets the derived
-    `llm_api_routes` / `info_routes` values through. Raw-body call sites
-    leave `allow_safe_presets=False` so non-admins can't write those values
-    directly.
+    Raw-body call sites pass
+    `allowed_routes_was_provided="allowed_routes" in data.model_fields_set` so a
+    caller that omits the field (model default flows through) is distinct from
+    one that sends any explicit value.
+
+    Post-`handle_key_type` call sites pass `allow_safe_presets=True` with the
+    values derived by `handle_key_type`; those values are not from the request
+    body, so `allowed_routes_was_provided` stays False and the safe-preset
+    carve-out below accepts any list of tokens in
+    `_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS`.
     """
-    # Empty list is the default on GenerateKeyRequest — treat as "not set".
-    if not allowed_routes:
+    if not allowed_routes_was_provided and not allowed_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    if allow_safe_presets and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes):
+    if (
+        allow_safe_presets
+        and allowed_routes
+        and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes)
+    ):
         return
     raise HTTPException(
         status_code=403,
@@ -545,6 +568,79 @@ def _check_allowed_routes_caller_permission(
             )
         },
     )
+
+
+def _check_permissions_caller_permission(
+    data: GenerateRequestBase,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Require PROXY_ADMIN when `permissions` is present in the request body.
+
+    Presence is detected via `data.model_fields_set` so a caller that
+    omits the field (default flows through) is distinct from one that
+    sends any explicit value.
+    """
+    permissions_in_request = "permissions" in data.model_fields_set
+    if not permissions_in_request and not data.permissions:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `permissions`."},
+    )
+
+
+def _check_budget_limits_delegation_ceiling(
+    budget_limits: Optional[List[BudgetLimitEntry]],
+    delegation_ceiling: Optional[float],
+    user_api_key_dict: UserAPIKeyAuth,
+    is_ui_session_team_key: bool,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    """
+    Enforce three invariants on `budget_limits`:
+
+    - Every `budget_limits[*].max_budget` must be a finite number; applies
+      to every caller including proxy admin.
+    - A CLI session token caller may not set `budget_limits` on a personal
+      key (one with no `team_id`); mirrors the scalar `max_budget` guard in
+      `_common_key_generation_helper`.
+    - Non-admin callers may not set a window above their delegation ceiling.
+    """
+    if not budget_limits:
+        return
+    non_finite = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
+    if non_finite is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
+        )
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if is_ui_session_team_key:
+        return
+    if user_api_key_dict.is_session_token and team_table is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": ("budget_limits cannot be set without specifying team_id when using a CLI session token.")
+            },
+        )
+    if delegation_ceiling is None:
+        return
+    over_ceiling = next((w for w in budget_limits if w.max_budget > delegation_ceiling), None)
+    if over_ceiling is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"budget_limits entry max_budget ({over_ceiling.max_budget}) "
+                    f"cannot exceed the caller's own max_budget ({delegation_ceiling})."
+                )
+            },
+        )
 
 
 async def validate_team_id_used_in_service_account_request(
@@ -663,6 +759,12 @@ async def _common_key_generation_helper(
         premium_user=premium_user,
     )
 
+    if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
+        )
+
     if data.metadata is not None and data.metadata.get("service_account_id") is not None and data.team_id is None:
         await validate_team_id_used_in_service_account_request(
             team_id=data.team_id,
@@ -743,6 +845,18 @@ async def _common_key_generation_helper(
                 )
             },
         )
+
+    _check_budget_limits_delegation_ceiling(
+        budget_limits=data.budget_limits,
+        delegation_ceiling=delegation_ceiling,
+        user_api_key_dict=user_api_key_dict,
+        is_ui_session_team_key=is_ui_session_team_key,
+        team_table=team_table,
+    )
+    _check_permissions_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -845,18 +959,42 @@ async def _common_key_generation_helper(
         data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
+    _is_proxy_admin_caller = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
-        is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+        is_proxy_admin=_is_proxy_admin_caller,
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
     await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
     )
+    await validate_key_vector_stores_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
+    )
+
+    # Merge default_key_generate_params.object_permission in *after* the team-scope
+    # checks above, so an admin-configured default (e.g. vector_stores, search_tools)
+    # is never mistaken for a caller-requested permission and rejected by those
+    # non-admin/no-team checks. Only fields the caller left unset are filled in.
+    _default_object_permission = (
+        litellm.default_key_generate_params.get("object_permission")
+        if litellm.default_key_generate_params is not None
+        else None
+    )
+    if isinstance(_default_object_permission, dict):
+        _caller_object_permission = data_json.get("object_permission")
+        if _caller_object_permission is None:
+            data_json["object_permission"] = dict(_default_object_permission)
+        elif isinstance(_caller_object_permission, dict):
+            for _op_field, _op_default_value in _default_object_permission.items():
+                _caller_object_permission.setdefault(_op_field, _op_default_value)
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1113,7 +1251,7 @@ async def _check_team_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
@@ -1295,7 +1433,7 @@ async def _check_org_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
@@ -1352,11 +1490,14 @@ async def generate_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
+    - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -1442,6 +1583,7 @@ async def generate_key_fn(
         _check_allowed_routes_caller_permission(
             allowed_routes=data.allowed_routes,
             user_api_key_dict=user_api_key_dict,
+            allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
         )
         _check_passthrough_routes_caller_permission(
             data=data,
@@ -1559,6 +1701,7 @@ async def generate_service_account_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -1612,6 +1755,7 @@ async def generate_service_account_key_fn(
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -1936,6 +2080,11 @@ async def _process_single_key_update(
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
 
+    _check_permissions_caller_permission(
+        data=update_key_request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Get and validate existing key
     if existing_key_row is None:
         existing_key_row = await _get_and_validate_existing_key(
@@ -2058,7 +2207,7 @@ async def _validate_mcp_servers_for_key_update(
     prisma_client: Any,
     user_api_key_cache: Any,
     is_proxy_admin: bool,
-) -> Optional[dict]:
+) -> Optional[ObjectPermissionDict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
     # If team_id isn't being changed, resolve the existing key's team
@@ -2069,13 +2218,7 @@ async def _validate_mcp_servers_for_key_update(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-    object_permission_dict: Optional[dict] = None
-    if data.object_permission is not None:
-        object_permission_dict = (
-            data.object_permission.model_dump(exclude_unset=True)
-            if hasattr(data.object_permission, "model_dump")
-            else dict(data.object_permission)  # type: ignore[arg-type]
-        )
+    object_permission_dict = _object_permission_to_dict(data.object_permission)
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
@@ -2085,6 +2228,12 @@ async def _validate_mcp_servers_for_key_update(
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
     )
     return normalized_object_permission
 
@@ -2107,8 +2256,13 @@ async def _validate_update_key_data(
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
@@ -2172,6 +2326,16 @@ async def _validate_update_key_data(
         or "budget_limits" in data.model_fields_set
     )
 
+    _existing_metadata = getattr(existing_key_row, "metadata", None)
+    _existing_throttle = (
+        _existing_metadata.get("throttle_on_budget_exceeded") if isinstance(_existing_metadata, dict) else None
+    )
+    if data.throttle_on_budget_exceeded is True and _existing_throttle is not True and not _is_proxy_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
+        )
+
     # Personal-key bypass: the caller both created the key AND still owns it
     # (user_id == caller).  Checking only created_by would let a demoted admin
     # who originally created a key for another user continue editing it without
@@ -2216,20 +2380,18 @@ async def _validate_update_key_data(
                 detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
             )
 
-        # Field-level opt-in: non-admin members may only assign access groups when
-        # the team has enabled KEY_ACCESS_GROUP_ASSIGNMENT.
-        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
-            user_api_key_dict=user_api_key_dict,
-            team_table=team_obj,
-            access_group_ids=data.access_group_ids,
-        )
-
         if team_obj is not None:
             await _check_team_key_limits(
                 team_table=team_obj,
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_obj,
+        access_group_ids=data.access_group_ids,
+    )
 
     # Validate key against project limits if project_id is being set
     _project_id_to_check = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
@@ -2345,6 +2507,7 @@ async def update_key_fn(
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -2353,6 +2516,7 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
+    - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -2363,6 +2527,7 @@ async def update_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -3385,9 +3550,11 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    budget_fallbacks: Optional[dict] = None,
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
+    tag_rpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     policies: Optional[list] = None,
     prompts: Optional[list] = None,
@@ -3461,6 +3628,9 @@ async def generate_key_helper_fn(
     if mcp_rpm_limit is not None:
         metadata = metadata or {}
         metadata["mcp_rpm_limit"] = mcp_rpm_limit
+    if tag_rpm_limit is not None:
+        metadata = metadata or {}
+        metadata["tag_rpm_limit"] = tag_rpm_limit
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails
@@ -3475,6 +3645,7 @@ async def generate_key_helper_fn(
     metadata_json = json.dumps(metadata)
     validate_model_max_budget(model_max_budget)
     model_max_budget_json = json.dumps(model_max_budget)
+    budget_fallbacks_json = json.dumps(budget_fallbacks or {})
     user_role = user_role
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
@@ -3527,6 +3698,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "budget_fallbacks": budget_fallbacks_json,
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
@@ -3877,6 +4049,7 @@ def _transform_verification_tokens_to_deleted_records(
             "metadata",
             "model_spend",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
         ]:
             if json_field in record and record[json_field] is not None:
@@ -4091,6 +4264,86 @@ async def _rotate_master_key(
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
 
 
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy._types import CommonProxyErrors
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+
+@router.post(
+    "/credentials/migrate-encryption",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def migrate_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    dry_run: bool = Query(
+        False,
+        description="If true, scan and report without writing any changes.",
+    ),
+):
+    """
+    Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+
+    Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+    Idempotent and resumable — re-running skips already-migrated values. Pass
+    ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        migrate_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await migrate_encryption(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        dry_run=dry_run,
+    )
+    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+
+
+@router.get(
+    "/credentials/migrate-encryption/check",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def check_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Read-only residual scan for compliance attestation. Reports how many at-rest
+    values are still in the legacy format. ``residual_legacy == 0`` attests no
+    legacy ciphertext remains. Admin only; performs no writes.
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        check_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await check_encryption(prisma_client=prisma_client)
+    return {"status": "success", "report": report.as_dict()}
+
+
 async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
@@ -4298,6 +4551,7 @@ async def regenerate_key_fn(
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -4345,8 +4599,13 @@ async def regenerate_key_fn(
             _check_allowed_routes_caller_permission(
                 allowed_routes=data.allowed_routes,
                 user_api_key_dict=user_api_key_dict,
+                allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
             _check_passthrough_routes_caller_permission(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
             )
@@ -4458,9 +4717,7 @@ async def regenerate_key_fn(
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
-        # Gate access_group_ids on regenerate, same as /key/generate and
-        # /key/update. Use the existing key's team since the body may omit it.
-        if data is not None and data.access_group_ids:
+        if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
             if _key_in_db.team_id is not None:
                 regenerate_team_table = await get_team_object(
@@ -4469,10 +4726,31 @@ async def regenerate_key_fn(
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
+            _regen_is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
+            )
+            _regen_object_permission_dict = _object_permission_to_dict(data.object_permission)
+            normalized_object_permission = await validate_key_mcp_servers_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                prisma_client=prisma_client,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            if normalized_object_permission is not None:
+                data.object_permission = LiteLLM_ObjectPermissionBase(**normalized_object_permission)
+                _regen_object_permission_dict = normalized_object_permission
+            await validate_key_search_tools_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            await validate_key_vector_stores_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
             )
 
         verbose_proxy_logger.info(
@@ -6014,8 +6292,13 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     """
     Validate the format of the key_alias.
 
-    Gated behind ``litellm.enable_key_alias_format_validation`` (default **False**).
-    When disabled, no validation is performed so existing workflows are not broken.
+    A baseline validation always runs, regardless of
+    ``litellm.enable_key_alias_format_validation``.
+
+    The remaining charset/length rules are gated behind
+    ``litellm.enable_key_alias_format_validation`` (default **False**). When disabled,
+    only the baseline validation above is performed, so existing workflows are not
+    broken.
 
     Rules (when enabled):
     - None is OK (no alias).
@@ -6023,10 +6306,20 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     - start/end with alphanumeric
     - only allow a-zA-Z0-9_-/.@
     """
-    if not litellm.enable_key_alias_format_validation:
+    if key_alias is None:
         return
 
-    if key_alias is None:
+    try:
+        raise_if_unsafe_secret_name(key_alias)
+    except ValueError:
+        raise ProxyException(
+            message="Invalid key_alias",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=400,
+        )
+
+    if not litellm.enable_key_alias_format_validation:
         return
 
     if not _KEY_ALIAS_PATTERN.match(key_alias):

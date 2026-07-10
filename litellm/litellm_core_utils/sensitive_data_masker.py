@@ -131,8 +131,26 @@ class SensitiveDataMasker:
 
         return masked_data
 
+    def mask(self, data: object) -> object:
+        if isinstance(data, Mapping):
+            return self.mask_dict(dict(data))
+        if isinstance(data, list):
+            return self._mask_sequence(
+                data,
+                0,
+                DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+                None,
+                False,
+            )
+        return data
+
 
 _default_masker = SensitiveDataMasker()
+_error_masker = SensitiveDataMasker(visible_prefix=4, visible_suffix=0)
+
+
+def mask_sensitive_structure(data: object) -> object:
+    return _error_masker.mask(data)
 
 
 def mask_sensitive_keys(data: Dict[str, Any], sensitive_fields: Set[str]) -> Dict[str, Any]:

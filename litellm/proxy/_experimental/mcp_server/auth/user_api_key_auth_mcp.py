@@ -8,9 +8,11 @@ from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
+    SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
@@ -218,6 +220,12 @@ class MCPRequestHandler:
             # when EVERY target is auth_type=oauth2 with delegate_auth_to_upstream
             # set; fails closed otherwise.
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif MCPRequestHandler._target_servers_are_true_passthrough(
+            path=request_route,
+            mcp_servers=mcp_servers,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ):
+            validated_user_api_key_auth = UserAPIKeyAuth()
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
             # LiteLLM credential, so a failed validation is a genuine 401/403 and
@@ -356,6 +364,7 @@ class MCPRequestHandler:
         # Inline imports avoid a circular dependency: mcp_server_manager imports
         # from this module.
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
             global_mcp_server_manager,
         )
         from litellm.types.mcp import MCPAuth
@@ -381,7 +390,45 @@ class MCPRequestHandler:
             # fetches the upstream token automatically using stored credentials,
             # so allowing anonymous bypass would let any external caller invoke
             # tools authenticated as LiteLLM's service account.
-            if server.has_client_credentials:
+            #
+            # Resolve the flow rather than reading has_client_credentials directly:
+            # this is a security gate, and a legacy row whose oauth2_flow was never
+            # stamped still carries the M2M credential shape (client_id/secret +
+            # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
+            # row as non-M2M here would reopen the anonymous bypass the explicit
+            # column no longer closes on its own. Shares the one resolution helper
+            # with the egress backstop and the anonymous-delegate allowlist; all fail
+            # closed on the ambiguous shape and are removed together once no null rows
+            # remain. A pure-PKCE delegate server (no stored credentials) resolves to a
+            # non-M2M flow and keeps its bypass.
+            if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
+                return False
+        return True
+
+    @staticmethod
+    def _target_servers_are_true_passthrough(
+        path: str, mcp_servers: Optional[list[str]], client_ip: Optional[str]
+    ) -> bool:
+        """
+        True only when EVERY MCP server the request targets is ``auth_type == true_passthrough``.
+        Fails closed when any target does not opt in or cannot be resolved.
+
+        Used by :meth:`process_mcp_request` to skip LiteLLM admission auth entirely: the gateway is a
+        transparent proxy and the caller's ``Authorization`` is an upstream token, never a LiteLLM key.
+        Mirrors :meth:`_target_servers_delegate_auth_to_upstream`; a mixed-target request keeps normal auth.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+            if server is None or server.auth_type != MCPAuth.true_passthrough:
                 return False
         return True
 
@@ -544,10 +591,19 @@ class MCPRequestHandler:
 
         ASGI headers are in format: List[List[bytes, bytes]]
         We need to convert them to the format Headers expects.
+
+        Collapsing the ASGI list into a dict keeps the last value for a duplicated
+        header name, so a request carrying more than one ``Authorization`` is
+        rejected first: for the client-forwarded token modes the gateway relays the
+        caller's ``Authorization`` upstream, so a duplicate would make which token is
+        forwarded ambiguous (and diverge from what admission inspected). Multiple
+        ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
+        a comma-combinable field), so fail closed with a 400.
         """
+        raw_headers = scope.get("headers", [])
+        MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
-            raw_headers = scope.get("headers", [])
             # Convert bytes to strings and create dict for Headers constructor
             headers_dict = {name.decode("latin-1"): value.decode("latin-1") for name, value in raw_headers}
             return Headers(headers_dict)
@@ -555,6 +611,26 @@ class MCPRequestHandler:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
             # Return empty Headers object with empty dict
             return Headers({})
+
+    @staticmethod
+    def _reject_duplicate_authorization(raw_headers: object) -> None:
+        """Raise 400 when the raw ASGI headers carry more than one ``Authorization`` header."""
+        if not isinstance(raw_headers, (list, tuple)):
+            return
+        count = 0
+        for entry in raw_headers:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 1:
+                continue
+            name = entry[0]
+            if isinstance(name, (bytes, bytearray)) and bytes(name).lower() == b"authorization":
+                count += 1
+            elif isinstance(name, str) and name.lower() == "authorization":
+                count += 1
+        if count > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Multiple Authorization headers are not allowed",
+            )
 
     @staticmethod
     async def get_allowed_mcp_servers(
@@ -723,6 +799,9 @@ class MCPRequestHandler:
             f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
         )
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
+            return None
+
+        if user_api_key_auth.team_id == UI_TEAM_ID:
             return None
 
         # Get the team object (which has object_permission already loaded)
@@ -1020,6 +1099,9 @@ class MCPRequestHandler:
             if user_api_key_auth is None or not user_api_key_auth.team_id or prisma_client is None:
                 return []
 
+            if user_api_key_auth.team_id == UI_TEAM_ID:
+                return []
+
             team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
                 team_id=user_api_key_auth.team_id,
                 prisma_client=prisma_client,
@@ -1040,6 +1122,9 @@ class MCPRequestHandler:
             object_permissions = team_obj.object_permission
             if object_permissions is None:
                 return list(set(team_access_group_servers))
+
+            if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
+                return list(global_mcp_server_manager.get_registry().keys())
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
 
@@ -1497,6 +1582,9 @@ class MCPRequestHandler:
 
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
+            return []
+
+        if user_api_key_auth.team_id == UI_TEAM_ID:
             return []
 
         try:

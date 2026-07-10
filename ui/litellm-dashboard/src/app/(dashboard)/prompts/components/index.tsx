@@ -38,7 +38,6 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     setIsLoading(true);
     try {
       const response: ListPromptsResponse = await getPromptsList(accessToken, selectedEnvironment);
-      console.log(`prompts: ${JSON.stringify(response)}`);
       setPromptsList(response.prompts);
     } catch (error) {
       console.error("Error fetching prompts:", error);

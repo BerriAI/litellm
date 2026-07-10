@@ -58,6 +58,101 @@ def _request_body() -> dict:
     }
 
 
+async def _reserve(valid_token, cost, key_cache, proxy_logging_obj):
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=cost,
+    ):
+        return await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reservation_still_protects_under_budget_throttled_key(
+    spend_counter_state, monkeypatch
+):
+    """An opted-in key that is still under budget keeps its reservation counter,
+    so concurrent requests can't collectively overshoot max_budget."""
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-throttle-under",
+        spend=0.0,
+        max_budget=1.0,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+
+    assert reservation is not None
+    assert (
+        counter_cache.in_memory_cache.get_cache(key="spend:key:key-throttle-under")
+        == 0.6
+    )
+
+
+@pytest.mark.asyncio
+async def test_reservation_does_not_block_over_budget_throttled_key(
+    spend_counter_state, monkeypatch
+):
+    """Once an opted-in key is over budget the reservation path must not raise;
+    the rate limiter throttles it instead."""
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-throttle-over",
+        spend=0.0,
+        max_budget=1.0,
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    # first reservation lands under budget (counter -> 0.6)
+    await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+
+    # any further request is over budget (0.6 + 0.6 > 1.0): the opted-in key is
+    # released and allowed through (None), not blocked, and its over-budget
+    # increment is released so the counter is not permanently inflated
+    result = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    assert result is None
+    assert (
+        counter_cache.in_memory_cache.get_cache(key="spend:key:key-throttle-over")
+        == 0.6
+    )
+
+
+@pytest.mark.asyncio
+async def test_reservation_blocks_over_budget_non_throttled_key(
+    spend_counter_state, monkeypatch
+):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-no-optin-over",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)  # counter -> 1.0
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+
+
 def test_should_not_serialize_budget_reservation_on_user_api_key_auth():
     auth = UserAPIKeyAuth(
         token="key-budget-runtime-state",

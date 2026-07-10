@@ -6,6 +6,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { DataTable } from "../view_logs/table";
 import { createMCPToolset, updateMCPToolset, deleteMCPToolset, listMCPTools, getProxyBaseUrl } from "../networking";
 import { MCPToolset, MCPToolsetTool } from "./types";
@@ -80,7 +81,7 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
         onClick={handleToggle}
       >
         <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+          <span className="inline-block w-2 h-2 rounded-full bg-blue-500 shrink-0" />
           {serverName}
           {selectedSet.size > 0 && (
             <span className="ml-1 text-xs text-purple-600 font-semibold">{selectedSet.size} selected</span>
@@ -121,9 +122,7 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
                         <p className="text-xs text-gray-400 mt-0.5 leading-tight line-clamp-2">{tool.description}</p>
                       )}
                     </div>
-                    {selected && (
-                      <span className="text-purple-500 text-xs font-semibold ml-2 flex-shrink-0 mt-0.5">✓</span>
-                    )}
+                    {selected && <span className="text-purple-500 text-xs font-semibold ml-2 shrink-0 mt-0.5">✓</span>}
                   </button>
                 );
               })}
@@ -249,10 +248,10 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
         </div>
 
         {/* Divider */}
-        <div className="w-px bg-gray-200 flex-shrink-0" />
+        <div className="w-px bg-gray-200 shrink-0" />
 
         {/* Right panel: Your Toolset */}
-        <div className="w-72 flex-shrink-0">
+        <div className="w-72 shrink-0">
           <Text className="text-sm font-semibold text-gray-700 mb-2 block">
             Your Toolset <span className="text-xs font-normal text-gray-400">({selectedTools.length} tools)</span>
           </Text>
@@ -273,7 +272,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
                     </span>
                     <span className="text-[10px] text-purple-400 truncate block">{tool.server_id.slice(0, 8)}…</span>
                   </div>
-                  <span className="ml-2 text-purple-300 group-hover:text-red-400 text-xs flex-shrink-0">✕</span>
+                  <span className="ml-2 text-purple-300 group-hover:text-red-400 text-xs shrink-0">✕</span>
                 </button>
               ))
             )}
@@ -304,11 +303,7 @@ function toolsetColumns(
     {
       header: "Toolset ID",
       accessorKey: "toolset_id",
-      cell: ({ row }) => (
-        <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-600">
-          {row.original.toolset_id.slice(0, 8)}…
-        </span>
-      ),
+      cell: ({ row }) => <IdCell value={row.original.toolset_id} />,
     },
     {
       header: "Name",
@@ -318,7 +313,7 @@ function toolsetColumns(
         return (
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-purple-500 flex-shrink-0" />
+              <span className="inline-block w-2 h-2 rounded-full bg-purple-500 shrink-0" />
               <span className="font-medium text-gray-900">{row.original.toolset_name}</span>
             </div>
             <button
@@ -348,7 +343,7 @@ function toolsetColumns(
             {tools.slice(0, 4).map((t, i) => (
               <span
                 key={i}
-                className="inline-flex items-center px-1.5 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-700 text-xs"
+                className="inline-flex items-center px-1.5 py-0.5 rounded-sm bg-purple-50 border border-purple-200 text-purple-700 text-xs"
               >
                 {displayToolName(serverPrefixById.get(t.server_id), t.tool_name)}
               </span>
@@ -361,11 +356,7 @@ function toolsetColumns(
     {
       header: "Created",
       accessorKey: "created_at",
-      cell: ({ row }) => (
-        <span className="text-xs text-gray-500">
-          {row.original.created_at ? new Date(row.original.created_at).toLocaleDateString() : "—"}
-        </span>
-      ),
+      cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
     },
     ...(isAdmin
       ? [
@@ -429,13 +420,13 @@ function ToolsetUsageGuide() {
       </p>
       <div className="text-xs text-gray-400 mb-1">Claude Code / Cursor config</div>
       <div className="relative">
-        <pre className="bg-white border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-700 overflow-x-auto leading-relaxed pr-14">
+        <pre className="bg-white border border-gray-200 rounded-sm px-4 py-3 text-xs font-mono text-gray-700 overflow-x-auto leading-relaxed pr-14">
           {snippet}
         </pre>
         <button
           type="button"
           onClick={copy}
-          className="absolute top-2 right-2 px-2 py-1 text-xs rounded border bg-white hover:bg-gray-50 text-gray-400 hover:text-gray-600 border-gray-200 transition-colors"
+          className="absolute top-2 right-2 px-2 py-1 text-xs rounded-sm border bg-white hover:bg-gray-50 text-gray-400 hover:text-gray-600 border-gray-200 transition-colors"
         >
           {copied ? "✓" : "copy"}
         </button>
@@ -511,8 +502,6 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
       <DataTable
         data={toolsets}
         columns={columns}
-        renderSubComponent={() => <div />}
-        getRowCanExpand={() => false}
         isLoading={isLoading}
         noDataMessage="No toolsets yet. Click 'New Toolset' to create one."
         loadingMessage="Loading toolsets..."

@@ -21,6 +21,7 @@ from litellm.integrations.opentelemetry import (
     _build_metric_attribute_filter,
     _resolve_metric_attribute_filter,
 )
+from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import Metric, resolve_operation
 from litellm.integrations.otel.model.utils import to_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -181,13 +182,10 @@ class GenAIMetricRecorder:
         self._metrics.token_usage.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
     def _record_time_to_first_token(self, kwargs: Mapping[str, Any], common_attrs: dict) -> None:
-        if not kwargs.get("optional_params", {}).get("stream", False):
+        time_to_first_chunk = time_to_first_chunk_seconds(kwargs)
+        if time_to_first_chunk is None:
             return
-        api_call_start = to_seconds(kwargs.get("api_call_start_time"))
-        completion_start = to_seconds(kwargs.get("completion_start_time"))
-        if api_call_start is None or completion_start is None:
-            return
-        self._metrics.time_to_first_token.record(completion_start - api_call_start, attributes=common_attrs)
+        self._metrics.time_to_first_token.record(time_to_first_chunk, attributes=common_attrs)
 
     def _record_time_per_output_token(
         self,
