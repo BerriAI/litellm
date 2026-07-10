@@ -52,6 +52,7 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
         "token_url",
         "registration_url",
         "oauth2_flow",
+        "dcr_bridge",
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
