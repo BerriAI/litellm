@@ -265,6 +265,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     complexity_router_config: Optional[Dict] = None
     complexity_router_default_model: Optional[str] = None
 
+    # llm-classifier-router params
+    llm_classifier_router_config: Optional[Dict] = None
+    llm_classifier_router_default_model: Optional[str] = None
+
     # adaptive-router params
     adaptive_router_default_model: Optional[str] = None
     adaptive_router_config: Optional[Dict] = None
