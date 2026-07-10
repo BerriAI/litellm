@@ -6755,9 +6755,9 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
 
 @pytest.mark.asyncio
 async def test_reseed_spend_from_db_user_and_org_prefixes():
-    """User, org, and tag counters reseed from their own DB tables.
+    """User and org counters reseed from their own DB tables.
 
-    End-user counters use the already fetched auth objects passed as
+    End-user and tag counters use the already fetched auth objects passed as
     fallback_spend, so this reseed helper must not add extra per-request DB
     reads for them.
     """
@@ -6767,13 +6767,11 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
     user_row.spend = 17.0
     org_row = MagicMock()
     org_row.spend = 305.0
-    tag_row = MagicMock()
-    tag_row.spend = 2.5
 
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
     fake_prisma.db.litellm_endusertable.find_unique = AsyncMock()
-    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock(return_value=tag_row)
+    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock()
     fake_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
         return_value=org_row
     )
@@ -6792,10 +6790,8 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
     )
     fake_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
-    assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") == 2.5
-    fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_once_with(
-        where={"tag_name": "paid-tag"}
-    )
+    assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") is None
+    fake_prisma.db.litellm_tagtable.find_unique.assert_not_awaited()
 
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:org:acme") == 305.0
     fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(

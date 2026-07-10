@@ -191,20 +191,14 @@ class CredentialLiteLLMParams(BaseModel):
 
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: Optional[str] = None
-    bucket_name: Optional[str] = None
-    s3_bucket_name: Optional[str] = None
-    s3_region_name: Optional[str] = None
-    s3_access_key_id: Optional[str] = None
-    s3_secret_access_key: Optional[str] = None
-    aws_batch_role_arn: Optional[str] = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
-    aws_session_token: Optional[str] = None
     aws_bedrock_runtime_endpoint: Optional[str] = None
     aws_bedrock_project_id: Optional[str] = None
+    s3_bucket_name: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 

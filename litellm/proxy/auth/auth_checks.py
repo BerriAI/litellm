@@ -1820,10 +1820,9 @@ async def _get_team_object_from_user_api_key_cache(
     proxy_logging_obj: Optional[ProxyLogging],
     key: str,
     team_id_upsert: Optional[bool] = None,
-    force_db: bool = False,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key = key
-    should_check_db = force_db or _should_check_db(
+    should_check_db = _should_check_db(
         key=db_access_time_key,
         last_db_access_time=last_db_access_time,
         db_cache_expiry=db_cache_expiry,
@@ -1834,13 +1833,9 @@ async def _get_team_object_from_user_api_key_cache(
         response = None
 
     if response is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
-        )
+        raise Exception
 
-    response_dict = response.model_dump() if hasattr(response, "model_dump") else response.dict()
-    _response = LiteLLM_TeamTableCachedObj(**response_dict)
+    _response = LiteLLM_TeamTableCachedObj(**response.dict())
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
@@ -1940,6 +1935,7 @@ async def get_team_object(
                 detail={"error": f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."},
             )
 
+    # else, check db
     try:
         return await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
@@ -1950,14 +1946,8 @@ async def get_team_object(
             db_cache_expiry=db_cache_expiry,
             key=key,
             team_id_upsert=team_id_upsert,
-            force_db=bool(check_db_only),
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "get_team_object failed for team_id=%s: %s", team_id, e
-        )
+    except Exception:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
