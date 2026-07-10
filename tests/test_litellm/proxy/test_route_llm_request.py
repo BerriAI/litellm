@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 from unittest.mock import MagicMock
@@ -169,9 +167,7 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
         "messages": [{"role": "user", "content": "what llm are you"}],
     }
 
-    with patch.object(
-        litellm, "acompletion", return_value="fake_response"
-    ) as mock_completion:
+    with patch.object(litellm, "acompletion", return_value="fake_response") as mock_completion:
         await route_request(data, None, "gpt-3.5-turbo", "acompletion")
 
         mock_completion.assert_called_once_with(**data)
@@ -209,9 +205,7 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
     assert call_kwargs["num_retries"] == 5
     assert call_kwargs["timeout"] == 30
-    assert call_kwargs["model_group_retry_policy"] == {
-        "gpt-3.5-turbo": {"RateLimitErrorRetries": 3}
-    }
+    assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
     # Verify unsupported settings were NOT merged
     assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
@@ -292,9 +286,7 @@ def test_mock_testing_kwarg_names_matches_dataclass():
     from litellm.proxy.route_llm_request import _MOCK_TESTING_KWARG_NAMES
     from litellm.types.router import MockRouterTestingParams
 
-    assert set(_MOCK_TESTING_KWARG_NAMES) == {
-        f.name for f in fields(MockRouterTestingParams)
-    }
+    assert set(_MOCK_TESTING_KWARG_NAMES) == {f.name for f in fields(MockRouterTestingParams)}
 
 
 @pytest.mark.asyncio
@@ -329,9 +321,7 @@ async def test_route_request_strips_mock_testing_flags(mock_flag):
     assert mock_flag not in data
 
 
-@pytest.mark.parametrize(
-    "route_type", ["agenerate_content", "agenerate_content_stream"]
-)
+@pytest.mark.parametrize("route_type", ["agenerate_content", "agenerate_content_stream"])
 @pytest.mark.asyncio
 async def test_route_request_maps_generation_config_for_google_routes(route_type):
     """For Google generate_content routes, route_request must rename
@@ -359,9 +349,7 @@ async def test_route_request_maps_generation_config_for_google_routes(route_type
     assert call_kwargs["config"]["imageConfig"]["imageSize"] == "4K"
 
 
-@pytest.mark.parametrize(
-    "route_type", ["agenerate_content", "agenerate_content_stream"]
-)
+@pytest.mark.parametrize("route_type", ["agenerate_content", "agenerate_content_stream"])
 @pytest.mark.asyncio
 async def test_route_request_preserves_existing_config_for_google_routes(route_type):
     """If the caller already supplies `config`, route_request must not
@@ -379,3 +367,261 @@ async def test_route_request_preserves_existing_config_for_google_routes(route_t
 
     call_kwargs = getattr(llm_router, route_type).call_args[1]
     assert call_kwargs["config"] == {"existing": True}
+
+
+async def _invoke_realtime_route(
+    data: dict,
+    llm_router,
+    route_type: str = "acreate_realtime_client_secret",
+):
+    llm_call = await route_request(data, llm_router, None, route_type)
+    return await llm_call
+
+
+@pytest.fixture
+def openai_realtime_credential():
+    import litellm
+    from litellm.types.utils import CredentialItem
+
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="openai-realtime-cred",
+            credential_info={"custom_llm_provider": "openai"},
+            credential_values={"api_key": "resolved-credential-key"},
+        )
+    ]
+    yield
+    litellm.credential_list = []
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_wildcard_model_resolves_credentials(
+    monkeypatch,
+):
+    """
+    POST /realtime/client_secrets with a request model like openai/gpt-realtime
+    must match an openai/* deployment and forward its api_key upstream.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "wildcard-realtime-key",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_client_secret_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, json={"value": "ephemeral"})
+        await _invoke_realtime_route(
+            {"model": "openai/gpt-realtime"},
+            router,
+        )
+
+    assert mock_handler.call_args.kwargs["api_key"] == "wildcard-realtime-key"
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_team_scoped_model_resolves_credentials(
+    monkeypatch,
+):
+    """
+    Team-scoped deployments (team_public_model_name) must be selected when
+    user_api_key_team_id is present, same as /chat/completions.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-realtime",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime",
+                    "api_key": "team-realtime-key",
+                },
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "team-realtime",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_client_secret_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, json={"value": "ephemeral"})
+        await _invoke_realtime_route(
+            {
+                "model": "team-realtime",
+                "metadata": {"user_api_key_team_id": "team-a"},
+            },
+            router,
+        )
+
+    assert mock_handler.call_args.kwargs["api_key"] == "team-realtime-key"
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_litellm_credential_name_resolves_api_key(
+    openai_realtime_credential,
+    monkeypatch,
+):
+    """
+    litellm_credential_name on a wildcard deployment must resolve to the stored
+    api_key when routing acreate_realtime_client_secret through the router.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "litellm_credential_name": "openai-realtime-cred",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_client_secret_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, json={"value": "ephemeral"})
+        await _invoke_realtime_route({"model": "openai/gpt-realtime"}, router)
+
+    assert mock_handler.call_args.kwargs["api_key"] == "resolved-credential-key"
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_unresolvable_model_raises_not_found(
+    monkeypatch,
+):
+    """
+    An unknown model must not silently fall through to litellm with an empty
+    OPENAI_API_KEY env var.
+    """
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "other-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "other-key"},
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_client_secret_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        with pytest.raises(ProxyModelNotFoundError):
+            await _invoke_realtime_route({"model": "nonexistent-realtime-model"}, router)
+
+    mock_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_calls_resolves_api_base(monkeypatch):
+    """
+    /realtime/calls must resolve the deployment's api_base through the router so a
+    non-default (self-hosted / proxied) OpenAI endpoint is honored, instead of
+    defaulting to https://api.openai.com.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-realtime",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime",
+                    "api_key": "calls-key",
+                    "api_base": "https://custom-realtime.example.com/v1",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_calls_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, content=b"v=0\r\n")
+        await _invoke_realtime_route(
+            {
+                "model": "my-realtime",
+                "openai_ephemeral_key": "ek_test",
+                "sdp_body": b"v=0\r\n",
+            },
+            router,
+            route_type="arealtime_calls",
+        )
+
+    assert mock_handler.call_args.kwargs["api_base"] == "https://custom-realtime.example.com/v1"
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_transcription_session_resolves_credentials(monkeypatch):
+    """
+    /realtime/transcription_sessions must resolve credentials through the router
+    (wildcard deployment) rather than falling back to an empty OPENAI_API_KEY.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "transcription-key",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_transcription_session_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, json={"client_secret": {"value": "ephemeral"}})
+        await _invoke_realtime_route(
+            {"model": "openai/gpt-realtime"},
+            router,
+            route_type="acreate_realtime_transcription_session",
+        )
+
+    assert mock_handler.call_args.kwargs["api_key"] == "transcription-key"

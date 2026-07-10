@@ -193,7 +193,7 @@ function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void 
       onClick={onToggle}
       role="switch"
       aria-checked={enabled}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
         enabled ? "bg-blue-500" : "bg-gray-200"
       }`}
     >
@@ -249,7 +249,7 @@ function GuardrailCard({
           <h3 className="text-sm font-semibold text-gray-900 mb-1">{g.name}</h3>
           <p className="text-xs text-gray-500 mb-2 line-clamp-1">{g.description}</p>
           <div className="flex items-center gap-1.5 mb-2">
-            <ServerIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+            <ServerIcon className="h-3.5 w-3.5 text-gray-400 shrink-0" />
             <code className="text-xs text-gray-500 font-mono truncate">{g.endpoint}</code>
           </div>
           <div className="flex items-center gap-4 text-xs text-gray-500">
@@ -261,7 +261,7 @@ function GuardrailCard({
             </span>
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+        <div className="flex flex-col items-end gap-2 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500 whitespace-nowrap">Forward API Key</span>
             <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} />
@@ -317,9 +317,11 @@ function GuardrailCard({
               <div className="space-y-1">
                 {g.customHeaders.map((h, i) => (
                   <div key={`${h.key}-${i}`} className="flex items-center gap-2 text-xs font-mono">
-                    <span className="text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">{h.key}</span>
+                    <span className="text-gray-500 bg-gray-50 border border-gray-200 rounded-sm px-2 py-0.5">
+                      {h.key}
+                    </span>
                     <span className="text-gray-400">:</span>
-                    <span className="text-gray-700 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
+                    <span className="text-gray-700 bg-gray-50 border border-gray-200 rounded-sm px-2 py-0.5">
                       {h.value}
                     </span>
                   </div>
@@ -368,7 +370,7 @@ function DetailPanel({
   const status = STATUS_CONFIG[g.status];
   const teamColor = TEAM_COLORS[g.team] ?? "bg-gray-100 text-gray-700";
   return (
-    <div className="w-96 flex-shrink-0 bg-white overflow-auto">
+    <div className="w-96 shrink-0 bg-white overflow-auto">
       <div className="p-5">
         <div className="flex items-start justify-between mb-4">
           <div>
@@ -404,14 +406,14 @@ function DetailPanel({
                 href={g.endpoint}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-gray-400 hover:text-blue-500 flex-shrink-0"
+                className="text-gray-400 hover:text-blue-500 shrink-0"
               >
                 <ExternalLinkIcon className="h-3.5 w-3.5" />
               </a>
             </div>
           </ConfigRow>
           <ConfigRow label="Method">
-            <span className="text-xs font-mono font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
+            <span className="text-xs font-mono font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded-sm">
               {g.method}
             </span>
           </ConfigRow>
@@ -425,7 +427,7 @@ function DetailPanel({
             </div>
             <p className="text-xs text-blue-700 leading-relaxed">
               When enabled, the caller&apos;s LiteLLM API key is forwarded as an{" "}
-              <code className="font-mono bg-blue-100 px-1 rounded">Authorization</code> header to your guardrail
+              <code className="font-mono bg-blue-100 px-1 rounded-sm">Authorization</code> header to your guardrail
               endpoint. This allows your guardrail to authenticate model calls using the original caller&apos;s
               credentials.
             </p>
@@ -447,7 +449,7 @@ function DetailPanel({
                 {g.customHeaders.map((h, i) => (
                   <li
                     key={`${h.key}-${i}`}
-                    className="flex items-center justify-between gap-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded px-2 py-1.5"
+                    className="flex items-center justify-between gap-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded-sm px-2 py-1.5"
                   >
                     <span className="text-gray-700 truncate">
                       {h.key}: {h.value}
@@ -455,7 +457,7 @@ function DetailPanel({
                     <button
                       type="button"
                       onClick={() => onUpdateCustomHeaders(g.customHeaders.filter((_, idx) => idx !== i))}
-                      className="text-gray-400 hover:text-red-600 flex-shrink-0"
+                      className="text-gray-400 hover:text-red-600 shrink-0"
                       aria-label={`Remove ${h.key}`}
                     >
                       <XIcon className="h-3.5 w-3.5" />
@@ -470,7 +472,7 @@ function DetailPanel({
                 value={newStaticHeaderKey}
                 onChange={(e) => setNewStaticHeaderKey(e.target.value)}
                 placeholder="Header name (e.g. X-API-Key)"
-                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
@@ -489,7 +491,7 @@ function DetailPanel({
                 value={newStaticHeaderValue}
                 onChange={(e) => setNewStaticHeaderValue(e.target.value)}
                 placeholder="Value"
-                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
@@ -514,7 +516,7 @@ function DetailPanel({
                     setNewStaticHeaderValue("");
                   }
                 }}
-                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded transition-colors flex-shrink-0"
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-sm transition-colors shrink-0"
               >
                 Add
               </button>
@@ -539,13 +541,13 @@ function DetailPanel({
                 {g.extraHeaders.map((name, i) => (
                   <li
                     key={`${name}-${i}`}
-                    className="flex items-center justify-between gap-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded px-2 py-1.5"
+                    className="flex items-center justify-between gap-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded-sm px-2 py-1.5"
                   >
                     <span className="text-gray-700 truncate">{name}</span>
                     <button
                       type="button"
                       onClick={() => onUpdateExtraHeaders(g.extraHeaders.filter((_, idx) => idx !== i))}
-                      className="text-gray-400 hover:text-red-600 flex-shrink-0"
+                      className="text-gray-400 hover:text-red-600 shrink-0"
                       aria-label={`Remove ${name}`}
                     >
                       <XIcon className="h-3.5 w-3.5" />
@@ -560,7 +562,7 @@ function DetailPanel({
                 value={newExtraHeader}
                 onChange={(e) => setNewExtraHeader(e.target.value)}
                 placeholder="e.g. x-request-id"
-                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded-sm px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
@@ -581,7 +583,7 @@ function DetailPanel({
                     setNewExtraHeader("");
                   }
                 }}
-                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded transition-colors"
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-sm transition-colors"
               >
                 Add
               </button>
@@ -607,7 +609,7 @@ function DetailPanel({
             )}
           </div>
           <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-lg p-3">
-            <InfoIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0 mt-0.5" />
+            <InfoIcon className="h-3.5 w-3.5 text-gray-400 shrink-0 mt-0.5" />
             <p className="text-xs text-gray-500 leading-relaxed">
               This guardrail runs on a separate instance. It receives the user request and forwards the result to the
               next step in the pipeline. See{" "}
@@ -887,13 +889,13 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
               placeholder="Search guardrails..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-md text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-md text-sm text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-            className="border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+            className="border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
           >
             <option value="all">All Status</option>
             <option value="pending">Pending Review</option>

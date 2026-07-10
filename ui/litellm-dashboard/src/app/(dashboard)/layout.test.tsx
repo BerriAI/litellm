@@ -3,9 +3,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
 
+const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
+
+let searchParamsValue = new URLSearchParams();
+
 vi.mock("next/navigation", () => ({
-  useRouter: vi.fn(() => ({ push: vi.fn(), replace: vi.fn() })),
-  useSearchParams: vi.fn(() => new URLSearchParams()),
+  useRouter: vi.fn(() => ({ push: vi.fn(), replace: replaceMock })),
+  useSearchParams: vi.fn(() => searchParamsValue),
   usePathname: vi.fn(() => "/ui/guardrails"),
 }));
 
@@ -19,6 +23,10 @@ vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
 
 vi.mock("@/components/DebugWarningBanner", () => ({
   DebugWarningBanner: () => null,
+}));
+
+vi.mock("@/components/LicenseExpiryBanner", () => ({
+  LicenseExpiryBanner: () => null,
 }));
 
 vi.mock("@/contexts/ThemeContext", () => ({
@@ -54,6 +62,7 @@ describe("(dashboard) Layout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pendingUiConfig = createDeferred();
+    searchParamsValue = new URLSearchParams();
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {
@@ -74,5 +83,26 @@ describe("(dashboard) Layout", () => {
     await waitFor(() => expect(screen.getByTestId("page-content")).toBeTruthy());
     expect(screen.getByTestId("navbar")).toBeTruthy();
     expect(screen.queryByTestId("loading-screen")).toBeNull();
+  });
+
+  it("redirects an invitation link to the onboarding route instead of rendering the dashboard shell", async () => {
+    searchParamsValue = new URLSearchParams("invitation_id=abc123");
+
+    render(
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content" />
+        </Layout>
+      </AuthProvider>,
+    );
+
+    pendingUiConfig.resolve();
+
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("/onboarding?invitation_id=abc123")),
+    );
+    expect(screen.queryByTestId("page-content")).toBeNull();
+    expect(screen.queryByTestId("navbar")).toBeNull();
+    expect(screen.queryByTestId("sidebar")).toBeNull();
   });
 });

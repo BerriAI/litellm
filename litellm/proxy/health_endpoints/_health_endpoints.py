@@ -6,7 +6,7 @@ import secrets
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
+from typing import Any, Dict, Iterable, Literal, Optional, TypedDict, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -1271,7 +1271,12 @@ async def health_license_endpoint(
     }
 
 
-db_health_cache = {"status": "unknown", "last_updated": datetime.now()}
+class DBHealthCache(TypedDict):
+    status: str
+    last_updated: datetime
+
+
+db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
 
 
 async def _db_health_readiness_check():
@@ -1807,6 +1812,7 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
+        loaded_model_info: Optional[dict] = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -1825,6 +1831,7 @@ async def test_model_connection(
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
+                    loaded_model_info = deployment_by_id.model_info.model_dump(exclude_none=True)
                 elif model_name:
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
@@ -1846,6 +1853,7 @@ async def test_model_connection(
                         # config. These already have resolved environment
                         # variables from proxy config.
                         config_litellm_params = dict(deployments[0].get("litellm_params", {}))
+                        loaded_model_info = dict(deployments[0].get("model_info") or {})
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. Proceeding with request params only."
@@ -1856,11 +1864,12 @@ async def test_model_connection(
         litellm_params = {**config_litellm_params, **request_litellm_params}
 
         ## Auth check
+        auth_model_info = loaded_model_info if loaded_model_info is not None else model_info
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=model_info,
+                model_info=auth_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,

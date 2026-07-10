@@ -3305,6 +3305,75 @@ class TestStreamingClientDisconnectLogging:
         assert "client_disconnected" not in request_data["metadata"]
 
     @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_handles_none_metadata(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "litellm_params": {"metadata": None},
+            "metadata": None,
+        }
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "litellm_logging_obj": mock_logging_obj,
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert (
+            mock_logging_obj.model_call_details["litellm_params"]["metadata"][
+                "client_disconnected"
+            ]
+            is True
+        )
+        assert (
+            mock_logging_obj.model_call_details["metadata"]["client_disconnected"]
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_handles_none_request_data_metadata(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "metadata": None,
+            "litellm_params": {"metadata": None},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert (
+            request_data["litellm_params"]["metadata"]["client_disconnected"] is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_client_disconnect_metadata_none_returns_early(self):
+        from litellm.proxy.common_request_processing import (
+            _apply_client_disconnect_metadata,
+        )
+
+        _apply_client_disconnect_metadata(None)
+
+    @pytest.mark.asyncio
     async def test_finalize_streaming_generator_cleanup_fires_deferred_logging(
         self, monkeypatch
     ):
@@ -4066,3 +4135,739 @@ class TestAllmPassthroughStreamingProviderGate:
         streamed = [chunk async for chunk in result.body_iterator]
         assert streamed == chunks
         mock_handler.assert_not_awaited()
+
+
+class TestResponseCostHeaderForTypedDictResponses:
+    """
+    Regression for LIT-4076. x-litellm-response-cost went missing on Anthropic
+    /v1/messages and Google :generateContent even though it appeared on
+    /chat/completions and /responses. /v1/messages returns a TypedDict that cannot
+    hold _hidden_params at all, and :generateContent carries _hidden_params but no
+    synchronously-populated response_cost. In both cases the raw response_cost is
+    empty at header-build time. The non-streaming header build now recovers the cost
+    from the logging object whenever the response itself never recorded one, while
+    leaving object responses (ModelResponse etc.) untouched.
+    """
+
+    def _build_logging_obj(self, *, model_call_details, response_cost_calculator):
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit4076"
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = model_call_details
+        logging_obj._response_cost_calculator = response_cost_calculator
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        return logging_obj
+
+    async def _drive_non_streaming(self, *, monkeypatch, response, logging_obj, route_type, return_result=False):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return response
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        async def fake_post_call_success_hook(data, user_api_key_dict, response):
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        fastapi_response = Response()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ):
+            result = await processing_obj.base_process_llm_request(
+                request=MagicMock(spec=Request, headers={}),
+                fastapi_response=fastapi_response,
+                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                select_data_generator=None,
+                llm_router=None,
+                skip_pre_call_logic=True,
+            )
+        if return_result:
+            return fastapi_response, result
+        return fastapi_response
+
+    @pytest.mark.asyncio
+    async def test_messages_typeddict_emits_cost_header_from_stored_cost(self, monkeypatch):
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        response = AnthropicMessagesResponse(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": "hi"}],
+            model="claude-haiku-4-5",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00123},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="anthropic_messages",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_typeddict_emits_cost_header_via_recompute(self, monkeypatch):
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}}],
+            usageMetadata={
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            },
+        )
+        recompute = MagicMock(return_value=0.00456)
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00456"
+        recompute.assert_called_once()
+        assert recompute.call_args.kwargs["result"] is response
+
+    @pytest.mark.asyncio
+    async def test_generate_content_emits_real_nonzero_cost_header_from_usage_metadata(self, monkeypatch):
+        """
+        End-to-end regression for LIT-4076 using the real cost calculator (not a
+        mock). A native :generateContent body reports tokens under usageMetadata,
+        which the cost calculator did not read, so the synchronously-recovered
+        cost was 0.0 and the header was dropped even though the async logging path
+        billed a real non-zero amount. The header must now carry the true cost.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+        from litellm.types.utils import ModelResponse, Usage
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+            usageMetadata={
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 500,
+                "totalTokenCount": 1500,
+            },
+        )
+
+        real_logging = LiteLLMLoggingObj(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="agenerate_content",
+            start_time=None,
+            litellm_call_id="call-lit4076-real",
+            function_id="fn",
+        )
+        real_logging.model_call_details["custom_llm_provider"] = "gemini"
+        real_logging.optional_params = {}
+
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=real_logging._response_cost_calculator,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        expected_cost = litellm.completion_cost(
+            completion_response=ModelResponse(
+                model="gemini-2.5-flash",
+                usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+        )
+        assert expected_cost > 0
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_emits_cost_header(self, monkeypatch):
+        """
+        Models the real :generateContent response: it DOES carry a _hidden_params
+        attribute (which is why x-litellm-model-group / x-litellm-model-api-base
+        appear), but no response_cost is populated synchronously at header-build
+        time. The cost is only available on the logging object. The previous
+        ``not hasattr(response, "_hidden_params")`` guard skipped recovery here, so
+        x-litellm-response-cost went missing even though the cost was computed.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0004521},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0004521"
+        assert fastapi_response.headers["x-litellm-model-group"] == "gemini-2.5-flash"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_zero_cost_drops_header(self, monkeypatch):
+        """
+        A recovered cost of 0 must normalize to a dropped header, exactly like
+        /chat/completions, so :generateContent does not start emitting
+        x-litellm-response-cost: 0.0 where nothing was emitted before.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_object_response_with_hidden_params_is_unaffected(self, monkeypatch):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(_hidden_params={"response_cost": 0.009})
+        recompute = MagicMock(side_effect=AssertionError("must not recompute for object responses"))
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 123.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="acompletion",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.009"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_object_response_zero_cost_drops_header_like_chat_completions(self, monkeypatch):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(_hidden_params={"response_cost": 0.0})
+        recompute = MagicMock(side_effect=AssertionError("must not recompute for object responses"))
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00789},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="acompletion",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_messages_typeddict_does_not_leak_hidden_params_into_response_body(self, monkeypatch):
+        """
+        Router.set_response_headers now writes rate-limit headers onto dict-shaped
+        responses (e.g. Anthropic /v1/messages, whose AnthropicMessagesResponse is a
+        TypedDict) via response["_hidden_params"] = ... . Unlike a pydantic model's
+        private attribute, that key is indistinguishable from any other dict key and
+        would otherwise serialize verbatim into the client-facing JSON body, leaking
+        response_cost/model_id/api_base/fallback errors. base_process_llm_request
+        must strip it before returning the response to the endpoint layer.
+        """
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        response = AnthropicMessagesResponse(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": "hi"}],
+            model="claude-haiku-4-5",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+        response["_hidden_params"] = {
+            "additional_headers": {"x-ratelimit-limit-input-tokens": "25"},
+            "response_cost": 0.00123,
+            "model_id": "internal-deployment-id",
+        }
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00123},
+            response_cost_calculator=MagicMock(return_value=999.0),
+        )
+
+        fastapi_response, result = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="anthropic_messages",
+            return_result=True,
+        )
+
+        assert "_hidden_params" not in result
+        assert fastapi_response.headers["x-ratelimit-limit-input-tokens"] == "25"
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
+
+
+class TestPreCallWithFallbacksOnLocalRateLimit:
+
+    @pytest.mark.asyncio
+    async def test_fallback_triggered_on_local_rate_limit(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        primary_model = "gpt-4"
+        fallback_model = "gpt-3.5-turbo"
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        call_count = 0
+
+        async def mock_pre_call_logic(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            model_in_data = processor.data.get("model")
+            if model_in_data == primary_model:
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded for gpt-4",
+                    headers={"retry-after": "30"},
+                )
+            logging_obj = MagicMock()
+            return processor.data, logging_obj
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            data, logging_obj = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == fallback_model
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_fallbacks_configured(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(
+                detail="TPM limit exceeded",
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = None
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+    @pytest.mark.asyncio
+    async def test_raises_when_all_fallbacks_also_rate_limited(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(
+                detail=f"TPM limit exceeded for {processor.data.get('model')}",
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError, match="gpt-4"):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert processor.data["model"] == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_fallback_uses_key_level_router_settings(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded",
+                    headers={"retry-after": "30"},
+                )
+            return processor.data, MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.router_settings = {
+            "fallbacks": [{"gpt-4": ["claude-3-haiku"]}]
+        }
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == "claude-3-haiku"
+
+    @pytest.mark.asyncio
+    async def test_disable_fallbacks_flag_respected(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4", "disable_fallbacks": True}
+        )
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(
+                detail="TPM limit exceeded",
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+    @pytest.mark.asyncio
+    async def test_model_restored_on_non_rate_limit_exception(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        primary_model = "gpt-4"
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        async def mock_pre_call_logic(**kwargs):
+            model_in_data = processor.data.get("model")
+            if model_in_data == primary_model:
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded for gpt-4",
+                    headers={"retry-after": "30"},
+                )
+            raise ValueError("unexpected auth failure on fallback")
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ValueError, match="unexpected auth failure"):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert processor.data["model"] == primary_model
+
+    @pytest.mark.asyncio
+    async def test_real_parallel_request_limiter_model_tpm_limit_triggers_fallback(self):
+        """
+        Customer-reported scenario from LIT-3890 / GH #8822.
+
+        The prior tests in this class hand-build a ``ProxyRateLimitError``. The
+        customer's production setup is different: they set a *per-key per-model*
+        TPM cap on the key itself::
+
+            Model TPM Limits: {"gpt-4.1-20250414-test": 100}
+
+        and configure a proxy-side fallback (gpt-4.1-...-test -> gpt-4.1-...).
+        When the per-model TPM cap trips, the real
+        ``parallel_request_limiter`` raises ``ProxyRateLimitError`` from inside
+        ``proxy_logging_obj.pre_call_hook`` — the seam ``_pre_call_with_fallbacks``
+        wraps. This test drives that *real* limiter (not a mock error) end-to-end
+        to prove the customer's exact knob triggers the gateway fallback instead
+        of returning a 429 to the client.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            ProxyRateLimitError,
+        )
+        from litellm.proxy.hooks.parallel_request_limiter import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
+        from litellm.proxy.utils import InternalUsageCache
+
+        primary_model = "gpt-4"
+        fallback_model = "gpt-3.5-turbo"
+
+        # Freeze the limiter's clock so the per-minute counter key is stable and
+        # the pre-seeded counter is guaranteed to be the one it reads.
+        class _FrozenClock(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 1, 1, 12, 30, 0)
+
+        precise_minute = "2026-01-01-12-30"
+
+        # Real per-key per-model TPM limiter + a key carrying the customer's
+        # `model_tpm_limit` metadata (only the primary is capped).
+        limiter = _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache())
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-lit3890",
+            metadata={"model_tpm_limit": {primary_model: 100}},
+        )
+
+        # Pre-seed the primary's per-model token counter at the cap so the very
+        # next request trips it. The counter key uses the *hashed* api_key.
+        counter_key = (
+            f"{user_api_key_dict.api_key}::{primary_model}"
+            f"::{precise_minute}::request_count"
+        )
+        await limiter.internal_usage_cache.async_set_cache(
+            key=counter_key,
+            value={"current_requests": 0, "current_tpm": 100, "current_rpm": 0},
+            litellm_parent_otel_span=None,
+            local_only=True,
+        )
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        # Stand in for common_processing_pre_call_logic's pre_call_hook step by
+        # invoking the real limiter for whatever model is currently selected.
+        limiter_calls = []
+
+        async def real_limiter_pre_call(**kwargs):
+            current_model = processor.data["model"]
+            limiter_calls.append(current_model)
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={
+                    "model": current_model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                call_type="acompletion",
+            )
+            return processor.data, MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{primary_model: [fallback_model]}]
+
+        with patch(
+            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
+        ):
+            with patch.object(
+                processor,
+                "common_processing_pre_call_logic",
+                side_effect=real_limiter_pre_call,
+            ):
+                data, logging_obj = await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=user_api_key_dict,
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model=primary_model,
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        # The capped primary tripped the real limiter, and the fallback (which
+        # has no per-model cap) served the request — no 429 to the client.
+        assert processor.data["model"] == fallback_model
+        assert limiter_calls == [primary_model, fallback_model]
+
+        # Sanity-check the premise: the limiter genuinely raises a
+        # ProxyRateLimitError for the capped primary under the frozen clock.
+        with patch(
+            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await limiter.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=DualCache(),
+                    data={
+                        "model": primary_model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                    call_type="acompletion",
+                )

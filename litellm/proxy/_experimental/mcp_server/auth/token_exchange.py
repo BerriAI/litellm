@@ -24,15 +24,17 @@ from litellm.constants import (
     MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # RFC 8693 grant type constant
 TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
-
-DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 
 class TokenExchangeHandler:
@@ -113,12 +115,16 @@ class TokenExchangeHandler:
                 f"but missing client_id or client_secret"
             )
 
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=server.token_endpoint_auth_method,
+            client_id=server.client_id,
+            client_secret=server.client_secret,
+        )
         data: Dict[str, str] = {
             "grant_type": TOKEN_EXCHANGE_GRANT_TYPE,
             "subject_token": subject_token,
             "subject_token_type": server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
-            "client_id": server.client_id,
-            "client_secret": server.client_secret,
+            **client_auth.body,
         }
         if server.audience:
             data["audience"] = server.audience
@@ -133,8 +139,9 @@ class TokenExchangeHandler:
         )
 
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        post_kwargs = {"data": data, **({"headers": client_auth.headers} if client_auth.headers else {})}
         try:
-            response = await client.post(endpoint, data=data)
+            response = await client.post(endpoint, **post_kwargs)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             verbose_logger.debug(

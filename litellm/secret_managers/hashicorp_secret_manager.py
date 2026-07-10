@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
-from .base_secret_manager import BaseSecretManager
+from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
 
 class HashicorpSecretManager(BaseSecretManager):
@@ -220,6 +220,7 @@ class HashicorpSecretManager(BaseSecretManager):
         - With custom mount: http://127.0.0.1:8200/v1/kv/data/mykey
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
+        raise_if_unsafe_secret_name(secret_name)
         resolved_namespace = self._sanitize_path_component(namespace if namespace is not None else self.vault_namespace)
         resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
         if resolved_mount is None:

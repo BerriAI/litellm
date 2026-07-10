@@ -15,6 +15,7 @@ from typing import Any, Dict
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
@@ -36,6 +37,30 @@ from litellm.llms.base_llm.ocr.transformation import (
 from litellm.secret_managers.main import get_secret_str
 
 AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+
+
+class AzureDocumentIntelligenceLine(BaseModel):
+    content: str | None = None
+
+
+class AzureDocumentIntelligencePage(BaseModel):
+    pageNumber: int | None = None
+    width: float | None = None
+    height: float | None = None
+    unit: str | None = None
+    lines: tuple[AzureDocumentIntelligenceLine, ...] = ()
+
+
+class AzureDocumentIntelligenceAnalyzeResult(BaseModel):
+    content: str | None = None
+    pages: tuple[AzureDocumentIntelligencePage, ...] = ()
+    tables: list[dict[str, object]] | None = None
+    keyValuePairs: list[dict[str, object]] | None = None
+
+
+class AzureDocumentIntelligenceOperation(BaseModel):
+    status: str | None = None
+    analyzeResult: AzureDocumentIntelligenceAnalyzeResult | None = None
 
 
 class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
@@ -67,11 +92,14 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         (1-based, e.g. "1-3,5,7-9"). To keep the public request shape
         aligned with Mistral OCR, callers pass `pages` using Mistral
         semantics — a list of 0-based integers — or a pre-formatted
-        Azure-style string. Other Mistral-specific params (e.g.
+        Azure-style string. Azure DI also exposes a `features` query
+        parameter enabling add-on capabilities (e.g. "keyValuePairs",
+        "languages"), passed as a list of feature names or a
+        comma-separated string. Other Mistral-specific params (e.g.
         `include_image_base64`) are not supported by Azure DI and are
         ignored during transformation.
         """
-        return ["pages"]
+        return ["pages", "features"]
 
     def map_ocr_params(
         self,
@@ -85,16 +113,18 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Translates Mistral-style `pages` (list[int], 0-based) into Azure's
         `pages` query string (1-based, e.g. "1,2,3" or "1-3,5"). A raw
         string that already matches Azure's format is passed through
-        unchanged.
+        unchanged. `features` (list[str] or comma-separated string) is
+        normalized into Azure's comma-joined `features` query string.
         """
         pages = non_default_params.get("pages")
-        if pages is None:
-            return optional_params
-
-        normalized = self._normalize_pages_param(pages)
-        if normalized:
-            optional_params["pages"] = normalized
-        return optional_params
+        features = non_default_params.get("features")
+        normalized_pages = self._normalize_pages_param(pages) if pages is not None else ""
+        normalized_features = self._normalize_features_param(features) if features is not None else ""
+        return {
+            **optional_params,
+            **({"pages": normalized_pages} if normalized_pages else {}),
+            **({"features": normalized_features} if normalized_features else {}),
+        }
 
     @staticmethod
     def _normalize_pages_param(pages: Any) -> str:
@@ -139,6 +169,39 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 return joined
 
         raise ValueError("`pages` must be a list[int] (0-based, Mistral-style) or a string like '1-3,5,7-9'.")
+
+    @staticmethod
+    def _normalize_features_param(features: object) -> str:
+        """
+        Convert a caller-provided `features` value to Azure DI's query-string
+        form (comma-joined feature names, e.g. "keyValuePairs,languages").
+
+        Accepted inputs:
+          - list[str]: feature names like ["keyValuePairs", "languages"].
+          - str: a single feature name or comma-separated names.
+        """
+        invalid_features_error = ValueError(
+            f"Invalid `features` for Azure Document Intelligence: {features!r}. "
+            f"Expected a list of feature names or a comma-separated string like "
+            f"'keyValuePairs' or 'keyValuePairs,languages'."
+        )
+
+        if isinstance(features, str):
+            raw_tokens = features.split(",")
+        elif isinstance(features, list):
+            if len(features) == 0:
+                return ""
+            raw_tokens = [feature for feature in features if isinstance(feature, str)]
+            if len(raw_tokens) != len(features):
+                raise invalid_features_error
+        else:
+            raise invalid_features_error
+
+        tokens = tuple(token.strip() for token in raw_tokens)
+        feature_pattern = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+        if not all(feature_pattern.match(token) for token in tokens):
+            raise invalid_features_error
+        return ",".join(tokens)
 
     def validate_environment(
         self,
@@ -228,13 +291,15 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             f"?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
         )
 
-        # Azure DI accepts `pages` as a query param (1-based, e.g. "1-3,5").
+        # Azure DI accepts `pages` (1-based, e.g. "1-3,5") and `features`
+        # (comma-joined names, e.g. "keyValuePairs") as query params.
         # `optional_params` has already been normalized in `map_ocr_params`.
         pages = optional_params.get("pages") if optional_params else None
-        if pages:
-            url += f"&pages={quote(str(pages), safe=',-')}"
+        features = optional_params.get("features") if optional_params else None
+        pages_query = f"&pages={quote(str(pages), safe=',-')}" if pages else ""
+        features_query = f"&features={quote(str(features), safe=',')}" if features else ""
 
-        return url
+        return f"{url}{pages_query}{features_query}"
 
     def _extract_base64_from_data_uri(self, data_uri: str) -> str:
         """
@@ -328,27 +393,15 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
         return OCRRequestData(data=data, files=None)
 
-    def _extract_page_markdown(self, page_data: Dict[str, Any]) -> str:
-        """
-        Extract text from Azure DI page and format as markdown.
-
-        Azure DI provides text in 'lines' array. We concatenate them with newlines.
-
-        Args:
-            page_data: Azure DI page object
-
-        Returns:
-            Markdown-formatted text
-        """
-        lines = page_data.get("lines", [])
-        if not lines:
-            return ""
-
-        # Extract text content from each line
-        text_lines = [line.get("content", "") for line in lines]
-
-        # Join with newlines to preserve structure
-        return "\n".join(text_lines)
+    def _transform_azure_page(self, azure_page: AzureDocumentIntelligencePage) -> OCRPage:
+        page_number = azure_page.pageNumber if azure_page.pageNumber is not None else 1
+        markdown = "\n".join(line.content or "" for line in azure_page.lines)
+        dimensions = self._convert_dimensions(
+            width=azure_page.width if azure_page.width is not None else 8.5,
+            height=azure_page.height if azure_page.height is not None else 11,
+            unit=azure_page.unit if azure_page.unit is not None else "inch",
+        )
+        return OCRPage(index=page_number - 1, markdown=markdown, dimensions=dimensions)
 
     def _convert_dimensions(self, width: float, height: float, unit: str) -> OCRPageDimensions:
         """
@@ -526,6 +579,52 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 retry_after = self._get_retry_after(response=response)
                 await asyncio.sleep(retry_after)
 
+    def _get_polling_target(self, raw_response: httpx.Response) -> tuple[str, Dict[str, str]]:
+        operation_url = raw_response.headers.get("Operation-Location")
+        if not operation_url:
+            raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")
+
+        # Reject cross-origin polling URLs — the auth headers
+        # below would otherwise leak to whatever URL the upstream
+        # (or an attacker-controlled upstream) returns. VERIA-51.
+        try:
+            assert_same_origin(operation_url, str(raw_response.request.url))
+        except SSRFError as ssrf_err:
+            raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
+
+        poll_headers = {"Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")}
+        return operation_url, poll_headers
+
+    def _transform_completed_response(self, model: str, raw_response: httpx.Response) -> OCRResponse:
+        """
+        Transform a completed Azure Document Intelligence analyze operation
+        into the Mistral OCR response shape, preserving Azure-native
+        `analyzeResult` fields (`content`, `tables`, `keyValuePairs`) as
+        top-level response fields.
+        """
+        operation = AzureDocumentIntelligenceOperation.model_validate(raw_response.json())
+
+        verbose_logger.debug(f"Azure Document Intelligence response status: {operation.status}")
+
+        if operation.status != "succeeded":
+            raise ValueError(f"Azure Document Intelligence analysis failed with status: {operation.status}")
+
+        analyze_result = (
+            operation.analyzeResult if operation.analyzeResult is not None else AzureDocumentIntelligenceAnalyzeResult()
+        )
+        mistral_pages = [self._transform_azure_page(azure_page) for azure_page in analyze_result.pages]
+        usage_info = OCRUsageInfo(pages_processed=len(mistral_pages), doc_size_bytes=None)
+
+        return OCRResponse(
+            pages=mistral_pages,
+            model=model,
+            usage_info=usage_info,
+            object="ocr",
+            content=analyze_result.content,
+            tables=analyze_result.tables,
+            keyValuePairs=analyze_result.keyValuePairs,
+        )
+
     def transform_ocr_response(
         self,
         model: str,
@@ -552,11 +651,13 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                         "unit": "inch",
                         "lines": [{"content": "text", "boundingBox": [...]}]
                     }
-                ]
+                ],
+                "tables": [...],
+                "keyValuePairs": [...]
             }
         }
 
-        Mistral OCR format:
+        Mistral OCR format (with Azure-native fields preserved):
         {
             "pages": [
                 {
@@ -567,7 +668,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             ],
             "model": "azure_ai/doc-intelligence/prebuilt-layout",
             "usage_info": {"pages_processed": 1},
-            "object": "ocr"
+            "object": "ocr",
+            "content": "Full document text...",
+            "tables": [...],
+            "keyValuePairs": [...]
         }
 
         Args:
@@ -578,86 +682,17 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRResponse in Mistral format
         """
-        try:
-            # Check if we got 202 Accepted (async operation started)
-            if raw_response.status_code == 202:
-                verbose_logger.debug("Azure DI returned 202 Accepted, polling operation...")
+        if raw_response.status_code != 202:
+            return self._transform_completed_response(model=model, raw_response=raw_response)
 
-                # Get Operation-Location header
-                operation_url = raw_response.headers.get("Operation-Location")
-                if not operation_url:
-                    raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")
-
-                # Reject cross-origin polling URLs — the auth headers
-                # below would otherwise leak to whatever URL the upstream
-                # (or an attacker-controlled upstream) returns. VERIA-51.
-                try:
-                    assert_same_origin(operation_url, str(raw_response.request.url))
-                except SSRFError as ssrf_err:
-                    raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
-
-                # Get headers for polling (need auth)
-                poll_headers = {
-                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")
-                }
-
-                # Get timeout from kwargs or use default
-                timeout_secs = AZURE_OPERATION_POLLING_TIMEOUT
-
-                # Poll until operation completes
-                raw_response = self._poll_operation_sync(
-                    operation_url=operation_url,
-                    headers=poll_headers,
-                    timeout_secs=timeout_secs,
-                )
-
-            # Now parse the completed response
-            response_json = raw_response.json()
-
-            verbose_logger.debug(f"Azure Document Intelligence response status: {response_json.get('status')}")
-
-            # Check if request succeeded
-            status = response_json.get("status")
-            if status != "succeeded":
-                raise ValueError(f"Azure Document Intelligence analysis failed with status: {status}")
-
-            # Extract analyze result
-            analyze_result = response_json.get("analyzeResult", {})
-            azure_pages = analyze_result.get("pages", [])
-
-            # Transform pages to Mistral format
-            mistral_pages = []
-            for azure_page in azure_pages:
-                page_number = azure_page.get("pageNumber", 1)
-                index = page_number - 1  # Convert to 0-based index
-
-                # Extract markdown text
-                markdown = self._extract_page_markdown(azure_page)
-
-                # Convert dimensions
-                width = azure_page.get("width", 8.5)
-                height = azure_page.get("height", 11)
-                unit = azure_page.get("unit", "inch")
-                dimensions = self._convert_dimensions(width=width, height=height, unit=unit)
-
-                # Build OCR page
-                ocr_page = OCRPage(index=index, markdown=markdown, dimensions=dimensions)
-                mistral_pages.append(ocr_page)
-
-            # Build usage info
-            usage_info = OCRUsageInfo(pages_processed=len(mistral_pages), doc_size_bytes=None)
-
-            # Return Mistral OCR response
-            return OCRResponse(
-                pages=mistral_pages,
-                model=model,
-                usage_info=usage_info,
-                object="ocr",
-            )
-
-        except Exception as e:
-            verbose_logger.error(f"Error parsing Azure Document Intelligence response: {e}")
-            raise e
+        verbose_logger.debug("Azure DI returned 202 Accepted, polling operation...")
+        operation_url, poll_headers = self._get_polling_target(raw_response)
+        completed_response = self._poll_operation_sync(
+            operation_url=operation_url,
+            headers=poll_headers,
+            timeout_secs=AZURE_OPERATION_POLLING_TIMEOUT,
+        )
+        return self._transform_completed_response(model=model, raw_response=completed_response)
 
     async def async_transform_ocr_response(
         self,
@@ -680,81 +715,14 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRResponse in Mistral format
         """
-        try:
-            # Check if we got 202 Accepted (async operation started)
-            if raw_response.status_code == 202:
-                verbose_logger.debug("Azure DI returned 202 Accepted, polling operation (async)...")
+        if raw_response.status_code != 202:
+            return self._transform_completed_response(model=model, raw_response=raw_response)
 
-                # Get Operation-Location header
-                operation_url = raw_response.headers.get("Operation-Location")
-                if not operation_url:
-                    raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")
-
-                # Reject cross-origin polling URLs (see sync path). VERIA-51.
-                try:
-                    assert_same_origin(operation_url, str(raw_response.request.url))
-                except SSRFError as ssrf_err:
-                    raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
-
-                # Get headers for polling (need auth)
-                poll_headers = {
-                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")
-                }
-
-                # Get timeout from kwargs or use default
-                timeout_secs = AZURE_OPERATION_POLLING_TIMEOUT
-
-                # Poll until operation completes (async)
-                raw_response = await self._poll_operation_async(
-                    operation_url=operation_url,
-                    headers=poll_headers,
-                    timeout_secs=timeout_secs,
-                )
-
-            # Now parse the completed response
-            response_json = raw_response.json()
-
-            verbose_logger.debug(f"Azure Document Intelligence response status: {response_json.get('status')}")
-
-            # Check if request succeeded
-            status = response_json.get("status")
-            if status != "succeeded":
-                raise ValueError(f"Azure Document Intelligence analysis failed with status: {status}")
-
-            # Extract analyze result
-            analyze_result = response_json.get("analyzeResult", {})
-            azure_pages = analyze_result.get("pages", [])
-
-            # Transform pages to Mistral format
-            mistral_pages = []
-            for azure_page in azure_pages:
-                page_number = azure_page.get("pageNumber", 1)
-                index = page_number - 1  # Convert to 0-based index
-
-                # Extract markdown text
-                markdown = self._extract_page_markdown(azure_page)
-
-                # Convert dimensions
-                width = azure_page.get("width", 8.5)
-                height = azure_page.get("height", 11)
-                unit = azure_page.get("unit", "inch")
-                dimensions = self._convert_dimensions(width=width, height=height, unit=unit)
-
-                # Build OCR page
-                ocr_page = OCRPage(index=index, markdown=markdown, dimensions=dimensions)
-                mistral_pages.append(ocr_page)
-
-            # Build usage info
-            usage_info = OCRUsageInfo(pages_processed=len(mistral_pages), doc_size_bytes=None)
-
-            # Return Mistral OCR response
-            return OCRResponse(
-                pages=mistral_pages,
-                model=model,
-                usage_info=usage_info,
-                object="ocr",
-            )
-
-        except Exception as e:
-            verbose_logger.error(f"Error parsing Azure Document Intelligence response (async): {e}")
-            raise e
+        verbose_logger.debug("Azure DI returned 202 Accepted, polling operation (async)...")
+        operation_url, poll_headers = self._get_polling_target(raw_response)
+        completed_response = await self._poll_operation_async(
+            operation_url=operation_url,
+            headers=poll_headers,
+            timeout_secs=AZURE_OPERATION_POLLING_TIMEOUT,
+        )
+        return self._transform_completed_response(model=model, raw_response=completed_response)

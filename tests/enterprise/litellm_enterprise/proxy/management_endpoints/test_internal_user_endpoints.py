@@ -25,6 +25,16 @@ def mock_user_api_key_auth():
         yield mock_auth
 
 
+def _user_count(total, deactivated=0):
+    """Where-aware count() fake: the filtered query (deactivated users) is
+    subtracted from the total to yield the billable count."""
+
+    async def _count(*args, where=None, **kwargs):
+        return deactivated if where is not None else total
+
+    return _count
+
+
 class TestAvailableEnterpriseUsers:
     @pytest.mark.asyncio
     async def test_available_users_with_max_users_set(
@@ -43,7 +53,7 @@ class TestAvailableEnterpriseUsers:
             ),
         ):
             # Mock database count
-            mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=5)
+            mock_prisma.db.litellm_usertable.count = _user_count(5)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=2)
 
             # Override the dependency
@@ -66,6 +76,36 @@ class TestAvailableEnterpriseUsers:
             assert data["total_users_remaining"] >= 0
 
     @pytest.mark.asyncio
+    async def test_available_users_excludes_scim_deactivated(
+        self, client, mock_user_api_key_auth
+    ):
+        """SCIM-deactivated users must not consume a seat: with 5 rows of which
+        2 are deactivated, the displayed usage is 3 and a seat is freed."""
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.proxy_server.premium_user_data",
+                {"max_users": 10},
+            ),
+        ):
+            mock_prisma.db.litellm_usertable.count = _user_count(5, deactivated=2)
+            mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=2)
+
+            client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
+                "user_id": "test_user"
+            }
+
+            response = client.get("/user/available_users")
+
+            assert response.status_code == 200
+            data = response.json()
+
+            assert data["total_users"] == 10
+            assert data["total_users_used"] == 3
+            assert data["total_users_remaining"] == 7
+
+    @pytest.mark.asyncio
     async def test_available_users_without_max_users_set(
         self, client, mock_user_api_key_auth
     ):
@@ -82,7 +122,7 @@ class TestAvailableEnterpriseUsers:
             ),
         ):
             # Mock database count
-            mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=3)
+            mock_prisma.db.litellm_usertable.count = _user_count(3)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=1)
 
             # Override the dependency
@@ -119,7 +159,7 @@ class TestAvailableEnterpriseUsers:
             ),
         ):
             # Mock database count higher than max_users to trigger the bug
-            mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=8)
+            mock_prisma.db.litellm_usertable.count = _user_count(8)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=3)
 
             # Override the dependency

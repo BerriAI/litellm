@@ -681,3 +681,76 @@ def test_custom_pricing_isolated_from_sibling_via_proxy_model_info_path():
         assert resolved["gemini-2.5-flash"] != resolved["custom-priced-flash"]
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
+    """LIT-3991 end to end: a proxy has a named text-embedding-3-small
+    deployment relying on built-in pricing plus an ``openai/*`` wildcard with
+    explicit zero pricing. One embedding call routed through the wildcard must
+    not clobber the shared ``openai/text-embedding-3-small`` pricing; requests
+    to the named deployment afterwards must still cost non-zero.
+    """
+    shared_key = "openai/text-embedding-3-small"
+    model_keys = {
+        shared_key: copy.deepcopy(litellm.model_cost.get(shared_key)),
+        "text-embedding-3-small": copy.deepcopy(
+            litellm.model_cost.get("text-embedding-3-small")
+        ),
+        "openai/*": copy.deepcopy(litellm.model_cost.get("openai/*")),
+        "lit3991-named": litellm.model_cost.get("lit3991-named"),
+        "lit3991-wildcard": litellm.model_cost.get("lit3991-wildcard"),
+    }
+    builtin_input_cost = litellm.get_model_info(model=shared_key)[
+        "input_cost_per_token"
+    ]
+    assert builtin_input_cost > 0
+
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "text-embedding-3-small",
+                    "litellm_params": {
+                        "model": "openai/text-embedding-3-small",
+                        "api_key": "fake-key-named",
+                    },
+                    "model_info": {"id": "lit3991-named"},
+                },
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "fake-key-wildcard",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "lit3991-wildcard"},
+                },
+            ],
+        )
+
+        router.embedding(
+            model="openai/text-embedding-3-small",
+            input=["hello"],
+            mock_response=[0.1, 0.2],
+        )
+
+        assert (
+            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
+            == builtin_input_cost
+        ), (
+            "one call through the zero-cost wildcard poisoned the shared "
+            f"{shared_key} pricing for the named deployment"
+        )
+
+        named_response = router.embedding(
+            model="text-embedding-3-small",
+            input=["hello"],
+            mock_response=[0.1, 0.2],
+        )
+        named_cost = litellm.completion_cost(
+            completion_response=named_response, call_type="embedding"
+        )
+        assert named_cost == pytest.approx(10 * builtin_input_cost)
+    finally:
+        _restore_model_cost_entries(model_keys)

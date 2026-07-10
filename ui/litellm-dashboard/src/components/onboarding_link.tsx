@@ -25,6 +25,32 @@ interface OnboardingProps {
   modalType?: "invitation" | "resetPassword";
 }
 
+export function buildOnboardingUrl({
+  baseUrl,
+  invitationId,
+  hasUserSetupSso,
+  resetPassword,
+}: {
+  baseUrl: string;
+  invitationId: string | undefined;
+  hasUserSetupSso: boolean;
+  resetPassword: boolean;
+}): string {
+  if (!baseUrl) {
+    return "";
+  }
+  const basePath = new URL(baseUrl).pathname;
+  const uiPath = basePath && basePath !== "/" ? `${basePath}/ui` : "ui";
+  if (hasUserSetupSso) {
+    return new URL(uiPath, baseUrl).toString();
+  }
+  if (!invitationId) {
+    return "";
+  }
+  const action = resetPassword ? "&action=reset_password" : "";
+  return new URL(`${uiPath}/onboarding?invitation_id=${invitationId}${action}`, baseUrl).toString();
+}
+
 export default function OnboardingModal({
   isInvitationLinkModalVisible,
   setIsInvitationLinkModalVisible,
@@ -41,24 +67,13 @@ export default function OnboardingModal({
     setIsInvitationLinkModalVisible(false);
   };
 
-  const getInvitationUrl = () => {
-    if (!baseUrl) {
-      return "";
-    }
-    const baseUrlObj = new URL(baseUrl);
-    const basePath = baseUrlObj.pathname; // This will be "/litellm" or ""
-    const path = basePath && basePath !== "/" ? `${basePath}/ui` : "ui";
-    // Get the path from the base URL
-    if (invitationLinkData?.has_user_setup_sso) {
-      return new URL(path, baseUrl).toString();
-    }
-    let urlPath = `${path}?invitation_id=${invitationLinkData?.id}`;
-    if (modalType === "resetPassword") {
-      urlPath += "&action=reset_password";
-    }
-    const url = new URL(urlPath, baseUrl).toString();
-    return url;
-  };
+  const getInvitationUrl = () =>
+    buildOnboardingUrl({
+      baseUrl,
+      invitationId: invitationLinkData?.id,
+      hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
+      resetPassword: modalType === "resetPassword",
+    });
 
   return (
     <Modal

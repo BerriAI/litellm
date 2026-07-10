@@ -69,6 +69,7 @@ class GenAI:
     RESPONSE_ID: Final = "gen_ai.response.id"
     RESPONSE_MODEL: Final = "gen_ai.response.model"
     RESPONSE_FINISH_REASONS: Final = "gen_ai.response.finish_reasons"
+    RESPONSE_TIME_TO_FIRST_CHUNK: Final = "gen_ai.response.time_to_first_chunk"
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
@@ -143,7 +144,24 @@ class Client:
 
 
 class Error:
+    """OTel-defined error attribute keys, from the semconv ``error.*`` registry.
+    ``MESSAGE`` is marked *Deprecated* upstream in favor of domain-specific
+    error message keys plus ``exception.message`` on the exception event, but
+    litellm still stamps it."""
+
     TYPE: Final = "error.type"
+    MESSAGE: Final = "error.message"
+
+
+class LiteLLMError:
+    """Detail keys for the mapped provider exception of a failed LLM call.
+    OTel semconv does not define these, so they live under the ``litellm.*``
+    vendor namespace rather than squatting on the semconv-owned ``error.*``
+    namespace."""
+
+    CODE: Final = "litellm.provider.error.code"
+    STACK_TRACE: Final = "litellm.provider.error.stack_trace"
+    LLM_PROVIDER: Final = "litellm.provider.error.llm_provider"
 
 
 class ExceptionEvent:

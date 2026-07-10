@@ -7,7 +7,35 @@ import {
   handleTransport,
   handleAuth,
   getMcpOAuthMode,
+  getOAuthAuthorizationIdentity,
+  isHeldOAuthTokenStale,
+  oauth2FlowToFormValue,
 } from "./types";
+
+describe("getOAuthAuthorizationIdentity", () => {
+  // Regression: the identity used to pick the audience from spec_path only when values.transport was
+  // OPENAPI, but the create form keeps transport in component state, so values.transport was absent and
+  // spec_path edits on OpenAPI servers never invalidated a held token.
+  it("changes when spec_path changes even when transport is absent from form values", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, spec_path: "https://a.example.com/openapi.json" };
+    const edited = { auth_type: AUTH_TYPE.OAUTH2, spec_path: "https://b.example.com/openapi.json" };
+    expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(edited, getOAuthAuthorizationIdentity(authorized))).toBe(true);
+  });
+
+  it("changes when url changes", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp" };
+    const edited = { auth_type: AUTH_TYPE.OAUTH2, url: "https://b.example.com/mcp" };
+    expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+  });
+
+  it("is stable across non-mint fields", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp", server_name: "one" };
+    const renamed = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp", server_name: "two" };
+    expect(getOAuthAuthorizationIdentity(renamed)).toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(renamed, getOAuthAuthorizationIdentity(authorized))).toBe(false);
+  });
+});
 
 describe("handleTransport", () => {
   it("should default to SSE when transport is null", () => {
@@ -81,6 +109,17 @@ describe("getMcpOAuthMode", () => {
     expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: MCP_OAUTH2_FLOW_M2M })).toBe("m2m");
   });
 
+  it("classifies oauth2_token_exchange as token_exchange regardless of the oauth2 secondary fields", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE })).toBe("token_exchange");
+    expect(
+      getMcpOAuthMode({
+        auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+        oauth2_flow: MCP_OAUTH2_FLOW_M2M,
+        delegate_auth_to_upstream: true,
+      }),
+    ).toBe("token_exchange");
+  });
+
   it("treats m2m as m2m even when delegate_auth_to_upstream is true", () => {
     expect(
       getMcpOAuthMode({
@@ -97,14 +136,14 @@ describe("getMcpOAuthMode", () => {
     );
   });
 
-  it("classifies an interactive server without delegation as obo", () => {
+  it("classifies an interactive server without delegation as authorization_code", () => {
     expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: null, delegate_auth_to_upstream: false })).toBe(
-      "obo",
+      "authorization_code",
     );
   });
 
-  it("defaults to obo when delegate_auth_to_upstream is undefined", () => {
-    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2 })).toBe("obo");
+  it("defaults to authorization_code when delegate_auth_to_upstream is undefined", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2 })).toBe("authorization_code");
   });
 
   it("treats explicit authorization_code as interactive, not m2m", () => {
@@ -114,7 +153,7 @@ describe("getMcpOAuthMode", () => {
         oauth2_flow: "authorization_code",
         delegate_auth_to_upstream: false,
       }),
-    ).toBe("obo");
+    ).toBe("authorization_code");
   });
 
   // Regression: the old heuristic labeled any OAuth2 server with a token endpoint
@@ -122,7 +161,22 @@ describe("getMcpOAuthMode", () => {
   // legitimately carries one is classified by oauth2_flow + delegate, never M2M.
   it("does not treat an interactive server with a token endpoint as m2m", () => {
     expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: null, delegate_auth_to_upstream: false })).toBe(
-      "obo",
+      "authorization_code",
     );
+  });
+});
+
+describe("oauth2FlowToFormValue", () => {
+  it("maps client_credentials to the M2M select value", () => {
+    expect(oauth2FlowToFormValue(MCP_OAUTH2_FLOW_M2M)).toBe(OAUTH_FLOW.M2M);
+  });
+
+  it("maps authorization_code to the Interactive select value", () => {
+    expect(oauth2FlowToFormValue("authorization_code")).toBe(OAUTH_FLOW.INTERACTIVE);
+  });
+
+  it("returns undefined for a null/unset flow so the select shows its placeholder", () => {
+    expect(oauth2FlowToFormValue(null)).toBeUndefined();
+    expect(oauth2FlowToFormValue(undefined)).toBeUndefined();
   });
 });

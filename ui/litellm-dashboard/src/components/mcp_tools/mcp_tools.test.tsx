@@ -91,6 +91,37 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
   });
 
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "shows the Authorize gate for a %s server without a browser token and does not list tools",
+    async (authType) => {
+      renderViewer({ auth_type: authType, oauth2_flow: null, delegate_auth_to_upstream: false });
+
+      expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
+      expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
+      expect(vi.mocked(getMCPOAuthUserCredentialStatus)).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "forwards the session token via the x-mcp header for a %s server that has one",
+    async (authType) => {
+      vi.mocked(isTokenValid).mockReturnValue(true);
+      vi.mocked(getToken).mockReturnValue({ access_token: "upstream-tok" } as ReturnType<typeof getToken>);
+
+      renderViewer({ auth_type: authType, oauth2_flow: null, delegate_auth_to_upstream: false });
+
+      await waitFor(() =>
+        expect(vi.mocked(listMCPTools)).toHaveBeenCalledWith(
+          "litellm-key",
+          "srv-1",
+          expect.objectContaining({ "x-mcp-slack-authorization": "Bearer upstream-tok" }),
+        ),
+      );
+      expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
+    },
+  );
+
   it("lists tools for an OBO server when the user has a DB credential, with no x-mcp header", async () => {
     renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
 
@@ -129,6 +160,25 @@ describe("MCPToolsViewer auth gate routing", () => {
 
     await waitFor(() => expect(vi.mocked(listMCPTools)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined));
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
+  });
+
+  it("gates an OBO server whose stored token is expired and the list call 401s (refresh could not mint a token)", async () => {
+    // has_credential=true but the list call 401s: the server-side refresh could not
+    // produce a valid token (e.g. expired with no usable refresh token), so the user
+    // must reauthorize instead of seeing a dead empty list.
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(
+      credStatus({ has_credential: true, is_expired: true }),
+    );
+    vi.mocked(listMCPTools).mockResolvedValue({
+      tools: [],
+      error: "unauthorized",
+      status: 401,
+    } as unknown as Awaited<ReturnType<typeof listMCPTools>>);
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
   });
 
   it("does not gate an M2M server; lists with the LiteLLM key", async () => {

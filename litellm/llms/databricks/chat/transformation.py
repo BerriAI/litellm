@@ -40,10 +40,13 @@ from litellm.types.llms.databricks import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolMessage,
     ChatCompletionToolParam,
 )
 from litellm.types.utils import (
@@ -90,6 +93,58 @@ def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
             message_dict.pop("content")
         else:
             message_dict["content"] = filtered
+
+
+def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    """
+    Databricks (OpenAI-compatible serving) rejects a ``tool`` message unless the
+    message immediately before it carries ``tool_calls``. A single assistant turn
+    with parallel tool calls is followed by one ``tool`` message per call, so every
+    result after the first is preceded by another ``tool`` message and 400s. Re-emit
+    each result right after an assistant message holding only its matching call:
+    ``assistant(tool_calls=[A, B]), tool(A), tool(B)`` becomes
+    ``assistant(tool_calls=[A]), tool(A), assistant(tool_calls=[B]), tool(B)``.
+
+    Left untouched (no-op) when the turn is already valid or the history is
+    malformed, so no tool call is ever dropped.
+    """
+
+    def _expand(
+        assistant: ChatCompletionAssistantMessage,
+        calls_by_id: dict[Optional[str], ChatCompletionAssistantToolCall],
+        tool_messages: list[ChatCompletionToolMessage],
+    ) -> Iterator[AllMessageValues]:
+        for position, tool_message in enumerate(tool_messages):
+            matched_call = calls_by_id[tool_message["tool_call_id"]]
+            if position == 0:
+                yield cast(AllMessageValues, {**assistant, "tool_calls": [matched_call]})
+            else:
+                yield ChatCompletionAssistantMessage(role="assistant", tool_calls=[matched_call])
+            yield tool_message
+
+    def _generate() -> Iterator[AllMessageValues]:
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            tool_calls = message.get("tool_calls") if message["role"] == "assistant" else None
+            if not tool_calls or len(tool_calls) < 2:
+                yield message
+                index += 1
+                continue
+            end = index + 1
+            while end < len(messages) and messages[end]["role"] == "tool":
+                end += 1
+            tool_messages = cast(list[ChatCompletionToolMessage], messages[index + 1 : end])
+            calls_by_id = {call["id"]: call for call in tool_calls}
+            result_ids = {tool_message["tool_call_id"] for tool_message in tool_messages}
+            if len(tool_messages) == len(tool_calls) and set(calls_by_id) == result_ids:
+                yield from _expand(cast(ChatCompletionAssistantMessage, message), calls_by_id, tool_messages)
+                index = end
+            else:
+                yield message
+                index += 1
+
+    return list(_generate())
 
 
 if TYPE_CHECKING:
@@ -384,6 +439,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 _message = self._move_cache_control_into_string_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
             new_messages.append(_message)
+
+        if "claude" not in model:
+            new_messages = _split_parallel_tool_calls(cast(list[AllMessageValues], new_messages))
 
         if is_async:
             return super()._transform_messages(messages=new_messages, model=model, is_async=cast(Literal[True], True))

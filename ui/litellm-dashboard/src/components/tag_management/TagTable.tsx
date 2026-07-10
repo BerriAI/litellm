@@ -7,20 +7,10 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Badge,
-  Button,
-  Icon,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-} from "@tremor/react";
+import { Badge, Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text } from "@tremor/react";
 import { Tooltip } from "antd";
 import React from "react";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { Tag } from "./types";
 
 interface TagTableProps {
@@ -45,21 +35,15 @@ const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag
         const isDynamicSpendTag = tag.description === DYNAMIC_SPEND_TAG_DESCRIPTION;
         return (
           <div className="overflow-hidden">
-            <Tooltip
-              title={
+            <IdCell
+              value={tag.name}
+              truncate={false}
+              onClick={onSelectTag}
+              disabled={isDynamicSpendTag}
+              tooltip={
                 isDynamicSpendTag ? "You cannot view the information of a dynamically generated spend tag" : tag.name
               }
-            >
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5"
-                onClick={() => onSelectTag(tag.name)}
-                disabled={isDynamicSpendTag}
-              >
-                {tag.name}
-              </Button>
-            </Tooltip>
+            />
           </div>
         );
       },
@@ -104,10 +88,7 @@ const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag
       header: "Created",
       accessorKey: "created_at",
       sortingFn: "datetime",
-      cell: ({ row }) => {
-        const tag = row.original;
-        return <span className="text-xs">{new Date(tag.created_at).toLocaleDateString()}</span>;
-      },
+      cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
     },
     {
       id: "actions",

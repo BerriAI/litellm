@@ -1,3 +1,4 @@
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { BarChart, Card, Title } from "@tremor/react";
 import { Table } from "antd";
@@ -24,7 +25,7 @@ const columns: ColumnsType<TopModelData> = [
     title: "Spend (USD)",
     dataIndex: "spend",
     key: "spend",
-    render: (value) => `$${formatNumberWithCommas(value, 2)}`,
+    render: (value) => <MoneyCell value={value} decimals={2} />,
   },
   {
     title: "Successful",

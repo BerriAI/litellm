@@ -29,6 +29,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
+    _hash_api_key_for_spend_log,
     _is_master_key,
     _redact_prompt_leaks_in_error_string,
     _sanitize_error_information_for_spend_logs,
@@ -2229,3 +2230,86 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
     assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
     assert "_cache_hit" in payload["request_id"]
     assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
+
+
+class TestHashApiKeyForSpendLog:
+    """Regression: plaintext API keys with Bearer prefix were stored in
+    SpendLogs for failed requests (LIT-4121)"""
+
+    def test_bearer_prefixed_sk_key_is_hashed(self):
+        raw = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("Bearer")
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_bare_sk_key_is_hashed(self):
+        raw = "sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_bearer_lowercase_is_handled(self):
+        raw = "bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("bearer")
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_already_hashed_key_unchanged(self):
+        hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
+        assert _hash_api_key_for_spend_log(hashed) == hashed
+
+    def test_bearer_prefixed_non_sk_key_strips_prefix(self):
+        raw = "Bearer some-other-token-format"
+        result = _hash_api_key_for_spend_log(raw)
+        assert result == "some-other-token-format"
+        assert not result.startswith("Bearer")
+
+    def test_bearer_and_bare_produce_same_hash(self):
+        bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
+        bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        assert _hash_api_key_for_spend_log(bare) == _hash_api_key_for_spend_log(bearer)
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_hashes_bearer_prefixed_api_key():
+    """Regression for LIT-4121: failed-request spend logs stored plaintext
+    'Bearer sk-...' in both the api_key column and metadata.user_api_key"""
+    raw_key = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": raw_key,
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+                "status": "failure",
+            }
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("model error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert not payload["api_key"].startswith("Bearer"), (
+        f"api_key column contains plaintext Bearer key: {payload['api_key']}"
+    )
+    assert not payload["api_key"].startswith("sk-"), (
+        f"api_key column contains unhashed key: {payload['api_key']}"
+    )
+
+    metadata_dict = json.loads(payload["metadata"])
+    assert not metadata_dict["user_api_key"].startswith("Bearer"), (
+        f"metadata user_api_key contains plaintext Bearer key: {metadata_dict['user_api_key']}"
+    )
+    assert not metadata_dict["user_api_key"].startswith("sk-"), (
+        f"metadata user_api_key contains unhashed key: {metadata_dict['user_api_key']}"
+    )

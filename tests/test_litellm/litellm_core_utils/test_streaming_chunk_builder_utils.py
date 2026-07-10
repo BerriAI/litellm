@@ -325,6 +325,159 @@ def test_cache_read_input_tokens_retained():
     assert usage.cache_read_input_tokens == 11775
     assert usage.prompt_tokens_details.cached_tokens == 11775
 
+
+def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
+    """
+    Anthropic emits the cache-creation TTL breakdown (ephemeral 5m/1h split) only
+    on the `message_start` SSE event; the later `message_delta` carries the flat
+    cache-creation count but drops the nested `cache_creation` object. Because
+    prompt_tokens_details is aggregated last-wins, the breakdown used to be
+    clobbered by message_delta, leaving cost calc with no TTL split. It then fell
+    back to the 5-minute write rate and undercounted 1-hour cache writes by ~37.5%.
+
+    Reproduces the trace: input=3, cache_creation=50 (all 1h), cache_read=8728.
+    Correct cache-write cost is 50 * 6e-06 (1h) = 0.0003, not 50 * 3.75e-06 = 0.0001875.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    message_start_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 50,
+            "cache_read_input_tokens": 8728,
+            "output_tokens": 1,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 50,
+            },
+        },
+        reasoning_content=None,
+    )
+    message_delta_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 50,
+            "cache_read_input_tokens": 8728,
+            "output_tokens": 31,
+        },
+        reasoning_content=None,
+    )
+    # Sanity: the delta event genuinely lacks the breakdown - this is the input
+    # condition that used to defeat cost calc.
+    assert (
+        getattr(message_delta_usage.prompt_tokens_details, "cache_creation_token_details", None)
+        is None
+    )
+
+    def _usage_chunk(usage, finish_reason):
+        return ModelResponseStream(
+            id="chatcmpl-1hr-cache",
+            created=1745513206,
+            model="claude-sonnet-4-6",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    delta=Delta(content="" if finish_reason is None else None),
+                )
+            ],
+            stream_options={"include_usage": True},
+            usage=usage,
+        )
+
+    chunks = [
+        _usage_chunk(message_start_usage, None),
+        _usage_chunk(message_delta_usage, "stop"),
+    ]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="claude-sonnet-4-6", completion_output="hi"
+    )
+
+    breakdown = getattr(usage.prompt_tokens_details, "cache_creation_token_details", None)
+    assert breakdown is not None, "1h/5m cache-creation breakdown lost during aggregation"
+    assert breakdown.ephemeral_1h_input_tokens == 50
+    assert breakdown.ephemeral_5m_input_tokens == 0
+    assert usage.cache_creation_input_tokens == 50
+    assert usage.cache_read_input_tokens == 8728
+
+    prompt_cost, _ = cost_per_token(model="claude-sonnet-4-6", usage=usage)
+    # text 3*3e-06 + cache_read 8728*3e-07 + cache_write 50*6e-06 (1h rate)
+    expected = 3 * 3e-06 + 8728 * 3e-07 + 50 * 6e-06
+    assert prompt_cost == pytest.approx(expected)
+    # Guard against the regression: 5m-rate fallback would shave the write cost.
+    buggy = 3 * 3e-06 + 8728 * 3e-07 + 50 * 3.75e-06
+    assert prompt_cost != pytest.approx(buggy)
+
+
+def test_streaming_keeps_cache_creation_breakdown_from_final_chunk():
+    """When the final usage chunk itself carries the cache-creation breakdown,
+    aggregation must keep that breakdown instead of re-attaching a stale one
+    captured from an earlier chunk."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    config = AnthropicConfig()
+    message_start_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 7,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 1,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 7,
+                "ephemeral_1h_input_tokens": 0,
+            },
+        },
+        reasoning_content=None,
+    )
+    message_delta_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 31,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 50,
+            },
+        },
+        reasoning_content=None,
+    )
+
+    def _usage_chunk(usage, finish_reason):
+        return ModelResponseStream(
+            id="chatcmpl-final-breakdown",
+            created=1745513206,
+            model="claude-sonnet-4-6",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    delta=Delta(content="" if finish_reason is None else None),
+                )
+            ],
+            stream_options={"include_usage": True},
+            usage=usage,
+        )
+
+    chunks = [
+        _usage_chunk(message_start_usage, None),
+        _usage_chunk(message_delta_usage, "stop"),
+    ]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="claude-sonnet-4-6", completion_output="hi"
+    )
+
+    breakdown = getattr(usage.prompt_tokens_details, "cache_creation_token_details", None)
+    assert breakdown is not None
+    assert breakdown.ephemeral_1h_input_tokens == 50
+    assert breakdown.ephemeral_5m_input_tokens == 0
+    assert usage.cache_creation_input_tokens == 50
+
+
 def test_cache_read_input_tokens_retained_genericstreamingchunk():
     chunk1 = GenericStreamingChunk(
         text="Test1",

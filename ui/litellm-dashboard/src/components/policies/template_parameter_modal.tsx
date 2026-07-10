@@ -313,7 +313,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               />
               <p className="text-xs text-gray-500 mt-1">Type a name and press Enter to add. Click ✕ to remove.</p>
               {statusMessage && (
-                <div className="flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded border border-blue-100">
+                <div className="flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded-sm border border-blue-100">
                   <Spin size="small" />
                   <span className="text-xs text-blue-700">{statusMessage}</span>
                 </div>

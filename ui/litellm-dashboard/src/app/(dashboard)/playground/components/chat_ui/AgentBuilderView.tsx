@@ -11,7 +11,7 @@ import {
 } from "@ant-design/icons";
 import { Button, Input, Modal, Select, Spin, Tabs } from "antd";
 import React, { useCallback, useEffect, useState } from "react";
-import CodeBlock from "@/app/(dashboard)/api-reference/components/CodeBlock";
+import CodeBlock from "@/components/CodeBlock";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   keyCreateCall,
@@ -102,7 +102,7 @@ function ConnectTabContent({
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-gray-900 mb-1">Proxy base URL</h3>
-        <p className="text-sm text-gray-600 font-mono bg-gray-50 px-2 py-1.5 rounded border border-gray-200 break-all">
+        <p className="text-sm text-gray-600 font-mono bg-gray-50 px-2 py-1.5 rounded-sm border border-gray-200 break-all">
           {baseUrl}
         </p>
       </div>
@@ -442,7 +442,7 @@ export default function AgentBuilderView({
 
   return (
     <div className="flex h-full flex-col bg-white text-gray-900">
-      <div className="flex flex-shrink-0 flex-col border-b border-gray-200">
+      <div className="flex shrink-0 flex-col border-b border-gray-200">
         <div className="flex h-12 items-center justify-between px-4">
           <span className="text-sm font-medium text-gray-900">Agent Builder</span>
           {isNewAgent ? (
@@ -460,7 +460,7 @@ export default function AgentBuilderView({
           )}
         </div>
         <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-          <ExperimentOutlined className="flex-shrink-0 text-amber-600" />
+          <ExperimentOutlined className="shrink-0 text-amber-600" />
           <span>
             Agent Builder is experimental and may change or be removed without notice. We’d love your feedback—email us
             at{" "}
@@ -474,7 +474,7 @@ export default function AgentBuilderView({
 
       <div className="flex flex-1 overflow-hidden">
         {/* Roster */}
-        <div className="w-60 flex-shrink-0 border-r border-gray-200 bg-white flex flex-col">
+        <div className="w-60 shrink-0 border-r border-gray-200 bg-white flex flex-col">
           <div className="flex items-center justify-between border-b border-gray-200 p-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Agents</span>
             <Button type="text" size="small" icon={<PlusOutlined />} onClick={handleAddAgent} aria-label="Add agent" />
@@ -542,7 +542,7 @@ export default function AgentBuilderView({
                         {isNewAgent || selectedAgent ? (
                           <div className="mx-auto max-w-xl space-y-4">
                             {!selectedAgentModelId && selectedAgent && (
-                              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                              <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                                 This agent cannot be updated or deleted here (missing model id). Manage it from Models
                                 &amp; Endpoints.
                               </div>
@@ -616,8 +616,8 @@ export default function AgentBuilderView({
                               {selectedAgent && draftTools.length > 0 && (
                                 <p className="mt-1 text-xs text-gray-500">
                                   {draftTools.length} MCP server{draftTools.length !== 1 ? "s" : ""} saved. Use the same{" "}
-                                  <code className="rounded bg-gray-100 px-1">tools</code> array in chat completions when
-                                  calling this agent.
+                                  <code className="rounded-sm bg-gray-100 px-1">tools</code> array in chat completions
+                                  when calling this agent.
                                 </p>
                               )}
                             </div>

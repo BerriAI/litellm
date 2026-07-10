@@ -188,6 +188,8 @@ class UserAPIKeyLabelNames(Enum):
     STREAM = "stream"
     ORG_ID = "org_id"
     ORG_ALIAS = "org_alias"
+    MCP_TOOL_NAME = "mcp_tool_name"
+    MCP_SERVER_NAME = "mcp_server_name"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -195,6 +197,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_time_to_first_token_metric",
     "litellm_request_total_latency_metric",
     "litellm_overhead_latency_metric",
+    "litellm_overhead_with_guardrails_latency_metric",
     "litellm_remaining_requests_metric",
     "litellm_remaining_tokens_metric",
     "litellm_proxy_total_requests_metric",
@@ -263,6 +266,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_check_batch_cost_jobs_processed_total",
     "litellm_check_batch_cost_errors_total",
     "litellm_check_batch_cost_last_run_timestamp",
+    # MCP tool call metrics
+    "litellm_mcp_tool_calls_total",
+    "litellm_mcp_tool_call_spend_metric",
 ]
 
 
@@ -277,6 +283,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -289,6 +296,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -301,6 +309,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -313,6 +322,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
@@ -335,6 +345,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -356,6 +367,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -370,6 +382,16 @@ class PrometheusMetricLabels:
     ]
 
     litellm_overhead_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+    ]
+
+    litellm_overhead_with_guardrails_latency_metric = [
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.API_BASE.value,
@@ -442,6 +464,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_total_tokens_metric = [
@@ -455,6 +478,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_output_tokens_metric = [
@@ -468,6 +492,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     # Token-type detail metrics — reuse the same label set as
@@ -666,6 +691,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_cache_hits_metric = _cache_metric_labels
@@ -725,6 +751,20 @@ class PrometheusMetricLabels:
     litellm_check_batch_cost_errors_total: List[str] = []  # label: error_type (custom)
 
     litellm_check_batch_cost_last_run_timestamp: List[str] = []
+
+    # MCP tool call metrics
+    litellm_mcp_tool_calls_total: list[str] = [
+        UserAPIKeyLabelNames.MCP_TOOL_NAME.value,
+        UserAPIKeyLabelNames.MCP_SERVER_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.END_USER.value,
+    ]
+
+    litellm_mcp_tool_call_spend_metric: list[str] = list(litellm_mcp_tool_calls_total)
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
@@ -829,6 +869,8 @@ class UserAPIKeyLabelValues:
     stream: Optional[str] = None
     org_id: Optional[str] = None
     org_alias: Optional[str] = None
+    mcp_tool_name: Optional[str] = None
+    mcp_server_name: Optional[str] = None
 
     # Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:

@@ -1,7 +1,8 @@
 import React from "react";
-import { Table, Badge, Tooltip } from "antd";
+import { Table, Tooltip } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { EyeOutlined, CopyOutlined, DeleteOutlined } from "@ant-design/icons";
+import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { DocumentUpload } from "./types";
 
 interface DocumentsTableProps {
@@ -16,15 +17,15 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
   };
 
   const getStatusBadge = (status: DocumentUpload["status"]) => {
-    const statusConfig = {
-      uploading: { color: "blue", text: "Uploading" },
-      done: { color: "green", text: "Ready" },
-      error: { color: "red", text: "Error" },
-      removed: { color: "default", text: "Removed" },
+    const statusConfig: Record<DocumentUpload["status"], { tone: StatusTone; label: string }> = {
+      uploading: { tone: "info", label: "Uploading" },
+      done: { tone: "success", label: "Ready" },
+      error: { tone: "error", label: "Error" },
+      removed: { tone: "neutral", label: "Removed" },
     };
 
-    const config = statusConfig[status];
-    return <Badge color={config.color} text={config.text} />;
+    const config: { tone: StatusTone; label: string } = statusConfig[status] ?? { tone: "neutral", label: status };
+    return <StatusBadge tone={config.tone} label={config.label} />;
   };
 
   const formatFileSize = (bytes?: number) => {
@@ -60,10 +61,7 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
       render: (_: any, record: DocumentUpload) => (
         <div className="flex items-center space-x-2">
           <Tooltip title="View details">
-            <EyeOutlined
-              className="cursor-pointer text-gray-600 hover:text-blue-500"
-              onClick={() => console.log("View", record)}
-            />
+            <EyeOutlined className="cursor-pointer text-gray-600 hover:text-blue-500" onClick={() => {}} />
           </Tooltip>
           <Tooltip title="Copy ID">
             <CopyOutlined

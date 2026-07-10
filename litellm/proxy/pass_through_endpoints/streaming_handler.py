@@ -26,6 +26,11 @@ from .success_handler import PassThroughEndpointLogging
 
 class PassThroughStreamingHandler:
     @staticmethod
+    def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
+        if litellm_logging_obj.completion_start_time is None:
+            litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+
+    @staticmethod
     async def chunk_processor(
         response: httpx.Response,
         request_body: Optional[dict],
@@ -58,6 +63,7 @@ class PassThroughStreamingHandler:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
+                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     yield chunk
             else:
                 # ``cost_injection_active`` already requires ``model_name`` to
@@ -67,6 +73,7 @@ class PassThroughStreamingHandler:
                 resolved_model_name: str = model_name
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
+                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     if endpoint_type == EndpointType.VERTEX_AI:
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
                             modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
@@ -89,7 +96,11 @@ class PassThroughStreamingHandler:
             # GeneratorExit (raised on client disconnect) is not caught by
             # `except Exception`; the finally block ensures partial usage
             # still gets logged for spend tracking. See LIT-2642.
-            if not logging_scheduled and raw_bytes:
+            # Upstream 4xx/5xx responses are already logged as a failure by
+            # the caller before this generator starts (see
+            # _log_passthrough_upstream_failure); logging them again here as
+            # a success would double-log the same request.
+            if not logging_scheduled and raw_bytes and response.status_code < 400:
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(

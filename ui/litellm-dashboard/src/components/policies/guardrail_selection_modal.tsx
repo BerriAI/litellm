@@ -156,7 +156,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
               } transition-colors`}
             >
               <div className="flex items-start gap-3">
-                <div className="flex-shrink-0 pt-0.5">
+                <div className="shrink-0 pt-0.5">
                   {guardrail.alreadyExists ? (
                     <CheckCircleOutlined className="text-green-600 text-lg" />
                   ) : (

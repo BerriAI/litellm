@@ -41,6 +41,15 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
     ),
     # Common fields for all Redis types
     CacheSettingsField(
+        field_name="url",
+        field_type="String",
+        field_value=None,
+        field_description="Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Username, Password, and Database Index.",
+        field_default=None,
+        ui_field_name="Redis URL",
+        redis_type=None,
+    ),
+    CacheSettingsField(
         field_name="host",
         field_type="String",
         field_value=None,
@@ -56,6 +65,15 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         field_description="Redis server port number",
         field_default="6379",
         ui_field_name="Port",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="db",
+        field_type="Integer",
+        field_value=None,
+        field_description="Logical database index to isolate the cache (e.g. 1 for redis://host:6379/1)",
+        field_default=None,
+        ui_field_name="Database Index",
         redis_type=None,
     ),
     CacheSettingsField(

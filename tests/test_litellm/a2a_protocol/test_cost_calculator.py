@@ -103,9 +103,7 @@ async def _mock_stream_messages(a2a_client: Any, request: Any) -> AsyncIterator[
         kind="message",
     )
     for _ in range(2):
-        yield SendStreamingMessageResponse(
-            root=SendStreamingMessageSuccessResponse(id=request.id, result=msg)
-        )
+        yield SendStreamingMessageResponse(root=SendStreamingMessageSuccessResponse(id=request.id, result=msg))
 
 
 class CostLogger(CustomLogger):
@@ -119,9 +117,7 @@ class CostLogger(CustomLogger):
         slp = kwargs.get("standard_logging_object")
         if slp:
             self.response_cost = (
-                slp.get("response_cost")
-                if isinstance(slp, dict)
-                else getattr(slp, "response_cost", None)
+                slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
             )
 
 
@@ -160,6 +156,43 @@ async def test_asend_message_uses_cost_per_query():
     assert cost_logger.response_cost == 0.05
 
 
+@pytest.mark.asyncio
+async def test_asend_message_uses_cost_per_query_from_litellm_params_dict():
+    """
+    Proxy passes agent pricing as the litellm_params dict param (not top-level
+    kwargs). Regression for cost_per_query landing at $0 on the native path.
+    """
+    from litellm.a2a_protocol import asend_message
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+    cost_logger = CostLogger()
+    litellm.callbacks = [cost_logger]
+
+    mock_client = MagicMock()
+    mock_client._litellm_agent_card = MagicMock()
+    mock_client._litellm_agent_card.name = "test-agent"
+
+    mock_request = _make_send_message_request("test-123")
+
+    with patch(
+        "litellm.a2a_protocol.main._execute_a2a_send_with_retry",
+        new=_mock_execute_a2a_send,
+    ):
+        await asend_message(
+            a2a_client=mock_client,
+            request=mock_request,
+            litellm_params={
+                "cost_per_query": 0.5,
+                "input_cost_per_token": 0.099999,
+                "output_cost_per_token": 0.1,
+            },
+        )
+
+    await asyncio.sleep(0.1)
+
+    assert cost_logger.response_cost == 0.5
+
+
 class TokenAndCostLogger(CustomLogger):
     """Custom logger to capture both token counts and cost."""
 
@@ -173,19 +206,13 @@ class TokenAndCostLogger(CustomLogger):
         slp = kwargs.get("standard_logging_object")
         if slp:
             self.response_cost = (
-                slp.get("response_cost")
-                if isinstance(slp, dict)
-                else getattr(slp, "response_cost", None)
+                slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
             )
             self.prompt_tokens = (
-                slp.get("prompt_tokens")
-                if isinstance(slp, dict)
-                else getattr(slp, "prompt_tokens", None)
+                slp.get("prompt_tokens") if isinstance(slp, dict) else getattr(slp, "prompt_tokens", None)
             )
             self.completion_tokens = (
-                slp.get("completion_tokens")
-                if isinstance(slp, dict)
-                else getattr(slp, "completion_tokens", None)
+                slp.get("completion_tokens") if isinstance(slp, dict) else getattr(slp, "completion_tokens", None)
             )
 
 
@@ -207,9 +234,7 @@ async def test_asend_message_uses_input_output_cost_per_token():
     mock_client._litellm_agent_card = MagicMock()
     mock_client._litellm_agent_card.name = "test-agent"
 
-    mock_request = _make_send_message_request(
-        "test-123", user_text="Hello, what can you do?"
-    )
+    mock_request = _make_send_message_request("test-123", user_text="Hello, what can you do?")
 
     # Define specific cost per token values
     input_cost_per_token = 0.00001  # $0.01 per 1000 tokens
@@ -246,15 +271,11 @@ async def test_asend_message_uses_input_output_cost_per_token():
     assert response_cost is not None, "response_cost should be captured"
 
     # Calculate expected cost
-    expected_cost = (prompt_tokens * input_cost_per_token) + (
-        completion_tokens * output_cost_per_token
-    )
+    expected_cost = (prompt_tokens * input_cost_per_token) + (completion_tokens * output_cost_per_token)
     print(f"expected_cost: {expected_cost}")
 
     # Verify exact cost calculation
-    assert (
-        response_cost == expected_cost
-    ), f"response_cost {response_cost} should equal expected {expected_cost}"
+    assert response_cost == expected_cost, f"response_cost {response_cost} should equal expected {expected_cost}"
 
 
 class AgentIdLogger(CustomLogger):
@@ -305,9 +326,9 @@ async def test_asend_message_passes_agent_id_to_callback():
     await asyncio.sleep(0.1)
 
     # Verify agent_id was passed to callback
-    assert (
-        agent_id_logger.agent_id == test_agent_id
-    ), f"Expected agent_id '{test_agent_id}', got '{agent_id_logger.agent_id}'"
+    assert agent_id_logger.agent_id == test_agent_id, (
+        f"Expected agent_id '{test_agent_id}', got '{agent_id_logger.agent_id}'"
+    )
 
 
 class MetadataLogger(CustomLogger):
@@ -418,9 +439,7 @@ async def test_asend_message_streaming_triggers_callbacks():
     assert len(chunks) == 2
 
     # Verify callbacks WERE triggered after stream completed
-    assert (
-        callback_logger.kwargs is not None
-    ), "Streaming should trigger callbacks after completion"
-    assert (
-        callback_logger.agent_id == test_agent_id
-    ), f"Expected agent_id '{test_agent_id}', got '{callback_logger.agent_id}'"
+    assert callback_logger.kwargs is not None, "Streaming should trigger callbacks after completion"
+    assert callback_logger.agent_id == test_agent_id, (
+        f"Expected agent_id '{test_agent_id}', got '{callback_logger.agent_id}'"
+    )

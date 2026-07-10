@@ -69,11 +69,11 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
       ]}
     >
       <div className="space-y-3">
-        {error && <div className="p-3 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{error}</div>}
+        {error && <div className="p-3 bg-red-50 border border-red-200 rounded-sm text-red-600 text-sm">{error}</div>}
         <textarea
           value={json}
           onChange={(e) => setJson(e.target.value)}
-          className="w-full min-h-[400px] px-4 py-3 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          className="w-full min-h-[400px] px-4 py-3 border border-gray-300 rounded-lg text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 resize-none"
           placeholder="Paste your tool JSON here..."
         />
       </div>

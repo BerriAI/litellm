@@ -17,6 +17,7 @@ export interface FilterOption {
   searchFn?: (searchText: string) => Promise<Array<{ label: string; value: string }>>;
   options?: Array<{ label: string; value: string }>;
   customComponent?: React.ComponentType<FilterOptionCustomComponentProps>;
+  loading?: boolean;
 }
 
 interface FilterValues {
@@ -74,7 +75,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   // Load initial options for searchable filters
   const loadInitialOptions = useCallback(
     async (option: FilterOption) => {
-      if (!option.isSearchable || !option.searchFn || initialOptionsLoaded[option.name]) return;
+      if (!option.isSearchable || !option.searchFn || option.loading || initialOptionsLoaded[option.name]) return;
 
       setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
       setInitialOptionsLoaded((prev) => ({ ...prev, [option.name]: true }));
@@ -145,6 +146,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
           {options.map((option) => {
+            const isOptionLoading = searchLoadingMap[option.name] || option.loading;
             return (
               <div key={option.name} className="flex flex-col gap-2">
                 <label className="text-sm text-gray-600">{option.label || option.name}</label>
@@ -166,10 +168,10 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                       }
                     }}
                     filterOption={false}
-                    loading={searchLoadingMap[option.name]}
+                    loading={isOptionLoading}
                     options={searchOptionsMap[option.name] || []}
                     allowClear
-                    notFoundContent={searchLoadingMap[option.name] ? "Loading..." : "No results found"}
+                    notFoundContent={isOptionLoading ? "Loading..." : "No results found"}
                   />
                 ) : option.options ? (
                   <Select

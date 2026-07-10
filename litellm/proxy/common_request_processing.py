@@ -52,6 +52,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
@@ -90,7 +91,9 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
 }
 
 
-def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> None:
+def _apply_client_disconnect_metadata(target_metadata: Optional[dict[str, object]]) -> None:
+    if target_metadata is None:
+        return
     target_metadata["client_disconnected"] = True
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 
@@ -113,12 +116,33 @@ async def _record_streaming_client_disconnect_if_needed(
     logging_obj = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
         litellm_params = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
-        _apply_client_disconnect_metadata(logging_obj.model_call_details.setdefault("metadata", {}))
+        _lp_metadata = litellm_params.get("metadata")
+        if _lp_metadata is None:
+            _lp_metadata = {}
+            litellm_params["metadata"] = _lp_metadata
+        _apply_client_disconnect_metadata(_lp_metadata)
 
-    _apply_client_disconnect_metadata(request_data.setdefault("metadata", {}))
-    litellm_params = request_data.setdefault("litellm_params", {})
-    _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
+        _mcd_metadata = logging_obj.model_call_details.get("metadata")
+        if _mcd_metadata is None:
+            _mcd_metadata = {}
+            logging_obj.model_call_details["metadata"] = _mcd_metadata
+        _apply_client_disconnect_metadata(_mcd_metadata)
+
+    _rd_metadata = request_data.get("metadata")
+    if _rd_metadata is None:
+        _rd_metadata = {}
+        request_data["metadata"] = _rd_metadata
+    _apply_client_disconnect_metadata(_rd_metadata)
+
+    _rd_litellm_params = request_data.get("litellm_params")
+    if _rd_litellm_params is None:
+        _rd_litellm_params = {}
+        request_data["litellm_params"] = _rd_litellm_params
+    _rd_lp_metadata = _rd_litellm_params.get("metadata")
+    if _rd_lp_metadata is None:
+        _rd_lp_metadata = {}
+        _rd_litellm_params["metadata"] = _rd_lp_metadata
+    _apply_client_disconnect_metadata(_rd_lp_metadata)
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
@@ -600,7 +624,7 @@ def _override_openai_response_model(
     if not requested_model:
         return
 
-    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    hidden_params = get_hidden_params_dict(response_obj)
     if isinstance(hidden_params, dict):
         # Check if a fallback occurred - if so, preserve the actual model used
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
@@ -896,7 +920,7 @@ class ProxyBaseLLMRequestProcessing:
         (e.g. Google native :generateContent) instead of base_process_llm_request.
         """
         if isinstance(response, dict):
-            hidden_params = response.get("_hidden_params") or {}
+            hidden_params = get_hidden_params_dict(response)
         else:
             hidden_params = getattr(response, "_hidden_params", None) or {}
         if not isinstance(hidden_params, dict):
@@ -1174,6 +1198,120 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
+    async def _pre_call_with_fallbacks(
+        self,
+        request: Request,
+        general_settings: dict,
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
+        version: Optional[str],
+        proxy_config: ProxyConfig,
+        user_model: Optional[str],
+        user_temperature: Optional[float],
+        user_request_timeout: Optional[float],
+        user_max_tokens: Optional[int],
+        user_api_base: Optional[str],
+        model: Optional[str],
+        route_type: str,
+        llm_router: Optional[Router],
+    ) -> tuple[dict, LiteLLMLoggingObj]:
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        try:
+            return await self.common_processing_pre_call_logic(
+                request=request,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                model=model,
+                route_type=route_type,
+                llm_router=llm_router,
+            )
+        except ProxyRateLimitError as original_exc:
+            original_model = self.data.get("model")
+            if not original_model or not llm_router or self.data.get("disable_fallbacks"):
+                raise
+
+            fallback_models = self._resolve_fallback_models(
+                model=original_model,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if not fallback_models:
+                raise
+
+            verbose_proxy_logger.info(
+                "Local rate limit hit for model=%s, attempting fallbacks: %s",
+                original_model,
+                fallback_models,
+            )
+
+            try:
+                for fallback_model in fallback_models:
+                    if fallback_model == original_model:
+                        continue
+                    self.data["model"] = fallback_model
+                    try:
+                        return await self.common_processing_pre_call_logic(
+                            request=request,
+                            general_settings=general_settings,
+                            proxy_logging_obj=proxy_logging_obj,
+                            user_api_key_dict=user_api_key_dict,
+                            version=version,
+                            proxy_config=proxy_config,
+                            user_model=user_model,
+                            user_temperature=user_temperature,
+                            user_request_timeout=user_request_timeout,
+                            user_max_tokens=user_max_tokens,
+                            user_api_base=user_api_base,
+                            model=fallback_model,
+                            route_type=route_type,
+                            llm_router=llm_router,
+                        )
+                    except ProxyRateLimitError:
+                        continue
+            except BaseException:
+                self.data["model"] = original_model
+                raise
+
+            self.data["model"] = original_model
+            raise original_exc
+
+    def _resolve_fallback_models(
+        self,
+        model: str,
+        llm_router: Router,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[list]:
+        from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+        fallbacks = None
+
+        key_router_settings = user_api_key_dict.router_settings
+        if isinstance(key_router_settings, dict) and "fallbacks" in key_router_settings:
+            fallbacks = key_router_settings["fallbacks"]
+
+        if fallbacks is None:
+            fallbacks = llm_router.fallbacks
+
+        if not fallbacks:
+            return None
+
+        fallback_model_group, generic_fallback_idx = get_fallback_model_group(
+            fallbacks=fallbacks,
+            model_group=model,
+        )
+        if fallback_model_group is None and generic_fallback_idx is not None:
+            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
+        return fallback_model_group
+
     @staticmethod
     def _get_model_id_from_response(hidden_params: dict, data: dict) -> str:
         """Extract model_id from hidden_params with fallback to litellm_metadata."""
@@ -1183,6 +1321,26 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    @staticmethod
+    def _response_cost_from_logging_obj(
+        *,
+        response: Any,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> float | str:
+        """
+        Recover the response cost when the response never recorded one in its
+        ``_hidden_params``: Anthropic /v1/messages returns a TypedDict that cannot
+        hold the attribute at all, and Google :generateContent carries
+        ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
+        cases the cost is read back from the logging object instead, recomputing from
+        the same calculator only when it has not been stored yet.
+        """
+        stored_cost = logging_obj.model_call_details.get("response_cost")
+        if isinstance(stored_cost, (int, float)):
+            return float(stored_cost)
+        recomputed_cost = logging_obj._response_cost_calculator(result=response)
+        return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
@@ -1329,7 +1487,7 @@ class ProxyBaseLLMRequestProcessing:
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
         else:
-            self.data, logging_obj = await self.common_processing_pre_call_logic(
+            self.data, logging_obj = await self._pre_call_with_fallbacks(
                 request=request,
                 general_settings=general_settings,
                 proxy_logging_obj=proxy_logging_obj,
@@ -1409,7 +1567,7 @@ class ProxyBaseLLMRequestProcessing:
 
         _exception_raised = False
         try:
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            hidden_params = get_hidden_params_dict(response)
             model_id = self._get_model_id_from_response(hidden_params, self.data)
 
             cache_key, api_base, response_cost = (
@@ -1684,8 +1842,15 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}  # get any updated response headers
+        hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
+
+        recover_response_cost = not response_cost and hidden_params.get("response_cost") is None
+        response_cost_for_headers = (
+            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            if recover_response_cost
+            else response_cost
+        )
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1695,7 +1860,7 @@ class ProxyBaseLLMRequestProcessing:
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
-                response_cost=response_cost,
+                response_cost=response_cost_for_headers,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
@@ -1704,6 +1869,9 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
         )
+
+        if isinstance(response, dict):
+            response.pop("_hidden_params", None)
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(

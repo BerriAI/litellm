@@ -746,6 +746,66 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         assert len(mock_scheduler_calls) > 0
 
 
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
+    """
+    Regression (LIT-4128): MCP servers created via the UI are persisted to the DB
+    regardless of store_model_in_db, but the in-memory registry that GET
+    /v1/mcp/server reads is hydrated from the DB only by the store_model_in_db
+    model-sync loop (add_deployment). On a DB-backed proxy with store_model_in_db
+    unset the registry must still be hydrated on startup so previously-added
+    servers survive a restart instead of showing an empty list until a write.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    mock_proxy_config.add_deployment.assert_not_called()
+    mock_proxy_config.init_mcp_servers_from_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatch):
+    """
+    init_mcp_servers_from_db hydrates MCP from the DB by default but skips it when
+    an explicit supported_db_objects allowlist omits "mcp".
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config = ProxyConfig()
+    with patch.object(config, "_init_mcp_servers_in_db", new=AsyncMock()) as mock_init:
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        await config.init_mcp_servers_from_db()
+        mock_init.assert_awaited_once()
+
+        mock_init.reset_mock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"supported_db_objects": ["models"]},
+        )
+        await config.init_mcp_servers_from_db()
+        mock_init.assert_not_awaited()
+
+
 def test_update_config_fields_deep_merge_db_wins():
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -836,7 +896,9 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
 
     # Bypass auth dependency
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -890,7 +952,9 @@ def test_get_config_returns_email_settings(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -947,7 +1011,9 @@ def test_get_config_returns_slack_webhook(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -1001,7 +1067,9 @@ def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -2513,6 +2581,50 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
         assert litellm.max_budget > 0
     finally:
         litellm.max_budget = original_max_budget
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_url_validation_handles_null_and_string_false(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.example"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["provider.example"])
+    null_config_file = tmp_path / "null_config.yaml"
+    null_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "user_url_allowed_hosts": None,
+                    "user_url_validation": None,
+                    "provider_url_destination_allowed_hosts": None,
+                },
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(null_config_file)
+    )
+    assert litellm.user_url_validation is True
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
+
+    false_config_file = tmp_path / "false_config.yaml"
+    false_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {"user_url_validation": "false"},
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(false_config_file)
+    )
+    assert litellm.user_url_validation is False
 
 
 @pytest.mark.asyncio
@@ -5145,7 +5257,9 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
 
     original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
 
     client = TestClient(app)
     try:
@@ -8530,6 +8644,149 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
+    """The throttle fraction is a litellm_settings scalar surfaced on the General
+    Settings table as a Float field so it sits with the other global limits; it
+    must appear in /config/list reading its live litellm.<attr> value."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.15)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "budget_exceeded_throttle_percentage" in fields
+        assert fields["budget_exceeded_throttle_percentage"]["field_type"] == "Float"
+        assert fields["budget_exceeded_throttle_percentage"]["field_value"] == 0.15
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_persists_to_litellm_settings(monkeypatch):
+    """Editing the throttle Float row on the General Settings table routes to
+    litellm_settings (not general_settings): it sets litellm.<attr> live and
+    persists under litellm_settings so the runtime read is unchanged."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="budget_exceeded_throttle_percentage",
+            field_value=0.1,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.budget_exceeded_throttle_percentage == 0.1
+    assert saved["litellm_settings"]["budget_exceeded_throttle_percentage"] == 0.1
+
+
+@pytest.mark.parametrize("bad_value", [0, -0.1, 1.5, True])
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_rejects_invalid(monkeypatch, bad_value):
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="budget_exceeded_throttle_percentage",
+                field_value=bad_value,
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+    assert exc.value.status_code == 400
+    assert litellm.budget_exceeded_throttle_percentage is None
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_rejected_for_non_admin(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    non_admin = UserAPIKeyAuth(api_key="k", user_id="u", user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(HTTPException):
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="budget_exceeded_throttle_percentage",
+                field_value=0.1,
+                config_type="general_settings",
+            ),
+            user_api_key_dict=non_admin,
+        )
+    assert litellm.budget_exceeded_throttle_percentage is None
+
+
 def test_preserve_redacted_plugin_keys_keeps_stored_credential():
     """A redacted or blank plugin_key on update must not overwrite the real key."""
     from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
@@ -8650,3 +8907,454 @@ def test_config_field_info_returns_raw_secrets_for_full_admin(monkeypatch):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def _fake_prisma_with_config(existing_param_value):
+    """MagicMock prisma whose litellm_config row returns existing_param_value and
+    whose litellm_auditlog.create records the written audit row."""
+    fake = MagicMock()
+    config_row = MagicMock()
+    config_row.param_value = existing_param_value
+    fake.db.litellm_config.find_first = AsyncMock(return_value=config_row)
+    fake.db.litellm_config.upsert = AsyncMock(return_value=config_row)
+    fake.db.litellm_auditlog.create = AsyncMock()
+    return fake
+
+
+def test_dump_redacted_config_redacts_secret_leaves():
+    from litellm.proxy.proxy_server import _dump_redacted_config
+
+    assert _dump_redacted_config(None) is None
+
+    restored = json.loads(
+        _dump_redacted_config(
+            {
+                "api_key": "sk-leak",
+                "model": "gpt-4",
+                "nested": {"aws_secret_access_key": "abc", "region": "us-east-1"},
+            }
+        )
+    )
+    assert restored["api_key"] == "REDACTED"
+    assert restored["model"] == "gpt-4"
+    assert restored["nested"]["aws_secret_access_key"] == "REDACTED"
+    assert restored["nested"]["region"] == "us-east-1"
+
+
+@pytest.mark.asyncio
+async def test_create_config_audit_log_writes_redacted_entry(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import LitellmTableNames
+    from litellm.proxy.proxy_server import create_config_audit_log
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    caller = UserAPIKeyAuth(api_key="hashed-key-abc", user_id="admin-7")
+    await create_config_audit_log(
+        "router_settings",
+        "updated",
+        {"routing_strategy": "simple-shuffle", "api_key": "sk-old"},
+        {"routing_strategy": "latency-based", "api_key": "sk-new"},
+        caller,
+    )
+
+    fake.db.litellm_auditlog.create.assert_awaited_once()
+    written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
+    assert written["table_name"] == LitellmTableNames.CONFIG_TABLE_NAME.value
+    assert written["object_id"] == "router_settings"
+    assert written["action"] == "updated"
+    assert written["changed_by"] == "admin-7"
+    assert written["changed_by_api_key"] == "hashed-key-abc"
+
+    before = json.loads(written["before_value"])
+    after = json.loads(written["updated_values"])
+    assert before["routing_strategy"] == "simple-shuffle"
+    assert after["routing_strategy"] == "latency-based"
+    assert "sk-old" not in written["before_value"]
+    assert "sk-new" not in written["updated_values"]
+    assert before["api_key"] != "sk-old"
+    assert after["api_key"] != "sk-new"
+
+
+@pytest.mark.asyncio
+async def test_create_config_audit_log_noop_when_store_audit_logs_disabled(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import create_config_audit_log
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    await create_config_audit_log(
+        "router_settings",
+        "updated",
+        {},
+        {"a": 1},
+        UserAPIKeyAuth(api_key="k", user_id="u"),
+    )
+    fake.db.litellm_auditlog.create.assert_not_called()
+
+
+def test_dump_redacted_config_serializes_non_json_native_values():
+    """YAML-loaded config can contain datetime/date/custom values that plain
+    json.dumps refuses. Without default=str the audit write turns into a 500
+    after the config change has already committed; the sibling audit-log
+    serializers in team_endpoints.py use default=str for the same reason."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.proxy_server import _dump_redacted_config
+
+    out = _dump_redacted_config({"updated_at": datetime(2026, 6, 30, tzinfo=timezone.utc)})
+    assert out is not None
+    restored = json.loads(out)
+    assert "2026-06-30" in restored["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_emits_audit_log(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    existing = {"max_parallel_requests": 5, "some_api_key": "sk-stored-secret"}
+    fake = _fake_prisma_with_config(existing)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="max_parallel_requests",
+            field_value=42,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    # Audit is scheduled via asyncio.create_task; yield so it runs.
+    await asyncio.sleep(0)
+
+    fake.db.litellm_auditlog.create.assert_awaited_once()
+    written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
+    assert written["table_name"] == "LiteLLM_Config"
+    assert written["object_id"] == "general_settings"
+    assert written["action"] == "updated"
+    assert written["changed_by"] == "admin-1"
+
+    before = json.loads(written["before_value"])
+    after = json.loads(written["updated_values"])
+    assert before["max_parallel_requests"] == 5
+    assert after["max_parallel_requests"] == 42
+    assert "sk-stored-secret" not in written["before_value"]
+    assert "sk-stored-secret" not in written["updated_values"]
+    assert before["some_api_key"] != "sk-stored-secret"
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_validation",
+            field_value="false",
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=["internal.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=["provider.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_validation is False
+    assert litellm.user_url_allowed_hosts == ["internal.example"]
+    assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import delete_config_general_settings
+
+    existing = {"max_parallel_requests": 5}
+    fake = _fake_prisma_with_config(existing)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(
+            field_name="max_parallel_requests", config_type="general_settings"
+        ),
+        user_api_key_dict=admin,
+    )
+    # Audit is scheduled via asyncio.create_task; yield so it runs.
+    await asyncio.sleep(0)
+
+    fake.db.litellm_auditlog.create.assert_awaited_once()
+    written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
+    assert written["object_id"] == "general_settings"
+    assert written["action"] == "deleted"
+    before = json.loads(written["before_value"])
+    after = json.loads(written["updated_values"])
+    assert before["max_parallel_requests"] == 5
+    assert "max_parallel_requests" not in after
+
+
+def test_update_config_audits_every_written_section(_update_config_setup, monkeypatch):
+    """/config/update must emit one audit row per section it writes, so each
+    of the four call sites (general_settings, environment_variables,
+    litellm_settings, router_settings) is mutation-protected. litellm_settings
+    is the row that holds default_internal_user_params ("default user settings")."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"litellm_settings": {"drop_params": True}}
+    )
+    audit_create = AsyncMock()
+    prisma.db.litellm_auditlog.create = audit_create
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    try:
+        resp = client.post(
+            "/config/update",
+            json={
+                "general_settings": {"store_prompts_in_spend_logs": True},
+                "environment_variables": {"FOO": "bar"},
+                "litellm_settings": {
+                    "default_internal_user_params": {"max_budget": 10}
+                },
+                "router_settings": {"routing_strategy": "latency-based-routing"},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        audited = {
+            call.kwargs["data"]["object_id"]: call.kwargs["data"]["action"]
+            for call in audit_create.await_args_list
+        }
+        assert audited == {
+            "general_settings": "updated",
+            "environment_variables": "updated",
+            "litellm_settings": "updated",
+            "router_settings": "updated",
+        }
+        for call in audit_create.await_args_list:
+            assert call.kwargs["data"]["table_name"] == "LiteLLM_Config"
+            assert call.kwargs["data"]["changed_by"] == "test_admin"
+
+        ls_call = next(
+            c
+            for c in audit_create.await_args_list
+            if c.kwargs["data"]["object_id"] == "litellm_settings"
+        )
+        after = json.loads(ls_call.kwargs["data"]["updated_values"])
+        assert after["default_internal_user_params"] == {"max_budget": 10}
+    finally:
+        restore()
+
+
+def test_delete_callback_audits_litellm_settings_deletion(
+    _update_config_setup, monkeypatch
+):
+    """/config/callback/delete must emit a deleted audit row for litellm_settings
+    capturing the success_callback list before and after removal."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    client, prisma, restore = _update_config_setup()
+    audit_create = AsyncMock()
+    prisma.db.litellm_auditlog.create = audit_create
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    from litellm.proxy.proxy_server import proxy_config as real_proxy_config
+
+    monkeypatch.setattr(
+        real_proxy_config,
+        "get_config",
+        AsyncMock(
+            return_value={
+                "litellm_settings": {"success_callback": ["langfuse", "datadog"]}
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        real_proxy_config, "save_config", AsyncMock(return_value=None)
+    )
+    try:
+        resp = client.post(
+            "/config/callback/delete", json={"callback_name": "datadog"}
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "litellm_settings"
+        assert written["action"] == "deleted"
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+        assert before["success_callback"] == ["langfuse", "datadog"]
+        assert after["success_callback"] == ["langfuse"]
+    finally:
+        restore()
+
+
+def test_delete_callback_audits_before_reload_failure(_update_config_setup, monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    client, prisma, restore = _update_config_setup()
+    audit_create = AsyncMock()
+    prisma.db.litellm_auditlog.create = audit_create
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    from litellm.proxy.proxy_server import proxy_config as real_proxy_config
+
+    monkeypatch.setattr(
+        real_proxy_config,
+        "get_config",
+        AsyncMock(
+            return_value={
+                "litellm_settings": {"success_callback": ["langfuse", "datadog"]}
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        real_proxy_config, "save_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        real_proxy_config,
+        "add_deployment",
+        AsyncMock(side_effect=RuntimeError("reload failed")),
+    )
+    try:
+        resp = client.post(
+            "/config/callback/delete", json={"callback_name": "datadog"}
+        )
+        assert resp.status_code == 500, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "litellm_settings"
+        assert written["action"] == "deleted"
+    finally:
+        restore()
+
+
+def test_update_config_redacts_all_environment_variable_values(
+    _update_config_setup, monkeypatch
+):
+    """environment_variables hold credentials under arbitrary uppercase keys
+    (DATABASE_URL) that key-name secret matching misses, so every value in the
+    section must be redacted before the audit row is written; a plaintext
+    secret must never reach LiteLLM_AuditLog."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    # DATABASE_URL is the bug class: an uppercase env key that key-name secret
+    # matching does NOT flag, so only whole-section value redaction protects it.
+    client, prisma, restore = _update_config_setup(
+        initial_rows={
+            "environment_variables": {
+                "DATABASE_URL": "enc:postgresql://OLDsecret@old.host:5432/db"
+            }
+        }
+    )
+    audit_create = AsyncMock()
+    prisma.db.litellm_auditlog.create = audit_create
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    try:
+        resp = client.post(
+            "/config/update",
+            json={
+                "environment_variables": {
+                    "DATABASE_URL": "postgresql://u:p@db.internal:5432/litellm",
+                    "LOG_LEVEL": "debug",
+                }
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        env_call = next(
+            c
+            for c in audit_create.await_args_list
+            if c.kwargs["data"]["object_id"] == "environment_variables"
+        )
+        data = env_call.kwargs["data"]
+
+        # the pre-existing secret must be redacted in the before snapshot
+        before = json.loads(data["before_value"])
+        assert before == {"DATABASE_URL": "REDACTED"}
+        assert "OLDsecret" not in data["before_value"]
+        assert "old.host" not in data["before_value"]
+
+        # the newly-written values must be redacted in the after snapshot
+        after = json.loads(data["updated_values"])
+        assert after == {"DATABASE_URL": "REDACTED", "LOG_LEVEL": "REDACTED"}
+        assert "postgresql://" not in data["updated_values"]
+        assert "db.internal" not in data["updated_values"]
+    finally:
+        restore()

@@ -52,9 +52,8 @@ ui/litellm-dashboard/node_modules
 ui/litellm-dashboard/next-env.d.ts
 ui/litellm-dashboard/package.json
 ui/litellm-dashboard/package-lock.json
-deploy/charts/litellm/*.tgz
-deploy/charts/litellm/charts/*
-deploy/charts/*.tgz
+helm/litellm-helm/*.tgz
+helm/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/
 **/node_modules
@@ -130,3 +129,5 @@ crash.*.log
 
 # pytest coverage data
 .coverage
+
+ui/litellm-dashboard/out/

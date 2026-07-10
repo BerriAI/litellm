@@ -10,6 +10,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { PolicyAttachment } from "./types";
 import ImpactPopover from "./impact_popover";
 
@@ -30,24 +31,11 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
 
-  // Format date helper function
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
-
   const columns: ColumnDef<PolicyAttachment>[] = [
     {
       header: "Attachment ID",
       accessorKey: "attachment_id",
-      cell: (info: any) => (
-        <Tooltip title={String(info.getValue() || "")}>
-          <span className="font-mono text-xs text-gray-600">
-            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
-          </span>
-        </Tooltip>
-      ),
+      cell: (info: any) => <IdCell value={info.getValue()} variant="plain" />,
     },
     {
       header: "Policy",
@@ -183,14 +171,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
     {
       header: "Created At",
       accessorKey: "created_at",
-      cell: ({ row }) => {
-        const attachment = row.original;
-        return (
-          <Tooltip title={attachment.created_at}>
-            <span className="text-xs">{formatDate(attachment.created_at)}</span>
-          </Tooltip>
-        );
-      },
+      cell: ({ row }) => <DateCell value={row.original.created_at} />,
     },
     {
       id: "actions",

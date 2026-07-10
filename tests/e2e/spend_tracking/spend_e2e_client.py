@@ -2,8 +2,8 @@
 
 Generic proxy operations (keys, customers, chat/embed, route probing, SpendLogs
 polling) come from the shared Gateway, DI'd in (composition, not inheritance).
-This client adds only the spend surface: /spend/calculate, key-spend
-polling, and the route probes the breadth test uses.
+This client adds only the spend surface: /spend/calculate, /spend/tags,
+key-spend polling, and the route probes the breadth test uses.
 
 Re-exports unwrap / is_ok / unique_marker / SpendLogRow so the tests import their
 helpers from one place.
@@ -15,6 +15,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from e2e_config import unique_marker
 from e2e_http import (
@@ -22,6 +23,7 @@ from e2e_http import (
     ProbeResult,
     Result,
     StreamingResponse,
+    Success,
     is_ok,
     unwrap,
 )
@@ -38,6 +40,10 @@ from models import (
     SpendCalculateBody,
     SpendCalculateResponse,
     SpendLogRow,
+    SpendLogsPage,
+    SpendLogsPageParams,
+    SpendTagsResponse,
+    TagSpend,
 )
 
 __all__ = [
@@ -139,6 +145,34 @@ class SpendClient:
             )
         ).cost
 
+    def spend_by_tags(self) -> list[TagSpend]:
+        result = self.gateway.transport.get(
+            "/spend/tags",
+            headers=self.gateway.transport.master,
+            params=NoBody(),
+            response_type=SpendTagsResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.root
+            case _:
+                return []
+
+    def poll_tag_spend(self, tag: str, *, minimum: float = 0.0) -> TagSpend | None:
+        """Poll /spend/tags until the tag's aggregate reaches `minimum`; last seen."""
+        deadline = time.monotonic() + self.gateway.poll_timeout
+        entry: TagSpend | None = None
+        while time.monotonic() < deadline:
+            matches = [
+                t for t in self.spend_by_tags() if t.individual_request_tag == tag
+            ]
+            if matches:
+                entry = matches[0]
+                if (entry.total_spend or 0.0) >= minimum:
+                    return entry
+            time.sleep(self.gateway.poll_interval)
+        return entry
+
     def poll_key_spend(self, key: str, *, minimum: float = 0.0) -> float:
         deadline = time.monotonic() + self.gateway.poll_timeout
         spend = 0.0
@@ -148,6 +182,28 @@ class SpendClient:
                 return spend
             time.sleep(self.gateway.poll_interval)
         return spend
+
+    def spend_logs_page(
+        self, *, api_key: str | None, page: int, page_size: int
+    ) -> SpendLogsPage:
+        """One page of /spend/logs/v2 over a window wide enough to contain every
+        row this test run wrote (the endpoint requires explicit dates)."""
+        now = datetime.now(timezone.utc)
+        fmt = "%Y-%m-%d %H:%M:%S"
+        return unwrap(
+            self.gateway.transport.get(
+                "/spend/logs/v2",
+                headers=self.gateway.transport.master,
+                params=SpendLogsPageParams(
+                    start_date=(now - timedelta(days=1)).strftime(fmt),
+                    end_date=(now + timedelta(days=1)).strftime(fmt),
+                    page=page,
+                    page_size=page_size,
+                    api_key=api_key,
+                ),
+                response_type=SpendLogsPage,
+            )
+        )
 
     def probe(self, path: str, *, params: DateRangeParams) -> ProbeResult:
         return self.gateway.transport.probe(path, params=params)
