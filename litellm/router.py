@@ -7357,6 +7357,7 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
+            _litellm_params = self._apply_xai_oauth_alias(_litellm_params)
             litellm_params: LiteLLM_Params = LiteLLM_Params(**_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -7831,8 +7832,48 @@ class Router:
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
 
+    @staticmethod
+    def _normalize_xai_oauth_alias_model(model: str, custom_llm_provider: Optional[str]) -> Optional[str]:
+        """Map the ``xai-oauth`` / ``xai_oauth`` provider alias onto ``xai``.
+
+        xAI OAuth is enabled through the ``use_xai_oauth`` litellm param on an
+        ``xai/`` deployment, so ``xai-oauth`` is not a real provider. Users who
+        follow the ``litellm xai-oauth login`` CLI naming and configure the
+        provider as ``xai-oauth`` (as a model prefix or ``custom_llm_provider``)
+        would otherwise hit "Unsupported provider - xai-oauth". Returns the
+        normalized ``xai/<model>`` string, or None when no alias is present.
+        """
+        aliases = ("xai-oauth", "xai_oauth")
+        prefix = model.split("/", 1)[0] if "/" in model else None
+        if custom_llm_provider not in aliases and prefix not in aliases:
+            return None
+        bare_model = model.split("/", 1)[1] if prefix in (*aliases, "xai") else model
+        return f"xai/{bare_model}"
+
+    def _apply_xai_oauth_alias(self, litellm_params: dict) -> dict:
+        normalized_model = self._normalize_xai_oauth_alias_model(
+            litellm_params.get("model") or "",
+            litellm_params.get("custom_llm_provider"),
+        )
+        if normalized_model is None:
+            return litellm_params
+        return {
+            **{k: v for k, v in litellm_params.items() if k != "custom_llm_provider"},
+            "model": normalized_model,
+            "use_xai_oauth": True,
+        }
+
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
+
+        normalized_model = self._normalize_xai_oauth_alias_model(
+            deployment.litellm_params.model,
+            deployment.litellm_params.custom_llm_provider,
+        )
+        if normalized_model is not None:
+            deployment.litellm_params.model = normalized_model
+            deployment.litellm_params.custom_llm_provider = None
+            deployment.litellm_params.use_xai_oauth = True
 
         #### VALIDATE MODEL ########
         # Check if this is a prompt management model before validating as LLM provider

@@ -1068,6 +1068,49 @@ def test_add_invalid_provider_to_router():
     assert router.pattern_router.patterns == {}
 
 
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "xai-oauth/grok-4.5"},
+        {"model": "xai_oauth/grok-4.5"},
+        {"model": "grok-4.5", "custom_llm_provider": "xai-oauth"},
+        {"model": "xai/grok-4.5", "custom_llm_provider": "xai_oauth"},
+        {"model": "xai-oauth/grok-4.5", "custom_llm_provider": "xai-oauth"},
+    ],
+)
+def test_router_normalizes_xai_oauth_alias(litellm_params):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/32660
+
+    xai-oauth is not a real provider; it is the xai provider with the
+    use_xai_oauth flag. Configuring the provider as xai-oauth (matching the
+    `litellm xai-oauth login` CLI) used to fail with
+    "Unsupported provider - xai-oauth". The router should transparently rewrite
+    it to xai/<model> with use_xai_oauth=True.
+    """
+    router = litellm.Router(
+        model_list=[{"model_name": "grok-4.5", "litellm_params": dict(litellm_params)}]
+    )
+
+    deployment = router.get_model_list()[0]["litellm_params"]
+    assert deployment["model"] == "xai/grok-4.5"
+    assert deployment.get("custom_llm_provider") is None
+    assert deployment["use_xai_oauth"] is True
+
+
+def test_router_leaves_plain_xai_deployment_untouched():
+    """A plain xai/ deployment must not have use_xai_oauth force-enabled."""
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "grok-4.5", "litellm_params": {"model": "xai/grok-4.5"}}
+        ]
+    )
+
+    deployment = router.get_model_list()[0]["litellm_params"]
+    assert deployment["model"] == "xai/grok-4.5"
+    assert not deployment.get("use_xai_oauth")
+
+
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():
     """
