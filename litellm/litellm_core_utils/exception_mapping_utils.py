@@ -2,7 +2,7 @@ import json
 import re
 import traceback
 from collections.abc import Mapping
-from typing import Any, Optional, Protocol, cast
+from typing import Any, Optional, Protocol, cast, runtime_checkable
 
 import httpx
 
@@ -248,13 +248,23 @@ class _ProviderHTTPException(Protocol):
     llm_provider: str
 
 
-def _is_insufficient_quota_error(original_exception: _ProviderHTTPException) -> bool:
+@runtime_checkable
+class _ProviderQuotaException(Protocol):
+    body: object
+    response: httpx.Response
+
+
+def _get_insufficient_quota_response(original_exception: object) -> Optional[httpx.Response]:
+    if not isinstance(original_exception, _ProviderQuotaException):
+        return None
     body = original_exception.body
     if not isinstance(body, Mapping):
-        return False
+        return None
     nested_error = body.get("error")
     error_body = nested_error if isinstance(nested_error, Mapping) else body
-    return error_body.get("code") == "insufficient_quota" or error_body.get("type") == "insufficient_quota"
+    if error_body.get("code") != "insufficient_quota" and error_body.get("type") != "insufficient_quota":
+        return None
+    return original_exception.response
 
 
 def _map_openai_exception(
@@ -288,12 +298,13 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if _is_insufficient_quota_error(original_exception):
+    insufficient_quota_response = _get_insufficient_quota_response(original_exception)
+    if insufficient_quota_response is not None:
         raise InsufficientQuotaError(
             message=f"InsufficientQuotaError: {exception_provider} - {message}",
             model=model,
             llm_provider=custom_llm_provider,
-            response=original_exception.response,
+            response=insufficient_quota_response,
         )
     elif ExceptionCheckers.is_error_str_rate_limit(error_str):
         raise RateLimitError(
