@@ -31,6 +31,7 @@ const oauthHook = vi.hoisted(() => ({
     | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
     | null,
   getCredentials: null as (() => Record<string, unknown> | undefined) | null,
+  getTemporaryPayload: null as (() => Record<string, unknown> | null) | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
@@ -39,9 +40,11 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
       registeredClient?: { clientId?: string; clientSecret?: string },
     ) => void;
     getCredentials?: () => Record<string, unknown> | undefined;
+    getTemporaryPayload?: () => Record<string, unknown> | null;
   }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
     oauthHook.getCredentials = opts.getCredentials ?? null;
+    oauthHook.getTemporaryPayload = opts.getTemporaryPayload ?? null;
     return {
       startOAuthFlow: vi.fn(),
       status: "idle",
@@ -627,6 +630,38 @@ describe("CreateMCPServer", () => {
       // The DCR client must NOT be in the form store (or it could be collected as a CF server's app),
       // but getCredentials merges it so a re-authorize reuses the registered client instead of re-DCRing.
       expect(oauthHook.getCredentials?.()?.client_id).toBe("dcr-client");
+      // getTemporaryPayload must mirror getCredentials for oauth2, or a re-authorize's temp session omits
+      // the registered client and useMcpOAuthFlow re-registers instead of reusing it.
+      expect(oauthHook.getTemporaryPayload?.()?.credentials).toMatchObject({ client_id: "dcr-client" });
+    });
+
+    it("clears the DCR ref and the upstream warning when the modal closes so nothing leaks to the next session", async () => {
+      const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument());
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "Leak_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "OAuth");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!(
+          { access_token: "oauth2-tok", token_type: "Bearer" },
+          { clientId: "leak-client", clientSecret: "leak-secret" },
+        );
+      });
+      // Ref is held while the modal is open.
+      expect(oauthHook.getCredentials?.()?.client_id).toBe("leak-client");
+
+      // A parent dismiss (isModalVisible -> false) that does not route through Cancel/Create must still
+      // clear the DCR ref, or the next server's oauth2 submit would carry this server's registered client.
+      await act(async () => {
+        rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      });
+
+      expect(oauthHook.getCredentials?.()?.client_id).toBeUndefined();
+      expect(oauthHook.getTemporaryPayload?.()?.credentials ?? {}).not.toMatchObject({ client_id: "leak-client" });
     });
 
     it("persists the DCR client on an oauth2 submit via the ref", async () => {

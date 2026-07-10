@@ -204,9 +204,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         url,
         transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
         auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
+        // Mirror getCredentials: merge the ref-held DCR client for oauth2 so a re-authorize reuses the
+        // registered client (useMcpOAuthFlow keys reuse off credentials.client_id) instead of re-DCRing;
+        // the client-forwarded modes carry only the declared app.
         credentials: isClientForwardedTokenMode(values.auth_type)
           ? preservedDeclaredAppCredentials(values.credentials)
-          : values.credentials,
+          : { ...((values.credentials as Record<string, unknown> | undefined) ?? {}), ...(dcrClientRef.current ?? {}) },
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,
@@ -728,6 +731,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       clearTools();
       resetOAuthFlow();
       setAuthorizedIdentity(undefined);
+      dcrClientRef.current = null;
+      setAppMayNotMatchUpstream(false);
     }
   }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
