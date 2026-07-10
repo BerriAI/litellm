@@ -3577,6 +3577,247 @@ async def test_token_exchange_passes_through_upstream_expires_in():
     assert body["expires_in"] == 43200
 
 
+_BRIDGE_CLIENT_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
+
+
+def _bridge_server(**overrides):
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    fields = {
+        "server_id": "bridge_srv",
+        "name": "bridge_srv",
+        "server_name": "bridge_srv",
+        "alias": "bridge_srv",
+        "transport": MCPTransport.http,
+        "auth_type": MCPAuth.true_passthrough,
+        "dcr_bridge": True,
+        "authorization_url": "https://provider.com/oauth/authorize",
+        "token_url": "https://provider.com/oauth/token",
+        "registration_url": "https://provider.com/oauth/register",
+        **overrides,
+    }
+    return MCPServer(**fields)
+
+
+def _bridge_mock_request():
+    from fastapi import Request
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+    return mock_request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type_value", ["true_passthrough", "oauth_delegate"])
+async def test_authorize_bridge_relay_passes_client_params_verbatim(auth_type_value):
+    """The bridge relay arm (registration relayed upstream, no admin-configured client) passes the
+    client's client_id, redirect_uri, state, and PKCE through verbatim: the code returns straight
+    to the client's own redirect URI, so the gateway sets no state cookie, injects no /callback,
+    and applies no gateway-side redirect trust (the upstream enforces its registered binding)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    response = await authorize_with_server(
+        request=_bridge_mock_request(),
+        mcp_server=_bridge_server(auth_type=MCPAuth(auth_type_value)),
+        client_id="dcr-client-123",
+        redirect_uri=_BRIDGE_CLIENT_REDIRECT,
+        state="client-state",
+        code_challenge="chal",
+        code_challenge_method="S256",
+    )
+
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert location.startswith("https://provider.com/oauth/authorize")
+    query = parse_qs(urlparse(location).query)
+    assert query["client_id"] == ["dcr-client-123"]
+    assert query["redirect_uri"] == [_BRIDGE_CLIENT_REDIRECT]
+    assert query["state"] == ["client-state"]
+    assert query["code_challenge"] == ["chal"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert "litellm.example.com" not in location
+    assert "set-cookie" not in {key.lower() for key in response.headers.keys()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code_challenge,code_challenge_method",
+    [(None, None), ("chal", None), ("chal", "plain"), (None, "S256")],
+)
+async def test_authorize_bridge_requires_s256_pkce(code_challenge, code_challenge_method):
+    """Bridge servers serve unauthenticated public clients, so the PKCE downgrade paths (missing
+    challenge, or a method that is not S256; RFC 7636 defaults a missing method to plain) are
+    rejected at the gateway on both bridge arms."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=_bridge_server(),
+            client_id="dcr-client-123",
+            redirect_uri=_BRIDGE_CLIENT_REDIRECT,
+            state="s",
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+        )
+
+    assert exc.value.status_code == 400
+    assert "S256" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_authorize_bridge_short_circuit_keeps_callback_and_redirect_trust():
+    """The bridge short-circuit arm (admin-configured OAuth client, upstream only knows the
+    gateway callback) keeps the /callback state relay and the gateway redirect trust: a public
+    client redirect target is rejected unless ops allowlist it, and a trusted target still routes
+    through the gateway callback with the state cookie."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+
+    short_circuit_server = _bridge_server(client_id="admin-client", registration_url=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=short_circuit_server,
+            client_id="ignored",
+            redirect_uri=_BRIDGE_CLIENT_REDIRECT,
+            state="s",
+            code_challenge="chal",
+            code_challenge_method="S256",
+        )
+    assert exc.value.status_code in (400, 403)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+        return_value="mocked_encrypted_state",
+    ):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=short_circuit_server,
+            client_id="ignored",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="s",
+            code_challenge="chal",
+            code_challenge_method="S256",
+        )
+
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["redirect_uri"] == ["https://litellm.example.com/callback"]
+    assert query["client_id"] == ["admin-client"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_non_bridge_client_forwarded_keeps_pre_bridge_contract():
+    """A client-forwarded server without dcr_bridge keeps the pre-bridge behavior: no PKCE
+    requirement and the gateway /callback relay (this is the browser-only Authorize path)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+        return_value="mocked_encrypted_state",
+    ):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=_bridge_server(dcr_bridge=None),
+            client_id="cid",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="s",
+        )
+
+    assert response.status_code == 307
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["redirect_uri"] == ["https://litellm.example.com/callback"]
+
+
+async def _bridge_token_post_data(server, redirect_uri):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=fake_http_client,
+    ):
+        await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri=redirect_uri,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    return fake_http_client.post.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_token_bridge_relay_posts_client_redirect_uri():
+    """The bridge relay arm's token exchange sends the client's own redirect_uri upstream (it must
+    match the authorize leg) with the caller's public client_id and PKCE verifier."""
+    data = await _bridge_token_post_data(_bridge_server(), redirect_uri=_BRIDGE_CLIENT_REDIRECT)
+
+    assert data["redirect_uri"] == _BRIDGE_CLIENT_REDIRECT
+    assert data["client_id"] == "dcr-client-123"
+    assert data["code_verifier"] == "verifier"
+    assert "client_secret" not in data
+
+
+@pytest.mark.asyncio
+async def test_token_bridge_relay_requires_redirect_uri():
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=_bridge_server(),
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri=None,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+    assert exc.value.status_code == 400
+    assert "redirect_uri" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_token_non_bridge_keeps_gateway_callback():
+    """Without dcr_bridge the token exchange keeps posting the gateway callback as redirect_uri,
+    pinning the pre-bridge contract for the browser-only Authorize path."""
+    data = await _bridge_token_post_data(_bridge_server(dcr_bridge=None), redirect_uri=_BRIDGE_CLIENT_REDIRECT)
+
+    assert data["redirect_uri"] == "https://litellm.example.com/callback"
+
+
 async def _exchange_persistence_attempted_for_auth_type(auth_type) -> bool:
     """Run exchange_token_with_server for a server of ``auth_type`` and report whether it attempted
     to persist the exchanged token server-side. The client-forwarded token modes must not persist:

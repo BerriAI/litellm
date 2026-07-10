@@ -516,6 +516,67 @@ def _raise_unless_oauth2_discovery_server(
     )
 
 
+def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
+    """True when a DCR-bridge server relays client registration to the upstream authorization
+    server instead of short-circuiting to an admin-configured OAuth client. In the relay arm the
+    upstream holds each client's own registration, so the authorize and token relays pass the
+    client's ``client_id`` and ``redirect_uri`` through verbatim and the authorization code
+    returns directly to the client's redirect URI without transiting the gateway. Gateway-side
+    redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
+    arm, where the upstream only knows the gateway's own callback."""
+    return mcp_server.is_dcr_bridge and bool(mcp_server.registration_url) and not mcp_server.client_id
+
+
+def _require_s256_pkce(
+    code_challenge: Optional[str],
+    code_challenge_method: Optional[str],
+) -> Tuple[str, str]:
+    """DCR-bridge servers serve unauthenticated public OAuth clients, so the PKCE downgrade
+    paths (no challenge, or a non-S256 method; RFC 7636 defaults a missing method to ``plain``)
+    are rejected at the gateway instead of relying on upstream enforcement. Returns the
+    validated pair so callers get non-optional values."""
+    if code_challenge and code_challenge_method == "S256":
+        return code_challenge, code_challenge_method
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": (
+                "This server requires PKCE: send code_challenge with "
+                "code_challenge_method=S256 on the authorization request"
+            )
+        },
+    )
+
+
+def _redirect_to_upstream_authorize(
+    *,
+    mcp_server: MCPServer,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str,
+    code_challenge_method: str,
+    response_type: Optional[str],
+    scope: Optional[str],
+) -> RedirectResponse:
+    """The bridge relay arm's authorize redirect: every client-supplied parameter passes through
+    to the upstream authorize endpoint verbatim, no relay state cookie is set, and the upstream
+    enforces its own registered redirect binding for the client."""
+    scope_value = scope or (" ".join(mcp_server.scopes) if mcp_server.scopes else None)
+    passthrough_params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "response_type": response_type or "code",
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        **({"scope": scope_value} if scope_value else {}),
+    }
+    parsed_auth_url = urlparse(mcp_server.authorization_url or "")
+    merged_params = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
+    return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -530,6 +591,20 @@ async def authorize_with_server(
     _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
         raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+
+    if mcp_server.is_dcr_bridge:
+        bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
+        if _dcr_bridge_relays_client_registration(mcp_server):
+            return _redirect_to_upstream_authorize(
+                mcp_server=mcp_server,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                state=state,
+                code_challenge=bridge_challenge,
+                code_challenge_method=bridge_method,
+                response_type=response_type,
+                scope=scope,
+            )
 
     # Trusted redirect_uri: same-origin, loopback, or ops-allowlisted.
     # The URI is encrypted into the OAuth state and decoded on
@@ -626,11 +701,22 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="code is required for authorization_code grant",
             )
+        if _dcr_bridge_relays_client_registration(mcp_server) and not redirect_uri:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "redirect_uri is required for the authorization_code grant on this server; "
+                    "send the same redirect_uri used on the authorization request"
+                ),
+            )
         proxy_base_url = get_request_base_url(request)
+        resolved_redirect_uri = (
+            redirect_uri if _dcr_bridge_relays_client_registration(mcp_server) else f"{proxy_base_url}/callback"
+        )
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": f"{proxy_base_url}/callback",
+            "redirect_uri": resolved_redirect_uri,
             **client_auth.body,
         }
         if code_verifier:
