@@ -1006,6 +1006,22 @@ if MCP_AVAILABLE:
                     content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
                     isError=True,
                 )
+            except MCPUpstreamAuthError as e:
+                # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
+                # mid-session tool call cannot emit a raw 401 + WWW-Authenticate the way the REST
+                # call path and the connect-time preemptive check do. Return an explicit isError
+                # naming the upstream status (at info level, not a traceback) so the client still
+                # learns it must re-authenticate upstream and expected pass-through 401s don't spam.
+                verbose_logger.info(f"Upstream auth failure calling MCP tool: HTTP {e.status_code}")
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            text=f"Error: upstream authentication required (HTTP {e.status_code})",
+                            type="text",
+                        )
+                    ],
+                    isError=True,
+                )
             except Exception as e:
                 verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
                 return CallToolResult(
@@ -2943,6 +2959,14 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 **kwargs,
             )
+        except MCPUpstreamAuthError:
+            # A client-forwarded pass-through upstream 401 is an expected caller-must-reauth signal, so
+            # re-raise it without post_call_failure_hook, which fires the proxy's llm_exceptions alert.
+            # mcp_server_tool_call then downgrades it to an informational isError result for the
+            # streamable client. Note: this function is @client-decorated, so the decorator's standard
+            # failure logging still records the event (spend log / OTel); only the extra alert sink is
+            # skipped here.
+            raise
         except Exception as e:
             traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
@@ -3676,6 +3700,17 @@ if MCP_AVAILABLE:
                 and not _scope_has_authorization_header(scope)
                 and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
             ):
+                if server.is_dcr_bridge:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={
+                            "www-authenticate": _get_passthrough_www_authenticate(
+                                scope=scope,
+                                server_name=server_name,
+                            )
+                        },
+                    )
                 upstream_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", "")
                 if upstream_status == 401 and upstream_www_authenticate:
                     raise HTTPException(

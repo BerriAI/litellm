@@ -1,8 +1,8 @@
 {
-  "@typescript-eslint/no-explicit-any": 1958,
+  "@typescript-eslint/no-explicit-any": 1957,
   "complexity": 129,
-  "local/no-large-inline-object-arg": 509,
+  "local/no-large-inline-object-arg": 506,
   "local/no-long-condition-chain": 231,
   "max-depth": 59,
-  "no-console": 15
+  "no-console": 16
 }

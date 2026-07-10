@@ -377,10 +377,13 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
+    gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None

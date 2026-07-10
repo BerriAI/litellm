@@ -7,6 +7,8 @@ Reduces context window size and improves tool selection accuracy.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from fastapi import HTTPException
+
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
@@ -14,6 +16,9 @@ from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+    SemanticToolFilterContextWindowError,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -294,6 +299,8 @@ class SemanticToolFilterHook(CustomLogger):
                 )
                 return data
 
+            except SemanticToolFilterContextWindowError as e:
+                raise HTTPException(status_code=400, detail={"error": str(e)}) from e
             except Exception as e:
                 verbose_proxy_logger.error(f"Failed to expand MCP references: {e}", exc_info=True)
                 return None
@@ -366,6 +373,8 @@ class SemanticToolFilterHook(CustomLogger):
 
             return data
 
+        except SemanticToolFilterContextWindowError as e:
+            raise HTTPException(status_code=400, detail={"error": str(e)}) from e
         except Exception as e:
             verbose_proxy_logger.warning(f"Semantic tool filter hook failed: {e}. Proceeding with all tools.")
             return None
