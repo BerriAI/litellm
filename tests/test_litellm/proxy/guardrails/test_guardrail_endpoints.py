@@ -2177,3 +2177,34 @@ def test_model_armor_runtime_supported_event_hooks_match_classmethod():
         project_id="p",
     )
     assert instance.supported_event_hooks == ModelArmorGuardrail.get_supported_event_hooks()
+
+
+def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog):
+    """
+    Escape hatch for the boot-time behavior change. Deployments upgrading from
+    a build where a guardrail previously silently no-op'd on an unsupported
+    mode should be able to set LITELLM_STRICT_GUARDRAIL_MODES=false and boot
+    with a warning instead of a hard failure while they fix their config.
+    """
+    import logging
+
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        ContentFilterGuardrail(
+            guardrail_name="lit4226-strict-default",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+        )
+
+    monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "false")
+    with caplog.at_level(logging.WARNING):
+        instance = ContentFilterGuardrail(
+            guardrail_name="lit4226-strict-off",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+        )
+    assert instance is not None
+    assert any("not in the supported event hooks" in rec.message for rec in caplog.records)

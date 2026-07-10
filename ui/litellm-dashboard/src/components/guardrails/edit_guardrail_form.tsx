@@ -426,17 +426,17 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
                 providerKey && guardrailSettings?.supported_modes_by_provider
                   ? guardrailSettings.supported_modes_by_provider[providerKey]
                   : undefined;
-              return perProvider ?? guardrailSettings?.supported_modes;
-            })()?.map((mode) => (
-              <Option key={mode} value={mode}>
-                {mode}
-              </Option>
-            )) || (
-              <>
-                <Option value="pre_call">pre_call</Option>
-                <Option value="post_call">post_call</Option>
-              </>
-            )}
+              const modes = perProvider ?? guardrailSettings?.supported_modes ?? ["pre_call", "post_call"];
+              const currentMode = initialValues?.mode;
+              const merged = currentMode && !modes.includes(currentMode) ? [currentMode, ...modes] : modes;
+              return merged.map((mode) => (
+                <Option key={mode} value={mode}>
+                  {mode === currentMode && !modes.includes(mode)
+                    ? `${mode} (not supported by ${selectedProvider}, pick another)`
+                    : mode}
+                </Option>
+              ));
+            })()}
           </Select>
         </Form.Item>
 
