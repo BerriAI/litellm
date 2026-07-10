@@ -108,13 +108,15 @@ vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
 vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
-vi.mock("@/components/organizations", () => ({
+vi.mock("@/app/(dashboard)/organizations/_components/organizations", () => ({
   default: stub("organizations"),
   fetchOrganizations: vi.fn(), // consumed in effects
 }));
 vi.mock("@/components/admins", () => ({ default: stub("admin-panel") }));
 vi.mock("@/components/settings", () => ({ default: stub("settings") }));
-vi.mock("@/components/general_settings", () => ({ default: stub("general-settings") }));
+vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => ({
+  default: stub("general-settings"),
+}));
 vi.mock("@/components/pass_through_settings", () => ({ default: stub("pass-through-settings") }));
 vi.mock("@/components/budgets/budget_panel", () => ({ default: stub("budget-panel") }));
 vi.mock("@/components/view_logs", () => ({ default: stub("spend-logs") }));
@@ -123,7 +125,7 @@ vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
 vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
-vi.mock("@/components/usage", () => ({ default: stub("usage") }));
+vi.mock("@/app/(dashboard)/old-usage/_components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
 vi.mock("@/components/guardrails", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));

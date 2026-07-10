@@ -3,11 +3,11 @@ import { render } from "@testing-library/react";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./vector_store_management/VectorStoreSelector", () => ({
+vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
   __esModule: true,
   default: () => null,
 }));
-vi.mock("./mcp_server_management/MCPServerSelector", () => ({
+vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
   __esModule: true,
   default: () => null,
 }));

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import HowItWorks from "./how_it_works";
 
-vi.mock("@/app/(dashboard)/api-reference/components/CodeBlock", () => ({
+vi.mock("@/components/CodeBlock", () => ({
   default: ({ code }: { code: string }) => <pre data-testid="code-block">{code}</pre>,
 }));
 

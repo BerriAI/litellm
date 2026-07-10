@@ -1,6 +1,6 @@
 "use client";
 
-import OrganizationsTable from "@/components/organizations";
+import OrganizationsTable from "./_components/organizations";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function OrganizationsPage() {
