@@ -9,11 +9,14 @@ error value, model repr, or raised exception ever contains the inner access toke
 """
 
 import base64
+import hashlib
+import hmac
 import json
 from datetime import datetime, timedelta, timezone
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
@@ -77,6 +80,22 @@ def _unverified_claims(sealed_token: str) -> dict[str, object]:
 
 def _forge(claims: dict[str, object], signing_key: str = _SIGNING_KEY) -> str:
     return ENVELOPE_PREFIX + jwt.encode(claims, signing_key, algorithm="HS256")
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _hand_crafted_hs256(payload: dict[str, object], signing_key: str = _SIGNING_KEY) -> str:
+    """Assemble an HS256 envelope from raw bytes, bypassing PyJWT's encode-side claim
+    guards (it refuses to build a token with a non-string ``iss``). This is the real
+    attacker path: a client crafts the compact JWT directly, so any registered claim can
+    carry a hostile JSON type."""
+    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8"))
+    body = _b64url(json.dumps(payload).encode("utf-8"))
+    signing_input = f"{header}.{body}".encode("ascii")
+    signature = _b64url(hmac.new(signing_key.encode("utf-8"), signing_input, hashlib.sha256).digest())
+    return ENVELOPE_PREFIX + f"{header}.{body}.{signature}"
 
 
 def _tampered(sealed_token: str, segment: int, index: int) -> str:
@@ -219,6 +238,80 @@ def test_signed_empty_identity_claim_is_malformed_payload_not_a_raise(identity_c
     intact = open_envelope(_forge(claims), _KEYS, _NOW)
     assert isinstance(intact, OpenedEnvelope)
     assert intact.identity == _IDENTITY
+
+
+def test_lone_surrogate_candidate_is_malformed_payload_not_a_raise():
+    surrogate_candidate = ENVELOPE_PREFIX + "\ud800abc.def.ghi"
+    result = open_envelope(surrogate_candidate, _KEYS, _NOW)
+    assert isinstance(result, MalformedPayload)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"iat": [1]},
+        {"iat": {}},
+        {"iat": float("inf")},
+        {"nbf": None},
+        {"nbf": [1]},
+    ],
+)
+def test_hostile_iat_nbf_types_are_malformed_payload_not_a_raise(override):
+    claims = _unverified_claims(_sealed_token(_full_grant()))
+    forged = _forge({**claims, **override})
+    result = open_envelope(forged, _KEYS, _NOW)
+    assert isinstance(result, MalformedPayload)
+
+
+@pytest.mark.parametrize("hostile_iss", [["litellm-mcp-bridge"], 5, {"iss": "x"}])
+def test_non_string_issuer_claim_is_malformed_payload_not_a_raise(hostile_iss):
+    claims = _unverified_claims(_sealed_token(_full_grant()))
+    forged = _hand_crafted_hs256({**claims, "iss": hostile_iss})
+    result = open_envelope(forged, _KEYS, _NOW)
+    assert isinstance(result, MalformedPayload)
+
+
+@pytest.mark.parametrize("hostile_exp", ["600", 600.5, [600]])
+def test_non_int_exp_claim_is_malformed_payload_not_a_raise(hostile_exp):
+    claims = _unverified_claims(_sealed_token(_full_grant()))
+    forged = _hand_crafted_hs256({**claims, "exp": hostile_exp})
+    result = open_envelope(forged, _KEYS, _NOW)
+    assert isinstance(result, MalformedPayload)
+
+
+def test_unexpected_extra_claim_is_malformed_payload():
+    claims = _unverified_claims(_sealed_token(_full_grant()))
+    forged = _forge({**claims, "role": "admin"})
+    assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
+
+
+def test_future_iat_opens_against_injected_now_not_wall_clock():
+    future = _NOW + timedelta(seconds=100_000)
+    sealed = mint_envelope(_IDENTITY, _full_grant(), _KEYS, future)
+    assert isinstance(sealed, SealedEnvelope)
+    opened = open_envelope(sealed.token.get_secret_value(), _KEYS, future)
+    assert isinstance(opened, OpenedEnvelope)
+    assert opened.identity == _IDENTITY
+    assert opened.grant == _full_grant()
+
+
+def test_rs256_signed_token_is_rejected_against_the_hs256_pin():
+    claims = _unverified_claims(_sealed_token(_full_grant()))
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    rs256_token = ENVELOPE_PREFIX + jwt.encode(claims, private_key, algorithm="RS256")
+    result = open_envelope(rs256_token, _KEYS, _NOW)
+    assert isinstance(result, MalformedPayload)
+
+
+@pytest.mark.parametrize("short_key", ["", "too-short", "x" * 31])
+def test_signing_key_below_hs256_minimum_is_rejected_at_construction(short_key):
+    with pytest.raises(ValidationError):
+        EnvelopeKeys(signing_key=SecretStr(short_key), encryption_key=SecretStr(_ENCRYPTION_KEY))
+
+
+def test_signing_key_at_hs256_minimum_is_accepted():
+    keys = EnvelopeKeys(signing_key=SecretStr("y" * 32), encryption_key=SecretStr(_ENCRYPTION_KEY))
+    assert keys.signing_key.get_secret_value() == "y" * 32
 
 
 def test_correctly_signed_garbage_grant_blob_is_decrypt_failed():

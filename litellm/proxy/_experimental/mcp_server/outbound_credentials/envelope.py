@@ -21,8 +21,15 @@ Failures are values: :func:`open_envelope` returns one of the frozen
 ``EnvelopeOpenError`` variants (discriminated on ``tag``) for invalid, expired,
 tampered, or undecryptable input, and :func:`mint_envelope` returns
 ``EnvelopeTooLarge`` for oversized grants. Error values carry tags and sizes only,
-never token material. Raising is reserved for programmer errors, which the pydantic
-models reject at construction (e.g. a non-positive ``expires_in``).
+never token material.
+
+The pydantic input models reject programmer errors at construction (e.g. a
+non-positive ``expires_in`` or an empty required field). :func:`open_envelope` is
+additionally total over hostile, attacker-controlled input: it never raises, only
+returns an ``EnvelopeOpenError``. :func:`mint_envelope` operates on a
+gateway-supplied grant (an upstream IdP's UTF-8 JSON token response), so it does not
+defend against non-UTF-8 field content that cannot survive JSON parsing; its only
+value-typed failure is ``EnvelopeTooLarge``.
 """
 
 from __future__ import annotations
@@ -85,10 +92,15 @@ class UpstreamTokenGrant(BaseModel):
 
 
 class EnvelopeKeys(BaseModel):
-    """Injected key material: the HS256 signing key and the symmetric encryption key."""
+    """Injected key material: the HS256 signing key and the symmetric encryption key.
+
+    ``signing_key`` must be at least 32 bytes: HS256's HMAC-SHA256 has a 256-bit
+    security level, RFC 7518 requires a key of at least that size, and a shorter key
+    makes PyJWT emit ``InsecureKeyLengthWarning``.
+    """
 
     model_config = ConfigDict(frozen=True)
-    signing_key: SecretStr = Field(min_length=1)
+    signing_key: SecretStr = Field(min_length=32)
     encryption_key: SecretStr = Field(min_length=1)
 
 
@@ -160,12 +172,22 @@ EnvelopeOpenError: TypeAlias = NotAnEnvelope | BadSignature | Expired | Malforme
 
 
 class _EnvelopeClaims(BaseModel):
-    """Decoded-claims boundary. ``user_id``/``server_id`` mirror the ``min_length``
-    constraints of :class:`EnvelopeIdentity` so any claim set that validates here also
-    constructs an identity, keeping :func:`open_envelope` raise-free: a correctly signed
-    JWT with an empty identity claim fails here and maps to ``MalformedPayload``."""
+    """Decoded-claims boundary that pins the exact shape :func:`mint_envelope` emits.
 
-    model_config = ConfigDict(frozen=True)
+    ``user_id``/``server_id`` mirror the ``min_length`` constraints of
+    :class:`EnvelopeIdentity` so any claim set that validates here also constructs an
+    identity, keeping :func:`open_envelope` raise-free: a correctly signed JWT with an
+    empty identity claim fails here and maps to ``MalformedPayload``.
+
+    ``strict`` rejects coerced types (``exp: "123"``, ``exp: 123.0``) rather than opening
+    on them, and ``extra="forbid"`` rejects any claim the gateway never mints (a hostile
+    ``nbf``/``aud``/... rides along on a re-signed token). Since PyJWT's own ``iat``/
+    ``nbf``/``exp`` validators are disabled at decode (they raise on hostile claim types
+    and, for ``iat``/``nbf``, compare against the wall clock rather than the injected
+    ``now``), this model is the sole, total type gate for every registered claim.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
     iss: str
     iat: int
     exp: int
@@ -228,10 +250,15 @@ def open_envelope(
     """Validate ``candidate`` and recover the identity and inner grant.
 
     Never raises for bad input: every invalid, expired, tampered, or undecryptable
-    candidate maps to a distinct ``EnvelopeOpenError`` variant.
+    candidate maps to a distinct ``EnvelopeOpenError`` variant. The recovered
+    ``grant.expires_in`` is the value the upstream reported at mint time and is not
+    re-derived, so it is stale by up to the envelope's lifetime; callers that need a
+    live remaining lifetime should use ``now`` against the upstream, not this field.
     """
     if not is_envelope(candidate):
         return NotAnEnvelope()
+    if len(candidate) > MAX_ENVELOPE_BYTES:
+        return MalformedPayload()
     claims = _decode_claims(candidate.removeprefix(ENVELOPE_PREFIX), keys.signing_key)
     if not isinstance(claims, _EnvelopeClaims):
         return claims
@@ -267,17 +294,34 @@ def _decode_claims(
     compact: str,
     signing_key: SecretStr,
 ) -> _EnvelopeClaims | BadSignature | MalformedPayload:
+    """Verify the HS256 signature and shape of an attacker-controlled compact JWT.
+
+    ``compact`` is fully hostile and bounded to ``MAX_ENVELOPE_BYTES`` by the caller.
+    PyJWT's ``iat``/``nbf``/``exp`` validators are disabled: they raise on hostile claim
+    types and, for ``iat``/``nbf``, compare against the wall clock rather than the
+    injected ``now`` (``exp`` is checked by the caller against ``now``). Apart from a
+    signature mismatch (``BadSignature``), every decode failure is ``MalformedPayload``:
+    a non-UTF-8 candidate surfaces as ``UnicodeEncodeError`` (a ``ValueError``), a
+    non-string registered claim such as ``iss`` as a ``TypeError`` from PyJWT's claim
+    validators, and a wrong issuer or structurally invalid token as an
+    ``InvalidTokenError``. ``_EnvelopeClaims`` is the total type gate for the payload.
+    """
     try:
         payload = jwt.decode(
             compact,
             signing_key.get_secret_value(),
             algorithms=[_ENVELOPE_JWT_ALGORITHM],
             issuer=ENVELOPE_ISSUER,
-            options={"verify_exp": False, "require": ["iss", "iat", "exp"]},
+            options={
+                "verify_exp": False,
+                "verify_iat": False,
+                "verify_nbf": False,
+                "require": ["iss", "iat", "exp"],
+            },
         )
     except jwt.InvalidSignatureError:
         return BadSignature()
-    except jwt.InvalidTokenError:
+    except (jwt.InvalidTokenError, ValueError, TypeError):
         return MalformedPayload()
     try:
         return _EnvelopeClaims.model_validate(payload)
