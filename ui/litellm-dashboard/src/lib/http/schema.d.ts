@@ -6828,6 +6828,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/share/onepassword": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Share Key Via Onepassword
+         * @description Write a virtual key into 1Password and return a secure-share link that can be
+         *     handed to an external user or vendor.
+         *
+         *     Parameters:
+         *     - key: str - The virtual key value (must be the unhashed `sk-...` value, since
+         *       the plaintext is needed to store it in 1Password).
+         *     - title: Optional[str] - Item title in 1Password. Defaults to the key alias.
+         *     - recipients: Optional[List[str]] - Emails/domains to lock the share to. When
+         *       omitted, anyone with the link can view it (subject to 1Password account policy).
+         *     - expire_after: Optional[str] - One of OneHour, OneDay, SevenDays, FourteenDays,
+         *       ThirtyDays. Defaults to the 1Password account policy default.
+         *     - one_time_only: bool - Whether the link may only be viewed once per recipient.
+         *
+         *     Requires OP_SERVICE_ACCOUNT_TOKEN and OP_VAULT_ID to be set on the proxy.
+         *
+         *     Note: This is an admin-only endpoint. Only proxy admins, team admins, or org
+         *     admins can share keys.
+         */
+        post: operations["share_key_via_onepassword_key_share_onepassword_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/unblock": {
         parameters: {
             query?: never;
@@ -24360,6 +24396,38 @@ export interface components {
             key_aliases?: string[] | null;
             /** Keys */
             keys?: string[] | null;
+        };
+        /** KeyShareOnePasswordRequest */
+        KeyShareOnePasswordRequest: {
+            /** Expire After */
+            expire_after?: ("OneHour" | "OneDay" | "SevenDays" | "FourteenDays" | "ThirtyDays") | null;
+            /** Key */
+            key: string;
+            /**
+             * One Time Only
+             * @default false
+             */
+            one_time_only: boolean;
+            /** Recipients */
+            recipients?: string[] | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** KeyShareOnePasswordResponse */
+        KeyShareOnePasswordResponse: {
+            /** Expire After */
+            expire_after?: string | null;
+            /** Item Id */
+            item_id: string;
+            /** Item Title */
+            item_title: string;
+            /**
+             * One Time Only
+             * @default false
+             */
+            one_time_only: boolean;
+            /** Share Link */
+            share_link: string;
         };
         /**
          * KeyUpdateFields
@@ -42191,6 +42259,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    share_key_via_onepassword_key_share_onepassword_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyShareOnePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyShareOnePasswordResponse"];
                 };
             };
             /** @description Validation Error */

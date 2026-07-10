@@ -20,7 +20,7 @@ import secrets
 import traceback
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
 import yaml
@@ -87,6 +87,9 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
+
+if TYPE_CHECKING:
+    from litellm.integrations.onepassword import OnePasswordClient
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     get_ui_settings_cached,
 )
@@ -6091,6 +6094,129 @@ async def unblock_key(
     )
 
     return record
+
+
+def _get_onepassword_client() -> "OnePasswordClient":
+    """
+    FastAPI dependency that builds a cached 1Password client from the proxy
+    environment (OP_SERVICE_ACCOUNT_TOKEN + OP_VAULT_ID). Raises a 400 with a
+    clear setup message when the environment is not configured.
+    """
+    from litellm.integrations.onepassword import (
+        OnePasswordShareError,
+        get_cached_onepassword_client,
+    )
+
+    try:
+        return get_cached_onepassword_client()
+    except OnePasswordShareError as e:
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.bad_request_error,
+            param="OP_SERVICE_ACCOUNT_TOKEN",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.post(
+    "/key/share/onepassword",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=KeyShareOnePasswordResponse,
+)
+@management_endpoint_wrapper
+async def share_key_via_onepassword(
+    data: KeyShareOnePasswordRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    onepassword_client: "OnePasswordClient" = Depends(_get_onepassword_client),
+) -> KeyShareOnePasswordResponse:
+    """
+    Write a virtual key into 1Password and return a secure-share link that can be
+    handed to an external user or vendor.
+
+    Parameters:
+    - key: str - The virtual key value (must be the unhashed `sk-...` value, since
+      the plaintext is needed to store it in 1Password).
+    - title: Optional[str] - Item title in 1Password. Defaults to the key alias.
+    - recipients: Optional[List[str]] - Emails/domains to lock the share to. When
+      omitted, anyone with the link can view it (subject to 1Password account policy).
+    - expire_after: Optional[str] - One of OneHour, OneDay, SevenDays, FourteenDays,
+      ThirtyDays. Defaults to the 1Password account policy default.
+    - one_time_only: bool - Whether the link may only be viewed once per recipient.
+
+    Requires OP_SERVICE_ACCOUNT_TOKEN and OP_VAULT_ID to be set on the proxy.
+
+    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org
+    admins can share keys.
+    """
+    from litellm.integrations.onepassword import OnePasswordShareError
+    from litellm.proxy.proxy_server import (
+        hash_token,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise ProxyException(
+            message=CommonProxyErrors.db_not_connected_error.value,
+            type=ProxyErrorTypes.internal_server_error,
+            param="key",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    if not is_valid_api_key(data.key) or not data.key.startswith("sk-"):
+        raise ProxyException(
+            message="Invalid key format. The unhashed 'sk-...' key value is required to share it.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    hashed_token = hash_token(token=data.key)
+
+    await _check_key_admin_access(
+        user_api_key_dict=user_api_key_dict,
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route="/key/share/onepassword",
+    )
+
+    existing_record = await VerificationTokenRepository(prisma_client).find_by_id(hashed_token)
+    if existing_record is None:
+        raise ProxyException(
+            message="Key not found.",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
+        )
+
+    title = data.title or existing_record.key_alias or f"litellm-virtual-key-{hashed_token[-8:]}"
+
+    try:
+        result = await onepassword_client.share_secret(
+            title=title,
+            secret_value=data.key,
+            recipients=data.recipients,
+            expire_after=data.expire_after,
+            one_time_only=data.one_time_only,
+        )
+    except OnePasswordShareError as e:
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    return KeyShareOnePasswordResponse(
+        share_link=result.share_link,
+        item_id=result.item_id,
+        item_title=result.item_title,
+        expire_after=result.expire_after,
+        one_time_only=result.one_time_only,
+    )
 
 
 @router.post(
