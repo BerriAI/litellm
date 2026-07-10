@@ -50,13 +50,6 @@ const PREMIUM_METADATA_FIELDS = ["policies", "guardrails", "prompts", "tags", "a
 const isEmptyValue = (v: unknown): boolean =>
   v == null || (Array.isArray(v) && v.length === 0) || (typeof v === "string" && v.trim() === "");
 
-/**
- * ─────────────────────────────────────────────────────────────────────────
- * @deprecated
- * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/KeyInfoView.tsx
- * Please contribute to the new refactor.
- * ─────────────────────────────────────────────────────────────────────────
- */
 export default function KeyInfoView({
   onClose,
   keyData,

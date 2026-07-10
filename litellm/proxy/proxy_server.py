@@ -620,6 +620,13 @@ class SPAStaticFiles(StaticFiles):
         last_segment = path.rstrip("/").rsplit("/", 1)[-1]
         return "." not in last_segment
 
+    def _bounded_shell(self, relative: str) -> Optional[str]:
+        base = os.path.realpath(str(self.directory))
+        candidate = os.path.realpath(os.path.join(base, relative))
+        if candidate != base and not candidate.startswith(base + os.sep):
+            return None
+        return relative if os.path.isfile(candidate) else None
+
     def _spa_shell(self, path: str) -> Optional[str]:
         trimmed = path.strip("/")
         segments = trimmed.split("/") if trimmed else []
@@ -630,11 +637,10 @@ class SPAStaticFiles(StaticFiles):
                 if parent
                 else f"{_SPA_SHELL_PLACEHOLDER_SEGMENT}/index.html"
             )
-            if os.path.isfile(os.path.join(str(self.directory), placeholder)):
-                return placeholder
-        if os.path.isfile(os.path.join(str(self.directory), "index.html")):
-            return "index.html"
-        return None
+            shell = self._bounded_shell(placeholder)
+            if shell is not None:
+                return shell
+        return self._bounded_shell("index.html")
 
     async def _try_original(self, path: str, scope: StarletteScope) -> Optional[StarletteResponse]:
         try:
