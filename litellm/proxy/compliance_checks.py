@@ -40,53 +40,28 @@ class ComplianceChecker:
     @staticmethod
     def _mode_matches(g_mode: object, mode: str) -> bool:
         """
-        Return True if a guardrail whose logged ``guardrail_mode`` is ``g_mode``
-        ran in ``mode``.
+        Return True only when a guardrail with logged ``guardrail_mode`` of
+        ``g_mode`` is guaranteed to have run in ``mode`` for the audited request.
 
         ``guardrail_mode`` in a spend log can take several shapes because
-        ``LitellmParams.mode`` is typed ``Union[str, List[str], Mode]``:
+        ``LitellmParams.mode`` is typed ``Union[str, List[str], Mode]``, and
+        when the event type cannot be inferred at write time the raw config is
+        logged verbatim. The spend log records the configured mode(s), not the
+        concrete hook that fired for a given request; a match reports a mode
+        satisfied only when every configured branch runs in that mode, so True
+        never claims a hook the guardrail may not have actually executed.
 
-        - ``None``            → treated as ``pre_call`` (the common default)
-        - ``str``             → single mode, e.g. ``"pre_call"``
-        - ``list``/``tuple``  → multi-mode guardrail, e.g. ``["pre_call", "post_call"]``
-        - ``dict``            → tag-based ``Mode``; matched only when *every*
-                                branch runs in ``mode`` (see below)
-
-        A prior implementation compared ``g_mode == mode`` directly, which
-        silently failed for the list form (a list never equals a string), so a
-        single guardrail configured with ``mode: [pre_call, post_call]`` was
-        counted for no mode at all and every mode-based compliance check
-        reported NON-COMPLIANT.
-
-        In practice the ``dict`` branch is defensive. Every guardrail hook logs
-        the already-resolved concrete mode: ``guardrail_mode = event_type`` in
-        ``add_standard_logging_guardrail_information_to_request_data``, so an
-        executed guardrail's spend-log row carries a plain ``str`` and hits the
-        branch above. The raw ``Mode`` dict only survives when the event type
-        cannot be inferred, which does not happen on the standard hook paths.
-
-        For that residual ``dict`` form the spend log stores the raw ``Mode``
-        config, not which branch actually ran for the audited request. So a dict
-        is treated as running in ``mode`` only when it is guaranteed to regardless
-        of routing: the ``default`` AND every per-tag override must all establish
-        ``mode``. A missing ``default`` means an untagged request has no guaranteed
-        mode, so nothing is asserted (returns False).
-
-        Invariant: this never reports ``mode`` satisfied unless it holds for every
-        possible routing branch, so it can never report a request compliant when
-        the guardrail did not run in ``mode`` (no false-COMPLIANT). It may
-        under-report (a guardrail that ran pre-call via its default counts as
-        neither when a divergent tag exists), which is the safe direction for an
-        audit check; ``{"default": "pre_call", "tags": {"pii": "post_call"}}``
-        matches neither mode. The precise fix is to log the resolved event mode
-        and match that; this is the safe interim reading until that is available.
+        Fails safe: if the guarantee cannot be established (missing default,
+        divergent per-tag override, or a list that runs in more than one mode),
+        the guardrail counts for no mode. The precise fix is to log the
+        resolved event mode and match on it; this is the safe interim.
         """
         if g_mode is None:
             return mode == "pre_call"
         if isinstance(g_mode, str):
             return g_mode == mode
-        if isinstance(g_mode, (list, tuple, set)):
-            return mode in g_mode
+        if isinstance(g_mode, (list, tuple)):
+            return bool(g_mode) and all(m == mode for m in g_mode)
         if isinstance(g_mode, dict):
             default = g_mode.get("default")
             if default is None:
@@ -97,8 +72,8 @@ class ComplianceChecker:
             def _branch_runs_in_mode(branch: object) -> bool:
                 if isinstance(branch, str):
                     return branch == mode
-                if isinstance(branch, (list, tuple, set)):
-                    return mode in branch
+                if isinstance(branch, (list, tuple)):
+                    return bool(branch) and all(m == mode for m in branch)
                 return False
 
             return all(_branch_runs_in_mode(branch) for branch in [default, *tag_branches])

@@ -385,61 +385,54 @@ class TestGdprCompliant:
         assert all(c.passed for c in checks)
 
 
-# ---------------------------------------------------------------------------
-# guardrail_mode matching — LitellmParams.mode is Union[str, List[str], Mode],
-# so a spend log's guardrail_mode can be None / str / list / tuple / set / dict.
-# A prior implementation compared `g_mode == mode`, which silently failed for
-# the non-str shapes (a list never equals a string), so multi-mode guardrails
-# were counted for no mode and every mode-based check reported NON-COMPLIANT.
-# For the tag-based dict Mode the spend log does not record which branch ran, so
-# a dict matches a mode only when EVERY branch (default + all tag overrides) runs
-# in that mode. A missing default asserts nothing (the untagged branch has no
-# guaranteed mode). This fails safe: a tag-routed guardrail cannot pass a
-# pre-call check on a default it may not have used, and vice versa.
-# ---------------------------------------------------------------------------
-
-
 class TestModeMatching:
-    """Direct coverage of ComplianceChecker._mode_matches for every shape."""
+    """Direct coverage of ComplianceChecker._mode_matches for every shape.
+
+    LitellmParams.mode is Union[str, List[str], Mode], so a spend-log
+    guardrail_mode can be None / str / list / tuple / dict. A prior
+    implementation compared `g_mode == mode`, which silently failed for the
+    non-str shapes and reported NON-COMPLIANT for every multi-mode guardrail.
+    A match now reports a mode satisfied only when every configured branch
+    runs in that mode: fails safe, no false-COMPLIANT.
+    """
 
     @pytest.mark.parametrize(
         "g_mode, mode, expected",
         [
-            # None → defaults to pre_call only.
             (None, "pre_call", True),
             (None, "post_call", False),
             (None, "during_call", False),
-            # str → exact match.
             ("pre_call", "pre_call", True),
             ("post_call", "pre_call", False),
             ("during_call", "during_call", True),
-            # list → membership (the primary regression the fix addresses).
-            (["pre_call", "post_call"], "pre_call", True),
-            (["pre_call", "post_call"], "post_call", True),
-            (["pre_call"], "post_call", False),
+            # list/tuple: only guaranteed when every listed mode equals `mode`
+            (["pre_call"], "pre_call", True),
+            (["pre_call", "pre_call"], "pre_call", True),
+            (["pre_call", "post_call"], "pre_call", False),
+            (["pre_call", "post_call"], "post_call", False),
             ([], "pre_call", False),
-            # tuple / set → membership.
             (("during_call",), "during_call", True),
-            ({"pre_call", "post_call"}, "post_call", True),
-            # dict with no tags → matched on default.
+            (("pre_call", "post_call"), "pre_call", False),
+            # dict: default only
             ({"default": "pre_call"}, "pre_call", True),
             ({"default": "pre_call"}, "post_call", False),
-            ({"default": ["pre_call", "post_call"]}, "post_call", True),
-            # dict with tags → matched only when EVERY branch runs in the mode.
+            ({"default": ["pre_call", "post_call"]}, "post_call", False),
+            ({"default": ["pre_call"]}, "pre_call", True),
+            # dict with tags: every branch must run in mode
             ({"default": "pre_call", "tags": {"a": "pre_call"}}, "pre_call", True),
-            ({"default": "pre_call", "tags": {"a": ["pre_call", "post_call"]}}, "pre_call", True),
-            # A divergent tag override means no mode is guaranteed → matches nothing.
+            ({"default": "pre_call", "tags": {"a": ["pre_call"]}}, "pre_call", True),
+            ({"default": "pre_call", "tags": {"a": ["pre_call", "post_call"]}}, "pre_call", False),
             ({"default": "pre_call", "tags": {"eu": "post_call"}}, "pre_call", False),
             ({"default": "pre_call", "tags": {"eu": "post_call"}}, "post_call", False),
             ({"default": "pre_call", "tags": {"eu": ["during_call"]}}, "during_call", False),
             ({"default": ["pre_call", "post_call"], "tags": {"a": "pre_call"}}, "post_call", False),
-            # No usable default → nothing is guaranteed (untagged branch unknown).
+            # Missing default: untagged routing is unknown, nothing guaranteed
             ({"tags": {"x": "post_call"}}, "pre_call", False),
             ({"tags": {"x": "post_call"}}, "post_call", False),
             ({}, "pre_call", False),
             ({}, "post_call", False),
-            ({"default": 123}, "pre_call", False),  # junk default runs in no mode
-            # Unknown / unexpected top-level types never match.
+            ({"default": 123}, "pre_call", False),
+            # Unknown top-level shapes never match
             (5, "pre_call", False),
             (object(), "pre_call", False),
         ],
@@ -447,11 +440,13 @@ class TestModeMatching:
     def test_mode_matches(self, g_mode, mode, expected):
         assert ComplianceChecker._mode_matches(g_mode, mode) is expected
 
-    def test_list_mode_counted_for_each_listed_mode(self):
-        """Regression: a guardrail configured with mode ["pre_call", "post_call"]
-        is counted under BOTH modes. The old `g_mode == mode` compare matched
-        neither (a list never equals a string), so every mode-based EU AI Act
-        check reported NON-COMPLIANT."""
+    def test_list_mode_guardrail_not_misclassified(self):
+        """A guardrail configured with mode ["pre_call", "post_call"] is logged
+        with the raw list when the writer cannot infer the concrete hook that
+        ran (e.g. apply_guardrail invocations). The spend log records "this
+        guardrail could have run at either hook", not "which hook fired this
+        request". Counting it for both would let a request that only fired
+        post_call pass a pre_call compliance check. It counts for neither."""
         data = ComplianceCheckRequest(
             request_id="req-mode-1",
             user_id="user-1",
@@ -466,17 +461,34 @@ class TestModeMatching:
             ],
         )
         checker = ComplianceChecker(data)
-        assert len(checker._get_guardrails_by_mode("pre_call")) == 1
-        assert len(checker._get_guardrails_by_mode("post_call")) == 1
-        assert len(checker._get_guardrails_by_mode("during_call")) == 0
+        assert len(checker._get_guardrails_by_mode("pre_call")) == 0
+        assert len(checker._get_guardrails_by_mode("post_call")) == 0
         results = {c.check_name: c.passed for c in checker.check_eu_ai_act()}
-        assert results["Content screened before LLM"] is True
+        assert results["Content screened before LLM"] is False
+
+    def test_list_mode_single_value_counts(self):
+        """A single-entry list ["pre_call"] runs pre_call unconditionally, so it
+        counts for pre_call and no other mode."""
+        data = ComplianceCheckRequest(
+            request_id="req-mode-1b",
+            user_id="user-1",
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii_masking",
+                    "guardrail_mode": ["pre_call"],
+                    "guardrail_status": "success",
+                }
+            ],
+        )
+        checker = ComplianceChecker(data)
+        assert len(checker._get_guardrails_by_mode("pre_call")) == 1
+        assert len(checker._get_guardrails_by_mode("post_call")) == 0
 
     def test_dict_tag_routed_guardrail_not_misclassified(self):
         """A tag-routed guardrail (default=pre_call, a post_call tag) is not
-        guaranteed to run in either mode, so it counts for neither. A pre-call
-        compliance check therefore cannot pass on the strength of a default the
-        request may not have used."""
+        guaranteed to run in either mode, so it counts for neither."""
         data = ComplianceCheckRequest(
             request_id="req-mode-2",
             user_id="user-1",
@@ -493,7 +505,6 @@ class TestModeMatching:
         checker = ComplianceChecker(data)
         assert len(checker._get_guardrails_by_mode("pre_call")) == 0
         assert len(checker._get_guardrails_by_mode("post_call")) == 0
-        # Fails safe: pre-call screening is not reported as satisfied.
         results = {c.check_name: c.passed for c in checker.check_eu_ai_act()}
         assert results["Content screened before LLM"] is False
 
@@ -508,7 +519,7 @@ class TestModeMatching:
             guardrail_information=[
                 {
                     "guardrail_name": "pii_masking",
-                    "guardrail_mode": {"default": "pre_call", "tags": {"eu": ["pre_call", "post_call"]}},
+                    "guardrail_mode": {"default": "pre_call", "tags": {"eu": "pre_call"}},
                     "guardrail_status": "success",
                 }
             ],
@@ -529,35 +540,57 @@ class TestModeMatching:
         assert len(checker._get_guardrails_by_mode("pre_call")) == 1
         assert len(checker._get_guardrails_by_mode("post_call")) == 0
 
-    def test_dict_never_reports_false_compliant(self):
-        """Invariant that matters for an audit: a tag-based dict Mode is reported
-        as running in `mode` ONLY when every routing branch (default and each tag)
-        runs in that mode. So a True result can never claim a mode the guardrail
-        would not run in for some request routing (no false-COMPLIANT); the only
-        allowed error direction is under-reporting."""
+    def test_never_reports_false_compliant(self):
+        """The core invariant: a match reports `mode` satisfied only when every
+        configured branch runs in that mode. So True can never claim a hook the
+        guardrail may not have actually executed. The only allowed error
+        direction is under-reporting."""
 
         def _branch_modes(value):
             if isinstance(value, str):
                 return {value}
-            if isinstance(value, (list, tuple, set)):
+            if isinstance(value, (list, tuple)):
                 return {v for v in value if isinstance(v, str)}
             return set()
 
-        dict_modes = [
+        def _guaranteed_modes(g_mode):
+            """Modes every branch of ``g_mode`` runs in."""
+            if isinstance(g_mode, str):
+                return {g_mode}
+            if isinstance(g_mode, (list, tuple)):
+                sets = [_branch_modes(m) for m in g_mode]
+                return set.intersection(*sets) if sets else set()
+            if isinstance(g_mode, dict):
+                default = g_mode.get("default")
+                if default is None:
+                    return set()
+                branches = [default, *(g_mode.get("tags") or {}).values()]
+                sets = [_branch_modes(b) for b in branches]
+                return set.intersection(*sets) if sets else set()
+            return set()
+
+        shapes = [
+            None,
+            "pre_call",
+            "post_call",
+            ["pre_call"],
+            ["pre_call", "post_call"],
+            [],
             {"default": "pre_call"},
             {"default": ["pre_call", "post_call"]},
             {"default": "pre_call", "tags": {"a": "pre_call"}},
             {"default": "pre_call", "tags": {"a": "post_call"}},
-            {"default": "pre_call", "tags": {"a": "pre_call", "b": ["pre_call", "post_call"]}},
             {"default": ["pre_call", "post_call"], "tags": {"a": "pre_call"}},
             {"tags": {"a": "post_call"}},
             {},
             {"default": 123},
+            5,
         ]
-        for g_mode in dict_modes:
+        for g_mode in shapes:
             for mode in ("pre_call", "post_call", "during_call"):
-                if ComplianceChecker._mode_matches(g_mode, mode):
-                    default = g_mode.get("default")
-                    assert default is not None, (g_mode, mode)
-                    branches = [default, *(g_mode.get("tags") or {}).values()]
-                    assert all(mode in _branch_modes(b) for b in branches), (g_mode, mode)
+                matched = ComplianceChecker._mode_matches(g_mode, mode)
+                if g_mode is None:
+                    assert matched is (mode == "pre_call"), (g_mode, mode)
+                    continue
+                if matched:
+                    assert mode in _guaranteed_modes(g_mode), (g_mode, mode)
