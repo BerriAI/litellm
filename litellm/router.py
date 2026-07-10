@@ -6593,6 +6593,9 @@ class Router:
             _num_all_deployments = len(all_deployments)
 
         ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR / CONTENT POLICY VIOLATION ERROR w/ fallbacks available / Bad Request Error
+        if isinstance(error, litellm.InsufficientQuotaError):
+            raise error
+
         if isinstance(error, litellm.ContextWindowExceededError) and context_window_fallbacks is not None:
             raise error
 

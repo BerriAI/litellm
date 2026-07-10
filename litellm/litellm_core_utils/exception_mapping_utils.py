@@ -1,6 +1,7 @@
 import json
 import re
 import traceback
+from collections.abc import Mapping
 from typing import Any, Optional, Protocol, cast
 
 import httpx
@@ -18,6 +19,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InsufficientQuotaError,
     InternalServerError,
     NotFoundError,
     PermissionDeniedError,
@@ -246,6 +248,15 @@ class _ProviderHTTPException(Protocol):
     llm_provider: str
 
 
+def _is_insufficient_quota_error(original_exception: _ProviderHTTPException) -> bool:
+    body = original_exception.body
+    if not isinstance(body, Mapping):
+        return False
+    nested_error = body.get("error")
+    error_body = nested_error if isinstance(nested_error, Mapping) else body
+    return error_body.get("code") == "insufficient_quota" or error_body.get("type") == "insufficient_quota"
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -277,7 +288,14 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if ExceptionCheckers.is_error_str_rate_limit(error_str):
+    if _is_insufficient_quota_error(original_exception):
+        raise InsufficientQuotaError(
+            message=f"InsufficientQuotaError: {exception_provider} - {message}",
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=original_exception.response,
+        )
+    elif ExceptionCheckers.is_error_str_rate_limit(error_str):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
             model=model,

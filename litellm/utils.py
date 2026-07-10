@@ -411,6 +411,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InsufficientQuotaError,
     NotFoundError,
     OpenAIError,
     PermissionDeniedError,
@@ -1106,6 +1107,9 @@ def _get_wrapper_num_retries(kwargs: Dict[str, Any], exception: Exception) -> Tu
     Used for the wrapper functions.
     """
 
+    if isinstance(exception, InsufficientQuotaError):
+        return 0, kwargs
+
     num_retries = kwargs.get("num_retries", None)
     if num_retries is None:
         num_retries = litellm.num_retries
@@ -1501,7 +1505,11 @@ def client(original_function):
         except Exception as e:
             call_type = original_function.__name__
             if call_type == CallTypes.completion.value:
-                num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
+                num_retries = (
+                    None
+                    if isinstance(e, InsufficientQuotaError)
+                    else kwargs.get("num_retries", None) or litellm.num_retries or None
+                )
                 if kwargs.get("retry_policy", None):
                     get_num_retries_from_retry_policy = getattr(
                         sys.modules[__name__], "get_num_retries_from_retry_policy"
@@ -1540,7 +1548,11 @@ def client(original_function):
                         kwargs["model"] = context_window_fallback_dict[model]
                     return original_function(*args, **kwargs)
             elif call_type == CallTypes.responses.value:
-                num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
+                num_retries = (
+                    None
+                    if isinstance(e, InsufficientQuotaError)
+                    else kwargs.get("num_retries", None) or litellm.num_retries or None
+                )
                 if kwargs.get("retry_policy", None):
                     get_num_retries_from_retry_policy = getattr(
                         sys.modules[__name__], "get_num_retries_from_retry_policy"

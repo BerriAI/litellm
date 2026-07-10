@@ -423,6 +423,10 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
     :class:`RateLimitErrorCategory` for the available values.
     """
 
+    exception_name = "RateLimitError"
+    error_code = "429"
+    error_type = "throttling_error"
+
     def __init__(
         self,
         message,
@@ -438,7 +442,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         detail: Any = None,
     ):
         self.status_code = 429
-        self.message = "litellm.RateLimitError: {}".format(message)
+        self.message = f"litellm.{self.exception_name}: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -480,8 +484,8 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
-        self.code = "429"
-        self.type = "throttling_error"
+        self.code = self.error_code
+        self.type = self.error_type
 
     def __str__(self):
         _message = self.message
@@ -498,6 +502,12 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+class InsufficientQuotaError(RateLimitError):
+    exception_name = "InsufficientQuotaError"
+    error_code = "insufficient_quota"
+    error_type = "insufficient_quota"
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
@@ -944,6 +954,7 @@ LITELLM_EXCEPTION_TYPES = [
     Timeout,
     PermissionDeniedError,
     RateLimitError,
+    InsufficientQuotaError,
     ContextWindowExceededError,
     RejectedRequestError,
     ContentPolicyViolationError,

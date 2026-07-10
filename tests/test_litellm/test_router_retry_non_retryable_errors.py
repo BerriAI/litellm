@@ -16,6 +16,8 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy
+from litellm.types.router import RetryPolicy
 
 
 def _make_rate_limit_error(message="Rate limited"):
@@ -24,6 +26,14 @@ def _make_rate_limit_error(message="Rate limited"):
         message=message,
         llm_provider="bedrock",
         model="anthropic.claude-v2",
+    )
+
+
+def _make_insufficient_quota_error(message="You exceeded your current quota"):
+    return litellm.InsufficientQuotaError(
+        message=message,
+        llm_provider="openai",
+        model="gpt-5.5",
     )
 
 
@@ -234,6 +244,46 @@ async def test_retryable_errors_still_retry_normally():
 
         # Initial call + 3 retries = 4 total calls
         assert call_count == 4
+
+
+def test_router_does_not_retry_insufficient_quota_error():
+    router = _create_router(num_retries=3)
+    error = _make_insufficient_quota_error()
+
+    with pytest.raises(litellm.InsufficientQuotaError):
+        router.should_retry_this_error(
+            error=error,
+            healthy_deployments=["d1", "d2"],
+            all_deployments=["d1", "d2"],
+        )
+
+
+def test_insufficient_quota_error_ignores_rate_limit_retry_policy():
+    retries = get_num_retries_from_retry_policy(
+        exception=_make_insufficient_quota_error(),
+        retry_policy=RetryPolicy(RateLimitErrorRetries=3),
+    )
+
+    assert retries == 0
+
+
+def test_completion_with_retries_stops_on_insufficient_quota():
+    call_count = 0
+
+    def raise_insufficient_quota(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise _make_insufficient_quota_error()
+
+    with pytest.raises(litellm.InsufficientQuotaError):
+        litellm.completion_with_retries(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=raise_insufficient_quota,
+        )
+
+    assert call_count == 1
 
 
 @pytest.mark.asyncio

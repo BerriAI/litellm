@@ -1300,6 +1300,7 @@ from .exceptions import (
     ImageFetchError,
     NotFoundError,
     PermissionDeniedError,
+    InsufficientQuotaError,
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
