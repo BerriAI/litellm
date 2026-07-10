@@ -15,6 +15,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
+    store_batch_managed_object,
+)
 
 
 class TestAnthropicLoggingHandlerModelFallback:
@@ -677,10 +680,10 @@ class TestAnthropicBatchPassthroughCostTracking:
         }
 
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.store_batch_managed_object"
     )
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.get_actual_model_id_from_router"
     )
     @patch("litellm.llms.anthropic.batches.transformation.AnthropicBatchesConfig")
     def test_batch_creation_handler_success(
@@ -760,10 +763,10 @@ class TestAnthropicBatchPassthroughCostTracking:
         assert result["result"].object == "batch"
 
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.store_batch_managed_object"
     )
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.get_actual_model_id_from_router"
     )
     def test_batch_creation_handler_model_extraction_from_nested_request(
         self, mock_get_model_id, mock_store_batch, mock_httpx_response, mock_logging_obj
@@ -819,7 +822,7 @@ class TestAnthropicBatchPassthroughCostTracking:
             assert result["kwargs"]["model"] == "claude-sonnet-4-5-20250929"
 
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.get_actual_model_id_from_router"
     )
     def test_batch_creation_handler_model_prefix_when_not_in_router(
         self,
@@ -852,8 +855,8 @@ class TestAnthropicBatchPassthroughCostTracking:
             "transform_retrieve_batch_response",
             return_value=mock_batch_response,
         ):
-            with patch.object(
-                AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"
+            with patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.store_batch_managed_object"
             ):
                 result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
                     httpx_response=mock_httpx_response,
@@ -912,7 +915,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         ):
             mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
 
-            AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+            store_batch_managed_object(
                 unified_object_id="uoi",
                 batch_object={"id": "b1", "object": "batch", "status": "validating"},
                 model_object_id="b1",
@@ -973,7 +976,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         )
 
         with patch("asyncio.create_task"):
-            AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+            store_batch_managed_object(
                 unified_object_id="test-unified-id",
                 batch_object=batch_object,
                 model_object_id="msgbatch_123",

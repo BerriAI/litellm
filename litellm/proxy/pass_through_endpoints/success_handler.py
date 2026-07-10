@@ -280,12 +280,8 @@ class PassThroughEndpointLogging:
             # Don't log langfuse pass-through requests
             return
         else:
-            request_method = (
-                httpx_response.request.method if httpx_response.request else "POST"
-            )
-            if self.is_openai_route(url_route) and self._is_supported_openai_endpoint(
-                url_route, method=request_method
-            ):
+            request_method = httpx_response.request.method if httpx_response.request else "POST"
+            if self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route, method=request_method):
                 from litellm.litellm_core_utils.asyncify import asyncify
 
                 from .llm_provider_handlers.openai_passthrough_logging_handler import (
@@ -306,31 +302,25 @@ class PassThroughEndpointLogging:
                     request_body=request_body,
                     **kwargs,
                 )
-                standard_logging_response_object = (
-                    openai_passthrough_logging_handler_result["result"]
-                )
+                standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
                 kwargs = openai_passthrough_logging_handler_result["kwargs"]
             else:
-                normalized_llm_passthrough_logging_payload = (
-                    self.normalize_llm_passthrough_logging_payload(
-                        httpx_response=httpx_response,
-                        response_body=response_body,
-                        request_body=request_body,
-                        logging_obj=logging_obj,
-                        url_route=url_route,
-                        result=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        cache_hit=cache_hit,
-                        custom_llm_provider=custom_llm_provider,
-                        **kwargs,
-                    )
+                normalized_llm_passthrough_logging_payload = self.normalize_llm_passthrough_logging_payload(
+                    httpx_response=httpx_response,
+                    response_body=response_body,
+                    request_body=request_body,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
                 )
-                standard_logging_response_object = (
-                    normalized_llm_passthrough_logging_payload[
-                        "standard_logging_response_object"
-                    ]
-                )
+                standard_logging_response_object = normalized_llm_passthrough_logging_payload[
+                    "standard_logging_response_object"
+                ]
                 kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
@@ -431,9 +421,7 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
-    def _is_supported_openai_endpoint(
-        self, url_route: str, method: str = "POST"
-    ) -> bool:
+    def _is_supported_openai_endpoint(self, url_route: str, method: str = "POST") -> bool:
         """Check if the OpenAI endpoint is supported by the passthrough logging handler.
 
         The Responses API route is included because
@@ -453,9 +441,7 @@ class PassThroughEndpointLogging:
             or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_batch_route(
-                url_route, method=method
-            )
+            or OpenAIPassthroughLoggingHandler.is_openai_batch_route(url_route, method=method)
         )
 
     def _set_cost_per_request(

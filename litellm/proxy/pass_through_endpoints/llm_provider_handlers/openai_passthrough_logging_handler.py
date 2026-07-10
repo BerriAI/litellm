@@ -203,17 +203,13 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 or logging_obj.model_call_details.get("custom_llm_provider")
                 or "openai"
             )
-            raw_model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_url(
-                url_route, custom_llm_provider
-            )
+            raw_model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_url(url_route, custom_llm_provider)
             actual_model_id = get_actual_model_id_from_router(raw_model)
 
             from litellm.proxy.proxy_server import llm_router
 
             if llm_router is None or not llm_router.has_model_id(actual_model_id):
-                input_file_id = _json_response.get("input_file_id") or (
-                    request_body or {}
-                ).get("input_file_id")
+                input_file_id = _json_response.get("input_file_id") or (request_body or {}).get("input_file_id")
                 if input_file_id:
                     resolved_model_id = resolve_proxy_model_from_batch_input_file(
                         input_file_id=input_file_id,
@@ -225,16 +221,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             import base64
 
-            unified_id_string = (
-                SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(
-                    actual_model_id, batch_id
-                )
-            )
-            unified_object_id = (
-                base64.urlsafe_b64encode(unified_id_string.encode())
-                .decode()
-                .rstrip("=")
-            )
+            unified_id_string = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(actual_model_id, batch_id)
+            unified_object_id = base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
 
             litellm_batch_response = LiteLLMBatch(
                 id=batch_id,
@@ -245,9 +233,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 status="validating",
                 output_file_id=_json_response.get("output_file_id"),
                 error_file_id=_json_response.get("error_file_id"),
-                created_at=_json_response.get(
-                    "created_at", int(start_time.timestamp())
-                ),
+                created_at=_json_response.get("created_at", int(start_time.timestamp())),
                 expires_at=_json_response.get("expires_at"),
                 in_progress_at=_json_response.get("in_progress_at"),
                 finalizing_at=_json_response.get("finalizing_at"),

@@ -292,11 +292,7 @@ def resolve_proxy_model_from_batch_input_file(
                 file_content_kwargs[key] = litellm_params[key]
 
         _file_response = file_content(**file_content_kwargs)
-        content_bytes = (
-            _file_response.content
-            if hasattr(_file_response, "content")
-            else _file_response
-        )
+        content_bytes = _file_response.content if hasattr(_file_response, "content") else _file_response
         file_content_as_dict = _get_file_content_as_dictionary(content_bytes)
         models = _get_models_from_batch_input_file_content(file_content_as_dict)
 
@@ -310,9 +306,7 @@ def resolve_proxy_model_from_batch_input_file(
 
         return None
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Could not resolve proxy model from batch input file {input_file_id!r}: {e}"
-        )
+        verbose_proxy_logger.warning(f"Could not resolve proxy model from batch input file {input_file_id!r}: {e}")
         return None
 
 
@@ -327,9 +321,7 @@ def store_batch_managed_object(
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_hook is None or not hasattr(
-            managed_files_hook, "store_unified_object_id"
-        ):
+        if managed_files_hook is None or not hasattr(managed_files_hook, "store_unified_object_id"):
             verbose_proxy_logger.warning(
                 "Managed files hook not available, cannot store batch object for cost tracking"
             )
@@ -337,9 +329,7 @@ def store_batch_managed_object(
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-        _request_metadata = (kwargs.get("litellm_params", {}) or {}).get(
-            "metadata", {}
-        ) or {}
+        _request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
 
         user_api_key_dict = UserAPIKeyAuth(
             user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
