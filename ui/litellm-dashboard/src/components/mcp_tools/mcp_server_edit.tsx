@@ -8,6 +8,7 @@ import {
   getOAuthAuthorizationIdentity,
   CLEARED_ON_INVALIDATION,
   isHeldOAuthTokenStale,
+  preservedDeclaredAppCredentials,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -409,7 +410,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     setTools([]);
     resetOAuthFlow();
+    const keptAppCredentials = preservedDeclaredAppCredentials(
+      getEffectiveAuthType(),
+      "auth_type" in changedValues,
+      form.getFieldValue("credentials"),
+    );
     form.resetFields([...CLEARED_ON_INVALIDATION]);
+    if (keptAppCredentials) {
+      form.setFieldsValue({ credentials: keptAppCredentials });
+    }
     const preserved = Object.fromEntries(
       CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
     );

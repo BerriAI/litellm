@@ -18,6 +18,7 @@ import {
   getOAuthAuthorizationIdentity,
   CLEARED_ON_INVALIDATION,
   isHeldOAuthTokenStale,
+  preservedDeclaredAppCredentials,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
@@ -248,7 +249,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     clearTools();
     resetOAuthFlow();
     setAuthorizedIdentity(undefined);
+    const keptAppCredentials = preservedDeclaredAppCredentials(
+      form.getFieldValue("auth_type"),
+      "auth_type" in changedValues,
+      form.getFieldValue("credentials"),
+    );
     form.resetFields([...CLEARED_ON_INVALIDATION]);
+    if (keptAppCredentials) {
+      form.setFieldsValue({ credentials: keptAppCredentials });
+    }
     const preserved = Object.fromEntries(
       CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
     );

@@ -1423,6 +1423,60 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     },
   );
 
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "preserves admin-entered app credentials when the URL changes after authorize for the %s mode",
+    async (authType) => {
+      vi.mocked(networking.updateMCPServer).mockResolvedValue({
+        ...interactiveOAuthServer,
+        auth_type: authType,
+      });
+
+      render(
+        <MCPServerEdit
+          mcpServer={{ ...interactiveOAuthServer, auth_type: authType }}
+          accessToken="access-token"
+          userID="user-1"
+          onCancel={vi.fn()}
+          onSuccess={vi.fn()}
+          availableAccessGroups={[]}
+        />,
+      );
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+        "org-app-client-id",
+      );
+      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+
+      act(() => {
+        mockOauth.onTokenReceived?.({ access_token: "cf-tok", token_type: "bearer" });
+      });
+
+      // The URL edit invalidates the held browser token (removeToken fires), but the declared app
+      // is config and must survive the invalidation into the update payload.
+      await act(async () => {
+        fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+          target: { value: "https://other.example.com/mcp" },
+        });
+      });
+      expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+
+      await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+      expect(payload.url).toBe("https://other.example.com/mcp");
+      expect(payload.credentials).toMatchObject({
+        client_id: "org-app-client-id",
+        client_secret: "org-app-secret",
+      });
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
+    },
+  );
+
   it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
     // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
     // after switching the form to true_passthrough and authorizing, the fresh token was not sent as

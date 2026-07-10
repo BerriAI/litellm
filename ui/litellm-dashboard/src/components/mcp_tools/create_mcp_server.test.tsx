@@ -503,6 +503,110 @@ describe("CreateMCPServer", () => {
       },
     );
 
+    it("preserves admin-entered app credentials when the URL changes after authorize for true_passthrough", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "CF_Keep_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+        "org-app-client-id",
+      );
+      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+      });
+
+      // Editing the URL after authorize invalidates the held token (identity change), but the
+      // declared app is config, not minted material: it must survive the invalidation instead of
+      // being silently reset, or the server would persist without the configured app.
+      await act(async () => {
+        fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+          target: { value: "https://other.example.com/mcp" },
+        });
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "kept-app-server",
+        server_name: "CF_Keep_Server",
+        alias: "CF_Keep_Server",
+        url: "https://other.example.com/mcp",
+        transport: "http",
+        auth_type: "true_passthrough",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.url).toBe("https://other.example.com/mcp");
+      expect(payload.credentials).toEqual({
+        client_id: "org-app-client-id",
+        client_secret: "org-app-secret",
+      });
+      expect(JSON.stringify(payload)).not.toContain("upstream-tok");
+    });
+
+    it("wipes oauth2-minted credentials when the auth type switches to a client-forwarded mode", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "Switch_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "OAuth");
+
+      // The oauth2 onTokenReceived branch writes the fetched token AND the DCR client into
+      // form.credentials; both are minted for the oauth2 identity.
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!(
+          { access_token: "oauth2-minted-tok", refresh_token: "oauth2-minted-refresh", token_type: "Bearer" },
+          { clientId: "dcr-minted-client", clientSecret: "dcr-minted-secret" },
+        );
+      });
+
+      // Switching into a client-forwarded mode changes the identity with auth_type in the changed
+      // values, so the preserve carve-out must NOT apply: the minted material would otherwise ride
+      // into a mode that now persists credentials onto the server row.
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "switched-server",
+        server_name: "Switch_Server",
+        alias: "Switch_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "true_passthrough",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials).toBeUndefined();
+      expect(JSON.stringify(payload)).not.toContain("dcr-minted-client");
+      expect(JSON.stringify(payload)).not.toContain("oauth2-minted-tok");
+    });
+
     it("should not show auth value field when None auth type is selected", async () => {
       await selectHttpTransport();
 
