@@ -2325,6 +2325,7 @@ if MCP_AVAILABLE:
         # warning instead of failing the edit, whose primary job is the update itself.
         try:
             old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+            old_server_record_read_failed = False
         except Exception as exc:  # noqa: BLE001 - advisory read; invalidation is best-effort end-to-end
             verbose_logger.warning(
                 "MCP server %s: could not snapshot the pre-update record; skipping the stale-token check: %s",
@@ -2332,8 +2333,13 @@ if MCP_AVAILABLE:
                 exc,
             )
             old_server_record = None
+            old_server_record_read_failed = True
 
-        if payload.dcr_bridge and payload.auth_type is None:
+        if (
+            payload.dcr_bridge
+            and payload.auth_type is None
+            and (old_server_record is not None or old_server_record_read_failed)
+        ):
             stored_auth_type = old_server_record.auth_type if old_server_record else None
             stored_auth_type_name = getattr(stored_auth_type, "value", stored_auth_type)
             if stored_auth_type not in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):

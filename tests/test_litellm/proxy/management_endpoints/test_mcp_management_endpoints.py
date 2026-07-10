@@ -5032,6 +5032,26 @@ async def test_edit_mcp_server_rejects_dcr_bridge_when_stored_record_unreadable(
     update_mock.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_edit_mcp_server_dcr_bridge_on_unknown_server_returns_404_not_400():
+    """A dcr_bridge enablement targeting a server_id that does not exist must surface the accurate
+    404 from the update path, not a misleading 400 about the stored auth_type: get_mcp_server
+    returns None for a missing row without raising, which is distinct from a failed read."""
+    from litellm.proxy._types import UpdateMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
+
+    update_mock = AsyncMock(return_value=None)
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(None, update_mock)
+    with p1, p2, p3, p4, p5:
+        payload = UpdateMCPServerRequest(server_id="does-not-exist", dcr_bridge=True)
+        user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with pytest.raises(HTTPException) as exc:
+            await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+
+    assert exc.value.status_code == 404
+    update_mock.assert_called_once()
+
+
 class TestPerUserCredentialConfigServerResolution:
     """Per-user credential and env-var endpoints must resolve config-defined MCP
     servers, which live only in the in-memory registry and never get a DB row, so
