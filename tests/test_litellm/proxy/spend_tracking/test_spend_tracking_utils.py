@@ -1394,6 +1394,57 @@ def test_sanitize_guardrail_information_none_passthrough(mock_should_store):
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_normalizes_bare_dict_input(mock_should_store):
+    """
+    Regression: xecguard (xecguard.py:246) assigns a bare dict to
+    standard_logging_object["guardrail_information"] even though the typed
+    contract is Optional[List[...]]. Without defensive normalization here,
+    the for-loop would iterate the dict's string keys and _redact...
+    would TypeError on {**"guardrail_name"}, taking down the entire
+    spend-log write via update_database's broad except.
+    """
+    mock_should_store.return_value = False
+    bare_dict_entry = {
+        "guardrail_name": "xecguard",
+        "guardrail_status": "success",
+        "guardrail_response": {"decision": "SAFE", "raw_prompt": "hi"},
+        "start_time": 1.0,
+        "end_time": 2.0,
+        "duration": 1.0,
+    }
+
+    result = _sanitize_guardrail_information_for_spend_logs(bare_dict_entry)
+
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "xecguard"
+    assert entry["guardrail_status"] == "success"
+    assert entry["start_time"] == 1.0
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_drops_non_dict_items_in_list(mock_should_store):
+    """
+    A stray non-dict item in the list (e.g. from a buggy caller that
+    accidentally appends a string) should be silently skipped instead of
+    crashing the spend-log write.
+    """
+    mock_should_store.return_value = False
+    mixed_input = [
+        {"guardrail_name": "x", "guardrail_response": {"leak": "hi"}},
+        "not-a-dict",
+        None,
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(mixed_input)
+
+    assert result == [{"guardrail_name": "x", "guardrail_response": REDACTED_BY_LITELM_STRING}]
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_preserves_absent_prompt_fields(mock_should_store):
     """
     Entries that never carried guardrail_request or guardrail_response must
