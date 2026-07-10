@@ -140,6 +140,21 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
+            # Forward the parent request's proxy auth/attribution context
+            # (litellm_metadata, user_api_key_dict, proxy_server_request, ...) so
+            # the advisor sub-call is logged and cost-attributed to the
+            # originating key/user, exactly like the executor leg above (which
+            # spreads **kwargs). Without it the proxy cost-tracking callback skips
+            # the SpendLogs write entirely (it requires a non-None key/user/team),
+            # so advisor spend is invisible in per-user logs. litellm_logging_obj
+            # is excluded so the advisor leg gets its own logging object and its
+            # spend is not double-counted against the parent request's call id;
+            # api_key/api_base are excluded because they are passed explicitly.
+            advisor_passthrough = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ("litellm_logging_obj", "api_key", "api_base")
+            }
             advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
                 model=advisor_model,
                 messages=advisor_messages,
@@ -154,6 +169,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 },
                 api_key=advisor_api_key,
                 api_base=advisor_api_base,
+                **advisor_passthrough,
             )
 
             advisor_text = _extract_response_text(advisor_response)

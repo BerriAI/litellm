@@ -364,3 +364,70 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
     assert captured["thinking"] == {"type": "enabled", "budget_tokens": 2048}
     assert captured["system"] == "Hook overrode the system prompt."
     assert captured["temperature"] == 0.1
+
+
+# ---------------------------------------------------------------------------
+# Advisor sub-call is attributed to the originating key/user (SpendLogs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_forwards_proxy_attribution():
+    """
+    The advisor sub-call must inherit the parent request's proxy
+    auth/attribution context (litellm_metadata / user_api_key_dict /
+    proxy_server_request) so it is logged and cost-attributed to the originating
+    key/user, exactly like the executor leg. Without it the proxy cost-tracking
+    callback skips the SpendLogs write entirely.
+
+    litellm_logging_obj must NOT be forwarded: the advisor leg owns its own
+    logging object so its spend is not double-counted against the parent request.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    sentinel_meta = {"user_api_key_alias": "team-a", "user_api_key": "sk-" + "a" * 32}
+    sentinel_key = object()
+    sentinel_psr = {"url": "/v1/messages"}
+
+    captured = []
+    executor_calls = 0
+
+    async def mock_handler(
+        model, messages, tools, stream, max_tokens, custom_llm_provider, **kwargs
+    ):
+        nonlocal executor_calls
+        captured.append({"tools": tools, "kwargs": kwargs})
+        if tools is None:
+            return _text_resp("Some advice.", model="claude-opus-4-6")  # advisor leg
+        executor_calls += 1
+        if executor_calls == 1:
+            return _advisor_call_resp()  # executor → requests advisor (once)
+        return _text_resp("Final answer.")  # executor → final
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        await AdvisorOrchestrationHandler().handle(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+            litellm_metadata=sentinel_meta,
+            user_api_key_dict=sentinel_key,
+            proxy_server_request=sentinel_psr,
+            litellm_logging_obj=object(),
+        )
+
+    advisor_legs = [c for c in captured if c["tools"] is None]
+    assert advisor_legs, "advisor sub-call (tools=None) must have fired"
+    adv = advisor_legs[0]["kwargs"]
+    assert adv.get("litellm_metadata") == sentinel_meta
+    assert adv.get("user_api_key_dict") is sentinel_key
+    assert adv.get("proxy_server_request") == sentinel_psr
+    # Own logging object → not stamped onto the parent request.
+    assert "litellm_logging_obj" not in adv
