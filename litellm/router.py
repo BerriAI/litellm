@@ -8424,7 +8424,34 @@ class Router:
         else:
             credentials["custom_llm_provider"] = "openai"  # default
 
-        return credentials
+        return self._normalize_object_storage_credentials(credentials)
+
+    @staticmethod
+    def _normalize_object_storage_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
+        from litellm.secret_managers.main import get_secret
+
+        def _resolve(value: Any) -> Any:
+            if isinstance(value, str) and value.startswith("os.environ/"):
+                return get_secret(value)
+            return value
+
+        resolved = {
+            key: secret
+            for key, value in credentials.items()
+            if (secret := _resolve(value)) is not None
+            or not (isinstance(value, str) and value.startswith("os.environ/"))
+        }
+        aliases = {
+            "gcs_bucket_name": resolved.get("gcs_bucket_name") or resolved.get("bucket_name"),
+            "aws_access_key_id": resolved.get("aws_access_key_id") or resolved.get("s3_access_key_id"),
+            "aws_secret_access_key": resolved.get("aws_secret_access_key")
+            or resolved.get("s3_secret_access_key"),
+            "aws_region_name": resolved.get("aws_region_name") or resolved.get("s3_region_name"),
+        }
+        return {
+            **resolved,
+            **{key: value for key, value in aliases.items() if value is not None},
+        }
 
     @overload
     def get_router_model_info(

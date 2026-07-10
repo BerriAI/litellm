@@ -125,10 +125,15 @@ def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
         snapshot: dict[str, object] = {}
         snapshot.update(trusted_model_credentials)  # any-ok: untyped snapshot
         bucket_name = _TrustedS3ModelCredentials.model_validate(snapshot).s3_bucket_name
-    bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    bucket_name = (
+        bucket_name
+        or os.getenv("AWS_S3_BUCKET_NAME")
+        or os.getenv("AWS_BATCH_S3_BUCKET")
+    )
     if not bucket_name:
         raise ValueError(
-            "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+            "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or "
+            "AWS_S3_BUCKET_NAME / AWS_BATCH_S3_BUCKET for Bedrock file content retrieval."
         )
     return bucket_name
 
@@ -265,10 +270,15 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Get the complete S3 URL for the file upload request
         """
-        bucket_name = litellm_params.get("s3_bucket_name") or os.getenv("AWS_S3_BUCKET_NAME")
+        bucket_name = (
+            litellm_params.get("s3_bucket_name")
+            or os.getenv("AWS_S3_BUCKET_NAME")
+            or os.getenv("AWS_BATCH_S3_BUCKET")
+        )
         if not bucket_name:
             raise ValueError(
-                "S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or AWS_S3_BUCKET_NAME env var"
+                "S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or "
+                "AWS_S3_BUCKET_NAME / AWS_BATCH_S3_BUCKET env var"
             )
         bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
 

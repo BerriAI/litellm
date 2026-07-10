@@ -50,7 +50,6 @@ from e2e_http import (
 )
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, SpendLogRow, SpendLogsParams
-from provider_env import is_credential_error_body, skip_reason_missing_env
 
 pytestmark = pytest.mark.e2e
 
@@ -58,28 +57,6 @@ CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
 BATCH_CANCEL_DELAY_SECONDS = 2
 BATCH_TERMINAL_BEFORE_CANCEL = {"failed", "cancelled", "expired"}
 BATCH_CANCEL_RETRIES = 3
-
-
-def require_provider_env(provider: str) -> None:
-    reason = skip_reason_missing_env(provider)
-    if reason is not None:
-        pytest.skip(reason)
-
-
-def skip_if_credential_error(body: str, *, where: str) -> None:
-    if is_credential_error_body(body):
-        pytest.skip(f"{where}: gateway missing provider credential/config: {body[:300]}")
-
-
-def unwrap_or_skip_credentials[R](result: Result[R], *, where: str) -> R:
-    match result:
-        case Success(data=data):
-            return data
-        case UnknownApiError(body=body):
-            skip_if_credential_error(body, where=where)
-            raise AssertionError(result)
-        case _:
-            raise AssertionError(result)
 
 
 def cancel_batch(
@@ -90,20 +67,12 @@ def cancel_batch(
         match last:
             case Success(data=data):
                 return data
-            case UnknownApiError(status_code=500, body=body):
-                skip_if_credential_error(body, where="cancel_batch")
+            case UnknownApiError(status_code=500):
                 time.sleep(1)
                 last = client.cancel_batch(batch_id, key=key, provider=provider)
             case _:
                 break
-    match last:
-        case Success(data=data):
-            return data
-        case UnknownApiError(body=body):
-            skip_if_credential_error(body, where="cancel_batch")
-            raise AssertionError(last)
-        case _:
-            return unwrap(last)
+    return unwrap(last)
 
 
 def render_jsonl(model: str) -> bytes:
@@ -203,14 +172,10 @@ def test_batch_lifecycle(
     resources: ResourceManager,
     batch_deployments: None,
 ) -> None:
-    require_provider_env(cap.provider)
     key = resources.key()
     provider = op_provider(cap)
 
-    file = unwrap_or_skip_credentials(
-        upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key),
-        where=f"{cap.id} upload",
-    )
+    file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
     resources.defer(
         quietly(lambda: client.delete_file(file.id, key=key, provider=provider))
     )
@@ -220,7 +185,6 @@ def test_batch_lifecycle(
     ), f"{cap.id}: file id {file.id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
 
     created = create_for_scenario(client, cap, file.id, key)
-    skip_if_credential_error(created.body, where=f"{cap.id} create")
     require_successful_call(created)
     batch = BatchObject.model_validate_json(created.body)
     resources.defer(
@@ -240,10 +204,7 @@ def test_batch_lifecycle(
             cap.provider, batch.id
         ), f"{cap.provider} batch id {batch.id!r} not in that provider's native shape; misrouted?"
 
-    fetched = unwrap_or_skip_credentials(
-        client.retrieve_batch(batch.id, key=key, provider=provider),
-        where=f"{cap.id} retrieve",
-    )
+    fetched = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
     assert_batch_object(fetched)
     assert fetched.id == batch.id
     assert (
@@ -253,10 +214,7 @@ def test_batch_lifecycle(
 
     if cap.can_cancel:
         time.sleep(BATCH_CANCEL_DELAY_SECONDS)
-        pre_cancel = unwrap_or_skip_credentials(
-            client.retrieve_batch(batch.id, key=key, provider=provider),
-            where=f"{cap.id} pre-cancel retrieve",
-        )
+        pre_cancel = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
         assert (
             pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL
         ), (
@@ -276,24 +234,10 @@ def test_batch_lifecycle(
         )
 
     if cap.can_list:
-        list_result = client.list_batches(key=key, provider=provider)
-        match list_result:
-            case UnknownApiError(body=body) if (
-                "Filtering by 'provider' is not supported when using managed batches" in body
-            ):
-                listed = unwrap_or_skip_credentials(
-                    client.list_batches(key=key, provider=None),
-                    where=f"{cap.id} list (unfiltered fallback)",
-                )
-            case _:
-                listed = unwrap_or_skip_credentials(
-                    list_result, where=f"{cap.id} list"
-                )
+        listed = unwrap(client.list_batches(key=key, provider=provider))
         if listed.object is not None:
             assert listed.object == "list", f"list envelope object={listed.object!r}"
         match = next((b for b in listed.data if b.id == batch.id), None)
-        if match is None and cap.scenario == "provider_fallback":
-            return
         assert match is not None, "created batch absent from list"
         assert match.object == "batch"
 

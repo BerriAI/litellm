@@ -8,19 +8,16 @@ cancels, and lists a batch; everything created is deleted on teardown.
 ## Provider x operation
 
 Only supported cells are tested. The capability table in `capabilities.py` holds one
-row per supported (provider, scenario) pair. Missing provider secrets become a
-**skip** (not a red fail) so a red result means product/routing behavior, not a
-misconfigured env. Secrets live on the **gateway** process: docker compose
-`env_file: .env` locally, or the same key names mounted from AWS Secrets Manager
-into the gateway (and preferably e2e) pods on EKS. Deployments register with
-`os.environ/NAME` refs; see `provider_env.py` for the required name set per provider.
+row per supported (provider, scenario) pair, so there are no skipped cells in the
+parametrized run. The batches suite never skips: missing provider creds or upstream
+failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 
 | Provider  | create | retrieve | cancel | list | file backing |
 |-----------|--------|----------|--------|------|--------------|
 | OpenAI    | yes | yes | yes | yes | OpenAI Files |
 | Azure     | yes | yes | yes | yes | Azure Files |
-| Vertex AI | yes | yes | yes | yes | GCS (`GCS_BUCKET_NAME` on model as `gcs_bucket_name` + vertex creds) |
-| Bedrock   | yes | yes | no (limited upstream) | no | S3 (`AWS_BATCH_S3_BUCKET` or `AWS_S3_BUCKET_NAME` + `AWS_BATCH_ROLE_ARN`) |
+| Vertex AI | yes | yes | yes | yes | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
+| Bedrock   | yes | yes | no (limited upstream) | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
 Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
 (`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix.
