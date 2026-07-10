@@ -838,12 +838,6 @@ async def test_create_guardrail_endpoint(
 async def test_create_guardrail_config_error_returns_400_not_500(
     mocker, mock_guardrail_registry, mock_in_memory_handler
 ):
-    """
-    A ValueError raised while initializing a newly created guardrail is a
-    client-correctable config error and must surface as a 400. Pre-fix, the
-    inner 400 HTTPException was caught by the outer `except Exception` and
-    re-raised as a 500.
-    """
     mock_prisma_client = mocker.Mock()
     mock_in_memory_handler.initialize_guardrail.side_effect = ValueError("invalid config")
 
