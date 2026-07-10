@@ -31,6 +31,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
     OutputItemDoneEvent,
+    OutputTextDoneEvent,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -225,8 +226,13 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        text_done = Mock()
-        text_done.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE
+        text_done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            output_index=1,
+            content_index=0,
+            item_id="msg_transformed",
+            text="ok",
+        )
         terminal_response = Mock(spec=ResponsesAPIResponse)
         terminal_response.output = []
         terminal_event = Mock(spec=ResponseCompletedEvent)
@@ -246,7 +252,7 @@ class TestBaseResponsesAPIStreamingIterator:
             json.dumps(
                 {
                     "type": "response.output_text.done",
-                    "output_index": "1",
+                    "output_index": 1,
                     "content_index": 0,
                     "item_id": "msg_text",
                     "text": "ok",
@@ -260,7 +266,7 @@ class TestBaseResponsesAPIStreamingIterator:
         assert terminal_response.output == [
             {
                 "type": "message",
-                "id": "msg_text",
+                "id": "msg_transformed",
                 "role": "assistant",
                 "status": "completed",
                 "content": [{"type": "output_text", "text": "ok", "annotations": []}],

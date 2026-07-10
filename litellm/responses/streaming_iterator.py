@@ -230,7 +230,7 @@ class BaseResponsesAPIStreamingIterator:
                 if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
                     output_item = getattr(openai_responses_api_chunk, "item", None)
                     output_index = getattr(openai_responses_api_chunk, "output_index", None)
-                    if isinstance(output_index, int) and output_index >= 0:
+                    if type(output_index) is int and output_index >= 0:
                         if isinstance(output_item, BaseLiteLLMOpenAIResponseObject):
                             output_item = output_item.model_dump()
                         if isinstance(output_item, dict):
@@ -239,11 +239,27 @@ class BaseResponsesAPIStreamingIterator:
                                 self._streamed_output_items,
                             )
                 elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
-                    record_output_text_chunk(
-                        parsed_chunk,
-                        self._streamed_output_items,
-                        self._streamed_text_only_items,
-                    )
+                    output_index = getattr(openai_responses_api_chunk, "output_index", None)
+                    content_index = getattr(openai_responses_api_chunk, "content_index", None)
+                    output_text = getattr(openai_responses_api_chunk, "text", None)
+                    if (
+                        type(output_index) is int
+                        and output_index >= 0
+                        and type(content_index) is int
+                        and content_index >= 0
+                        and isinstance(output_text, str)
+                    ):
+                        record_output_text_chunk(
+                            {
+                                "output_index": output_index,
+                                "content_index": content_index,
+                                "item_id": getattr(openai_responses_api_chunk, "item_id", None),
+                                "text": output_text,
+                                "annotations": getattr(openai_responses_api_chunk, "annotations", None),
+                            },
+                            self._streamed_output_items,
+                            self._streamed_text_only_items,
+                        )
 
                 openai_types = _get_openai_response_types()
                 if openai_responses_api_chunk and _chunk_type in (
