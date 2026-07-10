@@ -50,17 +50,27 @@ def fetch_open_issues(repo: str | None) -> list[dict]:
     cmd = ["api", "--paginate", endpoint]
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
+    # gh --paginate concatenates raw JSON arrays — e.g. [{...}][{...}]
+    # Some issue bodies may contain embedded newlines, so splitting by line
+    # breaks JSON parsing.  Use raw_decode instead to consume one value at a
+    # time.
     issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(raw):
+        while idx < len(raw) and raw[idx].isspace():
+            idx += 1
+        if idx >= len(raw):
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, idx)
+            if isinstance(obj, list):
+                issues.extend(obj)
+            else:
+                issues.append(obj)
+            idx = end
+        except json.JSONDecodeError:
+            break
 
     # Filter out pull requests (they also appear in the issues endpoint)
     return [i for i in issues if "pull_request" not in i]
