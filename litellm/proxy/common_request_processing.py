@@ -438,9 +438,7 @@ def _get_sse_keepalive_interval_seconds() -> float:
     try:
         return float(os.getenv("LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS", "0") or "0")
     except ValueError:
-        verbose_proxy_logger.warning(
-            "Invalid LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS value; disabling SSE keepalives"
-        )
+        verbose_proxy_logger.warning("Invalid LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS value; disabling SSE keepalives")
         return 0.0
 
 
