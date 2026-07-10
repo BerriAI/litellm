@@ -1,6 +1,7 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import AvailableTeamsPanel from "@/components/team/available_teams";
-import TeamInfoView from "@/components/team/TeamInfo";
+import { migratedHref } from "@/utils/migratedPages";
+import { useRouter } from "next/navigation";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined, PlusOutlined, TeamOutlined, ReloadOutlined } from "@ant-design/icons";
@@ -75,7 +76,6 @@ interface EditTeamModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
-import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { Member, teamCreateCall } from "./networking";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
@@ -228,8 +228,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<null | any>(null);
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [editTeam, setEditTeam] = useState<boolean>(false);
+  const router = useRouter();
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -582,19 +581,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     }
   };
 
-  const is_team_admin = (team: any) => {
-    if (team == null || team.members_with_roles == null) {
-      return false;
-    }
-    for (let i = 0; i < team.members_with_roles.length; i++) {
-      let member = team.members_with_roles[i];
-      if (member.user_id == userID && member.role == "admin") {
-        return true;
-      }
-    }
-    return false;
-  };
-
   const handleSearchChange = (value: string) => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setIsSearching(true);
@@ -672,7 +658,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         width: 170,
         ellipsis: true,
         render: (id: string) => (
-          <IdCell value={id} onClick={(teamId) => setSelectedTeamId(teamId)} dataTestId="team-id-cell" />
+          <IdCell
+            value={id}
+            onClick={(teamId) => router.push(migratedHref(`teams/${encodeURIComponent(teamId)}/`))}
+            dataTestId="team-id-cell"
+          />
         ),
       },
       {
@@ -813,10 +803,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   variant="Edit"
                   tooltipText="Edit team"
                   dataTestId="edit-team-button"
-                  onClick={() => {
-                    setSelectedTeamId(record.team_id);
-                    setEditTeam(true);
-                  }}
+                  onClick={() => router.push(migratedHref(`teams/${encodeURIComponent(record.team_id)}/`))}
                 />
                 <TableIconActionButton
                   variant="Delete"
@@ -988,59 +975,27 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   return (
     <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
-      {selectedTeamId ? (
-        <TeamInfoView
-          teamId={selectedTeamId}
-          onUpdate={(data) => {
-            setTeams((teams) => {
-              if (teams == null) {
-                return teams;
-              }
-              return teams.map((team) => {
-                if (data.team_id === team.team_id) {
-                  return updateExistingKeys(team, data);
-                }
-                return team;
-              });
-            });
-            fetchTeamsV2();
-          }}
-          onClose={() => {
-            setSelectedTeamId(null);
-            setEditTeam(false);
-          }}
-          accessToken={accessToken}
-          is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
-          is_proxy_admin={userRole == "Admin"}
-          userModels={userModels}
-          editTeam={editTeam}
-          premiumUser={premiumUser}
-        />
-      ) : (
-        <>
-          <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-            <Space direction="vertical" size={0}>
-              <Title level={2} style={{ margin: 0 }}>
-                <TeamOutlined style={{ marginRight: 8 }} />
-                Teams
-              </Title>
-              <Text type="secondary">Manage teams, members, and their access to models and budgets</Text>
-            </Space>
-            {canCreateOrManageTeams(userRole, userID, organizations) && (
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => setIsTeamModalVisible(true)}
-                data-testid="create-team-button"
-              >
-                Create Team
-              </Button>
-            )}
-          </Flex>
+      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size={0}>
+          <Title level={2} style={{ margin: 0 }}>
+            <TeamOutlined style={{ marginRight: 8 }} />
+            Teams
+          </Title>
+          <Text type="secondary">Manage teams, members, and their access to models and budgets</Text>
+        </Space>
+        {canCreateOrManageTeams(userRole, userID, organizations) && (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setIsTeamModalVisible(true)}
+            data-testid="create-team-button"
+          >
+            Create Team
+          </Button>
+        )}
+      </Flex>
 
-          <Tabs items={tabItems} />
-        </>
-      )}
+      <Tabs items={tabItems} />
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (
         <Modal
