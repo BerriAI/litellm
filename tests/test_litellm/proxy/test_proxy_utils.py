@@ -15,9 +15,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
+from litellm.types.utils import CallTypes
 
 
 def test_get_custom_url(monkeypatch):
@@ -69,6 +70,28 @@ def test_proxy_only_error_false_for_other_error_type():
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_does_not_track_mcp_tool_as_hanging_request():
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.slack_alerting_instance = MagicMock()
+    proxy_logging_obj.slack_alerting_instance.alerting = ["slack"]
+    proxy_logging_obj.slack_alerting_instance.response_taking_too_long = AsyncMock()
+
+    await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=MagicMock(),
+        data=None,
+        call_type=CallTypes.call_mcp_tool.value,
+    )
+    proxy_logging_obj.slack_alerting_instance.response_taking_too_long.assert_not_called()
+
+    await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=MagicMock(),
+        data=None,
+        call_type=CallTypes.acompletion.value,
+    )
+    proxy_logging_obj.slack_alerting_instance.response_taking_too_long.assert_called_once_with(request_data=None)
 
 
 @pytest.mark.asyncio

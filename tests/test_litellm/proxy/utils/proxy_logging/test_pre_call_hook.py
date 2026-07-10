@@ -12,7 +12,6 @@ import litellm
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.utils import CallTypes
 
 
 @pytest.fixture(autouse=True)
@@ -101,25 +100,6 @@ async def test_pre_call_hook_returns_none_for_none_data(proxy_logging, make_user
         call_type="completion",
     )
     assert out is None
-
-
-@pytest.mark.asyncio
-async def test_pre_call_hook_does_not_track_mcp_tool_as_hanging_request(
-    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
-):
-    data = {"messages": [{"role": "user", "content": "Tool: search"}], "model": "mcp-tool-call"}
-    proxy_logging.slack_alerting_instance = MagicMock()
-    proxy_logging.slack_alerting_instance.alerting = ["slack"]
-    proxy_logging.slack_alerting_instance.response_taking_too_long = AsyncMock()
-
-    out = await proxy_logging.pre_call_hook(
-        user_api_key_dict=make_user_api_key_auth(),
-        data=data,
-        call_type=CallTypes.call_mcp_tool.value,
-    )
-
-    assert out is data
-    proxy_logging.slack_alerting_instance.response_taking_too_long.assert_not_called()
 
 
 @pytest.mark.asyncio
