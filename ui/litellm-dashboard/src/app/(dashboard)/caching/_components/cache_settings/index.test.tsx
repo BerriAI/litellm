@@ -63,12 +63,37 @@ describe("CacheSettings", () => {
     });
   });
 
-  describe("when the redis type is semantic", () => {
-    it("should reveal the semantic fields", async () => {
-      getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "semantic" } });
+  describe("when the cache type is semantic", () => {
+    it("should reveal the semantic fields when the stored type is redis-semantic", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { type: "redis-semantic" } });
       renderSettings();
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
+    });
+
+    it("should hide the Redis Type topology selector because semantic only supports a node connection", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { type: "redis-semantic" } });
+      renderSettings();
+      expect(await screen.findByText("Cache Type")).toBeInTheDocument();
+      expect(screen.queryByText("Redis Type")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("cache strategy and redis topology are separate dimensions", () => {
+    it("should move Semantic out of the Redis Type dropdown into its own Cache Type selector", async () => {
+      const user = userEvent.setup();
+      renderSettings();
+
+      expect(await screen.findByText("Redis Type")).toBeInTheDocument();
+      expect(screen.queryByText("Similarity Threshold")).not.toBeInTheDocument();
+
+      const cacheTypeSelect = screen.getByText("Cache Type").parentElement?.querySelector(".ant-select-selector");
+      expect(cacheTypeSelect).not.toBeNull();
+      await user.click(cacheTypeSelect as HTMLElement);
+      await user.click(await screen.findByText("Semantic"));
+
+      await waitFor(() => expect(screen.queryByText("Redis Type")).not.toBeInTheDocument());
+      expect(screen.getByText("Similarity Threshold")).toBeInTheDocument();
     });
   });
 

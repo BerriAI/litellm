@@ -2,7 +2,9 @@ import type { FormItemProps } from "antd";
 
 export type CacheFieldType = "string" | "password" | "integer" | "float" | "boolean" | "list" | "model-select";
 
-export type RedisType = "node" | "cluster" | "sentinel" | "semantic";
+export type CacheType = "standard" | "semantic";
+
+export type RedisType = "node" | "cluster" | "sentinel";
 
 export type CacheSection = "connection" | "cluster" | "sentinel" | "semantic" | "ssl" | "cacheManagement" | "gcp";
 
@@ -15,17 +17,35 @@ export interface CacheField {
   readonly section: CacheSection;
   readonly helpText: string;
   readonly redisType: RedisType | null;
+  readonly cacheType?: CacheType;
   readonly defaultValue?: string | number | boolean;
   readonly rules?: CacheFieldRule[];
 }
 
-export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel", "semantic"];
+export const CACHE_TYPES: readonly CacheType[] = ["standard", "semantic"];
+
+export const CACHE_TYPE_LABELS: Readonly<Record<CacheType, string>> = {
+  standard: "Standard",
+  semantic: "Semantic",
+};
+
+export const CACHE_TYPE_DESCRIPTIONS: Readonly<Record<CacheType, string>> = {
+  standard: "Exact-match caching keyed on the request",
+  semantic: "Reuses responses for semantically similar prompts using embedding vectors",
+};
+
+export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel"];
+
+export const REDIS_TYPE_LABELS: Readonly<Record<RedisType, string>> = {
+  node: "Node (Single Instance)",
+  cluster: "Cluster",
+  sentinel: "Sentinel",
+};
 
 export const REDIS_TYPE_DESCRIPTIONS: Readonly<Record<RedisType, string>> = {
   node: "Standard Redis node/single instance",
   cluster: "Redis Cluster mode for high availability and horizontal scaling",
   sentinel: "Redis Sentinel mode for high availability with automatic failover",
-  semantic: "Semantic caching that reuses responses for similar prompts",
 };
 
 const portRule: CacheFieldRule = {
@@ -177,7 +197,8 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     type: "float",
     section: "semantic",
     helpText: "Similarity threshold for semantic cache",
-    redisType: "semantic",
+    redisType: null,
+    cacheType: "semantic",
     defaultValue: 0.8,
     rules: [numberRule],
   },
@@ -187,7 +208,8 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     type: "model-select",
     section: "semantic",
     helpText: "Embedding model for semantic cache",
-    redisType: "semantic",
+    redisType: null,
+    cacheType: "semantic",
   },
   {
     name: "ssl",
