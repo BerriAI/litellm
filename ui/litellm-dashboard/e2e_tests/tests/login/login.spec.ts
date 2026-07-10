@@ -9,7 +9,8 @@ test("user can log in", async ({ page }) => {
   const loginButton = page.getByRole("button", { name: "Login", exact: true });
   await expect(loginButton).toBeEnabled();
   await loginButton.click();
-  await expect(page.getByText("Virtual Keys")).toBeVisible();
+  // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
+  await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible();
 
   // Match the navbar account button by its stable aria-label (UserDropdown.tsx
   // emits "Account menu — <role> — signed in as <email|id>"). Earlier this used
