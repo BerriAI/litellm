@@ -629,3 +629,46 @@ def test_sync_client_url_used_when_no_cluster(mock_from_url, monkeypatch):
     get_redis_client()
 
     mock_from_url.assert_called_once()
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_explicit_host_outranks_environment_redis_url(mock_from_url, monkeypatch):
+    """
+    An explicitly configured host must win over REDIS_URL in the environment.
+
+    Otherwise the url branch strips the caller's host/port and the client
+    silently connects to whatever REDIS_URL names, so an explicit config block
+    (or a connection test typed into the admin UI) targets the wrong server.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://env-host:6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    client = get_redis_client(host="explicit-host", port=6380)
+
+    mock_from_url.assert_not_called()
+    assert client.connection_pool.connection_kwargs["host"] == "explicit-host"
+    assert client.connection_pool.connection_kwargs["port"] == 6380
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_explicit_url_still_wins_over_environment_host(mock_from_url, monkeypatch):
+    """An explicit url argument keeps taking the from_url path."""
+    monkeypatch.setenv("REDIS_HOST", "env-host")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    get_redis_client(url="redis://explicit-host:6380")
+
+    mock_from_url.assert_called_once()
+    assert mock_from_url.call_args.kwargs["url"] == "redis://explicit-host:6380"
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_environment_redis_url_used_when_caller_names_no_target(mock_from_url, monkeypatch):
+    """With no caller-supplied connection target, REDIS_URL still drives the client."""
+    monkeypatch.setenv("REDIS_URL", "redis://env-host:6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    get_redis_client()
+
+    mock_from_url.assert_called_once()
