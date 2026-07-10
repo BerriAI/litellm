@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,6 +37,9 @@ from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        UpstreamTokenGrant,
+    )
     from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
@@ -654,6 +657,86 @@ async def authorize_with_server(
     return response
 
 
+def _bridge_grant_from_token_response(token_response: object) -> Optional["UpstreamTokenGrant"]:
+    """Validate an upstream OAuth token response into a typed grant, or None when it lacks a usable
+    access token. Each field is isinstance-checked so nothing untyped from ``response.json()`` flows
+    into the grant."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        UpstreamTokenGrant,
+    )
+
+    if not isinstance(token_response, dict):
+        return None
+    access = token_response.get("access_token")
+    if not isinstance(access, str) or not access:
+        return None
+    token_type = token_response.get("token_type")
+    refresh = token_response.get("refresh_token")
+    scope = token_response.get("scope")
+    expires_in = token_response.get("expires_in")
+    return UpstreamTokenGrant(
+        access_token=SecretStr(access),
+        token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
+        refresh_token=SecretStr(refresh) if isinstance(refresh, str) and refresh else None,
+        scope=scope if isinstance(scope, str) and scope else None,
+        expires_in=expires_in if isinstance(expires_in, int) and expires_in > 0 else None,
+    )
+
+
+async def _mint_bridge_delegate_token_response(
+    request: Request, mcp_server: MCPServer, token_response: object
+) -> JSONResponse:
+    """Return the client-held envelope bearer for a DCR-bridge ``oauth_delegate`` token exchange.
+
+    The envelope binds the caller's litellm identity (resolved from the token request) to the
+    upstream grant, so the client holds one bearer that later admits it and forwards the upstream
+    token, with nothing stored server-side. Fails closed with an OAuth ``invalid_request`` when no
+    litellm identity accompanies the token request rather than minting an identity-less credential.
+    """
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        build_bridge_token_response,
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        EnvelopeIdentity,
+        SealedEnvelope,
+    )
+    from litellm.proxy.proxy_server import (
+        master_key,  # noqa: PLC0415  # inline import avoids a module-load circular import
+    )
+
+    if not master_key:
+        raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+
+    user_id = await _extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": (
+                    "this server issues a gateway-bound credential; send a litellm credential "
+                    "(x-litellm-api-key or Authorization) on the token request"
+                ),
+            },
+        )
+
+    grant = _bridge_grant_from_token_response(token_response)
+    if grant is None:
+        raise HTTPException(status_code=502, detail="Upstream token response has no usable access_token")
+
+    now = datetime.now(timezone.utc)
+    keys = envelope_keys_from_master_key(master_key)
+    identity = EnvelopeIdentity(user_id=user_id, server_id=mcp_server.server_id)
+    sealed = build_bridge_token_response(identity, grant, keys, now)
+    if not isinstance(sealed, SealedEnvelope):
+        raise HTTPException(status_code=500, detail="Failed to mint the gateway-bound credential")
+
+    expires_in = max(1, int((sealed.expires_at - now).total_seconds()))
+    body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
+    return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -790,6 +873,12 @@ async def exchange_token_with_server(
                 "or store it via POST /mcp/server/{id}/oauth-user-credential.",
                 mcp_server.server_id,
             )
+
+    # A DCR-bridge oauth_delegate server hands the client a gateway-bound envelope (identity plus the
+    # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
+    # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
+    if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
+        return await _mint_bridge_delegate_token_response(request, mcp_server, token_response)
 
     result = {
         "access_token": access_token,
