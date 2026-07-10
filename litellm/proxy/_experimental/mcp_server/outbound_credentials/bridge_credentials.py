@@ -12,6 +12,7 @@ token-endpoint and admission wiring live in their respective call sites.
 import hashlib
 import hmac
 from datetime import datetime
+from functools import lru_cache
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, SecretStr
@@ -28,30 +29,51 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     open_envelope,
 )
 
-_SIGNING_KEY_DOMAIN = "litellm-mcp-bridge:envelope-signing:"
-_ENCRYPTION_KEY_DOMAIN = "litellm-mcp-bridge:envelope-encryption:"
+_SIGNING_KEY_DOMAIN = b"litellm-mcp-bridge:envelope-signing:"
+_ENCRYPTION_KEY_DOMAIN = b"litellm-mcp-bridge:envelope-encryption:"
 _BEARER_PREFIX = "bearer "
 
+# scrypt work factors (RFC 7914). n=2**15 with r=8/p=1 costs ~50ms and ~32MB per derivation, which
+# makes offline guessing of a candidate master key memory-hard rather than a bare hash comparison.
+_SCRYPT_N = 2**15
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * 2
+_DERIVED_KEY_BYTES = 32
 
+
+@lru_cache(maxsize=8)
 def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
     """Derive the envelope signing and encryption keys from the proxy master key.
 
-    Keyed HMAC-SHA256 over two distinct domain labels yields two independent 64-char
-    (256-bit) subkeys from the one secret, so the producer (mint) and consumer (open) agree
-    on keys without persisting any, and even a short master key still produces a >= 32-byte
-    signing key (HS256's requirement). HMAC keys the derivation on ``master_key`` (the
-    standard subkey-from-key construction) rather than hashing a concatenation. The
-    derivation is deterministic; rotating ``master_key`` invalidates every outstanding
-    envelope, which is the intended behavior for a signing-key change.
-
-    ``master_key`` is the proxy's root signing secret and must be high-entropy: a captured
-    envelope is an offline oracle for it, exactly as the existing master-key-signed session
-    tokens already are, so a low-entropy master key compromises the proxy regardless of this
-    path. A password-style slow KDF is deliberately not used here; it is the wrong tradeoff
-    for a per-request high-entropy secret.
+    A memory-hard scrypt KDF (RFC 7914) over two distinct domain-label salts yields two
+    independent 256-bit subkeys from the one secret, so the producer (mint) and consumer
+    (open) agree on keys without persisting any. scrypt is used rather than a bare hash or
+    HMAC so that a captured envelope is not a cheap offline oracle for the master key: each
+    candidate guess costs a full memory-hard derivation, which is what protects a deployment
+    whose master key is weaker than it should be. The result is cached (the master key is
+    fixed for a process), so the KDF runs once per key and adds nothing to the per-request
+    admission path. The derivation is deterministic; rotating ``master_key`` invalidates
+    every outstanding envelope, which is the intended behavior for a signing-key change.
     """
-    signing = hmac.new(master_key.encode(), _SIGNING_KEY_DOMAIN.encode(), hashlib.sha256).hexdigest()
-    encryption = hmac.new(master_key.encode(), _ENCRYPTION_KEY_DOMAIN.encode(), hashlib.sha256).hexdigest()
+    signing = hashlib.scrypt(
+        master_key.encode(),
+        salt=_SIGNING_KEY_DOMAIN,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        maxmem=_SCRYPT_MAXMEM,
+        dklen=_DERIVED_KEY_BYTES,
+    ).hex()
+    encryption = hashlib.scrypt(
+        master_key.encode(),
+        salt=_ENCRYPTION_KEY_DOMAIN,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        maxmem=_SCRYPT_MAXMEM,
+        dklen=_DERIVED_KEY_BYTES,
+    ).hex()
     return EnvelopeKeys(signing_key=SecretStr(signing), encryption_key=SecretStr(encryption))
 
 
