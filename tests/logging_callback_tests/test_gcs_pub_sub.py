@@ -44,6 +44,7 @@ ignored_keys = [
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
     "metadata.eval_information",
+    "metadata.service_tier",
 ]
 
 
