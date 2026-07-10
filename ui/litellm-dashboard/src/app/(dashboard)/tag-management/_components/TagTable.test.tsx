@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCellDate } from "@/components/shared/table_cells";
 import TagTable from "./TagTable";
-import { Tag } from "./types";
+import { Tag } from "@/components/tag_management/types";
 
 describe("TagTable", () => {
   const mockOnEdit = vi.fn();

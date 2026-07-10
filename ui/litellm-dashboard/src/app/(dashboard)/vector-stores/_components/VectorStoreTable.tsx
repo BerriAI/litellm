@@ -11,9 +11,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } fro
 import { Tooltip } from "antd";
 import React from "react";
 import { DateCell, IdCell } from "@/components/shared/table_cells";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
-import { getProviderLogoAndName } from "../provider_info_helpers";
-import { VectorStore } from "./types";
+import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { VectorStore } from "@/components/vector_store_management/types";
 
 interface VectorStoreTableProps {
   data: VectorStore[];

@@ -1,9 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CredentialItem } from "../networking";
+import { CredentialItem } from "@/components/networking";
 import VectorStoreForm from "./VectorStoreForm";
 
-vi.mock("../networking");
+vi.mock("@/components/networking");
 
 describe("VectorStoreForm", () => {
   it("should render the form when visible", () => {

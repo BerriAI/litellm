@@ -2,11 +2,11 @@ import React, { useState, useEffect } from "react";
 import { Icon, Button, Col, Text, Grid } from "@tremor/react";
 import { RefreshIcon } from "@heroicons/react/outline";
 import TagInfoView from "./tag_info";
-import { modelInfoCall } from "../networking";
-import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";
-import { Tag } from "./types";
+import { modelInfoCall } from "@/components/networking";
+import { tagCreateCall, tagListCall, tagDeleteCall } from "@/components/networking";
+import { Tag } from "@/components/tag_management/types";
 import TagTable from "./TagTable";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import CreateTagModal from "./components/CreateTagModal";
 
 interface ModelInfo {

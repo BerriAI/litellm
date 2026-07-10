@@ -2,17 +2,17 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import VectorStoreTable from "./VectorStoreTable";
-import { VectorStore } from "./types";
+import { VectorStore } from "@/components/vector_store_management/types";
 
 // Mock dependencies
 const mockGetProviderLogoAndName = vi.fn();
 const mockTableIconActionButton = vi.fn();
 
-vi.mock("../provider_info_helpers", () => ({
+vi.mock("@/components/provider_info_helpers", () => ({
   getProviderLogoAndName: (...args: any[]) => mockGetProviderLogoAndName(...args),
 }));
 
-vi.mock("../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton", () => ({
+vi.mock("@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton", () => ({
   default: (props: any) => {
     mockTableIconActionButton(props);
     return (

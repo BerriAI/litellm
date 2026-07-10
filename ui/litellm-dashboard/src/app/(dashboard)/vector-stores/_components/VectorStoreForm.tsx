@@ -2,17 +2,17 @@ import React, { useState, useEffect } from "react";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Modal, Form, Select, Tooltip, Input, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { CredentialItem, vectorStoreCreateCall } from "../networking";
+import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
 import {
   VectorStoreProviders,
   vectorStoreProviderLogoMap,
   vectorStoreProviderMap,
   getProviderSpecificFields,
   VectorStoreFieldConfig,
-} from "../vector_store_providers";
+} from "@/components/vector_store_providers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface VectorStoreFormProps {
   isVisible: boolean;

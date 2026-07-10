@@ -3,12 +3,17 @@ import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, Ta
 import { Form, Input, Select as Select2, Tooltip, Button as AntButton } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, CredentialItem } from "../networking";
-import { VectorStore } from "./types";
-import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
+import {
+  vectorStoreInfoCall,
+  vectorStoreUpdateCall,
+  credentialListCall,
+  CredentialItem,
+} from "@/components/networking";
+import { VectorStore } from "@/components/vector_store_management/types";
+import { Providers, providerLogoMap, provider_map } from "@/components/provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import VectorStoreTester from "./VectorStoreTester";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
