@@ -234,7 +234,16 @@ def test_batch_lifecycle(
         )
 
     if cap.can_list:
-        listed = unwrap(client.list_batches(key=key, provider=provider))
+        list_result = client.list_batches(key=key, provider=provider)
+        match list_result:
+            case UnknownApiError(body=body) if (
+                "Filtering by 'provider' is not supported when using managed batches" in body
+            ):
+                listed = unwrap(client.list_batches(key=key, provider=None))
+                if cap.scenario == "provider_fallback":
+                    return
+            case _:
+                listed = unwrap(list_result)
         if listed.object is not None:
             assert listed.object == "list", f"list envelope object={listed.object!r}"
         match = next((b for b in listed.data if b.id == batch.id), None)

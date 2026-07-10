@@ -6,6 +6,7 @@ llm-only key hitting a management route).
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from e2e_gateway import Gateway, build_gateway
@@ -43,6 +44,8 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+_TEAM_READY_ATTEMPTS = 15
+_TEAM_READY_SLEEP_SECONDS = 0.4
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +56,6 @@ class ManagementClient:
         return self.gateway.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
     def update_key_models(self, key: str, models: list[str]) -> None:
-        import time
-
         last: Result[NoBody] | None = None
         for attempt in range(5):
             last = self.gateway.transport.post(
@@ -99,7 +100,7 @@ class ManagementClient:
         ).total_count
 
     def create_team(self, body: TeamNewBody) -> str:
-        return unwrap(
+        team_id = unwrap(
             self.gateway.transport.post(
                 "/team/new",
                 headers=self.gateway.transport.master,
@@ -107,6 +108,8 @@ class ManagementClient:
                 response_type=TeamNewResponse,
             )
         ).team_id
+        self._wait_for_team(team_id)
+        return team_id
 
     def delete_team(self, team_id: str) -> None:
         _ = self.gateway.transport.post(
@@ -129,15 +132,33 @@ class ManagementClient:
     def team_info_status(self, team_id: str) -> ProbeResult:
         return self.gateway.transport.probe("/team/info", params=TeamInfoParams(team_id=team_id))
 
+    def _wait_for_team(self, team_id: str) -> None:
+        for _ in range(_TEAM_READY_ATTEMPTS):
+            if self.team_info_status(team_id).healthy:
+                return
+            time.sleep(_TEAM_READY_SLEEP_SECONDS)
+
     def add_team_member(self, team_id: str, user_id: str) -> None:
-        _ = unwrap(
-            self.gateway.transport.post(
+        last: Result[NoBody] | None = None
+        for attempt in range(_TEAM_READY_ATTEMPTS):
+            last = self.gateway.transport.post(
                 "/team/member_add",
                 headers=self.gateway.transport.master,
                 json=TeamMemberAddBody(team_id=team_id, member=TeamMemberEntry(role="user", user_id=user_id)),
                 response_type=NoBody,
             )
-        )
+            match last:
+                case Success():
+                    return
+                case UnknownApiError(body=body) if (
+                    "doesn't exist" in body and attempt + 1 < _TEAM_READY_ATTEMPTS
+                ):
+                    time.sleep(_TEAM_READY_SLEEP_SECONDS)
+                    continue
+                case _:
+                    break
+        assert last is not None
+        _ = unwrap(last)
 
     def delete_team_member(self, team_id: str, user_id: str) -> None:
         _ = unwrap(
