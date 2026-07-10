@@ -77,6 +77,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
+  const [removeStoredApp, setRemoveStoredApp] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
@@ -865,6 +866,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         payload.credentials = credentialsPayload;
       }
 
+      // Explicit removal of a saved app for the client-forwarded modes. Blank fields are the
+      // keep-existing convention (the backend merges partial credential updates), so removal must be
+      // an explicit-null write: encrypt skips nulls and the merge overrides the stored keys, which
+      // returns the server to dynamic client registration.
+      if (removeStoredApp && isClientForwardedTokenMode(restValues.auth_type)) {
+        payload.credentials = { client_id: null, client_secret: null };
+      }
+
       const updated = await updateMCPServer(accessToken, payload);
 
       // Persist the token staged via "Authorize & Fetch" (mirrors the create flow's
@@ -1051,6 +1060,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     error: oauthError,
                     tokenResponse: oauthTokenResponse,
                   }}
+                  isEditing
+                  removeStoredApp={removeStoredApp}
+                  onRemoveStoredAppChange={setRemoveStoredApp}
                 />
               </>
             )}

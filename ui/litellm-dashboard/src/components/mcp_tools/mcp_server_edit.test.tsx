@@ -1400,7 +1400,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
       const user = userEvent.setup({ delay: null });
       await user.type(
-        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+        screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)"),
         "org-app-client-id",
       );
       await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
@@ -1444,7 +1444,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
       const user = userEvent.setup({ delay: null });
       await user.type(
-        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+        screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)"),
         "org-app-client-id",
       );
       await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
@@ -1476,6 +1476,42 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       expect(JSON.stringify(payload)).not.toContain("cf-tok");
     },
   );
+
+  it("sends an explicit-null credential write when removing the saved app for true_passthrough", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // Blank fields keep the stored app (the backend merges partial credential updates), so the
+    // edit form states that convention and removal is an explicit checkbox that saves nulls.
+    expect(screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Remove the saved OAuth app on save/,
+      }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials).toEqual({ client_id: null, client_secret: null });
+  });
 
   it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
     // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
