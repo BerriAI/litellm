@@ -4,9 +4,7 @@ import pytest
 import ast
 import ast
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from litellm import Router
 
 
@@ -39,23 +37,15 @@ class TestRouterIndexManagement:
         }
 
         # Remove one of the duplicate gpt-5.5 deployments
-        router._update_deployment_indices_after_removal(
-            model_id="model-2", removal_idx=1
-        )
+        router._update_deployment_indices_after_removal(model_id="model-2", removal_idx=1)
 
         # Verify indices are shifted correctly
         assert router.model_name_to_deployment_indices["gpt-3.5"] == [0]
-        assert router.model_name_to_deployment_indices["gpt-5.5"] == [
-            1
-        ]  # was [1,2], removed 1, shifted 2->1
-        assert router.model_name_to_deployment_indices["claude"] == [
-            2
-        ]  # was [3], shifted to [2]
+        assert router.model_name_to_deployment_indices["gpt-5.5"] == [1]  # was [1,2], removed 1, shifted 2->1
+        assert router.model_name_to_deployment_indices["claude"] == [2]  # was [3], shifted to [2]
 
         # Remove the last gpt-5.5 deployment
-        router._update_deployment_indices_after_removal(
-            model_id="model-3", removal_idx=1
-        )
+        router._update_deployment_indices_after_removal(model_id="model-3", removal_idx=1)
 
         # Verify gpt-5.5 is removed from dict when no deployments remain
         assert "gpt-5.5" not in router.model_name_to_deployment_indices
@@ -144,9 +134,7 @@ class TestRouterIndexManagement:
         router._update_team_model_index(model, 2)
         assert router.team_model_to_deployment_indices[("team-abc", "gpt-5.5")] == [0, 2]
 
-        router._update_team_model_index(
-            {"model_name": "x", "model_info": {"id": "dep-2"}}, 5
-        )
+        router._update_team_model_index({"model_name": "x", "model_info": {"id": "dep-2"}}, 5)
         assert router.team_model_to_deployment_indices == {
             ("team-abc", "gpt-5.5"): [0, 2],
         }
@@ -245,6 +233,7 @@ class TestRouterIndexManagement:
         ALLOWED_METHODS = [
             "_get_deployment_by_litellm_model",  # Edge case: lookup by litellm_params.model (not indexed)
             "_finalize_adaptive_router_if_configured",  # Init-time prefix scan for "auto_router/adaptive_router" (no index for prefix match)
+            "re_register_deployments_in_model_cost",  # Replays registration for every deployment after a cost-map reload (inherently O(n) over all deployments)
         ]
 
         # Get path to router.py
@@ -303,15 +292,10 @@ class TestRouterIndexManagement:
 
         # Assert no violations
         if violations:
-            error_msg = "\n".join(
-                [
-                    f"  - {v['method']}() at line {v['line']}: {v['pattern']}"
-                    for v in violations
-                ]
-            )
+            error_msg = "\n".join([f"  - {v['method']}() at line {v['line']}: {v['pattern']}" for v in violations])
 
             pytest.fail(
-                f"\n{'='*70}\n"
+                f"\n{'=' * 70}\n"
                 f"Found O(n) linear scan pattern in router.py:\n\n"
                 f"{error_msg}\n\n"
                 f"These methods should use index maps instead:\n"
@@ -319,13 +303,13 @@ class TestRouterIndexManagement:
                 f"  - model_name_to_deployment_indices (for model_name lookups)\n\n"
                 f"If a method legitimately needs O(n) iteration, add it to\n"
                 f"ALLOWED_METHODS in this test method.\n"
-                f"{'='*70}\n"
+                f"{'=' * 70}\n"
             )
 
     def test_model_names_is_set(self):
         """Verify that model_names uses a set for O(1) lookups, not a list (O(n))"""
         router = Router(model_list=[])
 
-        assert isinstance(
-            router.model_names, set
-        ), f"model_names should be a set for O(1) lookups, but got {type(router.model_names)}"
+        assert isinstance(router.model_names, set), (
+            f"model_names should be a set for O(1) lookups, but got {type(router.model_names)}"
+        )
