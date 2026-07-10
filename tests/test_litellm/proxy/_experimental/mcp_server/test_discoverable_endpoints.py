@@ -665,6 +665,94 @@ async def test_register_client_persists_dcr_client_identity():
     mock_update_server.assert_called_once()
 
 
+async def _register_persistence_attempted_for_auth_type(auth_type: MCPAuth) -> bool:
+    """Run register_client_with_server with persist_credentials=True for a server of ``auth_type``
+    and report whether the DCR result was persisted onto the server row. The client-forwarded token
+    modes must skip the persist even on the admin path: writing it stamps oauth2_flow and a
+    client_id onto a server whose contract is that the gateway stores nothing, which makes a fresh
+    pass-through server read as gateway-authorized. The upstream registration must still be relayed
+    to the browser either way, since the caller needs the minted client to run its own flow."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="pt_server",
+        name="pt_server",
+        server_name="pt_server",
+        alias="pt_server",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+        registration_url="https://provider.example/oauth/register",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "client_id": "generated-client",
+        "client_secret": "generated-secret",
+        "token_endpoint_auth_method": "none",
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    mock_update = AsyncMock(return_value=MagicMock())
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
+        ),
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=mock_update),
+        patch.object(global_mcp_server_manager, "update_server", new=AsyncMock()),
+    ):
+        response = await register_client_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_name="Litellm Proxy",
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            token_endpoint_auth_method="none",
+            persist_credentials=True,
+        )
+
+    assert json.loads(response.body.decode("utf-8")) == mock_response.json.return_value
+    return mock_update.await_count > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+async def test_register_client_does_not_persist_for_client_forwarded_modes(auth_type):
+    """The admin Authorize path (persist_credentials=True) must not write the DCR client onto a
+    true_passthrough / oauth_delegate server row: the browser still receives the registration, but
+    the gateway keeps no OAuth client identity for these modes."""
+    assert await _register_persistence_attempted_for_auth_type(auth_type) is False
+
+
+@pytest.mark.asyncio
+async def test_register_client_persist_discriminator_oauth2_persists():
+    """Guard the no-persist assertion above against vacuity: the same helper run against a genuine
+    oauth2 server DOES persist, so a regression that silently disables persistence everywhere (or a
+    helper that never reaches the persist) fails here instead of passing both."""
+    assert await _register_persistence_attempted_for_auth_type(MCPAuth.oauth2) is True
+
+
 @pytest.mark.asyncio
 async def test_register_client_does_not_clobber_token_url_when_absent():
     """When the in-memory server has no token_url, the DCR persist must omit it from the
