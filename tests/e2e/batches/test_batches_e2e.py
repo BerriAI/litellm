@@ -237,18 +237,30 @@ def test_batch_lifecycle(
 
     if cap.can_list:
         list_result = client.list_batches(key=key, provider=provider)
+        managed_filter_unsupported = False
         match list_result:
             case UnknownApiError(body=body) if (
                 "Filtering by 'provider' is not supported when using managed batches" in body
             ):
-                if cap.scenario == "provider_fallback":
-                    return
+                managed_filter_unsupported = True
                 listed = unwrap(client.list_batches(key=key, provider=None))
             case _:
                 listed = unwrap(list_result)
         if listed.object is not None:
             assert listed.object == "list", f"list envelope object={listed.object!r}"
         match = next((b for b in listed.data if b.id == batch.id), None)
+        if (
+            match is None
+            and managed_filter_unsupported
+            and cap.scenario == "provider_fallback"
+        ):
+            # provider_fallback keeps the provider's raw batch id (not re-encoded
+            # into a managed/proxy id). When the gateway rejects provider-scoped
+            # list, the only available list is the unfiltered managed view, which
+            # does not index raw provider ids. Membership cannot be asserted here;
+            # create + retrieve (and raw_id_matches_provider above) already pin
+            # routing for this scenario.
+            return
         assert match is not None, "created batch absent from list"
         assert match.object == "batch"
 
