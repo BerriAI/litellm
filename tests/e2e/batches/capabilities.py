@@ -1,17 +1,4 @@
-"""The declarative provider x routing-scenario matrix the lifecycle test runs.
-
-One Capability per supported (provider, scenario) pair, so the parametrized test
-has no dead/skipped cells. `provider` is litellm's custom_llm_provider, used to
-route provider-fallback calls to /{provider}/v1/... and to assert the raw batch id
-shape (the only scenario whose id is not re-encoded by the proxy). Operations that
-a provider does not support (Bedrock: no cancel, no list) are gated per row.
-
-Credential refs use ``os.environ/NAME`` so the proxy loads secrets from its own
-process env (docker compose env_file, or K8s/EKS secret mounts). Field names match
-what the proxy keeps when resolving model credentials for files/batches
-(``aws_*`` + ``gcs_bucket_name`` / ``s3_bucket_name``), not the s3_* aliases the
-credential round-trip drops.
-"""
+"""Provider x routing-scenario matrix for the batches lifecycle e2e."""
 
 from __future__ import annotations
 
@@ -24,11 +11,6 @@ from models import LiteLLMParamsBody
 
 
 def _env_ref(*names: str) -> str:
-    """Pick the first set env var and return an ``os.environ/NAME`` ref for the proxy.
-
-    Docker/K8s may expose the batch bucket as either ``AWS_BATCH_S3_BUCKET`` or
-    ``AWS_S3_BUCKET_NAME``; the gateway must have the same name populated.
-    """
     for name in names:
         value = os.environ.get(name)
         if value is not None and value.strip() != "":
@@ -109,14 +91,6 @@ class Capability:
 
     @property
     def jsonl_model(self) -> str:
-        """Model name embedded in the uploaded JSONL ``body.model``.
-
-        Only the unified upload path rewrites JSONL on upload
-        (``target_model_names`` → ``llm_router.acreate_file`` →
-        ``replace_model_in_jsonl``), so that scenario can use the LiteLLM alias
-        and rely on the proxy to swap it to the deployment model. Every other
-        scenario uploads raw JSONL with no rewrite, so the provider's real
-        deployment name is required or create fails upstream validation."""
         return self.model if self.scenario == "unified" else self.raw_model
 
 
@@ -152,8 +126,6 @@ CAPABILITIES: tuple[Capability, ...] = tuple(
 
 
 def raw_id_matches_provider(provider: str, batch_id: str) -> bool:
-    """The provider-fallback path returns the provider's native batch id (unencoded),
-    so its shape discriminates which provider actually handled the batch."""
     if provider in ("openai", "azure"):
         return batch_id.startswith("batch")
     if provider == "vertex_ai":
@@ -191,12 +163,10 @@ def _b64_decode(value: str) -> str:
 
 
 def is_managed_id(id_str: str) -> bool:
-    """A litellm managed unified file/batch id base64-decodes to a litellm_proxy marker."""
     return _b64_decode(id_str).startswith("litellm_proxy")
 
 
 def is_model_encoded_id(id_str: str) -> bool:
-    """A model-encoded id keeps the provider prefix and base64-encodes litellm:<id>;model,<m>."""
     for prefix in ("file-", "batch_"):
         if id_str.startswith(prefix):
             decoded = _b64_decode(id_str[len(prefix) :])
