@@ -1099,16 +1099,6 @@
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageBarChart.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageLineChart.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageTable.tsx": {
     "no-nested-ternary": {
       "count": 1
