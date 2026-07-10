@@ -33,15 +33,18 @@ class SemanticToolFilterContextWindowError(Exception):
         )
 
 
-def _is_context_window_error(error: Optional[BaseException], depth: int = 5) -> bool:
+def _is_context_window_error(error: Optional[BaseException], max_depth: int = 5) -> bool:
     """Detect a context-window overflow anywhere in an exception's cause chain."""
-    if error is None or depth == 0:
-        return False
-    if isinstance(error, ContextWindowExceededError):
-        return True
-    if ExceptionCheckers.is_error_str_context_window_exceeded(str(error)):
-        return True
-    return _is_context_window_error(error.__cause__ or error.__context__, depth - 1)
+    current = error
+    for _ in range(max_depth):
+        if current is None:
+            return False
+        if isinstance(current, ContextWindowExceededError):
+            return True
+        if ExceptionCheckers.is_error_str_context_window_exceeded(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class SemanticMCPToolFilter:
