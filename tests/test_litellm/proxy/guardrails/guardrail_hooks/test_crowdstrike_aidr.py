@@ -93,9 +93,7 @@ async def test_apply_guardrail_request_blocked(
         ],
     }
     request_data = {"messages": inputs["structured_messages"]}
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -108,9 +106,7 @@ async def test_apply_guardrail_request_blocked(
             ),
         ),
     ) as mock_method:
-        with pytest.raises(
-            HTTPException, match="Violated CrowdStrike AIDR guardrail policy"
-        ):
+        with pytest.raises(HTTPException, match="Violated CrowdStrike AIDR guardrail policy"):
             await crowdstrike_aidr_guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -121,10 +117,7 @@ async def test_apply_guardrail_request_blocked(
         called_kwargs = mock_method.call_args.kwargs
         assert called_kwargs["json"]["event_type"] == "input"
         # Should include messages
-        assert (
-            called_kwargs["json"]["guard_input"]["messages"]
-            == inputs["structured_messages"]
-        )
+        assert called_kwargs["json"]["guard_input"]["messages"] == inputs["structured_messages"]
 
 
 @pytest.mark.asyncio
@@ -141,9 +134,7 @@ async def test_apply_guardrail_request_transformed(
         ],
     }
     request_data = {"messages": inputs["structured_messages"]}
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -179,10 +170,7 @@ async def test_apply_guardrail_request_transformed(
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["event_type"] == "input"
     # Should include messages
-    assert (
-        called_kwargs["json"]["guard_input"]["messages"]
-        == inputs["structured_messages"]
-    )
+    assert called_kwargs["json"]["guard_input"]["messages"] == inputs["structured_messages"]
     # Verify the transformed output
     assert result["texts"][0] == "Here is an SSN for one my employees: <US_SSN>"
 
@@ -196,9 +184,7 @@ async def test_apply_guardrail_request_ok(
         "structured_messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
     request_data = {"messages": inputs["structured_messages"]}
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -221,10 +207,7 @@ async def test_apply_guardrail_request_ok(
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["event_type"] == "input"
     # Should include messages
-    assert (
-        called_kwargs["json"]["guard_input"]["messages"]
-        == inputs["structured_messages"]
-    )
+    assert called_kwargs["json"]["guard_input"]["messages"] == inputs["structured_messages"]
     # Should return original inputs when not transformed
     assert result["texts"] == inputs["texts"]
 
@@ -252,9 +235,7 @@ async def test_apply_guardrail_response_blocked(
             {"role": "user", "content": "Hello"},
         ],
     }
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -272,9 +253,7 @@ async def test_apply_guardrail_response_blocked(
             ),
         ),
     ) as mock_method:
-        with pytest.raises(
-            HTTPException, match="Violated CrowdStrike AIDR guardrail policy"
-        ):
+        with pytest.raises(HTTPException, match="Violated CrowdStrike AIDR guardrail policy"):
             await crowdstrike_aidr_guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -305,9 +284,7 @@ async def test_apply_guardrail_response_transformed(
             {"role": "user", "content": "Hello"},
         ],
     }
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -375,9 +352,7 @@ async def test_apply_guardrail_response_ok(
             {"role": "user", "content": "Hello"},
         ],
     }
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -431,9 +406,7 @@ async def test_apply_guardrail_sends_user_id_model_and_extra_info(
             "user_api_key_user_email": "alice@example.com",
         },
     }
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -472,9 +445,7 @@ async def test_apply_guardrail_empty_extra_info_when_no_email(
             "user_api_key_user_email": None,
         },
     }
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -505,9 +476,7 @@ async def test_apply_guardrail_no_metadata_skips_user_fields(
         "structured_messages": [{"role": "user", "content": "Hello"}],
     }
     request_data = {"messages": inputs["structured_messages"]}
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -538,7 +507,12 @@ async def test_apply_guardrail_no_metadata_skips_user_fields(
         (["unexpected"], {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
         ({"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}, {"trace_id": "t1"}),
     ],
-    ids=["identity_in_metadata_llm_none", "identity_in_metadata_llm_user_dict", "identity_in_metadata_llm_non_mapping", "identity_in_litellm_metadata"],
+    ids=[
+        "identity_in_metadata_llm_none",
+        "identity_in_metadata_llm_user_dict",
+        "identity_in_metadata_llm_non_mapping",
+        "identity_in_litellm_metadata",
+    ],
 )
 async def test_apply_guardrail_reads_identity_from_either_metadata_bag(
     crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
@@ -556,9 +530,7 @@ async def test_apply_guardrail_reads_identity_from_either_metadata_bag(
         "litellm_metadata": litellm_metadata,
         "metadata": metadata,
     }
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -593,17 +565,13 @@ async def test_apply_guardrail_request_skipped_messages_stay_aligned(
             {"role": "user", "content": "Hello, help me with my task"},
             {
                 "role": "tool",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
             },
             {"role": "user", "content": "Here is my SSN: 078-05-1120"},
         ],
     }
     request_data = {"messages": inputs["structured_messages"]}
-    guardrail_endpoint = (
-        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
-    )
+    guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -645,3 +613,150 @@ async def test_apply_guardrail_request_skipped_messages_stay_aligned(
     assert result["texts"][1] == ""
     assert result["texts"][2] == "Here is my SSN: <US_SSN>"
     assert result["structured_messages"] == inputs["structured_messages"]
+
+
+def _guard_api_error_response(endpoint: str, status_code: int = 400) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        json={"error": "guard api error"},
+        request=httpx.Request(method="POST", url=endpoint),
+    )
+
+
+def _fail_open_guardrail() -> CrowdStrikeAIDRHandler:
+    return CrowdStrikeAIDRHandler(
+        mode="post_call",
+        guardrail_name="crowdstrike-aidr-guard",
+        api_key="pts_crowdstrike_tokenid",
+        api_base="https://api.crowdstrike.com/aidr/aiguard",
+        fail_on_error=False,
+    )
+
+
+def _malformed_inputs() -> GenericGuardrailAPIInputs:
+    return {
+        "texts": ["core dump: \x00\x01 raw bytes"],
+        "structured_messages": [{"role": "user", "content": "core dump: raw bytes"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fails_closed_on_guard_api_error(
+    crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
+) -> None:
+    inputs = _malformed_inputs()
+    request_data = {"messages": inputs["structured_messages"]}
+    endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=_guard_api_error_response(endpoint, status_code=503),
+    ):
+        with pytest.raises(httpx.HTTPStatusError):
+            await crowdstrike_aidr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fails_closed_on_4xx_even_when_fail_open() -> None:
+    guardrail = _fail_open_guardrail()
+    inputs = _malformed_inputs()
+    request_data = {"messages": inputs["structured_messages"]}
+    endpoint = f"{guardrail.api_base}/v1/guard_chat_completions"
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=_guard_api_error_response(endpoint, status_code=400),
+    ):
+        with pytest.raises(httpx.HTTPStatusError):
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fails_open_on_server_error() -> None:
+    guardrail = _fail_open_guardrail()
+    inputs = _malformed_inputs()
+    request_data = {"messages": inputs["structured_messages"]}
+    endpoint = f"{guardrail.api_base}/v1/guard_chat_completions"
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=_guard_api_error_response(endpoint, status_code=503),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result == inputs
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fails_closed_on_connection_error(
+    crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
+) -> None:
+    inputs = _malformed_inputs()
+    request_data = {"messages": inputs["structured_messages"]}
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=httpx.ConnectError("connection refused"),
+    ):
+        with pytest.raises(httpx.ConnectError):
+            await crowdstrike_aidr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fails_open_on_connection_error() -> None:
+    guardrail = _fail_open_guardrail()
+    inputs = _malformed_inputs()
+    request_data = {"messages": inputs["structured_messages"]}
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=httpx.ConnectError("connection refused"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result == inputs
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_header_on_fail_open() -> None:
+    guardrail = _fail_open_guardrail()
+    inputs = _malformed_inputs()
+    request_data = {"messages": inputs["structured_messages"]}
+    endpoint = f"{guardrail.api_base}/v1/guard_chat_completions"
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=_guard_api_error_response(endpoint, status_code=503),
+        ),
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header,
+    ):
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    mock_header.assert_called_once_with(request_data=request_data, guardrail_name=guardrail.guardrail_name)

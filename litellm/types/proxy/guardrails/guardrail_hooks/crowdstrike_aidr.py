@@ -18,6 +18,11 @@ class CrowdStrikeAIDRGuardrailConfigModel(GuardrailConfigModel[CrowdStrikeAIDRGu
         default=None,
         description="The CrowdStrike AIDR API base URL. Reads from CS_AIDR_BASE_URL env var if None.",
     )
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description="When False, transport errors from the AIDR guard API (e.g. a 4xx/5xx rejecting "
+        "malformed input, as opposed to a policy block) fail open and the request proceeds unmodified.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
