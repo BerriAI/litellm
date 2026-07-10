@@ -174,14 +174,18 @@ def get_gemini_context_caching_min_tokens(model: str) -> int:
 
     Gemini rejects a cachedContents create below a per-model floor with a 400, so
     the caller skips caching below this value. Figures from
-    https://ai.google.dev/gemini-api/docs/caching (Gemini 2.5 -> 2048, Gemini 3.x
-    -> 4096). Unknown Gemini models default to the highest known floor so a create
-    is never attempted below the real minimum.
+    https://ai.google.dev/gemini-api/docs/caching (Gemini 1.5 -> 32768, Gemini 2.5
+    -> 2048, Gemini 3.x -> 4096). Unknown Gemini models default to the highest
+    known floor so a create is never attempted below the real minimum.
     """
     model_lower = model.lower()
+    if "gemini-1.5" in model_lower or "gemini-1-5" in model_lower:
+        return 32768
     if "gemini-2.5" in model_lower or "gemini-2-5" in model_lower:
         return 2048
-    return 4096
+    if "gemini-3" in model_lower:
+        return 4096
+    return 32768
 
 
 def separate_cached_messages(

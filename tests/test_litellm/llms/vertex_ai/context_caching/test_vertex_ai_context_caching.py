@@ -1407,6 +1407,7 @@ class TestContextCachingEndpoints:
             ("gemini-3.5-flash", 4096),
             ("gemini/gemini-3.5-flash", 4096),
             ("gemini-3.1-pro-preview", 4096),
+            ("gemini-1.5-pro", 32768),
             ("gemini-2.5-flash", 2048),
             ("gemini-2.5-pro", 2048),
         ],

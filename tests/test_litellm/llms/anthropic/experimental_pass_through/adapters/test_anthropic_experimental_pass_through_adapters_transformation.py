@@ -1431,6 +1431,21 @@ def test_should_add_cache_control_for_gemini_model():
         assert target.get("cache_control") == cache_control
 
 
+def test_cache_control_fallback_setattr():
+    """Verify cache_control is safely assigned to non-dict target objects using setattr."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    class MockTarget:
+        pass
+
+    target = MockTarget()
+    adapter._add_cache_control_if_applicable(
+        {"cache_control": cache_control}, target, "claude-3-opus-20240229"
+    )
+    assert getattr(target, "cache_control", None) == cache_control
+
+
 def test_cache_control_preserved_in_text_content_for_gemini():
     """cache_control must survive message translation for a Gemini target."""
     anthropic_messages = [
