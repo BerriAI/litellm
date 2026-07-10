@@ -257,7 +257,7 @@ def open_envelope(
     """
     if not is_envelope(candidate):
         return NotAnEnvelope()
-    if len(candidate) > MAX_ENVELOPE_BYTES:
+    if len(candidate.encode("utf-8", "surrogatepass")) > MAX_ENVELOPE_BYTES:
         return MalformedPayload()
     claims = _decode_claims(candidate.removeprefix(ENVELOPE_PREFIX), keys.signing_key)
     if not isinstance(claims, _EnvelopeClaims):

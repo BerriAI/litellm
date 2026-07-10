@@ -366,6 +366,27 @@ def test_size_cap_boundary_just_under_succeeds_and_just_over_fails():
     assert isinstance(opened, OpenedEnvelope)
 
 
+def test_open_size_guard_measures_bytes_not_characters():
+    """The open-side size guard must reject on UTF-8 byte length, matching mint's cap, so a
+    hostile multi-byte candidate whose character count is under the cap but whose byte count is
+    over it is rejected up front rather than reaching the expensive HMAC/decrypt path. Patching
+    _decode_claims to fail loudly proves the guard short-circuits before decode."""
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import envelope
+
+    multibyte_body = "é" * 7000  # 7000 chars, 14000 UTF-8 bytes
+    candidate = ENVELOPE_PREFIX + multibyte_body
+    assert len(candidate) <= MAX_ENVELOPE_BYTES
+    assert len(candidate.encode("utf-8")) > MAX_ENVELOPE_BYTES
+
+    with patch.object(envelope, "_decode_claims", side_effect=AssertionError("decode reached")) as decode:
+        result = open_envelope(candidate, _KEYS, _NOW)
+
+    assert isinstance(result, MalformedPayload)
+    decode.assert_not_called()
+
+
 def test_is_envelope_detects_only_prefixed_values():
     assert is_envelope(_sealed_token(_full_grant()))
     raw_jwt = jwt.encode({"sub": "user-123"}, _SIGNING_KEY, algorithm="HS256")
