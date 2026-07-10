@@ -96,7 +96,7 @@ SERVER_VAD_SETTINGS = rt_events.SessionProperties(
             noise_reduction=rt_events.InputAudioNoiseReduction(type="near_field"),
             turn_detection=rt_events.TurnDetection(
                 type="server_vad",
-                threshold=0.8,
+                threshold=0.5,
                 prefix_padding_ms=300,
                 silence_duration_ms=700,
             ),
