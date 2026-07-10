@@ -3866,6 +3866,7 @@ async def _bridge_register_response(server, request_payload, persist_credentials
     )
 
     mock_response = MagicMock()
+    mock_response.status_code = 201
     mock_response.json.return_value = {
         "client_id": "upstream-issued-client",
         "redirect_uris": request_payload.get("redirect_uris", []),
@@ -3932,6 +3933,94 @@ async def test_register_bridge_relay_requires_redirect_uris():
 
     assert exc.value.status_code == 400
     assert "redirect_uris" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_register_bridge_relay_surfaces_upstream_error_not_500():
+    """A bridge relay registration the upstream rejects must surface the upstream status and its
+    RFC 7591 error body to the client, not a bare 500 that hides the real reason."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    error_response = MagicMock()
+    error_response.status_code = 400
+    error_response.text = '{"error":"invalid_redirect_uri","error_description":"redirect_uri not allowed"}'
+    error_response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
+    )
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=error_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await register_client_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=_bridge_server(),
+                client_name="Claude",
+                grant_types=None,
+                response_types=None,
+                token_endpoint_auth_method=None,
+                client_redirect_uris=[_BRIDGE_CLIENT_REDIRECT],
+            )
+
+    assert exc.value.status_code == 400
+    assert "invalid_redirect_uri" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_register_non_bridge_upstream_error_still_raises_500():
+    """Non-bridge DCR keeps its pre-change behavior: raise_for_status propagates so the flag-off
+    contract is byte-identical; only the bridge relay arm relays the upstream status."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    error_response = MagicMock()
+    error_response.status_code = 400
+    error_response.text = '{"error":"invalid_client_metadata"}'
+    error_response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
+    )
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=error_response)
+
+    oauth2_server = _bridge_server(auth_type=MCPAuth.oauth2, dcr_bridge=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(httpx.HTTPStatusError):
+            await register_client_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=oauth2_server,
+                client_name="Claude",
+                grant_types=None,
+                response_types=None,
+                token_endpoint_auth_method=None,
+            )
 
 
 @pytest.mark.asyncio

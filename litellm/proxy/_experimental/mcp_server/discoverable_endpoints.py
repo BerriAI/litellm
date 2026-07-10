@@ -989,6 +989,21 @@ async def _persist_dcr_client_registration(
         return "failed"
 
 
+_MAX_UPSTREAM_ERROR_CHARS = 500
+
+
+def _safe_upstream_error_detail(response: httpx.Response) -> str:
+    """Bounded plaintext summary of an upstream registration failure for the client.
+
+    RFC 7591 error bodies are small JSON objects (``error`` / ``error_description``); relaying the
+    text lets the client read the real reason instead of a bare 500, and the length bound keeps a
+    hostile or oversized upstream body from bloating the gateway response."""
+    body = response.text
+    if not body:
+        return response.reason_phrase or "upstream registration failed"
+    return body[:_MAX_UPSTREAM_ERROR_CHARS]
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1050,6 +1065,8 @@ async def register_client_with_server(
             status_code=502,
             detail="MCP upstream registration endpoint returned no response",
         )
+    if bridge_relay and response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=_safe_upstream_error_detail(response))
     response.raise_for_status()
 
     token_response = response.json()
