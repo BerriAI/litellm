@@ -96,6 +96,31 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
 // edit forms so what gets wiped cannot drift.
 export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
 
+// The carve-out to the wipe above for the client-forwarded token modes: their onTokenReceived branch
+// never writes minted material into form.credentials, so for them the field only ever holds the
+// admin-DECLARED upstream app (persisted as server config since the modes joined
+// AUTH_TYPES_REQUIRING_CREDENTIALS), and an intra-mode identity change (e.g. a URL edit after
+// Authorize) must not silently discard it. Two guards make the preserve safe: it never applies when
+// auth_type itself changed (the previous mode's onTokenReceived may have written a fetched token or
+// DCR client into the same field, and those are minted for the old mode), and it only ever keeps the
+// declared-app keys, so token-shaped keys can never ride through a preserve. Shared by the create and
+// edit forms so the carve-out cannot drift.
+const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
+
+export const preservedDeclaredAppCredentials = (
+  authType: string | null | undefined,
+  authTypeChanged: boolean,
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined => {
+  if (!isClientForwardedTokenMode(authType) || authTypeChanged || !credentials) return undefined;
+  const kept = Object.fromEntries(
+    DECLARED_APP_CREDENTIAL_KEYS.filter((key) => typeof credentials[key] === "string" && credentials[key] !== "").map(
+      (key) => [key, credentials[key] as string],
+    ),
+  );
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
 // True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the
 // form's current identity no longer matches it. Every invalidation decision in both forms goes through
 // this single check: onValuesChange for user edits, and an explicit recheck after any programmatic
