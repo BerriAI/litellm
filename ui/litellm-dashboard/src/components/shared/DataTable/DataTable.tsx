@@ -36,10 +36,8 @@ import {
 import { cn } from "@/lib/cva.config";
 
 import "./columnMeta";
-import { DataTablePagination } from "./DataTablePagination";
+import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
 import type { ColumnPinnedSide, DataTableProps, DataTableSize, PaginationMode, SortingMode } from "./types";
-
-const DEFAULT_PAGE_SIZE_OPTIONS = [25, 50, 100];
 
 const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, [role=checkbox], [data-row-click-exempt]";
 
