@@ -119,17 +119,19 @@ class GraySwanGuardrail(CustomGuardrail):
             streaming_sampling_rate,
         )
 
-        supported_event_hooks = [
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
+            **kwargs,
+        )
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
-
-        super().__init__(
-            guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
-            **kwargs,
-        )
 
     # ------------------------------------------------------------------
     # Debug override to trace post_call issues

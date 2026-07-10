@@ -7,7 +7,7 @@
 import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Type, Union
 
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
@@ -26,6 +26,7 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
@@ -44,7 +45,16 @@ class AimGuardrailMissingSecrets(Exception):
 
 
 class AimGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         ssl_verify = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,

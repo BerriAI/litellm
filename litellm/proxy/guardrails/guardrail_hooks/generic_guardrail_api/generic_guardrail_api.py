@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Set
 
 import httpx
 
@@ -222,12 +222,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
         # Set supported event hooks
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.during_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
 
@@ -490,3 +485,11 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
 
         return GenericGuardrailAPIConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+        ]

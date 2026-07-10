@@ -179,12 +179,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=[
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.during_call,
-                GuardrailEventHooks.realtime_input_transcription,
-            ],
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
             **kwargs,
@@ -1900,3 +1895,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
         return LitellmContentFilterGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.realtime_input_transcription,
+        ]

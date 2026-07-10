@@ -303,6 +303,18 @@ class CustomGuardrail(CustomLogger):
         """
         return None
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> Optional[List[GuardrailEventHooks]]:
+        """
+        Returns the event hooks this guardrail supports, for the UI to render.
+
+        Subclasses should override to return their supported hooks list. When a
+        subclass returns None, the endpoint omits it from the per-provider map
+        and the UI is expected to fall back to the global `supported_modes`
+        list client-side.
+        """
+        return None
+
     def _validate_event_hook(
         self,
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]],

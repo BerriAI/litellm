@@ -224,18 +224,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # Register broadly; runtime filtering happens in ``_surface_matches``.
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.during_mcp_call,
-        ]
-
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
 
@@ -2133,3 +2124,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         )
 
         return CiscoAIDefenseGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]

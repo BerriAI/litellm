@@ -40,6 +40,7 @@ interface GuardrailSettings {
   supported_entities: string[];
   supported_actions: string[];
   supported_modes: string[];
+  supported_modes_by_provider?: Record<string, string[]>;
   pii_entity_categories: Array<{
     category: string;
     entities: string[];
@@ -419,7 +420,14 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           rules={[{ required: true, message: "Please select a mode" }]}
         >
           <Select>
-            {guardrailSettings?.supported_modes?.map((mode) => (
+            {(() => {
+              const providerKey = selectedProvider ? guardrail_provider_map[selectedProvider]?.toLowerCase() : null;
+              const perProvider =
+                providerKey && guardrailSettings?.supported_modes_by_provider
+                  ? guardrailSettings.supported_modes_by_provider[providerKey]
+                  : undefined;
+              return perProvider ?? guardrailSettings?.supported_modes;
+            })()?.map((mode) => (
               <Option key={mode} value={mode}>
                 {mode}
               </Option>

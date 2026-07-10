@@ -13,6 +13,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
@@ -42,6 +43,13 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
     default_severity_threshold: int = 2
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         guardrail_name: str,
@@ -56,6 +64,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             AzureTextModerationRequestBodyOptionalParams,
         )
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
         # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
