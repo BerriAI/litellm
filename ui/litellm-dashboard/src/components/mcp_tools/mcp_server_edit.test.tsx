@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import MCPServerEdit from "./mcp_server_edit";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -1374,6 +1375,51 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
       expect(payload.credentials).toBeUndefined();
       expect(JSON.stringify(payload)).not.toContain("cf-tok");
+    },
+  );
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "persists admin-entered OAuth app credentials in the update payload for the %s mode",
+    async (authType) => {
+      mockOauth.tokenResponse = { access_token: "cf-tok", expires_in: 1800, token_type: "bearer" };
+      vi.mocked(networking.updateMCPServer).mockResolvedValue({
+        ...interactiveOAuthServer,
+        auth_type: authType,
+      });
+
+      render(
+        <MCPServerEdit
+          mcpServer={{ ...interactiveOAuthServer, auth_type: authType }}
+          accessToken="access-token"
+          userID="user-1"
+          onCancel={vi.fn()}
+          onSuccess={vi.fn()}
+          availableAccessGroups={[]}
+        />,
+      );
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+        "org-app-client-id",
+      );
+      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+
+      await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+
+      // The declared app is config and persists onto the row; the browser-held token still never
+      // reaches the payload or the per-user credential store.
+      expect(payload.credentials).toMatchObject({
+        client_id: "org-app-client-id",
+        client_secret: "org-app-secret",
+      });
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
+      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
     },
   );
 

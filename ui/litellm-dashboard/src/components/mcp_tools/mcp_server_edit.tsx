@@ -56,6 +56,8 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
   AUTH_TYPE.AWS_SIGV4,
+  AUTH_TYPE.TRUE_PASSTHROUGH,
+  AUTH_TYPE.OAUTH_DELEGATE,
 ];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
@@ -202,7 +204,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         };
         setToken(mcpServer.server_id, browserHeldToken, userID);
         NotificationsManager.success(
-          "Token held for this browser session. Tools can now be loaded and configured; nothing was saved to LiteLLM.",
+          "Token held for this browser session. Tools can now be loaded and configured; the token is not saved to LiteLLM.",
         );
         return;
       }
