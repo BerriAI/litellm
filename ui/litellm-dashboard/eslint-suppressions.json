@@ -4,6 +4,14 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/admin-panel/_components/AdminPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/api-reference/_components/APIReferenceView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -154,16 +162,6 @@
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsOverview.tsx": {
     "no-nested-ternary": {
       "count": 8
-    }
-  },
-  "src/app/(dashboard)/guardrails-monitor/_components/ScoreChart.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails-monitor/_components/ScoreChart.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails.ts": {
@@ -369,6 +367,22 @@
     }
   },
   "src/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/old-usage/_components/usage.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    },
+    "react-hooks/immutability": {
+      "count": 1
+    },
+    "react-hooks/purity": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/organizations/_components/organizations.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -649,6 +663,14 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
+    "no-nested-ternary": {
+      "count": 3
+    },
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/search-tools/_components/CreateSearchTools.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -844,14 +866,6 @@
     }
   },
   "src/components/AIHub/forms/MakeModelPublicForm.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/admin-panel/_components/AdminPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1520,14 +1534,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/components/guardrails.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2028,11 +2034,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/organizations/_components/organizations.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/page_utils.test.ts": {
     "max-nested-callbacks": {
       "count": 3
@@ -2368,17 +2369,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/old-usage/_components/usage.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/purity": {
       "count": 1
     }
   },
