@@ -62,8 +62,11 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
 
 
 def test_get_model_info_surfaces_mid_conversation_system_messages(local_model_cost_map):
-    info = litellm.get_model_info(model="eu.anthropic.claude-opus-4-8")
-    assert info["supports_mid_conversation_system_messages"] is True
+    bedrock_info = litellm.get_model_info(model="eu.anthropic.claude-opus-4-8")
+    anthropic_info = litellm.get_model_info(model="claude-opus-4-8")
+
+    assert bedrock_info["supports_mid_conversation_system_messages"] is True
+    assert anthropic_info["supports_mid_conversation_system_messages"] is None
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -4713,4 +4716,3 @@ class TestValidateEnvironmentTencent:
 
         assert result["keys_in_environment"] is False
         assert "TENCENT_API_KEY" in result["missing_keys"]
-

@@ -11719,7 +11719,6 @@
         "supports_output_config": true
     },
     "claude-opus-4-8": {
-        "supports_mid_conversation_system_messages": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
