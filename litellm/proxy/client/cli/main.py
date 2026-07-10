@@ -8,7 +8,7 @@ from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
-from .commands.auth import get_stored_api_key, login, logout, whoami
+from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
 from .commands.chat import chat
 from .commands.credentials import credentials
 from .commands.encryption import encryption
@@ -104,6 +104,8 @@ def version(ctx: click.Context):
 cli.add_command(login)
 cli.add_command(logout)
 cli.add_command(whoami)
+# Add the auth command group (e.g. `lite auth print-token`, used as Claude Code's apiKeyHelper)
+cli.add_command(auth_group, name="auth")
 # Add the models command group
 cli.add_command(models)
 # Add the credentials command group

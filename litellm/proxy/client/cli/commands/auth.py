@@ -379,7 +379,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
             return None
 
         # User has multiple teams - let them select
-        jwt_with_team = _handle_team_selection_during_polling(
+        team_selection_result = _handle_team_selection_during_polling(
             base_url=base_url,
             key_id=key_id,
             poll_secret=poll_secret,
@@ -387,9 +387,10 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
         )
 
         # Use the team-specific JWT if selection succeeded
-        if jwt_with_team:
+        if team_selection_result:
             return {
-                "api_key": jwt_with_team,
+                "api_key": team_selection_result["api_key"],
+                "refresh_token": team_selection_result.get("refresh_token"),
                 "user_id": user_id,
                 "teams": teams,
                 "team_id": None,  # Set by server in JWT
@@ -400,6 +401,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
 
     # JWT is ready (single team or team already selected)
     api_key = data.get("key")
+    refresh_token = data.get("refresh_token")
     user_id = data.get("user_id")
     teams = data.get("teams", [])
     team_id = data.get("team_id")
@@ -411,6 +413,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
     if api_key:
         return {
             "api_key": api_key,
+            "refresh_token": refresh_token,
             "user_id": user_id,
             "teams": teams,
             "team_id": team_id,
@@ -421,7 +424,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
 
 def _handle_team_selection_during_polling(
     base_url: str, key_id: str, poll_secret: str, teams: List[Dict[str, Any]]
-) -> Optional[str]:
+) -> Optional[Dict[str, Any]]:
     """
     Handle team selection and re-poll with selected team_id.
 
@@ -429,7 +432,8 @@ def _handle_team_selection_during_polling(
         teams: List of team IDs (strings)
 
     Returns:
-        The JWT token with the selected team, or None if selection was skipped
+        Dict with "api_key" (JWT) and "refresh_token" for the selected team,
+        or None if selection was skipped
     """
     if not teams:
         click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
@@ -459,7 +463,7 @@ def _handle_team_selection_during_polling(
     jwt_token = data.get("key")
     if jwt_token:
         click.echo(f"✅ Successfully generated JWT for team: {team_id}")
-        return jwt_token
+        return {"api_key": jwt_token, "refresh_token": data.get("refresh_token")}
 
     return None
 
@@ -549,6 +553,7 @@ def login(ctx: click.Context):
 
         if auth_result:
             api_key = auth_result["api_key"]
+            refresh_token = auth_result.get("refresh_token")
             user_id = auth_result["user_id"]
 
             # Save token data. base_url is stored so we can verify origin
@@ -557,6 +562,7 @@ def login(ctx: click.Context):
                 {
                     "base_url": base_url.rstrip("/"),
                     "key": api_key,
+                    "refresh_token": refresh_token,
                     "user_id": user_id or "cli-user",
                     "user_email": "unknown",
                     "user_role": "cli",
@@ -587,10 +593,100 @@ def login(ctx: click.Context):
 
 
 @click.command(name="logout")
-def logout():
+@click.pass_context
+def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
+    token_data = load_token()
+    refresh_token = token_data.get("refresh_token") if token_data else None
+    if refresh_token:
+        base_url = ctx.obj["base_url"]
+        try:
+            requests.post(
+                f"{base_url}/sso/cli/logout",
+                headers={"Authorization": f"Bearer {refresh_token}"},
+                timeout=5,
+            )
+        except requests.RequestException:
+            # Best-effort: still clear the local file even if the proxy is
+            # unreachable, so `lite logout` always leaves the machine clean.
+            pass
     clear_token()
     click.echo("✅ Logged out successfully. Authentication token cleared.")
+
+
+def _cached_jwt_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.1) -> bool:
+    """Best-effort local freshness check so print-token can skip the network
+    round trip when the cached JWT still has meaningful life left. Mirrors
+    the age heuristic already used by `whoami`."""
+    timestamp = token_data.get("timestamp")
+    if not isinstance(timestamp, (int, float)):
+        return False
+    age_hours = (time.time() - timestamp) / 3600
+    return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)
+
+
+def _refresh_cli_token(base_url: str, refresh_token: str) -> Optional[Dict[str, Any]]:
+    """Exchange a CLI refresh token for a fresh JWT + refresh token pair,
+    persisting the result. Returns the updated token data, or None on any
+    failure (network error, expired/revoked refresh token)."""
+    try:
+        response = requests.post(
+            f"{base_url}/sso/cli/refresh",
+            headers={"Authorization": f"Bearer {refresh_token}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    data = response.json()
+    new_key = data.get("key")
+    new_refresh_token = data.get("refresh_token")
+    if not new_key or not new_refresh_token:
+        return None
+
+    token_data = load_token() or {}
+    token_data.update(
+        {
+            "base_url": base_url.rstrip("/"),
+            "key": new_key,
+            "refresh_token": new_refresh_token,
+            "timestamp": time.time(),
+        }
+    )
+    save_token(token_data)
+    return token_data
+
+
+@click.command(name="print-token")
+@click.pass_context
+def print_token(ctx: click.Context):
+    """Print a valid API token for this proxy, silently refreshing it first if needed.
+
+    Designed to be used as Claude Code's `apiKeyHelper`
+    (https://docs.claude.com/en/docs/claude-code/settings): stdout must
+    contain only the token, so all diagnostics go to stderr.
+    """
+    base_url = ctx.obj["base_url"]
+    token_data = load_token()
+    if not token_data or token_data.get("base_url") != base_url.rstrip("/"):
+        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    refresh_token = token_data.get("refresh_token")
+    if refresh_token and not _cached_jwt_still_fresh(token_data):
+        refreshed = _refresh_cli_token(base_url=base_url, refresh_token=refresh_token)
+        if refreshed is None:
+            click.echo("Token refresh failed. Run 'lite login' again.", err=True)
+            sys.exit(1)
+        token_data = refreshed
+
+    api_key = token_data.get("key")
+    if not api_key:
+        click.echo("No token available. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    click.echo(api_key)
 
 
 @click.command(name="whoami")
@@ -616,8 +712,16 @@ def whoami():
         click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
 
 
+@click.group(name="auth")
+def auth_group():
+    """Manage CLI authentication (apiKeyHelper support, etc.)"""
+
+
+auth_group.add_command(print_token)
+
+
 # Export functions for use by other CLI commands
-__all__ = ["login", "logout", "whoami", "prompt_team_selection"]
+__all__ = ["login", "logout", "print_token", "auth_group", "whoami", "prompt_team_selection"]
 
 # Export individual commands instead of grouping them
 # login, logout, and whoami will be added as top-level commands
