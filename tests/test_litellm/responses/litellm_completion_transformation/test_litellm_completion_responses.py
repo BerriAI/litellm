@@ -2673,6 +2673,22 @@ class TestCacheControlPreservation:
         assert messages[0]["tool_calls"][0]["id"] == "call_xyz789"
         assert messages[0]["tool_calls"][0]["function"]["name"] == "get_weather"
 
+    def test_is_input_item_object_type_checks(self):
+        """Test _is_input_item_tool_call_output and _is_input_item_function_call with custom objects."""
+        class MockObj:
+            def __init__(self, t):
+                self.type = t
+
+        # Test tool call output
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(MockObj("function_call_output")) is True
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(MockObj("custom_tool_call_output")) is True
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(MockObj("text")) is False
+
+        # Test function call
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(MockObj("function_call")) is True
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(MockObj("custom_tool_call")) is True
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(MockObj("text")) is False
+
 
 def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that

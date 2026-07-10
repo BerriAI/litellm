@@ -1,9 +1,31 @@
 import pytest
 from litellm.llms.vertex_ai.context_caching.transformation import (
     extract_ttl_from_cached_messages,
+    get_gemini_context_caching_min_tokens,
     _is_valid_ttl_format,
+    _normalize_ttl_to_seconds,
     transform_openai_messages_to_gemini_context_caching,
 )
+
+
+class TestGeminiContextCachingMinTokens:
+    """Per-model floor for explicit Gemini context cache creation."""
+
+    @pytest.mark.parametrize(
+        "model, expected",
+        [
+            ("gemini-2.5-flash", 2048),
+            ("gemini-2.5-pro", 2048),
+            ("gemini/gemini-2.5-pro", 2048),
+            ("vertex_ai/gemini-2.5-flash", 2048),
+            ("gemini-3.5-flash", 4096),
+            ("gemini-3.1-pro-preview", 4096),
+            ("gemini/gemini-3.5-flash", 4096),
+            ("gemini-1.5-pro", 4096),
+        ],
+    )
+    def test_min_tokens_by_model(self, model, expected):
+        assert get_gemini_context_caching_min_tokens(model) == expected
 
 
 class TestTTLValidation:
@@ -35,6 +57,65 @@ class TestTTLValidation:
 
         for ttl in invalid_ttls:
             assert not _is_valid_ttl_format(ttl), f"TTL {ttl} should be invalid"
+
+
+class TestTTLNormalization:
+    """Normalization of anthropic-style TTL units into Gemini's seconds format."""
+
+    @pytest.mark.parametrize(
+        "ttl, expected",
+        [
+            ("3600s", "3600s"),
+            ("1.5s", "1.5s"),
+            ("5m", "300s"),
+            ("90m", "5400s"),
+            ("1h", "3600s"),
+            ("2h", "7200s"),
+            ("0.5h", "1800s"),
+        ],
+    )
+    def test_normalizes_units_to_seconds(self, ttl, expected):
+        assert _normalize_ttl_to_seconds(ttl) == expected
+
+    @pytest.mark.parametrize(
+        "ttl",
+        ["invalid", "", "0m", "0h", "-1h", "5d", "1 h", "m", None, 123, 3600],
+    )
+    def test_rejects_unparseable_ttl(self, ttl):
+        assert _normalize_ttl_to_seconds(ttl) is None
+
+    def test_extract_ttl_normalizes_anthropic_hour_unit(self):
+        """Claude Code / Anthropic send "1h"; Gemini must receive "3600s"."""
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cached",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            }
+        ]
+
+        assert extract_ttl_from_cached_messages(messages) == "3600s"
+
+    def test_extract_ttl_normalizes_anthropic_minute_unit(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cached",
+                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                    }
+                ],
+            }
+        ]
+
+        assert extract_ttl_from_cached_messages(messages) == "300s"
 
 
 class TestTTLExtraction:

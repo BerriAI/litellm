@@ -305,11 +305,17 @@ class LiteLLMAnthropicMessagesAdapter:
             target: Dict or TypedDict to add cache_control to
             model: Model name to check if cache_control should be preserved
         """
+        from litellm.utils import _is_gemini_model
+
         # TypedDict objects are dicts at runtime, so .get() works
         cache_control = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and (self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)):
+        if cache_control and model and (
+            self.is_anthropic_claude_model(model)
+            or self.is_bedrock_arn_model(model)
+            or _is_gemini_model(model, None)
+        ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
