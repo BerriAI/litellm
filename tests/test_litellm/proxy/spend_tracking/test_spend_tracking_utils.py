@@ -1265,6 +1265,42 @@ def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_redacts_all_prompt_carrying_fields_when_flag_false(
+    mock_should_store,
+):
+    """
+    match_details and classification are declared as structured metadata but
+    in-tree writers (litellm_content_filter, block_code_execution) inline
+    raw prompt content into them, so they leak the same way
+    guardrail_request/guardrail_response do. Redaction must cover all four.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "demo-echo-guard",
+            "guardrail_status": "success",
+            "guardrail_request": {"messages": [{"role": "user", "content": "hi"}]},
+            "guardrail_response": {"evaluated_input": "hi"},
+            "match_details": [{"type": "pattern", "snippet": "hi", "action_taken": "log"}],
+            "classification": {"intent": "x", "evidence": [{"match": "hi"}]},
+            "guardrail_action": "NONE",
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["match_details"] == REDACTED_BY_LITELM_STRING
+    assert entry["classification"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "demo-echo-guard"
+    assert entry["guardrail_status"] == "success"
+    assert entry["guardrail_action"] == "NONE"
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
     mock_should_store,
 ):

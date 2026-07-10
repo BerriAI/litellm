@@ -887,13 +887,20 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in guardrail_information]
 
 
+_PROMPT_CARRYING_GUARDRAIL_FIELDS = (
+    "guardrail_request",
+    "guardrail_response",
+    "match_details",
+    "classification",
+)
+
+
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
     return {
         **entry,
-        **({"guardrail_request": REDACTED_BY_LITELM_STRING} if "guardrail_request" in entry else {}),
-        **({"guardrail_response": REDACTED_BY_LITELM_STRING} if "guardrail_response" in entry else {}),
+        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
     }
 
 

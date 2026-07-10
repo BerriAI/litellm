@@ -2729,10 +2729,10 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     confidence_score: Optional[float]
     """For LLM-judge guardrails: confidence score 0.0-1.0"""
 
-    classification: Optional[dict]
+    classification: Optional[Union[dict, str]]
     """For LLM-judge guardrails: structured classification output"""
 
-    match_details: Optional[List[dict]]
+    match_details: Optional[Union[List[dict], str]]
     """Detailed match information for each detected pattern"""
 
     patterns_checked: Optional[int]
