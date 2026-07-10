@@ -1998,6 +1998,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=False,
         description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
     )
+    forward_raw_authorization: bool = Field(
+        default=False,
+        description="If True, allows raw client Authorization forwarding when forward_headers is also enabled. Defaults to False to avoid forwarding the LiteLLM proxy key upstream; prefer x-pass-authorization for provider credentials.",
+    )
     cost_per_request: float = Field(
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",

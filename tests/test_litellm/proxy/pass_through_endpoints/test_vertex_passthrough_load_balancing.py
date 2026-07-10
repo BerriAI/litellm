@@ -486,9 +486,8 @@ def test_forward_headers_from_request_x_pass_prefix():
 
 def test_forward_headers_from_request_protected_headers_not_overwritten():
     """
-    Test that x-pass- headers whose stripped names resolve to credential or
-    protocol-level header names are silently dropped and do not overwrite
-    values already present in the outbound headers dict.
+    Test that x-pass- credential headers do not overwrite configured upstream
+    credential headers, while protocol-level headers are still blocked.
     """
     from litellm.passthrough.utils import BasePassthroughUtils
 
@@ -518,7 +517,7 @@ def test_forward_headers_from_request_protected_headers_not_overwritten():
         forward_headers=False,
     )
 
-    # Protected headers must retain the proxy-configured values
+    # Configured credential headers must retain their upstream values
     assert result["authorization"] == "Bearer proxy-upstream-key"
     assert result["api-key"] == "proxy-azure-key"
     assert result["x-api-key"] == "proxy-anthropic-key"
@@ -536,6 +535,127 @@ def test_forward_headers_from_request_protected_headers_not_overwritten():
 
     # Header name must be normalized to lowercase in output
     assert "Anthropic-Beta" not in result
+
+
+def test_forward_headers_strips_proxy_credentials_and_uses_x_pass_auth():
+    """
+    Generic passthrough routes authenticate the caller with proxy credential
+    headers; x-pass-* is the explicit way to send provider auth upstream.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "authorization": "Bearer sk-litellm-master",
+        "api-key": "proxy-api-key",
+        "x-api-key": "proxy-x-api-key",
+        "x-goog-api-key": "proxy-google-api-key",
+        "ocp-apim-subscription-key": "proxy-apim-key",
+        "x-litellm-api-key": "proxy-litellm-key",
+        "x-pass-authorization": "Bearer provider-oauth-token",
+        "x-pass-x-api-key": "provider-api-key",
+        "x-pass-anthropic-beta": "context-1m-2025-08-07",
+        "x-custom-header": "custom-value",
+        "content-length": "123",
+        "host": "proxy.example.com",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers={},
+        forward_headers=True,
+    )
+
+    assert result["authorization"] == "Bearer provider-oauth-token"
+    assert result["x-api-key"] == "provider-api-key"
+    assert result["anthropic-beta"] == "context-1m-2025-08-07"
+    assert result["x-custom-header"] == "custom-value"
+    assert "x-pass-authorization" not in result
+    assert "x-pass-x-api-key" not in result
+    assert "x-pass-anthropic-beta" not in result
+    assert "api-key" not in result
+    assert "x-goog-api-key" not in result
+    assert "ocp-apim-subscription-key" not in result
+    assert "x-litellm-api-key" not in result
+    assert "content-length" not in result
+    assert "host" not in result
+    assert result.get("authorization") != "Bearer sk-litellm-master"
+    assert result.get("x-api-key") != "proxy-x-api-key"
+
+
+def test_forward_headers_strips_configured_custom_proxy_key_header():
+    """
+    A custom general_settings.litellm_key_header_name is also a proxy credential
+    header and must not be raw-forwarded upstream.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+    from litellm.proxy import proxy_server
+
+    original_general_settings = getattr(proxy_server, "general_settings", None)
+    proxy_server.general_settings = {"litellm_key_header_name": "X-My-Tenant-Key"}
+    try:
+        result = BasePassthroughUtils.forward_headers_from_request(
+            request_headers={
+                "X-My-Tenant-Key": "sk-litellm-custom",
+                "x-custom-header": "custom-value",
+            },
+            headers={},
+            forward_headers=True,
+        )
+    finally:
+        proxy_server.general_settings = original_general_settings
+
+    assert "X-My-Tenant-Key" not in result
+    assert "x-my-tenant-key" not in result
+    assert result["x-custom-header"] == "custom-value"
+
+
+def test_forward_headers_can_forward_raw_authorization_with_explicit_opt_in():
+    """
+    Operators who intentionally used forward_headers=True to pass caller
+    Authorization upstream can restore that legacy behavior per endpoint.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "authorization": "Bearer upstream-caller-token",
+        "x-api-key": "proxy-x-api-key",
+        "x-custom-header": "custom-value",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers={},
+        forward_headers=True,
+        forward_raw_authorization=True,
+    )
+
+    assert result["authorization"] == "Bearer upstream-caller-token"
+    assert "x-api-key" not in result
+    assert result["x-custom-header"] == "custom-value"
+
+
+def test_forward_headers_x_pass_overrides_same_request_raw_header():
+    """
+    x-pass-* is the explicit override path for upstream headers from the same
+    client request. It should only lose to configured/signed upstream headers.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "Anthropic-Beta": "raw-beta",
+        "x-pass-anthropic-beta": "explicit-beta",
+        "x-request-id": "req-123",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers={},
+        forward_headers=True,
+    )
+
+    assert result["anthropic-beta"] == "explicit-beta"
+    assert "Anthropic-Beta" not in result
+    assert result["x-request-id"] == "req-123"
 
 
 def test_forward_headers_custom_wins_case_insensitive_over_request_authorization():
