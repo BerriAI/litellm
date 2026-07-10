@@ -2202,6 +2202,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator.sent_message_output_item_added_event = False
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
+        iterator._next_output_index = 0
+        iterator._message_output_index = None
+        iterator._reasoning_output_index = None
         iterator._cached_item_id = None
         iterator._cached_reasoning_item_id = None
         iterator._sent_reasoning_summary_part_added_event = False
@@ -2257,12 +2260,14 @@ class TestEnsureOutputItemContentPartAdded:
         assert iterator.sent_content_part_added_event is True
 
     def test_reasoning_then_text_emits_message_output_item(self):
-        """A text delta after reasoning must open a message item before output_text.delta."""
+        """A text delta after reasoning must open a message item before output_text.delta.
+        Reasoning must get output_index=0 and message must get output_index=1."""
         from litellm.types.llms.openai import ResponsesAPIStreamEvents
 
         iterator = self._make_iterator()
 
         iterator._ensure_output_item_for_chunk(self._make_reasoning_chunk())
+        reasoning_events = list(iterator._pending_response_events)
         iterator._pending_response_events.clear()
         iterator._ensure_output_item_for_chunk(self._make_text_chunk())
 
@@ -2272,6 +2277,10 @@ class TestEnsureOutputItemContentPartAdded:
         assert events[0].item.type == "message"
         assert events[1].type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
         assert events[1].item_id == events[0].item.id
+        reasoning_output_index = reasoning_events[0].output_index
+        message_output_index = events[0].output_index
+        assert reasoning_output_index != message_output_index
+        assert message_output_index == reasoning_output_index + 1
 
     def test_reasoning_delta_uses_stable_item_id_and_summary_index(self):
         """Reasoning deltas must reference the added reasoning summary part."""
@@ -2290,6 +2299,7 @@ class TestEnsureOutputItemContentPartAdded:
         assert events[0].item.id == reasoning_item_id
         assert events[1].type == "response.reasoning_summary_part.added"
         assert events[1].item_id == reasoning_item_id
+        assert events[1].output_index == events[0].output_index
         assert events[1].summary_index == 0
 
         delta_event = LiteLLMCompletionStreamingIterator._transform_chat_completion_chunk_to_response_api_chunk(
@@ -2298,6 +2308,7 @@ class TestEnsureOutputItemContentPartAdded:
         assert delta_event is not None
         assert delta_event.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
         assert delta_event.item_id == reasoning_item_id
+        assert delta_event.output_index == events[0].output_index
         assert delta_event.summary_index == 0
 
     def test_emit_response_completed_uses_stream_finish_reason(self):
