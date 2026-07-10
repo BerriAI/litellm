@@ -2,12 +2,12 @@
 Unit tests for BaseResponsesAPIStreamingIterator
 
 Tests core functionality including:
-1. Processing chunks and handling ResponseCompletedEvent 
+1. Processing chunks and handling ResponseCompletedEvent
 2. Ensuring _update_responses_api_response_id_with_model_id is called for final chunk
 3. Verifying ID update is NOT called for non-final chunks (delta events)
 4. Edge case handling for invalid JSON, empty chunks, and [DONE] markers
 
-These tests ensure the streaming iterator correctly processes response chunks 
+These tests ensure the streaming iterator correctly processes response chunks
 and applies model ID updates only to completed responses, as required for proper
 response tracking and logging.
 """
@@ -28,7 +28,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
+    OutputItemDoneEvent,
+    OutputTextDoneEvent,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -169,6 +172,312 @@ class TestBaseResponsesAPIStreamingIterator:
             # Verify the response was updated on the event
             assert result.response == updated_response
 
+    def test_process_chunk_backfills_empty_completed_output_from_output_item_done(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        output_item = BaseLiteLLMOpenAIResponseObject(
+            type="message",
+            role="assistant",
+            content=[{"type": "output_text", "text": "ok"}],
+        )
+        output_item_done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=output_item,
+        )
+        completed_response = Mock(spec=ResponsesAPIResponse)
+        completed_response.output = []
+        completed_event = Mock(spec=ResponseCompletedEvent)
+        completed_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        completed_event.response = completed_response
+        mock_config.transform_streaming_response.side_effect = [
+            output_item_done,
+            completed_event,
+        ]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": output_item.model_dump(),
+                }
+            )
+        )
+        iterator._process_chunk(json.dumps({"type": "response.completed", "response": {"output": []}}))
+
+        assert completed_response.output == [output_item.model_dump()]
+        assert iterator.completed_response is completed_event
+
+    def test_process_chunk_recovers_text_done_for_empty_completed_output(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        text_done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            output_index=1,
+            content_index=0,
+            item_id="msg_transformed",
+            text="ok",
+        )
+        terminal_response = Mock(spec=ResponsesAPIResponse)
+        terminal_response.output = []
+        terminal_event = Mock(spec=ResponseCompletedEvent)
+        terminal_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        terminal_event.response = terminal_response
+        mock_config.transform_streaming_response.side_effect = [text_done, terminal_event]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_text.done",
+                    "output_index": 1,
+                    "content_index": 0,
+                    "item_id": "msg_text",
+                    "text": "ok",
+                }
+            )
+        )
+        iterator._process_chunk(
+            json.dumps({"type": ResponsesAPIStreamEvents.RESPONSE_COMPLETED, "response": {"output": []}})
+        )
+
+        assert terminal_response.output == [
+            {
+                "type": "message",
+                "id": "msg_transformed",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ]
+
+    def test_process_chunk_preserves_authoritative_terminal_output(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        output_item_done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(type="message", content=[]),
+        )
+        terminal_response = Mock(spec=ResponsesAPIResponse)
+        terminal_response.output = [{"type": "message", "content": [{"type": "output_text", "text": "final"}]}]
+        terminal_event = Mock(spec=ResponseCompletedEvent)
+        terminal_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        terminal_event.response = terminal_response
+        mock_config.transform_streaming_response.side_effect = [output_item_done, terminal_event]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {"type": "message", "content": [{"type": "output_text", "text": "streamed"}]},
+                }
+            )
+        )
+        iterator._process_chunk(
+            json.dumps({"type": "response.completed", "response": {"output": terminal_response.output}})
+        )
+
+        assert terminal_response.output[0]["content"][0]["text"] == "final"
+
+    def test_process_chunk_backfills_dictionary_terminal_response_in_index_order(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        terminal_response = {"output": []}
+        terminal_event = Mock(spec=ResponseCompletedEvent)
+        terminal_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        terminal_event.response = terminal_response
+        item_events = []
+        for index in (2, 0):
+            item_events.append(
+                OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=index,
+                    item=BaseLiteLLMOpenAIResponseObject(type="message", id=f"msg_{index}", content=[]),
+                )
+            )
+        mock_config.transform_streaming_response.side_effect = [*item_events, terminal_event]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        for index in (2, 0):
+            iterator._process_chunk(
+                json.dumps(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": index,
+                        "item": {"type": "message", "id": f"msg_{index}", "content": []},
+                    }
+                )
+            )
+        iterator._process_chunk(json.dumps({"type": "response.completed", "response": {"output": []}}))
+
+        assert [item["id"] for item in terminal_response["output"]] == ["msg_0", "msg_2"]
+
+    def test_process_chunk_ignores_malformed_output_index(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        valid_event = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=1,
+            item=BaseLiteLLMOpenAIResponseObject(type="message", id="valid", content=[]),
+        )
+        malformed_event = OutputItemDoneEvent.model_construct(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index="invalid",
+            item=BaseLiteLLMOpenAIResponseObject(type="message", id="invalid", content=[]),
+        )
+        terminal_response = Mock(spec=ResponsesAPIResponse)
+        terminal_response.output = []
+        terminal_event = Mock(spec=ResponseCompletedEvent)
+        terminal_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        terminal_event.response = terminal_response
+        mock_config.transform_streaming_response.side_effect = [valid_event, malformed_event, terminal_event]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(json.dumps({"type": "response.output_item.done", "output_index": 1}))
+        iterator._process_chunk(json.dumps({"type": "response.output_item.done"}))
+        iterator._process_chunk(json.dumps({"type": "response.completed", "response": {"output": []}}))
+
+        assert [item["id"] for item in terminal_response.output] == ["valid"]
+
+    def test_process_chunk_does_not_backfill_incomplete_response(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        text_done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            output_index=0,
+            content_index=0,
+            item_id="msg_partial",
+            text="partial",
+        )
+        incomplete_response = Mock(spec=ResponsesAPIResponse)
+        incomplete_response.output = []
+        incomplete_event = Mock(spec=ResponseIncompleteEvent)
+        incomplete_event.type = ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+        incomplete_event.response = incomplete_response
+        mock_config.transform_streaming_response.side_effect = [text_done, incomplete_event]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_text.done",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": "partial",
+                }
+            )
+        )
+        iterator._process_chunk(json.dumps({"type": "response.incomplete", "response": {"output": []}}))
+
+        assert incomplete_response.output == []
+
+    def test_process_chunk_does_not_backfill_failed_response(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        output_item_done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                type="message",
+                content=[{"type": "output_text", "text": "partial"}],
+            ),
+        )
+        failed_response = Mock(spec=ResponsesAPIResponse)
+        failed_response.output = []
+        failed_event = Mock(spec=ResponseFailedEvent)
+        failed_event.type = ResponsesAPIStreamEvents.RESPONSE_FAILED
+        failed_event.response = failed_response
+        mock_config.transform_streaming_response.side_effect = [output_item_done, failed_event]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.6-sol",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {"type": "message", "content": [{"type": "output_text", "text": "partial"}]},
+                }
+            )
+        )
+        iterator._process_chunk(json.dumps({"type": "response.failed", "response": {"output": []}}))
+
+        assert failed_response.output == []
+
     def test_process_chunk_with_delta_event_no_id_update(self):
         """
         Test that _process_chunk correctly processes a delta event
@@ -186,11 +495,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_delta_event.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
         mock_delta_event.delta = "Hello"
         # Delta events don't have a response attribute
-        (
-            delattr(mock_delta_event, "response")
-            if hasattr(mock_delta_event, "response")
-            else None
-        )
+        (delattr(mock_delta_event, "response") if hasattr(mock_delta_event, "response") else None)
 
         # Set up the mock transform method to return our delta event
         mock_config.transform_streaming_response.return_value = mock_delta_event
@@ -369,9 +674,7 @@ class TestBaseResponsesAPIStreamingIterator:
                 iterator._handle_logging_completed_response()
             except TypeError as e:
                 if "pickle" in str(e):
-                    pytest.fail(
-                        f"_handle_logging_completed_response failed with pickle error: {e}"
-                    )
+                    pytest.fail(f"_handle_logging_completed_response failed with pickle error: {e}")
                 raise
 
     @pytest.mark.asyncio
@@ -551,9 +854,7 @@ class TestBaseResponsesAPIStreamingIterator:
                 "_update_responses_api_response_id_with_model_id",
                 return_value=mock_responses_api_response,
             ),
-            patch(
-                "litellm.responses.streaming_iterator.run_async_function"
-            ) as mock_run_async,
+            patch("litellm.responses.streaming_iterator.run_async_function") as mock_run_async,
             patch("litellm.responses.streaming_iterator.executor") as mock_executor,
         ):
             result = iterator._process_chunk(json.dumps(test_chunk_data))
@@ -565,10 +866,7 @@ class TestBaseResponsesAPIStreamingIterator:
             # Failure handler should have been called via _handle_failure
             mock_run_async.assert_called_once()
             call_kwargs = mock_run_async.call_args
-            assert (
-                call_kwargs[1]["async_function"]
-                == mock_logging_obj.async_failure_handler
-            )
+            assert call_kwargs[1]["async_function"] == mock_logging_obj.async_failure_handler
 
             mock_executor.submit.assert_called_once()
             submit_args = mock_executor.submit.call_args
