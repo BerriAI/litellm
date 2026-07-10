@@ -1,15 +1,15 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
-import * as networking from "../networking";
+import * as networking from "@/components/networking";
 
 // Mock the networking module
-vi.mock("../networking", () => ({
+vi.mock("@/components/networking", () => ({
   ragIngestCall: vi.fn(),
 }));
 
 // Mock NotificationsManager
-vi.mock("../molecules/notifications_manager", () => ({
+vi.mock("@/components/molecules/notifications_manager", () => ({
   default: {
     success: vi.fn(),
     fromBackend: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("../molecules/notifications_manager", () => ({
 }));
 
 // Mock vector_store_providers
-vi.mock("../vector_store_providers", () => ({
+vi.mock("@/components/vector_store_providers", () => ({
   VectorStoreProviders: {
     BEDROCK: "Amazon Bedrock",
     OPENAI: "OpenAI",

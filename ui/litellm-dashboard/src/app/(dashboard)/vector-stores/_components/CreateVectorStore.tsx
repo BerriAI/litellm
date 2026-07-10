@@ -4,8 +4,8 @@ import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { InboxOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
-import { ragIngestCall } from "../networking";
-import { DocumentUpload, RAGIngestResponse } from "./types";
+import { ragIngestCall } from "@/components/networking";
+import { DocumentUpload, RAGIngestResponse } from "@/components/vector_store_management/types";
 import DocumentsTable from "./DocumentsTable";
 import {
   VectorStoreProviders,
@@ -13,9 +13,9 @@ import {
   vectorStoreProviderMap,
   getProviderSpecificFields,
   VectorStoreFieldConfig,
-} from "../vector_store_providers";
+} from "@/components/vector_store_providers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import S3VectorsConfig from "./S3VectorsConfig";
 
 const { Dragger } = Upload;

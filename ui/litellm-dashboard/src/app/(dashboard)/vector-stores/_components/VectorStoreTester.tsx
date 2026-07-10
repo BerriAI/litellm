@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { Button, Input, Card, Typography, Spin, Divider } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { SendOutlined, DatabaseOutlined, LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
-import { vectorStoreSearchCall } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { vectorStoreSearchCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Text, Title } = Typography;

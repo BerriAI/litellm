@@ -2,8 +2,8 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Accordion, AccordionBody, AccordionHeader, Button, TextInput, Title } from "@tremor/react";
 import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
 import React from "react";
-import BudgetDurationDropdown from "../../common_components/budget_duration_dropdown";
-import NumericalInput from "../../shared/numerical_input";
+import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import NumericalInput from "@/components/shared/numerical_input";
 
 interface ModelInfo {
   model_name: string;
