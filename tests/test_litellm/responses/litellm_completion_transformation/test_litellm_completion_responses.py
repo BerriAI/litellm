@@ -1955,7 +1955,7 @@ class TestUsageTransformation:
         # Assert
         assert response_usage.output_tokens == 150
         assert response_usage.output_tokens_details is not None
-        assert response_usage.output_tokens_details.reasoning_tokens is None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
         assert response_usage.output_tokens_details.text_tokens == 50
         assert response_usage.output_tokens_details.image_tokens == 100
 
@@ -2029,6 +2029,39 @@ class TestUsageTransformation:
 
         assert response_usage.output_tokens_details is not None
         assert response_usage.output_tokens_details.reasoning_tokens == 512
+
+    def test_reasoning_tokens_explicit_zero_preserved(self):
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=50,
+            total_tokens=60,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=0,
+                text_tokens=50,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-5.6",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
 
 
 class TestStreamingIDConsistency:

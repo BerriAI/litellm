@@ -270,8 +270,8 @@ def test_transform_usage_with_zero_values():
     Test transformation when token details are explicitly set to 0.
 
     cached_tokens=0 is preserved (cache was available; nothing was cached).
-    reasoning_tokens=0 is omitted — it is semantically equivalent to None
-    (no reasoning occurred either way), so the field is absent.
+    reasoning_tokens=0 is preserved the same way: an explicit provider-reported
+    zero passes through, while an absent value (None) is omitted.
     """
     completion_response = create_mock_completion_response(
         model="gpt-4",
@@ -279,7 +279,7 @@ def test_transform_usage_with_zero_values():
         completion_tokens=50,
         total_tokens=150,
         cached_tokens=0,  # Explicitly 0 — preserved
-        reasoning_tokens=0,  # Explicitly 0 — omitted (indistinguishable from absent)
+        reasoning_tokens=0,  # Explicitly 0 — preserved
     )
 
     responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
@@ -289,10 +289,10 @@ def test_transform_usage_with_zero_values():
     assert responses_usage.input_tokens_details is not None
     assert responses_usage.input_tokens_details.cached_tokens == 0
 
-    # reasoning_tokens=0 means no thinking occurred; field is omitted rather than forced to 0
-    assert responses_usage.output_tokens_details is None
+    assert responses_usage.output_tokens_details is not None
+    assert responses_usage.output_tokens_details.reasoning_tokens == 0
 
-    print("✓ Transformation omits reasoning_tokens when 0 or absent")
+    print("✓ Transformation preserves explicit reasoning_tokens=0 and omits absent values")
 
 
 def test_input_tokens_details_requires_cached_tokens():
