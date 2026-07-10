@@ -89,7 +89,7 @@ async def test_creates_decryptable_one_time_link() -> None:
     assert parsed["mode"] == "gcm"
     assert parsed["ks"] == 256
     assert parsed["iter"] == 10000
-    assert parsed["ts"] == 64
+    assert parsed["ts"] == 128
 
 
 @pytest.mark.asyncio
