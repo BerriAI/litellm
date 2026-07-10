@@ -513,6 +513,13 @@ describe("ActivityMetrics charts", () => {
     expect(screen.getAllByText("2025-01-02").length).toBeGreaterThanOrEqual(7);
   });
 
+  it("shows the No data placeholder on both global charts when there is no usage data", () => {
+    const { container } = render(<ActivityMetrics modelMetrics={{}} />);
+
+    expect(screen.getAllByText("No data")).toHaveLength(2);
+    expect(chartsOf(container)).toHaveLength(0);
+  });
+
   it("drops only the prompt caching chart when hidePromptCachingMetrics is true", () => {
     const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} hidePromptCachingMetrics={true} />);
 
