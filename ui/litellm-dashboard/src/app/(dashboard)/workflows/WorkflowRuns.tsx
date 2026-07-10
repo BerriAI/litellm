@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { Button, Collapse, Drawer, Empty, Spin, Table, Tooltip, Typography } from "antd";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Button, Collapse, Drawer, Empty, Spin, Tooltip, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
+import type { ColumnDef } from "@tanstack/react-table";
 import { proxyBaseUrl } from "@/components/networking";
+import { DataTable } from "@/components/shared/DataTable";
 
 const { Text } = Typography;
 
@@ -541,48 +543,54 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
     fetchRuns();
   }, [fetchRuns]);
 
-  const columns = [
-    {
-      title: "Run",
-      dataIndex: "run_id",
-      key: "run",
-      render: (_: string, run: WorkflowRun) => (
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <StatusDot status={run.status} size={7} />
-          <div>
-            <div style={{ fontSize: 13, color: "#18181b", fontWeight: 500, lineHeight: 1.4 }}>{runTitle(run)}</div>
-            <div style={{ fontFamily: "monospace", fontSize: 11, color: "#a1a1aa" }}>{shortId(run.run_id)}</div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: "Type",
-      dataIndex: "workflow_type",
-      key: "workflow_type",
-      render: (v: string) => <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{v}</span>,
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      render: (status: RunStatus, run: WorkflowRun) => {
-        const state = run.metadata?.state;
-        return (
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <StatusDot status={status} size={7} />
-            <span style={{ fontSize: 12, color: "#52525b", textTransform: "capitalize" }}>{state ?? status}</span>
-          </div>
-        );
+  const columns = useMemo<ColumnDef<WorkflowRun, unknown>[]>(
+    () => [
+      {
+        id: "run",
+        header: "Run",
+        cell: ({ row }) => {
+          const run = row.original;
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <StatusDot status={run.status} size={7} />
+              <div>
+                <div style={{ fontSize: 13, color: "#18181b", fontWeight: 500, lineHeight: 1.4 }}>{runTitle(run)}</div>
+                <div style={{ fontFamily: "monospace", fontSize: 11, color: "#a1a1aa" }}>{shortId(run.run_id)}</div>
+              </div>
+            </div>
+          );
+        },
       },
-    },
-    {
-      title: "Created",
-      dataIndex: "created_at",
-      key: "created_at",
-      render: (v: string) => <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(v)}</span>,
-    },
-  ];
+      {
+        accessorKey: "workflow_type",
+        header: "Type",
+        cell: ({ row }) => (
+          <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{row.original.workflow_type}</span>
+        ),
+      },
+      {
+        id: "status",
+        header: "Status",
+        cell: ({ row }) => {
+          const run = row.original;
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <StatusDot status={run.status} size={7} />
+              <span style={{ fontSize: 12, color: "#52525b", textTransform: "capitalize" }}>
+                {run.metadata?.state ?? run.status}
+              </span>
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: "created_at",
+        header: "Created",
+        cell: ({ row }) => <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(row.original.created_at)}</span>,
+      },
+    ],
+    [],
+  );
 
   return (
     <div
@@ -619,31 +627,23 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         </Button>
       </div>
 
-      {/* runs table — matches logs page density */}
-      <div className="rounded-lg custom-border overflow-x-auto w-full">
-        <Table
-          dataSource={runs}
-          columns={columns}
-          rowKey="run_id"
-          loading={loadingRuns}
-          size="small"
-          pagination={{ pageSize: 50, hideOnSinglePage: true, size: "small" }}
-          onRow={(run) => ({
-            onClick: () => fetchRunDetail(run),
-            style: { cursor: "pointer" },
-          })}
-          locale={{
-            emptyText: (
-              <Empty
-                description={<span style={{ color: "#a1a1aa", fontSize: 13 }}>No workflow runs yet</span>}
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
-            ),
-          }}
-          className="[&_.ant-table-cell]:py-0.5 [&_.ant-table-thead_.ant-table-cell]:py-1"
-          style={{ border: "none" }}
-        />
-      </div>
+      <DataTable
+        data={runs}
+        columns={columns}
+        getRowId={(run) => run.run_id}
+        isLoading={loadingRuns}
+        loadingMessage="Loading workflow runs…"
+        noDataMessage={
+          <Empty
+            description={<span style={{ color: "#a1a1aa", fontSize: 13 }}>No workflow runs yet</span>}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        }
+        paginationMode="client"
+        pageSizeOptions={[50, 100]}
+        onRowClick={fetchRunDetail}
+        size="compact"
+      />
 
       {/* detail drawer */}
       <Drawer

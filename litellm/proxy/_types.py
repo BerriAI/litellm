@@ -26,6 +26,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAuth,
     MCPAuthType,
     MCPCredentials,
     MCPTransport,
@@ -1229,6 +1230,14 @@ from litellm.models.mcp_server import (  # noqa: E402
 
 
 # MCP Proxy Request Types
+def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
+    return ValueError(
+        f"dcr_bridge is only supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+        "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded token modes; "
+        "interactive oauth2 servers already run the gateway authorization-code flow."
+    )
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
     server_name: Optional[str] = None
@@ -1268,6 +1277,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1322,6 +1332,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         """
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1362,6 +1382,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1390,6 +1411,21 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError("url or spec_path is required for HTTP/SSE transport")
         return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        """Partial updates omit auth_type; that case is validated against the stored row by the
+        update endpoint, which can read the database. This validator covers payloads that carry
+        both fields."""
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        if "auth_type" not in values:
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
 
 
 from litellm.models.mcp_server import (  # noqa: E402

@@ -1044,6 +1044,24 @@ class MCPServerManager:
                     "browser sign-in, including delegate_auth_to_upstream)."
                 )
 
+            config_dcr_bridge = server_config.get("dcr_bridge", None)
+            if config_dcr_bridge is not None and not isinstance(config_dcr_bridge, bool):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge "
+                    f"must be a boolean (got {config_dcr_bridge!r})."
+                )
+            if config_dcr_bridge and auth_type not in (
+                MCPAuth.true_passthrough,
+                MCPAuth.oauth_delegate,
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge is only "
+                    f"supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+                    "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded "
+                    "token modes; interactive oauth2 servers already run the gateway "
+                    "authorization-code flow."
+                )
+
             new_server = MCPServer(
                 server_id=server_id,
                 name=name_for_prefix,
@@ -1079,6 +1097,7 @@ class MCPServerManager:
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
+                dcr_bridge=config_dcr_bridge,
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -1454,6 +1473,7 @@ class MCPServerManager:
             available_on_public_internet=bool(getattr(mcp_server, "available_on_public_internet", True)),
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
+            dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -3966,10 +3986,50 @@ class MCPServerManager:
 
             tool_call_coro = _obo_call_tool_limited()
         else:
+            # Scoped to the two client-forwarded token modes this stack introduced; legacy
+            # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
+            # added here even though the list path still relays for it.
+            relays_upstream_auth = mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate
+            server_label = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):
                 async with self._limit_outbound_concurrency(mcp_server):
-                    return await client.call_tool(params, host_progress_callback=host_progress_callback)
+                    if not relays_upstream_auth:
+                        return await client.call_tool(params, host_progress_callback=host_progress_callback)
+                    # The client-forwarded modes carry the caller's own upstream token, so an upstream
+                    # 401 (expired/invalid token) is the caller's to resolve: relay it as
+                    # MCPUpstreamAuthError so single-server REST callers turn it into a 401 +
+                    # WWW-Authenticate and re-run the upstream OAuth flow. Only 401 is a re-auth signal
+                    # (mirrors the list path and MCPUpstreamAuthError's contract); a 403 is a genuine
+                    # authorization failure that re-auth won't fix, so it takes the non-auth branch and
+                    # stays a visible warning. raise_on_error only re-raises transport failures
+                    # (tool-level isError results are still returned normally); a non-auth failure keeps
+                    # the same isError degradation the default path produces.
+                    try:
+                        return await client.call_tool(
+                            params, host_progress_callback=host_progress_callback, raise_on_error=True
+                        )
+                    except Exception as e:
+                        auth_info = _extract_upstream_auth_failure(e)
+                        if auth_info is None or auth_info[0] != 401:
+                            # A genuine (non-auth or 403-forbidden) upstream/transport failure.
+                            # raise_on_error demoted the client-layer log to debug, so surface it here at
+                            # warning level to keep the outage visible; the caller still gets the graceful
+                            # isError result the default masking path would have produced. Log the
+                            # exception type only, never str(e), which for an httpx error embeds the
+                            # upstream URL (a credential can hide in it).
+                            verbose_logger.warning(
+                                "Pass-through MCP tool call failed against %s (non-auth, %s)",
+                                server_label,
+                                type(e).__name__,
+                            )
+                            return client.error_tool_result(e)
+                        _, www_authenticate = auth_info
+                        raise MCPUpstreamAuthError(
+                            status_code=401,
+                            www_authenticate=www_authenticate,
+                            server_name=server_label,
+                        ) from e
 
             tool_call_coro = _call_tool_via_client(client, call_tool_params)
 
@@ -4800,6 +4860,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             oauth2_flow=server.oauth2_flow,
+            dcr_bridge=server.dcr_bridge,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
@@ -4916,6 +4977,7 @@ class MCPServerManager:
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
+            dcr_bridge=server.dcr_bridge,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { countBudgetViolations, findDrift } from "./lint-budget-lib.mjs";
 
 const argv = process.argv.slice(2);
@@ -7,6 +7,8 @@ const flags = {};
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === "--check") {
     flags.check = argv[(i += 1)];
+  } else if (argv[i] === "--write") {
+    flags.write = argv[(i += 1)];
   } else {
     positional.push(argv[i]);
   }
@@ -28,6 +30,11 @@ for (const [rule, { max, target }] of Object.entries(budgets)) {
     );
     failed = true;
   }
+}
+
+if (flags.write) {
+  writeFileSync(flags.write, JSON.stringify(counts, null, 2) + "\n");
+  console.log(`Wrote ${flags.write}.`);
 }
 
 if (flags.check) {
