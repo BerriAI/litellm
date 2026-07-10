@@ -1,0 +1,16 @@
+{
+  "name": "litellm-e2e-ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Standalone Playwright e2e for the LiteLLM Admin UI",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install:browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.1",
+    "@types/node": "20.19.37",
+    "typescript": "5.9.3"
+  }
+}
