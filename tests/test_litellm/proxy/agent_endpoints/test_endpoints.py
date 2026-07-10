@@ -1049,3 +1049,94 @@ def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(monkey
     interface_url = merged["supportedInterfaces"][0]["url"]
     assert interface_url == f"{base_url.rstrip('/')}/a2a/agent-xyz"
     assert "//a2a" not in interface_url
+
+
+class TestUserAgentWrites:
+    """XCT fork: AGENT_REGISTRY_ALLOW_USER_WRITES — non-admin self-publish with
+    owner-scoped update/delete, payload sanitization, and per-user quota."""
+
+    def _user_auth(self):
+        return UserAPIKeyAuth(user_id="creator-1", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    def test_flag_off_blocks_non_admin_create(self, monkeypatch):
+        from fastapi import HTTPException
+
+        monkeypatch.delenv("AGENT_REGISTRY_ALLOW_USER_WRITES", raising=False)
+        with pytest.raises(HTTPException) as exc_info:
+            agent_endpoints._check_agent_management_permission(self._user_auth())
+        assert exc_info.value.status_code == 403
+
+    def test_flag_on_allows_non_admin_create(self, monkeypatch):
+        monkeypatch.setenv("AGENT_REGISTRY_ALLOW_USER_WRITES", "true")
+        agent_endpoints._check_agent_management_permission(self._user_auth())
+
+    def test_flag_on_blocks_key_without_user_id(self, monkeypatch):
+        from fastapi import HTTPException
+
+        monkeypatch.setenv("AGENT_REGISTRY_ALLOW_USER_WRITES", "true")
+        auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+        with pytest.raises(HTTPException) as exc_info:
+            agent_endpoints._check_agent_management_permission(auth)
+        assert exc_info.value.status_code == 403
+
+    def test_owner_may_modify_own_agent(self, monkeypatch):
+        monkeypatch.setenv("AGENT_REGISTRY_ALLOW_USER_WRITES", "true")
+        agent_endpoints._check_agent_management_permission(
+            self._user_auth(), {"created_by": "creator-1"}
+        )
+
+    def test_non_owner_blocked_from_others_agent(self, monkeypatch):
+        from fastapi import HTTPException
+
+        monkeypatch.setenv("AGENT_REGISTRY_ALLOW_USER_WRITES", "true")
+        with pytest.raises(HTTPException) as exc_info:
+            agent_endpoints._check_agent_management_permission(
+                self._user_auth(), {"created_by": "someone-else"}
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_admin_bypasses_ownership(self, monkeypatch):
+        monkeypatch.delenv("AGENT_REGISTRY_ALLOW_USER_WRITES", raising=False)
+        auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        agent_endpoints._check_agent_management_permission(auth, {"created_by": "someone-else"})
+
+    def test_sanitize_strips_admin_only_surface(self):
+        sanitized = agent_endpoints._sanitize_user_agent_config(
+            {
+                "agent_name": "xct-my-agent",
+                "agent_card_params": {"name": "My Agent"},
+                "litellm_params": {"make_public": True, "model": "gpt-5.5", "api_key": "sk-x"},
+                "extra_headers": ["x-evil"],
+                "static_headers": {"x": "y"},
+                "rpm_limit": 999999,
+            }
+        )
+        assert sanitized == {
+            "agent_name": "xct-my-agent",
+            "agent_card_params": {"name": "My Agent"},
+            "litellm_params": {"make_public": True},
+        }
+
+    def test_sanitize_partial_patch_keeps_absent_fields_absent(self):
+        sanitized = agent_endpoints._sanitize_user_agent_config(
+            {"agent_card_params": {"name": "Renamed"}}
+        )
+        assert sanitized == {"agent_card_params": {"name": "Renamed"}}
+
+    @pytest.mark.asyncio
+    async def test_quota_blocks_at_cap(self, monkeypatch):
+        from fastapi import HTTPException
+
+        monkeypatch.setenv("AGENT_REGISTRY_MAX_PER_USER", "2")
+        prisma = MagicMock()
+        prisma.db.litellm_agentstable.count = AsyncMock(return_value=2)
+        with pytest.raises(HTTPException) as exc_info:
+            await agent_endpoints._check_user_agent_quota(self._user_auth(), prisma)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_quota_allows_below_cap(self, monkeypatch):
+        monkeypatch.setenv("AGENT_REGISTRY_MAX_PER_USER", "2")
+        prisma = MagicMock()
+        prisma.db.litellm_agentstable.count = AsyncMock(return_value=1)
+        await agent_endpoints._check_user_agent_quota(self._user_auth(), prisma)
