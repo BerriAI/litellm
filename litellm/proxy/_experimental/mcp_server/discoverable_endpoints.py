@@ -591,6 +591,10 @@ async def authorize_with_server(
         raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
 
     if mcp_server.is_dcr_bridge:
+        # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
+        # now-non-optional pair to the upstream authorize; the short-circuit arm keeps
+        # calling this for its enforcement side effect, then falls through to the gateway
+        # /callback flow below, which reads the original code_challenge names.
         bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
         if _dcr_bridge_relays_client_registration(mcp_server):
             return _redirect_to_upstream_authorize(
