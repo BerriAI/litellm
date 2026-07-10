@@ -55,6 +55,14 @@ const barFills = (card: HTMLElement) =>
     bar.querySelector("path.recharts-rectangle")?.getAttribute("fill"),
   );
 
+const legendFillByCategory = (card: HTMLElement) =>
+  Object.fromEntries(
+    Array.from(card.querySelectorAll('.recharts-legend-wrapper [style*="background-color"]')).map((swatch) => [
+      swatch.parentElement?.textContent,
+      swatch.getAttribute("style")?.match(/background-color:\s*([^;]+);?/)?.[1],
+    ]),
+  );
+
 describe("CacheDashboard cache analytics charts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -68,23 +76,25 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(screen.getByText("Cached Completion Tokens vs Generated Completion Tokens")).toBeInTheDocument();
   });
 
-  it("renders the requests chart with its categories in order, sky/teal fills, and a legend", async () => {
+  it("renders the requests chart with each category legend-bound to its fill and stacked in order", async () => {
     renderDashboard();
     const { requestsCard } = await findChartCards();
 
-    expect(within(requestsCard).getByText("LLM API requests")).toBeInTheDocument();
-    expect(within(requestsCard).getByText("Cache hit")).toBeInTheDocument();
-    expect(requestsCard.querySelector(".recharts-legend-wrapper")).not.toBeNull();
+    expect(legendFillByCategory(requestsCard)).toEqual({
+      "LLM API requests": "var(--color-sky-500, #0ea5e9)",
+      "Cache hit": "var(--color-teal-500, #14b8a6)",
+    });
     expect(barFills(requestsCard)).toEqual(["var(--color-sky-500, #0ea5e9)", "var(--color-teal-500, #14b8a6)"]);
   });
 
-  it("renders the tokens chart with its categories in order, sky/teal fills, and a legend", async () => {
+  it("renders the tokens chart with each category legend-bound to its fill and stacked in order", async () => {
     renderDashboard();
     const { tokensCard } = await findChartCards();
 
-    expect(within(tokensCard).getByText("Generated Completion Tokens")).toBeInTheDocument();
-    expect(within(tokensCard).getByText("Cached Completion Tokens")).toBeInTheDocument();
-    expect(tokensCard.querySelector(".recharts-legend-wrapper")).not.toBeNull();
+    expect(legendFillByCategory(tokensCard)).toEqual({
+      "Generated Completion Tokens": "var(--color-sky-500, #0ea5e9)",
+      "Cached Completion Tokens": "var(--color-teal-500, #14b8a6)",
+    });
     expect(barFills(tokensCard)).toEqual(["var(--color-sky-500, #0ea5e9)", "var(--color-teal-500, #14b8a6)"]);
   });
 
