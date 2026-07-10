@@ -447,6 +447,22 @@ def test_deployment_mode_persists_across_model_cost_map_reload():
 
         assert litellm.model_cost[backend_key]["mode"] == "responses"
 
+        deployment = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(
+                model="gpt-5.6",
+                custom_llm_provider="openai",
+                api_key="fake-key-reload",
+            ),
+            model_info={"id": "gpt-56-responses-reload", "mode": "responses"},
+        )
+        router._register_deployment_in_model_cost(
+            deployment=deployment,
+            model_info=deployment.model_info.model_dump(exclude_none=True),
+        )
+        assert litellm.model_cost["gpt-56-responses-reload"]["mode"] == "responses"
+        assert litellm.model_cost[backend_key]["mode"] == "responses"
+
         bridge_model_info, bridge_model = responses_api_bridge_check(
             model="gpt-5.6",
             custom_llm_provider="openai",
