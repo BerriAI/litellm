@@ -7,6 +7,11 @@ import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./netwo
 import OldTeams from "./OldTeams";
 import { teamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 
+const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}));
+
 const mockTeamInfoView = vi.fn();
 const mockUseOrganizations = vi.fn();
 
@@ -17,6 +22,7 @@ vi.mock("./networking", () => ({
   v2TeamListCall: vi.fn(),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
+  serverRootPath: "",
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -575,16 +581,16 @@ describe("OldTeams - helper functions", () => {
   });
 });
 
-describe("OldTeams - premium props", () => {
+describe("OldTeams - team id navigation", () => {
   beforeEach(() => {
-    mockTeamInfoView.mockClear();
+    vi.clearAllMocks();
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
     vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("passes premiumUser flag to TeamInfoView", async () => {
+  it("navigates to the team detail route when clicking the team ID", async () => {
     vi.mocked(teamListCall).mockResolvedValue({
       teams: [
         {
@@ -614,9 +620,7 @@ describe("OldTeams - premium props", () => {
       fireEvent.click(teamIdElement);
     });
 
-    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
-
-    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ premiumUser: true }));
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining("teams/team-123456789"));
   });
 });
 
