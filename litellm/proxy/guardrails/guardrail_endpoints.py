@@ -374,6 +374,8 @@ async def create_guardrail(
             )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
         raise HTTPException(status_code=500, detail=str(e))

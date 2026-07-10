@@ -834,6 +834,39 @@ async def test_create_guardrail_endpoint(
             )
 
 
+@pytest.mark.asyncio
+async def test_create_guardrail_config_error_returns_400_not_500(
+    mocker, mock_guardrail_registry, mock_in_memory_handler
+):
+    """
+    A ValueError raised while initializing a newly created guardrail is a
+    client-correctable config error and must surface as a 400. Pre-fix, the
+    inner 400 HTTPException was caught by the outer `except Exception` and
+    re-raised as a 500.
+    """
+    mock_prisma_client = mocker.Mock()
+    mock_in_memory_handler.initialize_guardrail.side_effect = ValueError("invalid config")
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+        mock_guardrail_registry,
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_guardrail(MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 400
+    assert "invalid config" in str(exc_info.value.detail)
+    mock_guardrail_registry.add_guardrail_to_db.assert_called_once_with(
+        guardrail=MOCK_CREATE_REQUEST.guardrail, prisma_client=mocker.ANY
+    )
+
+
 @pytest.mark.parametrize(
     "scenario,expected_result,expected_exception",
     [
