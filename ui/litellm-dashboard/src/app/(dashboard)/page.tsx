@@ -1,11 +1,8 @@
 "use client";
 
 import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
-import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { Team } from "@/components/key_team_helpers/key_list";
 import { proxyBaseUrl } from "@/components/networking";
-import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -16,32 +13,20 @@ import {
 } from "@/utils/returnUrlUtils";
 import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef } from "react";
 
 function CreateKeyPageContent() {
-  const { authLoading, token, userID, userRole, userEmail, accessToken, premiumUser, setUserRole, setUserEmail } =
-    useAuth();
-
-  const [teams, setTeams] = useState<Team[] | null>(null);
-  const [keys, setKeys] = useState<null | any[]>([]);
+  const { authLoading, token } = useAuth();
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
-  const [createClicked, setCreateClicked] = useState<boolean>(false);
-
-  const invitation_id = searchParams.get("invitation_id");
 
   const explicitPage = searchParams.get("page");
-  const page = explicitPage || "api-keys";
 
   // Track if we've already attempted a return URL redirect to prevent race conditions
   const hasAttemptedReturnRedirectRef = useRef(false);
 
-  const addKey = (data: any) => {
-    setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
-    setCreateClicked(() => !createClicked);
-  };
-  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+  const redirectToLogin = authLoading === false && token === null;
 
   useEffect(() => {
     if (redirectToLogin) {
@@ -55,15 +40,13 @@ function CreateKeyPageContent() {
     }
   }, [redirectToLogin]);
 
-  // Redirect legacy query-param pages to their new path-based routes. Only when the page is
-  // explicitly requested via ?page=, so the bare landing renders inline and the post-login
-  // return-URL handling below stays intact.
+  // Redirect legacy ?page= deep links (old bookmarks) to their path-based routes.
   const isLegacyRedirect = explicitPage !== null && explicitPage in MIGRATED_PAGES;
   useEffect(() => {
     if (!authLoading && isLegacyRedirect) {
-      router.replace(migratedHref(MIGRATED_PAGES[page]));
+      router.replace(migratedHref(MIGRATED_PAGES[explicitPage]));
     }
-  }, [authLoading, isLegacyRedirect, page, router]);
+  }, [authLoading, isLegacyRedirect, explicitPage, router]);
 
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
@@ -102,42 +85,11 @@ function CreateKeyPageContent() {
     }
   }, [token]);
 
-  useEffect(() => {
-    if (accessToken && userID && userRole) {
-      v2TeamListCall(accessToken, 1, 100, {
-        userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
-      })
-        .then((response) => setTeams(response.teams ?? []))
-        .catch(console.error);
-    }
-  }, [accessToken, userID, userRole]);
-
   if (authLoading || redirectToLogin || isLegacyRedirect) {
     return <LoadingScreen />;
   }
 
-  return (
-    <>
-      {invitation_id ? (
-        <UserDashboard
-          userID={userID}
-          userRole={userRole}
-          premiumUser={premiumUser}
-          teams={teams}
-          keys={keys}
-          setUserRole={setUserRole}
-          userEmail={userEmail}
-          setUserEmail={setUserEmail}
-          setTeams={setTeams}
-          setKeys={setKeys}
-          addKey={addKey}
-          createClicked={createClicked}
-        />
-      ) : (
-        <ApiKeysDashboard />
-      )}
-    </>
-  );
+  return <ApiKeysDashboard />;
 }
 
 export default function CreateKeyPage() {

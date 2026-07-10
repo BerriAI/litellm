@@ -45,11 +45,17 @@ jobs:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      decision: ${{ steps.changes.outputs.decision }}
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Detect backend-relevant changes
+        id: changes
+        uses: ./.github/actions/detect-backend-changes
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -72,16 +78,19 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
 
       - name: Generate Prisma client
+        if: steps.changes.outputs.decision != 'skip'
         env:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
+        if: steps.changes.outputs.decision != 'skip'
         env:
           TEST_PATH: ${{ inputs.test-path }}
           MAX_FAILURES: ${{ inputs.max-failures }}
@@ -114,8 +123,8 @@ jobs:
           fi
 
       - name: Save coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.changes.outputs.decision != 'skip'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: coverage-${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
@@ -124,7 +133,7 @@ jobs:
   upload-coverage:
     name: Upload coverage to Codecov
     needs: run
-    if: always()
+    if: always() && needs.run.outputs.decision != 'skip'
     runs-on: ubuntu-latest
     permissions:
       contents: read

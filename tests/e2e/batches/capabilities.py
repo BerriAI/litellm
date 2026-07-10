@@ -44,10 +44,10 @@ class Provider:
                 )
             case "azure":
                 return LiteLLMParamsBody(
-                    model="azure/gpt-4.1-mini-batch",
+                    model="azure/gpt-5.4-mini-batch",
                     api_base="os.environ/AZURE_API_BASE",
                     api_key="os.environ/AZURE_API_KEY",
-                    api_version="2024-07-01-preview",
+                    api_version="2025-04-01-preview",
                 )
             case "vertex_ai":
                 return LiteLLMParamsBody(
@@ -97,7 +97,7 @@ class Capability:
 
 PROVIDERS: tuple[Provider, ...] = (
     Provider("openai", "openai-batch", "gpt-4o-mini", can_cancel=True, can_list=True),
-    Provider("azure", "azure-batch", "gpt-4.1-mini-batch", can_cancel=True, can_list=True),
+    Provider("azure", "azure-batch", "gpt-5.4-mini-batch", can_cancel=True, can_list=True),
     Provider(
         "vertex_ai", "vertex-batch", "gemini-2.5-flash", can_cancel=True, can_list=True
     ),

@@ -7,8 +7,35 @@ import {
   handleTransport,
   handleAuth,
   getMcpOAuthMode,
+  getOAuthAuthorizationIdentity,
+  isHeldOAuthTokenStale,
   oauth2FlowToFormValue,
 } from "./types";
+
+describe("getOAuthAuthorizationIdentity", () => {
+  // Regression: the identity used to pick the audience from spec_path only when values.transport was
+  // OPENAPI, but the create form keeps transport in component state, so values.transport was absent and
+  // spec_path edits on OpenAPI servers never invalidated a held token.
+  it("changes when spec_path changes even when transport is absent from form values", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, spec_path: "https://a.example.com/openapi.json" };
+    const edited = { auth_type: AUTH_TYPE.OAUTH2, spec_path: "https://b.example.com/openapi.json" };
+    expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(edited, getOAuthAuthorizationIdentity(authorized))).toBe(true);
+  });
+
+  it("changes when url changes", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp" };
+    const edited = { auth_type: AUTH_TYPE.OAUTH2, url: "https://b.example.com/mcp" };
+    expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+  });
+
+  it("is stable across non-mint fields", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp", server_name: "one" };
+    const renamed = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp", server_name: "two" };
+    expect(getOAuthAuthorizationIdentity(renamed)).toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(renamed, getOAuthAuthorizationIdentity(authorized))).toBe(false);
+  });
+});
 
 describe("handleTransport", () => {
   it("should default to SSE when transport is null", () => {

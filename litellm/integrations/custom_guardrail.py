@@ -757,6 +757,12 @@ class CustomGuardrail(CustomLogger):
         # raw provider JSON so redaction is not duplicated upstream).
         clean_guardrail_response = redact_nested_match_and_regex_keys(clean_guardrail_response)
 
+        from litellm.litellm_core_utils.sensitive_data_masker import (
+            mask_credentials_in_payload,
+        )
+
+        clean_guardrail_response = mask_credentials_in_payload(clean_guardrail_response)
+
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
             guardrail_provider=guardrail_provider,

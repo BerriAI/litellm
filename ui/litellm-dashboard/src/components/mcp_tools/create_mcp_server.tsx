@@ -14,8 +14,14 @@ import {
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
+  isClientForwardedTokenMode,
+  getOAuthAuthorizationIdentity,
+  CLEARED_ON_INVALIDATION,
+  isHeldOAuthTokenStale,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
+import TruePassthroughWarning from "./TruePassthroughWarning";
+import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -96,7 +102,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
-  const [authorizedUrl, setAuthorizedUrl] = useState<string | undefined>(undefined);
+  // The OAuth authorization identity (see getOAuthAuthorizationIdentity) captured at the moment a token
+  // was fetched; undefined when no valid token is held. If any mint-relevant field diverges from this,
+  // the held token is stale and is discarded so the admin must re-authorize.
+  const [authorizedIdentity, setAuthorizedIdentity] = useState<string | undefined>(undefined);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const {
@@ -122,32 +131,24 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
-  const getOAuthAuthorizationTarget = (values: Record<string, unknown>): string | undefined => {
-    const transport = values.transport || transportType;
-    const target = transport === TRANSPORT.OPENAPI ? values.spec_path : values.url;
-    return typeof target === "string" ? target : undefined;
-  };
-
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
       return;
     }
     try {
       const values = form.getFieldsValue(true);
-      setSecureItem(
-        CREATE_OAUTH_UI_STATE_KEY,
-        JSON.stringify({
-          modalVisible: isModalVisible,
-          formValues: values,
-          transportType,
-          costConfig,
-          allowedTools,
-          hasToolAllowlistInteraction,
-          searchValue,
-          aliasManuallyEdited,
-          logoUrl,
-        }),
-      );
+      const uiState = {
+        modalVisible: isModalVisible,
+        formValues: values,
+        transportType,
+        costConfig,
+        allowedTools,
+        hasToolAllowlistInteraction,
+        searchValue,
+        aliasManuallyEdited,
+        logoUrl,
+      };
+      setSecureItem(CREATE_OAUTH_UI_STATE_KEY, JSON.stringify(uiState));
     } catch (err) {
       console.warn("Failed to persist MCP create state", err);
     }
@@ -182,7 +183,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         description: values.description,
         url,
         transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
-        auth_type: AUTH_TYPE.OAUTH2,
+        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
@@ -197,35 +198,61 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
-      if (token?.access_token) {
-        const credentials = {
-          access_token: token.access_token,
-          ...(token.refresh_token && { refresh_token: token.refresh_token }),
-          ...(token.expires_in && { expires_in: token.expires_in }),
-          ...(token.scope && { scope: token.scope }),
-          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
-          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
-        };
-
-        form.setFieldsValue({ credentials });
-        setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
-
-        NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
-        );
+      if (!token?.access_token) {
+        return;
       }
+
+      if (isClientForwardedTokenMode(form.getFieldValue("auth_type"))) {
+        // Browser-only modes: the token is held in local state (oauthAccessToken) for tool preview
+        // and committed to sessionStorage on submit; it must never be written into form.credentials,
+        // which would persist it as server-level credentials on the created server row. Mirrors the
+        // edit form's onTokenReceived early return.
+        setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
+        NotificationsManager.success(
+          "Token held for this browser session. Tools can now be previewed and configured; nothing will be saved to LiteLLM.",
+        );
+        return;
+      }
+
+      const credentials = {
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+        ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
+        ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
+      };
+
+      form.setFieldsValue({ credentials });
+      // Capture the identity AFTER writing the DCR'd credentials so the held token is not spuriously
+      // invalidated by its own credential write.
+      setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
+
+      NotificationsManager.success(
+        "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
+      );
     },
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
   });
 
-  const clearAuthorizedOAuthState = (values: Record<string, unknown>) => {
-    form.resetFields(["credentials", "authorization_url", "token_url", "registration_url"]);
-    form.setFieldsValue(values);
+  // Discard the held browser-authorized token and its tool preview when the authorization identity
+  // changes (or the modal closes). The CLEARED_ON_INVALIDATION form fields (shared with the edit form
+  // via types.tsx) are reset too; whatever the admin just changed (passed via changedValues) is
+  // re-applied so the invalidation never wipes their in-flight edit. Admin-typed endpoint fields are
+  // left alone (see CLEARED_ON_INVALIDATION).
+  const clearHeldOAuthToken = (changedValues: Record<string, unknown> = {}) => {
     setOauthAccessToken(null);
     clearTools();
     resetOAuthFlow();
-    setAuthorizedUrl(undefined);
+    setAuthorizedIdentity(undefined);
+    form.resetFields([...CLEARED_ON_INVALIDATION]);
+    const preserved = Object.fromEntries(
+      CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
+    );
+    if (Object.keys(preserved).length > 0) {
+      form.setFieldsValue(preserved);
+    }
   };
 
   React.useEffect(() => {
@@ -494,23 +521,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           });
           if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
-            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
+            const oauthCredentialPayload = {
               access_token: oauthTokenResponse.access_token,
               refresh_token: oauthTokenResponse.refresh_token,
               expires_in: oauthTokenResponse.expires_in,
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
-            });
+            };
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, oauthCredentialPayload);
           } else {
-            setToken(
-              response.server_id,
-              {
-                access_token: oauthTokenResponse.access_token,
-                expires_in: oauthTokenResponse.expires_in,
-                refresh_token: oauthTokenResponse.refresh_token,
-                token_type: oauthTokenResponse.token_type,
-              },
-              userID,
-            );
+            const browserHeldToken = {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            };
+            setToken(response.server_id, browserHeldToken, userID);
           }
         }
 
@@ -564,22 +589,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? { url: undefined, command: undefined, args: undefined, env: undefined }
           : { spec_path: undefined, command: undefined, args: undefined, env: undefined };
 
-    const nextValues =
-      authorizedUrl === undefined
-        ? transportValues
-        : {
-            ...transportValues,
-            credentials: undefined,
-            authorization_url: undefined,
-            token_url: undefined,
-            registration_url: undefined,
-          };
-
-    if (authorizedUrl !== undefined) {
-      clearAuthorizedOAuthState(nextValues);
-    } else {
-      form.setFieldsValue(nextValues);
+    form.setFieldsValue(transportValues);
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
+      clearHeldOAuthToken();
     }
+    setFormValues(form.getFieldsValue(true));
   };
 
   // Generate options with existing groups and potential new group
@@ -640,27 +654,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setOauthAccessToken(null);
       clearTools();
       resetOAuthFlow();
-      setAuthorizedUrl(undefined);
+      setAuthorizedIdentity(undefined);
     }
   }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
 
   const handleFormValuesChange = (changedValues: Record<string, unknown>, allValues: Record<string, unknown>) => {
-    const changedAuthorizationTarget = "url" in changedValues || "spec_path" in changedValues;
-    if (
-      changedAuthorizationTarget &&
-      authorizedUrl !== undefined &&
-      getOAuthAuthorizationTarget(allValues) !== authorizedUrl
-    ) {
-      const invalidated = {
-        credentials: undefined,
-        authorization_url: changedValues.authorization_url,
-        token_url: changedValues.token_url,
-        registration_url: changedValues.registration_url,
-      };
-      clearAuthorizedOAuthState(invalidated);
-      setFormValues({ ...allValues, ...invalidated });
+    // Any change to a mint-relevant field (url, auth_type, oauth_flow_type, client creds/scopes, or the
+    // authorization/token/registration endpoints — see getOAuthAuthorizationIdentity) makes a held token
+    // stale, so discard it and force a fresh authorize. When that happens, formValues must be rebuilt
+    // from the form's post-reset state, not the pre-reset allValues snapshot: the snapshot still holds
+    // the discarded token in credentials, and useTestMCPConnection reads formValues for tool preview.
+    if (isHeldOAuthTokenStale(allValues, authorizedIdentity)) {
+      clearHeldOAuthToken(changedValues);
+      setFormValues({ ...form.getFieldsValue(true), ...changedValues });
       return;
     }
     setFormValues(allValues);
@@ -970,8 +978,24 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                            <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
+                            <Select.Option value="oauth_delegate">
+                              OAuth Delegate (client-supplied upstream token)
+                            </Select.Option>
                           </Select>
                         </Form.Item>
+
+                        <TruePassthroughWarning authType={authType} />
+
+                        <PassthroughAuthorizeSection
+                          authType={authType}
+                          oauthFlow={{
+                            startOAuthFlow,
+                            status: oauthStatus,
+                            error: oauthError,
+                            tokenResponse: oauthTokenResponse,
+                          }}
+                        />
 
                         {shouldShowAuthValueField && (
                           <Form.Item
