@@ -5957,7 +5957,7 @@ async def share_key_via_password_link(
     client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
 
     async def _poster(url: str, headers: dict[str, str], body: dict[str, object]) -> HttpResponse:
-        return await client.post(url=url, headers=headers, json=body)
+        return await client.client.post(url, headers=headers, json=body)
 
     result = await create_password_link_secret(
         secret=data.key,

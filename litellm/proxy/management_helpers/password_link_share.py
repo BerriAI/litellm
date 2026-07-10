@@ -2,7 +2,7 @@ import base64
 import json
 import secrets
 import string
-from typing import Awaitable, Callable, Literal, Optional, Protocol, Union
+from typing import Awaitable, Callable, Literal, Protocol, Union
 
 import httpx
 from cryptography.hazmat.primitives import hashes
@@ -38,7 +38,6 @@ PasswordLinkResult = Union[PasswordLinkShare, PasswordLinkError]
 
 class _SecretData(BaseModel):
     id: str
-    domain: Optional[str] = None
 
 
 class _CreateSecretResponse(BaseModel):
@@ -124,7 +123,6 @@ async def create_password_link_secret(
     except (ValueError, ValidationError) as exc:
         return PasswordLinkError(message=f"Unexpected password.link response: {exc}")
 
-    domain = (parsed.data.domain or base).rstrip("/")
     public_b64 = _b64(public_part.encode("utf-8"))
-    share_link = f"{domain}/{parsed.data.id}/#{public_b64}"
+    share_link = f"{base}/?{parsed.data.id}#{public_b64}"
     return PasswordLinkShare(share_link=share_link, secret_id=parsed.data.id)

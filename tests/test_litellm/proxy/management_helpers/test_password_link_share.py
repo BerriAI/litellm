@@ -54,7 +54,7 @@ async def test_creates_decryptable_one_time_link() -> None:
         captured["url"] = url
         captured["headers"] = headers
         captured["body"] = body
-        return _FakeResponse(201, {"data": {"id": "abc123", "domain": "https://password.link"}})
+        return _FakeResponse(201, {"data": {"id": "abc123"}})
 
     result = await create_password_link_secret(
         secret=secret,
@@ -77,7 +77,7 @@ async def test_creates_decryptable_one_time_link() -> None:
     assert body["expiration"] == 12
     assert body["max_views"] == 1
 
-    assert result.share_link.startswith("https://password.link/abc123/#")
+    assert result.share_link.startswith("https://password.link/?abc123#")
 
     public_part = base64.b64decode(result.share_link.split("#", 1)[1]).decode("utf-8")
     private_part = base64.b64decode(str(body["password_part_private"])).decode("utf-8")
@@ -109,7 +109,7 @@ async def test_ciphertext_does_not_leak_plaintext() -> None:
 
 
 @pytest.mark.asyncio
-async def test_uses_api_base_when_response_has_no_domain() -> None:
+async def test_link_uses_configured_api_base() -> None:
     async def poster(url: str, headers: dict[str, str], body: dict[str, object]) -> _FakeResponse:
         return _FakeResponse(201, {"data": {"id": "xyz"}})
 
@@ -121,7 +121,7 @@ async def test_uses_api_base_when_response_has_no_domain() -> None:
     )
 
     assert isinstance(result, PasswordLinkShare)
-    assert result.share_link.startswith("https://vault.example.com/xyz/#")
+    assert result.share_link.startswith("https://vault.example.com/?xyz#")
 
 
 @pytest.mark.asyncio
