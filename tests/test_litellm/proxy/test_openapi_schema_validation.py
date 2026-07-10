@@ -59,7 +59,9 @@ class TestSpendCalculateOpenAPISchema:
             if hasattr(route, "path") and route.path == "/spend/calculate":
                 responses = route.responses or {}
                 response_200 = responses.get(200, {})
-                assert "description" in response_200, "/spend/calculate 200 response must have a 'description' field"
+                assert (
+                    "description" in response_200
+                ), "/spend/calculate 200 response must have a 'description' field"
                 break
         else:
             pytest.fail("/spend/calculate route not found in router")
@@ -78,7 +80,9 @@ class TestSpendCalculateOpenAPISchema:
                     "top-level property - use 'content' wrapper instead"
                 )
                 # Must have 'content' wrapper
-                assert "content" in response_200, "/spend/calculate 200 response must have a 'content' field"
+                assert (
+                    "content" in response_200
+                ), "/spend/calculate 200 response must have a 'content' field"
                 content = response_200["content"]
                 assert "application/json" in content
                 assert "schema" in content["application/json"]
@@ -114,7 +118,8 @@ class TestCredentialEndpointsOpenAPISchema:
         by_name_endpoint = by_name_routes[0].endpoint
         by_model_endpoint = by_model_routes[0].endpoint
         assert by_name_endpoint is not by_model_endpoint, (
-            "by_name and by_model must be separate handler functions to avoid path parameter conflicts in OpenAPI spec"
+            "by_name and by_model must be separate handler functions "
+            "to avoid path parameter conflicts in OpenAPI spec"
         )
 
     def test_by_model_route_does_not_require_credential_name(self):
@@ -129,7 +134,9 @@ class TestCredentialEndpointsOpenAPISchema:
 
         sig = inspect.signature(get_credential_by_model)
         param_names = list(sig.parameters.keys())
-        assert "credential_name" not in param_names, "get_credential_by_model must not have a credential_name parameter"
+        assert (
+            "credential_name" not in param_names
+        ), "get_credential_by_model must not have a credential_name parameter"
 
     def test_by_name_route_does_not_require_model_id(self):
         """
@@ -143,7 +150,9 @@ class TestCredentialEndpointsOpenAPISchema:
 
         sig = inspect.signature(get_credential_by_name)
         param_names = list(sig.parameters.keys())
-        assert "model_id" not in param_names, "get_credential_by_name must not have a model_id parameter"
+        assert (
+            "model_id" not in param_names
+        ), "get_credential_by_name must not have a model_id parameter"
 
     def test_by_model_has_model_id_path_param(self):
         """The by_model handler must accept model_id as a path parameter."""
@@ -153,7 +162,9 @@ class TestCredentialEndpointsOpenAPISchema:
         )
 
         sig = inspect.signature(get_credential_by_model)
-        assert "model_id" in sig.parameters, "get_credential_by_model must have a model_id parameter"
+        assert (
+            "model_id" in sig.parameters
+        ), "get_credential_by_model must have a model_id parameter"
 
     def test_by_name_has_credential_name_path_param(self):
         """The by_name handler must accept credential_name as a path parameter."""
@@ -163,7 +174,9 @@ class TestCredentialEndpointsOpenAPISchema:
         )
 
         sig = inspect.signature(get_credential_by_name)
-        assert "credential_name" in sig.parameters, "get_credential_by_name must have a credential_name parameter"
+        assert (
+            "credential_name" in sig.parameters
+        ), "get_credential_by_name must have a credential_name parameter"
 
 
 class TestWebSocketStubInjection:
@@ -190,16 +203,26 @@ class TestWebSocketStubInjection:
             _inject_websocket_stubs_into_openapi_schema,
         )
 
-        schema = {"paths": {"/v1/responses": {"post": {"summary": "responses_api", "operationId": "responses_api"}}}}
+        schema = {
+            "paths": {
+                "/v1/responses": {
+                    "post": {"summary": "responses_api", "operationId": "responses_api"}
+                }
+            }
+        }
         ws_routes = [self._make_fake_ws_route("/v1/responses", name="responses_ws")]
 
         result = _inject_websocket_stubs_into_openapi_schema(schema, ws_routes)
 
-        assert "post" in result["paths"]["/v1/responses"], (
-            "POST operation must be preserved when a WebSocket route shares the path"
+        assert (
+            "post" in result["paths"]["/v1/responses"]
+        ), "POST operation must be preserved when a WebSocket route shares the path"
+        assert (
+            result["paths"]["/v1/responses"]["post"]["operationId"] == "responses_api"
         )
-        assert result["paths"]["/v1/responses"]["post"]["operationId"] == "responses_api"
-        assert "get" in result["paths"]["/v1/responses"], "WebSocket stub should also be added under 'get'"
+        assert (
+            "get" in result["paths"]["/v1/responses"]
+        ), "WebSocket stub should also be added under 'get'"
         assert result["paths"]["/v1/responses"]["get"]["tags"] == ["WebSocket"]
 
     def test_websocket_stub_added_when_path_is_new(self):
@@ -231,14 +254,20 @@ class TestWebSocketStubInjection:
             _inject_websocket_stubs_into_openapi_schema,
         )
 
-        schema = {"paths": {"/health": {"get": {"summary": "health_check", "operationId": "real_get"}}}}
+        schema = {
+            "paths": {
+                "/health": {
+                    "get": {"summary": "health_check", "operationId": "real_get"}
+                }
+            }
+        }
         ws_routes = [self._make_fake_ws_route("/health", name="health_ws")]
 
         result = _inject_websocket_stubs_into_openapi_schema(schema, ws_routes)
 
-        assert result["paths"]["/health"]["get"]["operationId"] == "real_get", (
-            "Real GET must take precedence over WebSocket stub"
-        )
+        assert (
+            result["paths"]["/health"]["get"]["operationId"] == "real_get"
+        ), "Real GET must take precedence over WebSocket stub"
 
     def test_responses_post_routes_registered_on_router(self):
         """
