@@ -287,6 +287,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   <DataTable
                     columns={columns}
                     data={deferredData}
+                    getRowId={(row) => row.request_id}
                     onRowClick={handleRowClick}
                     isLoading={isLogsLoading}
                   />

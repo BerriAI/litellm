@@ -33,6 +33,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",
     )
+    config.addinivalue_line(
+        "markers",
+        "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
+    )
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
@@ -102,6 +106,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     finally:
         if spend_dir in sys.path:
             sys.path.remove(spend_dir)
+
+    try:
+        from bob_the_builder import remediate
+
+        remediate(session)
+    except Exception as exc:  # noqa: BLE001 - remediation is best-effort
+        print(f"devin remediation skipped: {exc}")
 
 
 @pytest.fixture

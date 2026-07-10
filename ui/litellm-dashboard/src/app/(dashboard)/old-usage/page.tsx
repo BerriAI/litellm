@@ -1,18 +1,22 @@
 "use client";
 
-import Usage from "@/components/usage";
+import Usage from "./_components/usage";
+import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function OldUsagePage() {
   const { accessToken, token, userRole, userId: userID, premiumUser } = useAuthorized();
   return (
-    <Usage
-      accessToken={accessToken}
-      token={token}
-      userRole={userRole}
-      userID={userID}
-      keys={null}
-      premiumUser={premiumUser}
-    />
+    <>
+      <DeprecationBanner featureName="The old Usage page" />
+      <Usage
+        accessToken={accessToken}
+        token={token}
+        userRole={userRole}
+        userID={userID}
+        keys={null}
+        premiumUser={premiumUser}
+      />
+    </>
   );
 }

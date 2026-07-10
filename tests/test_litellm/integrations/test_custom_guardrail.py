@@ -833,6 +833,173 @@ class TestGuardrailSensitiveFieldStripping:
         assert "sk-secret" not in serialized
 
 
+class TestGuardrailResponseCredentialMasking:
+    """LIT-4314 issue B regression: credentials embedded in guardrail_response
+    (via team callback_vars flowing through data["metadata"]) must be masked at
+    the construction seam so every downstream sink (SpendLogs, OTel, Langfuse,
+    custom loggers) sees masked values rather than plaintext.
+    """
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def test_callback_vars_api_key_is_masked(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        plaintext_key = "lsv2_pt_abcdef1234567890"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata_snapshot": {
+                    "callback_vars": {
+                        "langsmith_api_key": plaintext_key,
+                        "langsmith_project": "proj-name",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]
+
+        masked_key = logged["metadata_snapshot"]["callback_vars"]["langsmith_api_key"]
+        assert masked_key != plaintext_key
+        assert "*" in masked_key
+        assert plaintext_key not in json.dumps(request_data)
+
+        assert logged["model"] == "gpt-4o-mini"
+        assert logged["messages"] == [{"role": "user", "content": "hi"}]
+        assert (
+            logged["metadata_snapshot"]["callback_vars"]["langsmith_project"]
+            == "proj-name"
+        )
+
+    def test_nested_user_api_key_auth_metadata_is_masked(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        token_value = "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "evaluated_metadata": {
+                    "user_api_key_auth": {
+                        "token": token_value,
+                        "api_key": token_value,
+                        "metadata": {
+                            "callback_vars": {
+                                "langsmith_api_key": "lsv2_pt_super_secret_value_1234",
+                            }
+                        },
+                    }
+                }
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        serialized = json.dumps(request_data)
+        assert token_value not in serialized
+        assert "lsv2_pt_super_secret_value_1234" not in serialized
+
+    def test_secret_fields_pop_still_runs(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4",
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-live-should-not-appear",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        serialized = json.dumps(request_data)
+        assert "secret_fields" not in serialized
+        assert "sk-live-should-not-appear" not in serialized
+
+    def test_match_and_regex_redaction_still_runs(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "filters": [{"regex": r"\d{3}-\d{2}-\d{4}", "action": "BLOCKED"}]
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
+
+    def test_scalar_types_pass_through_unchanged(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "flagged": True,
+                "score": 0.94,
+                "tokens_used": 42,
+                "categories": ["pii", "toxicity"],
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]
+        assert logged["flagged"] is True
+        assert logged["score"] == 0.94
+        assert logged["tokens_used"] == 42
+        assert logged["categories"] == ["pii", "toxicity"]
+
+    def test_masking_reveals_prefix_and_suffix(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        plaintext = "lsv2_pt_abcdef1234567890"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "metadata_snapshot": {
+                    "callback_vars": {"langsmith_api_key": plaintext}
+                }
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        masked = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]["metadata_snapshot"]["callback_vars"]["langsmith_api_key"]
+        assert masked != plaintext
+        assert masked.startswith(plaintext[:4])
+        assert masked.endswith(plaintext[-4:])
+
+
 class TestCustomGuardrailPassthroughSupport:
     """Tests for passthrough endpoint guardrail support - Issue fixes."""
 

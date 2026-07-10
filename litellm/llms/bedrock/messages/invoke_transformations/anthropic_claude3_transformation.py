@@ -94,25 +94,30 @@ class AmazonAnthropicClaudeMessagesConfig(
         return [value]
 
     def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict) -> None:
-        """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
-        some Claude aliases; Anthropic Messages carries that content in the
-        top-level ``system`` field. Move any such entries into ``system`` before
-        the Invoke request is built."""
+        """Bedrock Invoke rejects a conversation that opens with ``role: "system"``
+        entries inside ``messages`` ("messages.0: use the top-level 'system'
+        parameter for the initial system prompt"); Anthropic Messages carries that
+        content in the top-level ``system`` field, so hoist the leading run of
+        system entries there. Mid-conversation system entries (e.g. Claude Code's
+        ``mid-conversation-system-2026-04-07`` reminders) are accepted by Invoke in
+        place and MUST stay in place: hoisting one mutates the ``system`` prefix
+        and invalidates the prompt cache for the entire message history.
+        Billing-header system blocks are stripped from the top-level ``system``
+        field regardless of whether anything was hoisted."""
         messages = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        system_role_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
-        if not system_role_messages:
-            return
-
-        anthropic_messages_request["messages"] = [
-            m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
-        ]
+        leading_count = next(
+            (i for i, m in enumerate(messages) if not (isinstance(m, dict) and m.get("role") == "system")),
+            len(messages),
+        )
+        if leading_count:
+            anthropic_messages_request["messages"] = messages[leading_count:]
         system_content = [
             block
             for source in (
                 anthropic_messages_request.get("system"),
-                *(m.get("content") for m in system_role_messages),
+                *(m.get("content") for m in messages[:leading_count]),
             )
             for block in self._as_system_content_blocks(source)
         ]
@@ -489,24 +494,43 @@ class AmazonAnthropicClaudeMessagesConfig(
             if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
+    # Bedrock-InvokeModel-supported ``context_management.edits`` types and the
+    # ``anthropic-beta`` header that each one requires. ``clear_thinking_20251015``
+    # is intentionally absent — it is LiteLLM-internal, consumed via
+    # ``_ensure_thinking_for_clear_thinking_context_management``, and forwarding
+    # the raw edit trips Bedrock's
+    # ``"context_management: Extra inputs are not permitted"`` 400.
+    #
+    # Bedrock InvokeModel DOES support ``clear_tool_uses_20250919`` under the
+    # ``context-management-2025-06-27`` beta. AWS docs:
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
+    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Dict[str, str] = {
+        "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+        "clear_tool_uses_20250919": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+    }
+
     @staticmethod
     def _filter_context_management_for_bedrock_invoke(
         anthropic_messages_request: Dict,
         beta_set: set,
     ) -> None:
         """
-        Bedrock InvokeModel accepts ``context_management`` only when it carries
-        ``compact_20260112`` edits paired with the ``compact-2026-01-12``
-        anthropic-beta header. Other edit types (notably ``clear_thinking_20251015``,
-        which Claude Code sends on every request) are LiteLLM-internal and would
-        cause Bedrock to 400 with ``"context_management: Extra inputs are not
-        permitted"``.
+        Filter ``context_management.edits`` to the subset that Bedrock InvokeModel
+        accepts and add the matching ``anthropic-beta`` header for each surviving
+        edit type.
 
-        Filter the edits list to the supported subset, add the beta header when
-        compact edits remain, and drop ``context_management`` entirely when no
-        supported edits are left so the safety-net allowlist can pass it through.
+        - ``compact_20260112`` -> ``compact-2026-01-12``
+        - ``clear_tool_uses_20250919`` -> ``context-management-2025-06-27``
 
-        Ref: https://github.com/BerriAI/litellm/issues/27532
+        Other edit types (notably ``clear_thinking_20251015``, which Claude Code
+        sends on every request) are LiteLLM-internal: thinking is injected
+        separately via ``_ensure_thinking_for_clear_thinking_context_management``,
+        and forwarding the raw edit would trip Bedrock's
+        ``"context_management: Extra inputs are not permitted"`` 400.
+
+        Refs:
+          * https://github.com/BerriAI/litellm/issues/27532
+          * https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
         """
         cm = anthropic_messages_request.get("context_management")
         if not isinstance(cm, dict):
@@ -516,15 +540,17 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request.pop("context_management", None)
             return
 
-        compact_edits = [e for e in edits if isinstance(e, dict) and e.get("type") == "compact_20260112"]
-        if compact_edits:
-            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-            anthropic_messages_request["context_management"] = {
-                **cm,
-                "edits": compact_edits,
-            }
-        else:
+        supported = AmazonAnthropicClaudeMessagesConfig._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS
+        retained_edits = [e for e in edits if isinstance(e, dict) and e.get("type") in supported]
+        if not retained_edits:
             anthropic_messages_request.pop("context_management", None)
+            return
+
+        beta_set.update(supported[e["type"]] for e in retained_edits)
+        anthropic_messages_request["context_management"] = {
+            **cm,
+            "edits": retained_edits,
+        }
 
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,

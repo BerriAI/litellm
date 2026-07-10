@@ -516,3 +516,104 @@ async def test_full_hot_path_network_count():
     assert (
         summary["total_network_requests"] == 4
     ), f"Expected 4 total network requests on warm path, got {summary['total_network_requests']}"
+
+
+# ============================================================================
+# TEST: negative caching for entities that do not exist in the DB
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_missing_user_negative_cache():
+    """
+    A user_id with no DB row (e.g. the master key's default admin user_id)
+    must not trigger a DB query on every request. The first lookup hits the
+    DB; repeat lookups inside the db_cache_expiry window are throttled.
+    """
+    user_id = "user-missing-negative-cache"
+
+    cache = DualCache(in_memory_cache=InMemoryCache())
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+    for _ in range(3):
+        with pytest.raises(ValueError):
+            await get_user_object(
+                user_id=user_id,
+                prisma_client=mock_prisma,
+                user_api_key_cache=cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+                user_id_upsert=False,
+            )
+
+    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_missing_user_rechecks_after_expiry():
+    """
+    The negative cache must expire: a user created after a miss becomes
+    visible once the db_cache_expiry window has passed.
+    """
+    from litellm.proxy.auth.auth_checks import db_cache_expiry, last_db_access_time
+
+    user_id = "user-missing-expiry-recheck"
+
+    cache = DualCache(in_memory_cache=InMemoryCache())
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+    with pytest.raises(ValueError):
+        await get_user_object(
+            user_id=user_id,
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            user_id_upsert=False,
+        )
+    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 1
+
+    last_db_access_time[f"user_id:{user_id}"] = (
+        None,
+        time.time() - (db_cache_expiry + 1),
+    )
+
+    with pytest.raises(ValueError):
+        await get_user_object(
+            user_id=user_id,
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            user_id_upsert=False,
+        )
+    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 2
+
+
+def test_should_check_db_negative_entry_throttles_then_expires():
+    """
+    A recorded miss (value=None) suppresses DB checks inside the expiry
+    window and allows them again after it. Exercises the timestamp element
+    of the stored (value, time) tuple directly.
+    """
+    from litellm.caching.dual_cache import LimitedSizeOrderedDict
+    from litellm.proxy.auth.auth_checks import (
+        _should_check_db,
+        _update_last_db_access_time,
+    )
+
+    tracker: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=10)
+
+    _update_last_db_access_time(key="k", value=None, last_db_access_time=tracker)
+    assert _should_check_db(key="k", last_db_access_time=tracker, db_cache_expiry=5) is False
+
+    tracker["k"] = (None, time.time() - 6)
+    assert _should_check_db(key="k", last_db_access_time=tracker, db_cache_expiry=5) is True

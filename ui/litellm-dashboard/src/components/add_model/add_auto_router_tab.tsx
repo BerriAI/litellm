@@ -46,6 +46,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     classifier_type: "heuristic",
   });
 
+  const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
+
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
@@ -125,6 +127,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               tiers,
               classifier_type,
               ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
+              ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
             },
             model_access_group: currentFormValues.model_access_group,
           };
@@ -278,6 +281,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
                 onChange={(config) => {
                   setComplexityRouterConfig(config);
                 }}
+                customTechnicalKeywords={customTechnicalKeywords}
+                onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
               />
             </div>
           ) : (
