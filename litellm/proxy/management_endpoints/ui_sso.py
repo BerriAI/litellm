@@ -2184,6 +2184,12 @@ async def cli_poll_key(
                 team_alias=team_alias,
                 max_budget=session_max_budget,
             )
+            refresh_token = await _mint_cli_refresh_token(
+                user_id=user_id,
+                team_id=team_id,
+                team_alias=team_alias,
+                max_budget=session_max_budget,
+            )
 
             # Delete cache entry (single-use)
             user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
@@ -2192,6 +2198,7 @@ async def cli_poll_key(
             poll_response = {
                 "status": "ready",
                 "key": jwt_token,
+                "refresh_token": refresh_token,
                 "user_id": user_id,
                 "team_id": team_id,
                 "teams": user_teams,
@@ -2211,6 +2218,142 @@ async def cli_poll_key(
     except Exception as e:
         verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
         raise HTTPException(status_code=500, detail=f"Error checking session status: {str(e)}")
+
+
+CLI_REFRESH_TOKEN_DURATION = "90d"
+
+
+async def _mint_cli_refresh_token(
+    user_id: str,
+    team_id: Optional[str],
+    team_alias: Optional[str],
+    max_budget: Optional[float],
+) -> str:
+    """Mint a long-lived virtual key that can never call an LLM (``models=[]``),
+    used solely to silently refresh a CLI JWT via ``/sso/cli/refresh``.
+
+    Deliberately kept separate from the actual (short-lived) call credential:
+    the call credential flows through subprocess env vars and every LLM
+    request, so leaking it must not also grant indefinite self-renewal.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        GenerateKeyResponse,
+        generate_key_helper_fn,
+    )
+
+    response = await generate_key_helper_fn(
+        request_type="key",
+        models=[],
+        user_id=user_id,
+        duration=CLI_REFRESH_TOKEN_DURATION,
+        key_alias=f"cli-refresh-{user_id}",
+        metadata={
+            "cli_refresh": True,
+            "team_id": team_id,
+            "team_alias": team_alias,
+            "max_budget": max_budget,
+        },
+        table_name="key",
+    )
+    return GenerateKeyResponse(**response).key
+
+
+def _require_cli_refresh_token(user_api_key_dict: UserAPIKeyAuth) -> str:
+    """Validate the authenticated key is a CLI refresh token and return its
+    hashed value (the DB primary key), or raise 401."""
+    metadata = user_api_key_dict.metadata or {}
+    if metadata.get("cli_refresh") is not True:
+        raise HTTPException(status_code=401, detail="Not a CLI refresh token")
+    if not user_api_key_dict.token:
+        raise HTTPException(status_code=401, detail="Invalid CLI refresh token")
+    return user_api_key_dict.token
+
+
+@router.post("/sso/cli/refresh", tags=["experimental"], include_in_schema=False)
+async def cli_refresh_token(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Silently mint a fresh CLI JWT + refresh token, given a previously-issued
+    CLI refresh token. Single-use: the presented refresh token is blocked
+    immediately after a successful exchange, so a replay (stolen-file race,
+    client retry) can't mint a second pair from it.
+    """
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.repositories.verification_token_repository import (
+        VerificationTokenRepository,
+    )
+
+    presented_token = _require_cli_refresh_token(user_api_key_dict)
+
+    user_id = user_api_key_dict.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid CLI refresh token")
+
+    user_db_obj = await get_user_object(
+        user_id=user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+    )
+    if user_db_obj is None:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
+    metadata = user_api_key_dict.metadata or {}
+    team_id = metadata.get("team_id")
+    team_alias = metadata.get("team_alias")
+    max_budget = metadata.get("max_budget")
+
+    user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=user_db_obj.user_role,
+        models=user_db_obj.models or [],
+    )
+    new_jwt = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=user_info,
+        team_id=team_id,
+        team_alias=team_alias,
+        max_budget=max_budget,
+    )
+    new_refresh_token = await _mint_cli_refresh_token(
+        user_id=user_id,
+        team_id=team_id,
+        team_alias=team_alias,
+        max_budget=max_budget,
+    )
+
+    if prisma_client is not None:
+        await VerificationTokenRepository(prisma_client).table.update(
+            where={"token": presented_token},
+            data={"blocked": True},
+        )
+        user_api_key_cache.delete_cache(key=presented_token)
+
+    return {"key": new_jwt, "refresh_token": new_refresh_token}
+
+
+@router.post("/sso/cli/logout", tags=["experimental"], include_in_schema=False)
+async def cli_logout(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Revoke a CLI refresh token server-side. Called by ``lite logout`` so a
+    copied-then-deleted local token file can't still be used to refresh."""
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.repositories.verification_token_repository import (
+        VerificationTokenRepository,
+    )
+
+    presented_token = _require_cli_refresh_token(user_api_key_dict)
+
+    if prisma_client is not None:
+        await VerificationTokenRepository(prisma_client).table.update(
+            where={"token": presented_token},
+            data={"blocked": True},
+        )
+        user_api_key_cache.delete_cache(key=presented_token)
+
+    return {"status": "revoked"}
 
 
 async def insert_sso_user(

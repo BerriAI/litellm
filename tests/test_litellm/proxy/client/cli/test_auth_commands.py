@@ -12,6 +12,7 @@ sys.path.insert(
 
 from click.testing import CliRunner
 
+from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy.client.cli.commands.auth import (
     clear_token,
     get_stored_api_key,
@@ -19,6 +20,7 @@ from litellm.proxy.client.cli.commands.auth import (
     load_token,
     login,
     logout,
+    print_token,
     save_token,
     whoami,
 )
@@ -471,12 +473,55 @@ class TestLogoutCommand:
         self.runner = CliRunner()
 
     def test_logout_success(self):
-        """Test successful logout"""
-        with patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear:
-            result = self.runner.invoke(logout)
+        """Test successful logout with no stored refresh token (nothing to revoke server-side)"""
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
 
             assert result.exit_code == 0
             assert "✅ Logged out successfully" in result.output
+            mock_clear.assert_called_once()
+            mock_post.assert_not_called()
+
+    def test_logout_revokes_refresh_token_server_side(self):
+        """logout must revoke the stored refresh token, not just delete the local file --
+        otherwise a copied-then-deleted token.json could still be used to mint new JWTs."""
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={"base_url": "http://localhost:4000", "refresh_token": "sk-refresh-abc"},
+            ),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
+
+            assert result.exit_code == 0
+            mock_post.assert_called_once_with(
+                "http://localhost:4000/sso/cli/logout",
+                headers={"Authorization": "Bearer sk-refresh-abc"},
+                timeout=5,
+            )
+            mock_clear.assert_called_once()
+
+    def test_logout_clears_local_token_even_if_revoke_fails(self):
+        """The proxy being unreachable must not block clearing the local token."""
+        import requests
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={"base_url": "http://localhost:4000", "refresh_token": "sk-refresh-abc"},
+            ),
+            patch("requests.post", side_effect=requests.RequestException("connection refused")),
+        ):
+            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
+
+            assert result.exit_code == 0
             mock_clear.assert_called_once()
 
 
@@ -726,3 +771,139 @@ class TestCLIKeyRegenerationFlow:
                 saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt"
             )
             assert saved_data["user_id"] == "test-user-solo"
+
+
+class TestPrintTokenCommand:
+    """Test `lite auth print-token`, used as Claude Code's apiKeyHelper.
+
+    stdout must contain *only* the token -- Claude Code treats stdout
+    verbatim as the bearer token, so any diagnostic text on stdout would
+    corrupt authentication.
+    """
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def test_no_stored_token_fails_cleanly(self):
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None):
+            result = self.runner.invoke(print_token, obj={"base_url": "http://localhost:4000"})
+
+        assert result.exit_code != 0
+        assert "Not authenticated" in result.output
+
+    def test_base_url_mismatch_fails_cleanly(self):
+        """A token issued for a different server must never be printed."""
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_token",
+            return_value={
+                "base_url": "https://other-server.com",
+                "key": "sk-should-not-print",
+                "timestamp": time.time(),
+            },
+        ):
+            result = self.runner.invoke(print_token, obj={"base_url": "http://localhost:4000"})
+
+        assert result.exit_code != 0
+        assert "sk-should-not-print" not in result.output
+
+    def test_fresh_cached_jwt_printed_without_network_call(self):
+        """A recently-issued JWT should be printed straight from cache -- no
+        refresh call on every single invocation (apiKeyHelper gets called
+        frequently)."""
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "http://localhost:4000",
+                    "key": "sk-cached-fresh",
+                    "refresh_token": "sk-refresh-abc",
+                    "timestamp": time.time(),
+                },
+            ),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(print_token, obj={"base_url": "http://localhost:4000"})
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-cached-fresh"
+        mock_post.assert_not_called()
+
+    def test_stale_jwt_triggers_silent_refresh(self):
+        """Core apiKeyHelper contract: an expired cached JWT must be silently
+        refreshed and the *new* token printed, not the stale one."""
+        old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "key": "sk-refreshed-jwt",
+            "refresh_token": "sk-refresh-rotated",
+        }
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "http://localhost:4000",
+                    "key": "sk-stale-jwt",
+                    "refresh_token": "sk-refresh-old",
+                    "timestamp": old_timestamp,
+                },
+            ),
+            patch("requests.post", return_value=mock_response) as mock_post,
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
+        ):
+            result = self.runner.invoke(print_token, obj={"base_url": "http://localhost:4000"})
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-refreshed-jwt"
+        mock_post.assert_called_once_with(
+            "http://localhost:4000/sso/cli/refresh",
+            headers={"Authorization": "Bearer sk-refresh-old"},
+            timeout=10,
+        )
+        # The rotated refresh token must be persisted, or the *next*
+        # refresh would replay an already-consumed (blocked) token.
+        saved = mock_save.call_args[0][0]
+        assert saved["key"] == "sk-refreshed-jwt"
+        assert saved["refresh_token"] == "sk-refresh-rotated"
+
+    def test_refresh_failure_does_not_print_stale_token(self):
+        """If the refresh token was revoked/expired server-side, print-token
+        must fail loudly (stderr, nonzero exit) rather than silently handing
+        Claude Code a dead JWT that will just 401 again."""
+        old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
+        import requests
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "http://localhost:4000",
+                    "key": "sk-stale-jwt",
+                    "refresh_token": "sk-refresh-revoked",
+                    "timestamp": old_timestamp,
+                },
+            ),
+            patch("requests.post", side_effect=requests.RequestException("401")),
+        ):
+            result = self.runner.invoke(print_token, obj={"base_url": "http://localhost:4000"})
+
+        assert result.exit_code != 0
+        assert "sk-stale-jwt" not in result.output
+
+    def test_no_refresh_token_falls_back_to_cached_key(self):
+        """Backward compatibility: a token.json from before this feature
+        existed has no refresh_token -- print-token must still work as a
+        plain cached-key printer rather than erroring out."""
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_token",
+            return_value={
+                "base_url": "http://localhost:4000",
+                "key": "sk-legacy-key",
+                "timestamp": time.time() - 999999,  # long stale, but no refresh_token to use
+            },
+        ):
+            result = self.runner.invoke(print_token, obj={"base_url": "http://localhost:4000"})
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-legacy-key"
