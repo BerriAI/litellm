@@ -208,6 +208,7 @@ async def test_sync_updates_existing_config_team() -> None:
     data = updated["data"]
     assert data.team_alias == "Systems"
     assert data.team_member_budget == 75
+    assert "models" not in data.model_fields_set
     sonnet = data.model_max_budget["claude-sonnet-4-6"]
     opus = data.model_max_budget["claude-opus-4-8"]
     assert getattr(sonnet, "max_budget", None) == 20.0 or (
@@ -217,6 +218,56 @@ async def test_sync_updates_existing_config_team() -> None:
         isinstance(opus, dict) and opus.get("budget_limit") == 10.0
     )
     assert data.metadata[CONFIG_TEAM_METADATA_KEY] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_update_includes_models_when_configured() -> None:
+    updated: dict[str, Any] = {}
+
+    async def fake_update_team(*, data, http_request, user_api_key_dict):
+        updated["data"] = data
+        return {"team_id": data.team_id, "data": data}
+
+    existing = SimpleNamespace(
+        team_id="systems",
+        team_alias="Systems",
+        metadata={CONFIG_TEAM_METADATA_KEY: True},
+    )
+    team_repo = MagicMock()
+    team_repo.find_by_id = AsyncMock(return_value=existing)
+
+    with (
+        patch(
+            "litellm.repositories.team_repository.TeamRepository",
+            return_value=team_repo,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.new_team",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.update_team",
+            new=fake_update_team,
+        ),
+    ):
+        await sync_config_teams(
+            config_teams=parse_config_teams(
+                [
+                    {
+                        "team_id": "systems",
+                        "team_alias": "Systems",
+                        "team_member_budget": 100,
+                        "models": ["claude-haiku-4-5"],
+                    }
+                ]
+            ),
+            model_list=None,
+            prisma_client=MagicMock(),
+            master_key="sk-test",
+        )
+
+    assert updated["data"].models == ["claude-haiku-4-5"]
+    assert "models" in updated["data"].model_fields_set
 
 
 @pytest.mark.asyncio

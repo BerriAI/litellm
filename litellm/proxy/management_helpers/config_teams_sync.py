@@ -218,15 +218,22 @@ async def _sync_one_config_team(
 
     existing_metadata = dict(existing.metadata or {})
     existing_metadata[CONFIG_TEAM_METADATA_KEY] = True
-    update_data = UpdateTeamRequest(
-        team_id=existing.team_id,
-        team_alias=entry.team_alias,
-        team_member_budget=entry.team_member_budget,
-        team_member_budget_duration=entry.team_member_budget_duration,
-        model_max_budget=model_max_budget or None,
-        models=entry.models,
-        metadata=existing_metadata,
-    )
+    update_kwargs: dict[str, Any] = {
+        "team_id": existing.team_id,
+        "metadata": existing_metadata,
+    }
+    if entry.team_alias is not None:
+        update_kwargs["team_alias"] = entry.team_alias
+    if entry.team_member_budget is not None:
+        update_kwargs["team_member_budget"] = entry.team_member_budget
+    if entry.team_member_budget_duration is not None:
+        update_kwargs["team_member_budget_duration"] = entry.team_member_budget_duration
+    if model_max_budget:
+        update_kwargs["model_max_budget"] = model_max_budget
+    # Prisma rejects models=null; only set when config explicitly provides a list
+    if entry.models is not None:
+        update_kwargs["models"] = entry.models
+    update_data = UpdateTeamRequest(**update_kwargs)
     await update_team(
         data=update_data,
         http_request=_http_request(),
