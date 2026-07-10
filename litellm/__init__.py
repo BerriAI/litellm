@@ -207,6 +207,15 @@ redact_user_api_key_info: Optional[bool] = False
 # major release; opt in early with `litellm.expose_router_debug_in_errors
 # = False`.
 expose_router_debug_in_errors: bool = True
+# When True, unmapped / connection errors append the captured Python
+# traceback (absolute file paths, line numbers, internal call stack) onto
+# the exception message that is surfaced to API clients via
+# ProxyException.message. This is an information-disclosure leak (CWE-209) -
+# see https://github.com/BerriAI/litellm/issues/30948. Defaults to False so
+# the traceback stays in the server-side logs only. Set to True to restore
+# the legacy behavior of returning the traceback in the error response
+# (https://github.com/BerriAI/litellm/issues/4201).
+expose_traceback_in_errors: bool = False
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
