@@ -31,7 +31,7 @@ from realtime_client import (
     SessionUpdate,
     function_call_item,
     parse_last,
-    skip_if_unconfigured,
+    realtime_model,
     transcript,
     user_message,
 )
@@ -62,12 +62,12 @@ class WeatherResult(BaseModel):
 def test_text_conversation(
     client: RealtimeClient,
     scoped_key: str,
-    configured_models: frozenset[str],
+    realtime_models: dict[str, str],
     provider: RealtimeProvider,
 ) -> None:
-    skip_if_unconfigured(provider, configured_models)
+    model = realtime_model(provider, realtime_models)
 
-    with client.connect(key=scoped_key, model=provider.model) as session:
+    with client.connect(key=scoped_key, model=model) as session:
         created = session.collect_until("session.created", timeout=20)
         assert created[-1].type == "session.created"
 
@@ -99,12 +99,12 @@ def test_text_conversation(
 def test_tool_call_round_trip(
     client: RealtimeClient,
     scoped_key: str,
-    configured_models: frozenset[str],
+    realtime_models: dict[str, str],
     provider: RealtimeProvider,
 ) -> None:
-    skip_if_unconfigured(provider, configured_models)
+    model = realtime_model(provider, realtime_models)
 
-    with client.connect(key=scoped_key, model=provider.model) as session:
+    with client.connect(key=scoped_key, model=model) as session:
         session.collect_until("session.created", timeout=20)
         session.send(
             SessionUpdate(

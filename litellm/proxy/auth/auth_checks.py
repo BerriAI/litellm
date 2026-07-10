@@ -98,7 +98,10 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
-from .auth_checks_organization import organization_role_based_access_check
+from .auth_checks_organization import (
+    add_team_org_context_to_request_body,
+    organization_role_based_access_check,
+)
 from .auth_utils import get_model_from_request
 
 if TYPE_CHECKING:
@@ -707,10 +710,28 @@ async def common_checks(
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
 
+    async def _fetch_team_org_id(team_id: str) -> Optional[str]:
+        try:
+            team = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except HTTPException:
+            return None
+        return team.organization_id
+
+    request_body_for_route_check = await add_team_org_context_to_request_body(
+        route=route,
+        request_body=request_body,
+        fetch_team_org_id=_fetch_team_org_id,
+    )
+
     _is_route_allowed = _is_api_route_allowed(
         route=route,
         request=request,
-        request_data=request_body,
+        request_data=request_body_for_route_check,
         valid_token=valid_token,
         user_obj=user_object,
     )

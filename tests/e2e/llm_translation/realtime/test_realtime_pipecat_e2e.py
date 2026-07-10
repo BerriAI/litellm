@@ -29,7 +29,7 @@ from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
     _ws_base_url,
-    skip_if_unconfigured,
+    realtime_model,
 )
 
 pytestmark = pytest.mark.e2e
@@ -123,12 +123,12 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
 @pytest.mark.parametrize("provider", PROVIDER_PARAMS)
 def test_pipecat_tool_smoke(
     scoped_key: str,
-    configured_models: frozenset[str],
+    realtime_models: dict[str, str],
     provider: RealtimeProvider,
 ) -> None:
-    skip_if_unconfigured(provider, configured_models)
+    model = realtime_model(provider, realtime_models)
 
-    tool_called, produced_text = asyncio.run(_run_pipeline(scoped_key, provider.model))
+    tool_called, produced_text = asyncio.run(_run_pipeline(scoped_key, model))
 
     assert tool_called, "pipecat did not invoke the get_weather callback"
     assert produced_text, "pipecat produced no assistant text frames"

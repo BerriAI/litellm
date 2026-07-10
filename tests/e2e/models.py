@@ -376,6 +376,7 @@ class LiteLLMParamsBody(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    realtime_protocol: str | None = None
     aws_region_name: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
@@ -394,7 +395,11 @@ ModelMode = Literal["batch", "realtime", "image_generation"]
 
 
 class ModelInfoBody(BaseModel):
-    id: str
+    # id is left unset so the proxy assigns a unique model_id per deployment.
+    # Pinning it to the model_name made re-registrations of a fixed-name model
+    # (e.g. the batch suite's openai-batch) collide on the model_id unique
+    # constraint when a prior run's teardown had not removed the row.
+    id: str | None = None
     mode: ModelMode | None = None
 
 
@@ -408,6 +413,18 @@ class ModelNewBody(BaseModel):
 class ModelNewResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
+
+
+class ModelListEntry(BaseModel):
+    id: str
+
+
+class ModelsListResponse(BaseModel):
+    """GET /v1/models on the data plane: the deployments the gateway can actually
+    serve right now. Used to confirm a freshly created model has propagated from
+    the control plane before a test calls it."""
+
+    data: tuple[ModelListEntry, ...] = ()
 
 
 class ModelDeleteBody(BaseModel):

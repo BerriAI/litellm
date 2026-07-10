@@ -30,6 +30,7 @@ const oauthHook = vi.hoisted(() => ({
   onTokenReceived: null as
     | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
     | null,
+  getCredentials: null as (() => Record<string, unknown> | undefined) | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
@@ -37,8 +38,10 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
       token: Record<string, unknown> | null,
       registeredClient?: { clientId?: string; clientSecret?: string },
     ) => void;
+    getCredentials?: () => Record<string, unknown> | undefined;
   }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
+    oauthHook.getCredentials = opts.getCredentials ?? null;
     return {
       startOAuthFlow: vi.fn(),
       status: "idle",
@@ -162,6 +165,57 @@ describe("CreateMCPServer", () => {
       await waitFor(() => {
         expect(screen.getByText("Authentication Value")).toBeInTheDocument();
       });
+    });
+
+    it("should warn that LiteLLM auth is disabled when True Passthrough is selected", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("True Passthrough disables LiteLLM authentication for this server"),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("should not show the True Passthrough warning when OAuth Delegate is selected", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+
+      await waitFor(() => {
+        expect(screen.getAllByText("OAuth Delegate (client-supplied upstream token)").length).toBeGreaterThan(0);
+      });
+      expect(
+        screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
+      ).not.toBeInTheDocument();
+    });
+
+    it.each([["True Passthrough (no LiteLLM auth)"], ["OAuth Delegate (client-supplied upstream token)"]])(
+      "should show the browser-only authorize section when %s is selected",
+      async (optionLabel) => {
+        await selectHttpTransport();
+
+        await selectAntOption("Authentication", optionLabel);
+
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
+        });
+        expect(screen.getByText("OAuth Client ID (optional, not saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional, not saved)")).toBeInTheDocument();
+      },
+    );
+
+    it("should not show the browser-only authorize section for API Key auth", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "API Key");
+
+      await waitFor(() => {
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).not.toBeInTheDocument();
     });
 
     it("should not require auth value when creating a server with API Key auth type", async () => {
@@ -296,6 +350,90 @@ describe("CreateMCPServer", () => {
       const [token, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(token).toBe("test-token");
       expect(payload.credentials).toEqual({ auth_value: "my-secret-key" });
+    });
+
+    it("does not write the browser-authorized token into form.credentials for true_passthrough", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "PT_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      // Simulate the browser Authorize & Fetch flow handing back an upstream token.
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+      });
+
+      // For a browser-only mode the token must never land in form.credentials, which the OAuth flow's
+      // getCredentials reads for preview requests and the redirect-persist cache serializes. Without
+      // the guard, onTokenReceived writes it here and this returns { access_token: "upstream-tok" }.
+      const credentials = oauthHook.getCredentials?.() ?? {};
+      expect(credentials.access_token).toBeUndefined();
+    });
+
+    it.each([
+      ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
+      ["oauth_delegate", "OAuth Delegate (client-supplied upstream token)"],
+    ])("persists only tool config on create for %s; the token stays browser-held", async (_authType, optionLabel) => {
+      oauthHook.tokenResponse = { access_token: "upstream-tok", token_type: "Bearer" };
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "CF_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", optionLabel);
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Disable all tools" }));
+
+      // Previewing and configuring must stay stateless: nothing is persisted anywhere (server row,
+      // per-user DB credential, sessionStorage) until the admin submits.
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+      expect(setToken).not.toHaveBeenCalled();
+
+      const createdServer = {
+        server_id: "new-cf-server",
+        server_name: "CF_Server",
+        alias: "CF_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: _authType,
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+
+      // Only the tool configuration persists on the server row; the upstream token appears nowhere
+      // in the create payload and no per-user DB credential is written. The token is committed to
+      // sessionStorage only, keyed to the created server.
+      expect(payload.allowed_tools).toEqual([]);
+      expect(payload.credentials).toBeUndefined();
+      expect(JSON.stringify(payload)).not.toContain("upstream-tok");
+      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+      expect(setToken).toHaveBeenCalledWith(
+        "new-cf-server",
+        expect.objectContaining({ access_token: "upstream-tok" }),
+        undefined,
+      );
     });
 
     it("should not show auth value field when None auth type is selected", async () => {
@@ -603,6 +741,93 @@ describe("CreateMCPServer", () => {
     it("shows Token Validation Rules and Token Storage TTL fields", async () => {
       await setupOAuthInteractive();
       // Asserted in setupOAuthInteractive
+    });
+
+    it("invalidates the held token when the auth mode changes after Authorize & Fetch", async () => {
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      // Switching the Authentication mode changes the OAuth identity, so the held token is discarded.
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await waitFor(() => expect(oauthHook.reset).toHaveBeenCalled());
+    });
+
+    it("does NOT invalidate the held token when a non-mint field (server name) changes", async () => {
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Renamed_Server" } });
+      });
+
+      // server_name is not part of the OAuth identity, so the held token must survive the edit.
+      await waitFor(() => expect(screen.getAllByRole("button", { name: "Add MCP Server" }).length).toBeGreaterThan(0));
+      expect(oauthHook.reset).not.toHaveBeenCalled();
+    });
+
+    it("does not refetch the tool preview with a discarded token after invalidation", async () => {
+      // Regression: handleFormValuesChange used to publish the pre-reset antd snapshot into
+      // formValues after clearHeldOAuthToken, so useTestMCPConnection kept the discarded OAuth
+      // material (the DCR client minted for the old identity) and sent it on the next tool-preview
+      // request.
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "stale-tok" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Sync_FormValues" } });
+      });
+      vi.mocked(networking.testMCPToolsListRequest).mockClear();
+
+      await selectAntOption("Authentication", "API Key");
+
+      await waitFor(() => expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalled());
+      for (const call of vi.mocked(networking.testMCPToolsListRequest).mock.calls) {
+        expect(call[1]?.credentials?.client_id).not.toBe("client-a");
+        expect(call[1]?.credentials?.client_secret).not.toBe("secret-a");
+      }
+    });
+
+    it("keeps the held token on an http to sse switch with the same url", async () => {
+      // Same url means the same resource/audience (RFC 8707): the minted token is still valid, so a
+      // pure transport swap between the two MCP wire protocols must not force a re-authorize.
+      await setupOAuthInteractive();
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      await selectAntOption("Transport Type", "Server-Sent Events (SSE)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      expect(oauthHook.reset).not.toHaveBeenCalled();
     });
 
     it("includes token_validation in payload when token_validation_json is filled with valid JSON", async () => {

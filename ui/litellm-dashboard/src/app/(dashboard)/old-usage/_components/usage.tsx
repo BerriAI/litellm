@@ -14,9 +14,9 @@ import {
 
 import React, { useState, useEffect } from "react";
 
-import ViewUserSpend from "./view_user_spend";
-import { ProxySettings } from "./user_dashboard";
-import UsageDatePicker from "./shared/usage_date_picker";
+import ViewUserSpend from "@/components/view_user_spend";
+import { ProxySettings } from "@/components/user_dashboard";
+import UsageDatePicker from "@/components/shared/usage_date_picker";
 import {
   Grid,
   Col,
@@ -48,8 +48,8 @@ import {
   adminGlobalActivity,
   adminGlobalActivityPerModel,
   getProxyUISettings,
-} from "./networking";
-import TopKeyView from "./UsagePage/components/EntityUsage/TopKeyView";
+} from "@/components/networking";
+import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
