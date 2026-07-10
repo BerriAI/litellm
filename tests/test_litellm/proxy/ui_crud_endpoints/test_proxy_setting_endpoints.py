@@ -2393,3 +2393,19 @@ def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
         assert "proxy admin" in resp.json()["detail"].lower()
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_allow_user_team_creation_is_wired_into_ui_settings_sync():
+    """LIT-3254: the allow_user_team_creation UI toggle only reaches the
+    /team/new route gate through the general_settings runtime sync. If the
+    flag drops out of either list, the DB-persisted toggle silently stops
+    working while the UI still shows it as enabled."""
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        ALLOWED_UI_SETTINGS_FIELDS,
+        _RUNTIME_GENERAL_SETTINGS_FLAGS,
+        UISettings,
+    )
+
+    assert "allow_user_team_creation" in ALLOWED_UI_SETTINGS_FIELDS
+    assert "allow_user_team_creation" in _RUNTIME_GENERAL_SETTINGS_FLAGS
+    assert UISettings.model_fields["allow_user_team_creation"].default is False

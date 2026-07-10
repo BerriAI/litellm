@@ -1,4 +1,5 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
@@ -108,13 +109,18 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
   return unfurlWildcardModelsInList(tempModelsToPick, userModels);
 };
 
-const canCreateOrManageTeams = (
+export const canCreateOrManageTeams = (
   userRole: string | null,
   userID: string | null,
   organizations: Organization[] | null,
+  allowUserTeamCreation: boolean,
 ): boolean => {
   // Admin role always has permission
   if (userRole === "Admin") {
+    return true;
+  }
+
+  if (allowUserTeamCreation && userRole === "Internal User") {
     return true;
   }
 
@@ -164,6 +170,8 @@ const getOrganizationAlias = (
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
+  const { data: uiSettings } = useUISettings();
+  const allowUserTeamCreation = Boolean(uiSettings?.values?.allow_user_team_creation);
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -879,7 +887,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   Create your first team to organize members and manage access to models.
                 </Text>
               </div>
-              {canCreateOrManageTeams(userRole, userID, organizations) && (
+              {canCreateOrManageTeams(userRole, userID, organizations, allowUserTeamCreation) && (
                 <Button
                   type="primary"
                   icon={<PlusOutlined />}
@@ -1026,7 +1034,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               </Title>
               <Text type="secondary">Manage teams, members, and their access to models and budgets</Text>
             </Space>
-            {canCreateOrManageTeams(userRole, userID, organizations) && (
+            {canCreateOrManageTeams(userRole, userID, organizations, allowUserTeamCreation) && (
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
@@ -1042,7 +1050,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         </>
       )}
 
-      {canCreateOrManageTeams(userRole, userID, organizations) && (
+      {canCreateOrManageTeams(userRole, userID, organizations, allowUserTeamCreation) && (
         <Modal
           title="Create Team"
           open={isTeamModalVisible}
@@ -1070,6 +1078,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 const isOrgAdmin = userRole !== "Admin";
                 const isSingleOrg = adminOrgs.length === 1;
                 const hasNoOrgs = adminOrgs.length === 0;
+
+                if (userRole !== "Admin" && hasNoOrgs) {
+                  return null;
+                }
 
                 return (
                   <>

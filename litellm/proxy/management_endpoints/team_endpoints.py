@@ -74,6 +74,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.common_utils import (
@@ -784,6 +785,42 @@ async def _check_org_team_limits(
     )
 
 
+def _tightest_cap(*caps: Optional[float]) -> Optional[float]:
+    set_caps = tuple(cap for cap in caps if cap is not None)
+    return min(set_caps) if set_caps else None
+
+
+def _inherit_caller_limits_for_self_served_team(
+    data: NewTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> NewTeamRequest:
+    """Clamp a self-served team to the creating user's effective limits.
+
+    A self-served team must never be wider than its creator. The creator's
+    authority spans two layers: the calling key (`tpm_limit`/`rpm_limit`/
+    `models`) and the underlying user (`user_tpm_limit`/`user_rpm_limit`/
+    `user_max_budget`). The primary caller is a UI SSO session whose key
+    carries no tpm/rpm and only a tiny per-session `max_budget`
+    (`max_ui_session_budget`), so reading key limits alone would leave the team
+    uncapped. We take the tightest of both layers per dimension and clamp the
+    team down to it, filling unset fields and shrinking any value (including one
+    seeded by `default_team_params`) that exceeds the creator's ceiling. The
+    per-session key budget is deliberately excluded from the budget cap; only
+    the user's own `max_budget` bounds the team.
+    """
+    effective_tpm = _tightest_cap(user_api_key_dict.tpm_limit, user_api_key_dict.user_tpm_limit)
+    effective_rpm = _tightest_cap(user_api_key_dict.rpm_limit, user_api_key_dict.user_rpm_limit)
+    effective_budget = user_api_key_dict.user_max_budget
+    return data.model_copy(
+        update={
+            "models": data.models if data.models else list(user_api_key_dict.models),
+            "tpm_limit": _tightest_cap(data.tpm_limit, effective_tpm),
+            "rpm_limit": _tightest_cap(data.rpm_limit, effective_rpm),
+            "max_budget": _tightest_cap(data.max_budget, effective_budget),
+        }
+    )
+
+
 async def _check_user_team_limits(
     data: Union[NewTeamRequest, UpdateTeamRequest],
     user_api_key_dict: UserAPIKeyAuth,
@@ -1115,6 +1152,14 @@ async def new_team(
             # Only validate user budget/models/tpm/rpm for standalone teams (not org-scoped)
             # For org-scoped teams, validation is done by _check_org_team_limits()
             if data.organization_id is None:
+                if (
+                    user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+                    and RouteChecks._user_team_creation_enabled()
+                ):
+                    data = _inherit_caller_limits_for_self_served_team(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                    )
                 await _check_user_team_limits(
                     data=data,
                     user_api_key_dict=user_api_key_dict,

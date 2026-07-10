@@ -22334,6 +22334,12 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow User Team Creation
+             * @description When True, internal users can call POST /team/new to create standalone teams (no organization_id). The creating user is automatically added as the team's admin, and the team inherits the caller's model/tpm/rpm restrictions for any fields left unset.
+             * @default false
+             */
+            allow_user_team_creation: boolean;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */

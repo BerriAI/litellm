@@ -3,8 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
-import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
-import OldTeams from "./OldTeams";
+import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall, type Organization } from "./networking";
+import OldTeams, { canCreateOrManageTeams } from "./OldTeams";
 import { teamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 
 const mockTeamInfoView = vi.fn();
@@ -95,6 +95,12 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => mockUseOrganizations(),
 }));
 
+const mockUseUISettings = vi.fn();
+
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => mockUseUISettings() ?? { data: undefined },
+}));
+
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: vi.fn().mockReturnValue({
     data: [
@@ -129,6 +135,17 @@ const createQueryClient = () => {
 const renderWithQueryClient = (component: React.ReactElement) => {
   const queryClient = createQueryClient();
   return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
+};
+
+const emptyTeamListResult = { teams: [], total: 0, page: 1, page_size: 100, total_pages: 0 };
+const selfServeCreatedTeam = {
+  team_id: "new-team-1",
+  team_alias: "My Self Serve Team",
+  models: ["gpt-4"],
+  organization_id: null,
+  keys: [],
+  members_with_roles: [],
+  spend: 0,
 };
 
 describe("OldTeams - handleCreate organization handling", () => {
@@ -529,48 +546,39 @@ describe("OldTeams - helper functions", () => {
   });
 
   describe("canCreateOrManageTeams", () => {
-    it("should return true for Admin role", () => {
-      const userRole = "Admin";
-      const result = userRole === "Admin";
-      expect(result).toBe(true);
+    const orgWithOrgAdmin = {
+      organization_id: "org-1",
+      organization_alias: "Org 1",
+      models: [],
+      members: [{ user_id: "user-123", user_role: "org_admin" }],
+    } as unknown as Organization;
+
+    const orgWithPlainMember = {
+      organization_id: "org-1",
+      organization_alias: "Org 1",
+      models: [],
+      members: [{ user_id: "user-123", user_role: "member" }],
+    } as unknown as Organization;
+
+    it("returns true for Admin role regardless of the self-serve flag", () => {
+      expect(canCreateOrManageTeams("Admin", "user-123", null, false)).toBe(true);
     });
 
-    it("should return true for org_admin in any organization", () => {
-      const userID = "user-123";
-      const organizations = [
-        {
-          organization_id: "org-1",
-          organization_alias: "Org 1",
-          models: [],
-          members: [{ user_id: "user-123", user_role: "org_admin" }],
-        },
-      ];
-
-      const result = organizations.some((org) =>
-        org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin"),
-      );
-
-      expect(result).toBe(true);
+    it("returns true for org_admin in any organization regardless of the self-serve flag", () => {
+      expect(canCreateOrManageTeams("Internal User", "user-123", [orgWithOrgAdmin], false)).toBe(true);
     });
 
-    it("should return false when user has no admin permissions", () => {
-      const userID = "user-123";
-      const userRole: string = "User";
-      const organizations = [
-        {
-          organization_id: "org-1",
-          organization_alias: "Org 1",
-          models: [],
-          members: [{ user_id: "user-123", user_role: "member" }],
-        },
-      ];
+    it("returns true for Internal User when allow_user_team_creation is on", () => {
+      expect(canCreateOrManageTeams("Internal User", "user-123", null, true)).toBe(true);
+    });
 
-      const isAdmin = userRole === "Admin";
-      const isOrgAdmin = organizations.some((org) =>
-        org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin"),
-      );
+    it("returns false for Internal User when allow_user_team_creation is off", () => {
+      expect(canCreateOrManageTeams("Internal User", "user-123", [orgWithPlainMember], false)).toBe(false);
+    });
 
-      expect(isAdmin || isOrgAdmin).toBe(false);
+    it("does not extend the self-serve flag to viewer roles", () => {
+      expect(canCreateOrManageTeams("Internal Viewer", "user-123", null, true)).toBe(false);
+      expect(canCreateOrManageTeams("Admin Viewer", "user-123", null, true)).toBe(false);
     });
   });
 });
@@ -1144,5 +1152,99 @@ describe("OldTeams - LIT-2530 organization stays optional for proxy admin with a
         expect.objectContaining({ team_alias: "No Org Team", organization_id: null }),
       );
     });
+  });
+});
+
+describe("OldTeams - self-serve team creation (LIT-3254)", () => {
+  beforeEach(() => {
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamListCall).mockResolvedValue(emptyTeamListResult);
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("shows the Create Team button to an Internal User when allow_user_team_creation is on", async () => {
+    mockUseUISettings.mockReturnValue({ data: { values: { allow_user_team_creation: true } } });
+
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+
+    const buttons = await screen.findAllByTestId("create-team-button");
+    expect(buttons.length).toBeGreaterThan(0);
+  });
+
+  it("hides the Create Team button from an Internal User when allow_user_team_creation is off", async () => {
+    mockUseUISettings.mockReturnValue({ data: { values: { allow_user_team_creation: false } } });
+
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+
+    await waitFor(() => expect(screen.getAllByText("Teams").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("create-team-button")).not.toBeInTheDocument();
+  });
+
+  it("omits the Organization selector for a self-serve Internal User with no admin orgs", async () => {
+    mockUseUISettings.mockReturnValue({ data: { values: { allow_user_team_creation: true } } });
+
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+
+    const buttons = await screen.findAllByTestId("create-team-button");
+    fireEvent.click(buttons[0]);
+
+    await waitFor(() => expect(screen.getByTestId("team-name-input")).toBeInTheDocument());
+    expect(document.getElementById("organization_id")).toBeNull();
+  });
+
+  it("submits a standalone team creation for a self-serve Internal User", async () => {
+    mockUseUISettings.mockReturnValue({ data: { values: { allow_user_team_creation: true } } });
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(teamCreateCall).mockResolvedValue(selfServeCreatedTeam);
+
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+
+    const buttons = await screen.findAllByTestId("create-team-button");
+    act(() => {
+      fireEvent.click(buttons[0]);
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/team name/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "My Self Serve Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          team_alias: "My Self Serve Team",
+          models: ["gpt-4"],
+          organization_id: null,
+        }),
+      );
+    });
+  });
+
+  it("keeps the required Organization selector for an org admin when the flag is on", async () => {
+    mockUseUISettings.mockReturnValue({ data: { values: { allow_user_team_creation: true } } });
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_alias: "Org 1",
+          models: [],
+          members: [{ user_id: "user-123", user_role: "org_admin" }],
+        },
+      ],
+    });
+
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+
+    const buttons = await screen.findAllByTestId("create-team-button");
+    fireEvent.click(buttons[0]);
+
+    await waitFor(() => expect(screen.getByTestId("team-name-input")).toBeInTheDocument());
+    expect(document.getElementById("organization_id")).not.toBeNull();
   });
 });

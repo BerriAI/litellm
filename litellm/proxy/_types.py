@@ -2251,6 +2251,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="sends alerts if requests hang for 5min+",
     )
     ui_access_mode: Optional[Literal["admin_only", "all"]] = Field("all", description="Control access to the Proxy UI")
+    allow_user_team_creation: bool = Field(
+        default=False,
+        description="When True, internal users can call POST /team/new to create standalone teams (no organization_id). The creating user is automatically added as the team's admin, and the team inherits the caller's model/tpm/rpm restrictions for any fields left unset.",
+    )
     allowed_routes: Optional[List] = Field(None, description="Proxy API Endpoints you want users to be able to access")
     reject_clientside_metadata_tags: Optional[bool] = Field(
         None,

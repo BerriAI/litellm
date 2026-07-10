@@ -2926,3 +2926,109 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Only proxy admin" in str(exc_info.value)
     assert f"Route={route}" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
+
+
+def _self_serve_team_new_check(
+    route: str,
+    general_settings: dict,
+    role: str = LitellmUserRoles.INTERNAL_USER.value,
+    request_data: dict | None = None,
+):
+    """Run non_proxy_admin_allowed_routes_check for the LIT-3254 self-serve
+    team creation gate with the given general_settings patched in."""
+    user_obj = LiteLLM_UserTable(
+        user_id="self-serve-user",
+        user_email="user@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="self-serve-user",
+        user_role=role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.method = "POST"
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        return RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=role,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data=request_data if request_data is not None else {},
+        )
+
+
+@pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"allow_user_team_creation": False}, {"allow_user_team_creation": "yes"}],
+)
+def test_internal_user_team_new_blocked_unless_flag_enabled(general_settings):
+    """LIT-3254: /team/new stays admin-only when allow_user_team_creation is
+    absent, False, or any non-boolean truthy value."""
+    with pytest.raises(Exception) as exc_info:
+        _self_serve_team_new_check("/team/new", general_settings)
+    assert "Only proxy admin" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [{}, {"organization_id": None}, {"team_alias": "my-team"}],
+)
+def test_internal_user_team_new_allowed_when_flag_enabled(request_data):
+    """LIT-3254: with the flag on, an internal user may create a standalone
+    team (no organization_id in the request body)."""
+    result = _self_serve_team_new_check(
+        "/team/new",
+        {"allow_user_team_creation": True},
+        request_data=request_data,
+    )
+    assert result is None
+
+
+def test_internal_user_team_new_with_organization_id_blocked_despite_flag():
+    """LIT-3254 cross-org bypass guard: the self-serve gate must not admit
+    org-scoped requests. new_team only checks that the organization row
+    exists, not that the caller belongs to it, so an org-scoped request from
+    a non-org-admin must keep failing at the route layer."""
+    with pytest.raises(Exception) as exc_info:
+        _self_serve_team_new_check(
+            "/team/new",
+            {"allow_user_team_creation": True},
+            request_data={"organization_id": "org-i-dont-belong-to"},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/team/delete", "/team/update", "/team/block", "/user/new", "/organization/new"],
+)
+def test_flag_scoped_to_team_new_only(route):
+    """LIT-3254: the flag opens exactly one route. Every other management
+    route must keep raising for an internal user even with the flag on."""
+    with pytest.raises(Exception) as exc_info:
+        _self_serve_team_new_check(route, {"allow_user_team_creation": True})
+    assert "Only proxy admin" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        LitellmUserRoles.TEAM.value,
+    ],
+)
+def test_flag_scoped_to_internal_user_role_only(role):
+    """LIT-3254: view-only and team-scoped roles must stay blocked from
+    /team/new regardless of allow_user_team_creation."""
+    with pytest.raises(Exception):
+        _self_serve_team_new_check(
+            "/team/new",
+            {"allow_user_team_creation": True},
+            role=role,
+        )
