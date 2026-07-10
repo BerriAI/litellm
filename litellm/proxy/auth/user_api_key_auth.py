@@ -1011,6 +1011,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             ## Check CACHE
             try:
                 with tracer.trace("litellm.proxy.auth.get_key_object_check_cache"):
+                    # ONSITE HINT: This cache-only read runs before the DB fallback.
                     valid_token = await get_key_object(
                         hashed_token=hash_token(api_key),
                         prisma_client=prisma_client,
@@ -1191,6 +1192,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             try:
                 with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
+                    # ONSITE HINT: This DB read only runs after a cache miss.
                     valid_token = await get_key_object(
                         hashed_token=api_key,
                         prisma_client=prisma_client,
@@ -1507,6 +1509,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Add hashed token to cache
             asyncio.create_task(
+                # ONSITE HINT: Compare this write-back with the cache and DB branches.
                 _cache_key_object(
                     hashed_token=api_key,
                     user_api_key_obj=valid_token,
