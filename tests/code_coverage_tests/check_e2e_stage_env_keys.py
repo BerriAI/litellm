@@ -14,7 +14,8 @@ import re
 import sys
 from pathlib import Path
 
-OS_ENVIRON_REF = re.compile(r"os\.environ/([A-Z][A-Z0-9_]*)")
+# Only quoted string literals (real deployment params), not docstring prose.
+OS_ENVIRON_REF = re.compile(r"""["']os\.environ/([A-Z][A-Z0-9_]*)["']""")
 _ENV_REF_FIRST_ARG = re.compile(r"""_env_ref\(\s*["']([A-Z][A-Z0-9_]*)["']""")
 
 HARNESS_ONLY_KEYS = frozenset(
