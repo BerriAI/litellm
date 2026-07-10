@@ -275,8 +275,13 @@ class TestOllamaChatConfigResponseFormat:
         assert result["messages"][0]["images"][0] == "image1data..."
         assert result["messages"][0]["images"][1] == "image2data..."
 
-    def test_transform_request_image_url_as_string(self):
-        """Test handling of image_url as direct string (edge case)"""
+    def test_transform_request_image_url_as_string(self, monkeypatch):
+        """Test handling of image_url as direct string (edge case). Remote URLs
+        are downloaded and base64-encoded for Ollama (issue #30313)."""
+        monkeypatch.setattr(
+            "litellm.llms.ollama.common_utils.convert_url_to_base64",
+            lambda url: "data:image/jpeg;base64,downloadedbase64",
+        )
         config = OllamaChatConfig()
 
         # Test message with image_url as string (edge case from extract_images_from_message)
@@ -304,10 +309,10 @@ class TestOllamaChatConfigResponseFormat:
             headers={},
         )
 
-        # Verify image URL was extracted
+        # Verify the remote image URL was downloaded and base64-encoded
         assert "images" in result["messages"][0]
         assert len(result["messages"][0]["images"]) == 1
-        assert result["messages"][0]["images"][0] == "https://example.com/image.jpg"
+        assert result["messages"][0]["images"][0] == "downloadedbase64"
 
     def test_transform_request_no_images_no_images_key(self):
         """Test that messages without images don't have images key"""
@@ -906,3 +911,20 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+def test_prepare_ollama_images_downloads_urls_and_passes_through_base64(monkeypatch):
+    """prepare_ollama_images downloads remote http(s) URLs (issue #30313) and
+    leaves already-base64 data untouched."""
+    from litellm.llms.ollama.common_utils import prepare_ollama_images
+
+    monkeypatch.setattr(
+        "litellm.llms.ollama.common_utils.convert_url_to_base64",
+        lambda url: "data:image/png;base64,downloaded",
+    )
+
+    result = prepare_ollama_images(
+        ["alreadybase64data", "https://example.com/image.png"]
+    )
+
+    assert result == ["alreadybase64data", "downloaded"]
