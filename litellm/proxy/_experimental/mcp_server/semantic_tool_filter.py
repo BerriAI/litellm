@@ -29,7 +29,7 @@ class SemanticToolFilterContextWindowError(Exception):
             f"exceeded its context window while embedding {stage}. "
             f"The request was blocked instead of silently passing all tools through. "
             f"Switch to an embedding model with a larger context window, or disable "
-            f"semantic tool filtering. Original error: {original_error}"
+            f"semantic tool filtering."
         )
 
 
@@ -41,7 +41,7 @@ def _is_context_window_error(error: Optional[BaseException], depth: int = 5) -> 
         return True
     if ExceptionCheckers.is_error_str_context_window_exceeded(str(error)):
         return True
-    return _is_context_window_error(error.__cause__, depth - 1)
+    return _is_context_window_error(error.__cause__ or error.__context__, depth - 1)
 
 
 class SemanticMCPToolFilter:
@@ -231,6 +231,10 @@ class SemanticMCPToolFilter:
 
         except Exception as e:
             if _is_context_window_error(e):
+                verbose_logger.error(
+                    f"Semantic tool filter embedding exceeded its context window: {e}",
+                    exc_info=True,
+                )
                 raise SemanticToolFilterContextWindowError(
                     embedding_model=self.embedding_model,
                     stage="the user query",

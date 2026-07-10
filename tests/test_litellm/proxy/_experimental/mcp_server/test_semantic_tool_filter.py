@@ -1510,6 +1510,7 @@ async def test_semantic_filter_hook_fails_closed_on_context_window_error():
     assert "context window" in error_message
     assert "text-embedding-3-small" in error_message
     assert "larger context window" in error_message
+    assert "maximum input length" not in error_message
     print("✅ Hook fails closed with actionable 400 on context window overflow")
 
 
@@ -1575,6 +1576,7 @@ async def test_semantic_filter_hook_fails_closed_on_expanded_tools_context_windo
     error_message = exc_info.value.detail["error"]
     assert "context window" in error_message
     assert "larger context window" in error_message
+    assert "maximum input length" not in error_message
     print("✅ Expansion path fails closed with actionable 400 on context window overflow")
 
 
@@ -1622,3 +1624,43 @@ async def test_semantic_filter_hook_ignores_build_error_for_native_only_tools():
     assert result is not None
     assert result["tools"] == native_tools
     print("✅ Native-only requests pass through despite recorded build error")
+
+
+def test_is_context_window_error_detection_variants():
+    """
+    _is_context_window_error must detect the overflow in every shape it
+    reaches filter_tools in: the raw typed exception, the encoder's
+    explicitly chained ValueError wrapper, an implicitly chained wrapper,
+    and a bare error whose message carries a known overflow phrase; a
+    generic error must not match.
+    """
+    import litellm
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        _is_context_window_error,
+    )
+
+    cwe = litellm.ContextWindowExceededError(
+        message="Invalid 'input[0]': maximum input length is 8192 tokens.",
+        model="text-embedding-3-small",
+        llm_provider="openai",
+    )
+    assert _is_context_window_error(cwe)
+
+    try:
+        raise ValueError("Internal_litellm_router API call failed") from cwe
+    except ValueError as explicitly_chained:
+        assert _is_context_window_error(explicitly_chained)
+
+    try:
+        try:
+            raise litellm.ContextWindowExceededError(
+                message="overflow", model="m", llm_provider="openai"
+            )
+        except litellm.ContextWindowExceededError:
+            raise ValueError("wrapper without explicit chaining")
+    except ValueError as implicitly_chained:
+        assert _is_context_window_error(implicitly_chained)
+
+    assert _is_context_window_error(ValueError("Invalid 'input[0]': maximum input length is 8192 tokens."))
+    assert not _is_context_window_error(ValueError("A generic API error occurred."))
+    assert not _is_context_window_error(None)
