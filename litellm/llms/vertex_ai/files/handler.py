@@ -65,29 +65,6 @@ class VertexAIFilesHandler(GCSBucketBase):
             allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
 
-    def _get_read_gcs_dynamic_params(
-        self,
-        litellm_params: Optional[dict],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-    ) -> StandardCallbackDynamicParams:
-        """
-        Resolve the GCS bucket and service account for the file read path from the
-        per-model litellm_params (mirroring how the write path honors gcs_bucket_name),
-        falling back to the deployment's vertex_credentials for GCS auth.
-
-        get_gcs_logging_config applies the global GCS_BUCKET_NAME / GCS_PATH_SERVICE_ACCOUNT
-        env fallbacks for any value left unset here.
-        """
-        litellm_params = litellm_params or {}
-        bucket_name = litellm_params.get("gcs_bucket_name") or litellm_params.get("bucket_name")
-        service_account = litellm_params.get("gcs_path_service_account") or (
-            json.dumps(vertex_credentials) if isinstance(vertex_credentials, dict) else vertex_credentials
-        )
-        return StandardCallbackDynamicParams(
-            gcs_bucket_name=bucket_name,
-            gcs_path_service_account=service_account,
-        )
-
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
@@ -116,9 +93,12 @@ class VertexAIFilesHandler(GCSBucketBase):
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
-        gcs_dynamic_params = self._get_read_gcs_dynamic_params(
-            litellm_params=litellm_params,
-            vertex_credentials=vertex_credentials,
+        resolved_litellm_params = litellm_params or {}
+        gcs_dynamic_params = StandardCallbackDynamicParams(
+            gcs_bucket_name=resolved_litellm_params.get("gcs_bucket_name")
+            or resolved_litellm_params.get("bucket_name"),
+            gcs_path_service_account=resolved_litellm_params.get("gcs_path_service_account")
+            or (json.dumps(vertex_credentials) if isinstance(vertex_credentials, dict) else vertex_credentials),
         )
         gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
             kwargs={"standard_callback_dynamic_params": gcs_dynamic_params}
