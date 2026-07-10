@@ -3,7 +3,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { Suspense } from "react";
-import SecureShareView from "../_components/SecureShareView";
+import SecureShareView from "@/components/secure_share/SecureShareView";
 
 function SecureShareViewPageContent() {
   const { isLoading, isAuthorized, accessToken } = useAuthorized();

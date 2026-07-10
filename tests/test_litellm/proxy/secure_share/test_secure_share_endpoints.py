@@ -169,7 +169,33 @@ async def test_get_returns_unexpired_share_for_allowed_roles(role: LitellmUserRo
 
     assert result.share_id == "share-1"
     assert result.ciphertext == _b64(b"c")
-    table.delete.assert_not_called()
+    table.delete.assert_awaited_once_with(where={"share_id": "share-1"})
+
+
+@pytest.mark.asyncio
+async def test_get_is_one_time_second_read_returns_404():
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    table = _fake_table()
+    table.find_unique.side_effect = [
+        SimpleNamespace(
+            share_id="share-1",
+            ciphertext=_b64(b"c"),
+            salt=_b64(b"s"),
+            iv=_b64(b"i"),
+            expires_at=expires_at,
+            created_by="admin-user",
+        ),
+        None,
+    ]
+
+    with _patched_prisma(table):
+        first = await get_secure_share(share_id="share-1", user_api_key_dict=_admin())
+        with pytest.raises(HTTPException) as exc:
+            await get_secure_share(share_id="share-1", user_api_key_dict=_admin())
+
+    assert first.share_id == "share-1"
+    table.delete.assert_awaited_once_with(where={"share_id": "share-1"})
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio

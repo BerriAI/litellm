@@ -11,8 +11,11 @@ alongside an expiry. The plaintext secret and the password never leave the
 client, so a database or server compromise yields ciphertext without the
 password required to open it.
 
+Links are one-time: a successful GET returns the ciphertext once and deletes
+the row, so the encrypted payload is exposed to the network at most once.
+
 POST   /secure_share/create        - store an encrypted share (proxy admin only)
-GET    /secure_share/{share_id}     - fetch an unexpired share (admins + internal users)
+GET    /secure_share/{share_id}     - fetch and consume a share once (admins + internal users)
 DELETE /secure_share/{share_id}     - revoke a share early (proxy admin only)
 """
 
@@ -178,8 +181,8 @@ async def get_secure_share(
         raise HTTPException(status_code=404, detail={"error": "Secure share not found."})
 
     share = SecureShareGetResponse.model_validate(row, from_attributes=True)
+    await repository.table.delete(where={"share_id": share_id})
     if _is_expired(share.expires_at):
-        await repository.table.delete(where={"share_id": share_id})
         raise HTTPException(status_code=status.HTTP_410_GONE, detail={"error": "Secure share has expired."})
     return share
 
