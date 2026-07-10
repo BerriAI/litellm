@@ -75,8 +75,9 @@ def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Option
                     if isinstance(msg_cache_control, dict)
                     else getattr(msg_cache_control, "ttl", None)
                 )
-                if ttl and _is_valid_ttl_format(ttl):
-                    return str(ttl)
+                normalized = _normalize_ttl_to_seconds(ttl)
+                if normalized is not None:
+                    return normalized
 
         content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
         if not isinstance(content, list):
@@ -103,8 +104,9 @@ def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Option
                         if isinstance(cache_control, dict)
                         else getattr(cache_control, "ttl", None)
                     )
-                    if ttl and _is_valid_ttl_format(ttl):
-                        return str(ttl)
+                    normalized = _normalize_ttl_to_seconds(ttl)
+                    if normalized is not None:
+                        return normalized
 
     return None
 
@@ -136,6 +138,50 @@ def _is_valid_ttl_format(ttl: str) -> bool:
         return numeric_part > 0
     except ValueError:
         return False
+
+
+def _normalize_ttl_to_seconds(ttl: object) -> Optional[str]:
+    """
+    Normalize a cache_control TTL into Gemini's "<seconds>s" format.
+
+    Accepts Gemini-native seconds (e.g. "3600s", "1.5s") and Anthropic-style
+    minute/hour units (e.g. "5m", "1h") that Claude Code and the Anthropic
+    /v1/messages spec use. Returns None for missing or unparseable values so
+    Gemini falls back to its own default TTL.
+    """
+    if not isinstance(ttl, str):
+        return None
+
+    if _is_valid_ttl_format(ttl):
+        return ttl
+
+    match = re.match(r"^([0-9]*\.?[0-9]+)(m|h)$", ttl)
+    if not match:
+        return None
+
+    value = float(match.group(1))
+
+    if value <= 0:
+        return None
+
+    seconds = value * (60 if match.group(2) == "m" else 3600)
+    return f"{int(seconds)}s" if seconds.is_integer() else f"{seconds}s"
+
+
+def get_gemini_context_caching_min_tokens(model: str) -> int:
+    """
+    Minimum input token count required to create an explicit Gemini context cache.
+
+    Gemini rejects a cachedContents create below a per-model floor with a 400, so
+    the caller skips caching below this value. Figures from
+    https://ai.google.dev/gemini-api/docs/caching (Gemini 2.5 -> 2048, Gemini 3.x
+    -> 4096). Unknown Gemini models default to the highest known floor so a create
+    is never attempted below the real minimum.
+    """
+    model_lower = model.lower()
+    if "gemini-2.5" in model_lower or "gemini-2-5" in model_lower:
+        return 2048
+    return 4096
 
 
 def separate_cached_messages(
