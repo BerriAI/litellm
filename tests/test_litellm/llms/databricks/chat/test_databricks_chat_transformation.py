@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -18,6 +19,12 @@ from litellm.llms.databricks.chat.transformation import (
     DatabricksConfig,
     _sanitize_empty_content,
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
 def test_transform_choices():

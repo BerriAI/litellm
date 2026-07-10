@@ -273,15 +273,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         GPT-5/GPT-OSS accept `reasoning_effort` natively and need no
         translation.
         """
-        model_lower = model.lower()
-        if "claude" in model_lower:
-            return True
-        # Match gemini-2-5 / gemini-2.5 only — not the broader 2.x range, which
-        # could catch hypothetical future 2.0/2.6/etc variants that may use a
-        # different reasoning contract.
-        if "gemini-2-5" in model_lower or "gemini-2.5" in model_lower:
-            return True
-        return False
+        from litellm.utils import _supports_factory
+
+        normalized = model.lower().replace(".", "-")
+        return _supports_factory(
+            model=normalized,
+            custom_llm_provider="databricks",
+            key="supports_anthropic_thinking_payload",
+        )
 
     def convert_anthropic_tool_to_databricks_tool(
         self, tool: Optional[AllAnthropicToolsValues]
