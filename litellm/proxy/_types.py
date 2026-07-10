@@ -587,7 +587,6 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity/aggregated",
             # team
             "/team/new",
-            "/team/update",
             "/team/delete",
             "/team/list",
             "/v2/team/list",
@@ -736,6 +735,7 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/team/update",
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",

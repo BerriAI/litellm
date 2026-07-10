@@ -9,31 +9,31 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 # POST /team/update — actor x team-shape matrix (shapes built by _seed_target).
-# Each request carries the team's own organization_id so a non-proxy-admin can
-# reach the org-scoped branch of the route-permission gate (401 on denial),
-# which fronts the handler's _verify_team_access. Only PROXY_ADMIN and an
-# ORG_ADMIN of the team's org pass: an internal_user team admin is filtered by
-# the route gate before _verify_team_access's team-admin branch is reached.
+# /team/update is a self-managed route, so every authenticated caller reaches
+# the handler and authorization is decided by _verify_team_access: PROXY_ADMIN,
+# the team's team admin, or an org admin of the team's org may update the team
+# (200); everyone else is 403. The request updates only team_alias (an allowed
+# field) so a team admin is not tripped by the budget/rate-limit/model lock.
 MARKER_ALIAS = "behavior-pin-update-marker-alias"
 
 _MATRIX = [
     ("alpha/proxy_admin", Actor.PROXY_ADMIN, "alpha", 200),
     ("alpha/org_admin", Actor.ORG_ADMIN, "alpha", 200),
-    ("alpha/team_admin", Actor.TEAM_ADMIN, "alpha", 401),
-    ("alpha/internal_user", Actor.INTERNAL_USER, "alpha", 401),
-    ("alpha/owner", Actor.OWNER, "alpha", 401),
-    ("alpha/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "alpha", 401),
-    ("alpha/cross_org_user", Actor.CROSS_ORG_USER, "alpha", 401),
-    ("alpha/service_account", Actor.SERVICE_ACCOUNT, "alpha", 401),
-    ("alpha/org_b_admin", Actor.ORG_B_ADMIN, "alpha", 401),
+    ("alpha/team_admin", Actor.TEAM_ADMIN, "alpha", 200),
+    ("alpha/internal_user", Actor.INTERNAL_USER, "alpha", 403),
+    ("alpha/owner", Actor.OWNER, "alpha", 403),
+    ("alpha/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "alpha", 403),
+    ("alpha/cross_org_user", Actor.CROSS_ORG_USER, "alpha", 403),
+    ("alpha/service_account", Actor.SERVICE_ACCOUNT, "alpha", 403),
+    ("alpha/org_b_admin", Actor.ORG_B_ADMIN, "alpha", 403),
     ("beta/proxy_admin", Actor.PROXY_ADMIN, "beta", 200),
-    ("beta/org_admin", Actor.ORG_ADMIN, "beta", 401),
-    ("beta/team_admin", Actor.TEAM_ADMIN, "beta", 401),
-    ("beta/internal_user", Actor.INTERNAL_USER, "beta", 401),
-    ("beta/owner", Actor.OWNER, "beta", 401),
-    ("beta/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "beta", 401),
-    ("beta/cross_org_user", Actor.CROSS_ORG_USER, "beta", 401),
-    ("beta/service_account", Actor.SERVICE_ACCOUNT, "beta", 401),
+    ("beta/org_admin", Actor.ORG_ADMIN, "beta", 403),
+    ("beta/team_admin", Actor.TEAM_ADMIN, "beta", 403),
+    ("beta/internal_user", Actor.INTERNAL_USER, "beta", 403),
+    ("beta/owner", Actor.OWNER, "beta", 403),
+    ("beta/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "beta", 403),
+    ("beta/cross_org_user", Actor.CROSS_ORG_USER, "beta", 403),
+    ("beta/service_account", Actor.SERVICE_ACCOUNT, "beta", 403),
     ("beta/org_b_admin", Actor.ORG_B_ADMIN, "beta", 200),
 ]
 
@@ -105,41 +105,45 @@ async def test_team_update_authz_matrix(
         assert row.team_alias != MARKER_ALIAS, "denied but team mutated"
 
 
-async def test_team_update_requires_proxy_admin_without_org_context(
+async def test_team_update_authorizes_by_role_without_org_context(
     proxy_client, prisma, scratch, world
 ):
-    """With no organization_id in the body the route gate has no org context
-    and falls back to proxy-admin-only: an org admin of the team's own org
-    is 401, PROXY_ADMIN is 200."""
+    """/team/update is a self-managed route: authorization no longer depends on
+    an organization_id being present in the body. An org admin of the team's own
+    org is authorized by _verify_team_access even with no org context (200), and
+    an internal user who is only a member (not the team admin) is 403."""
     await _seed_target(prisma, world, "alpha", scratch.prefix)
 
     denied = await proxy_client.post(
         "/team/update",
-        headers={"Authorization": f"Bearer {world.keys[Actor.ORG_ADMIN].cleartext}"},
+        headers={"Authorization": f"Bearer {world.keys[Actor.INTERNAL_USER].cleartext}"},
         json={"team_id": scratch.prefix, "team_alias": MARKER_ALIAS},
     )
-    assert denied.status_code == 401, denied.text
+    assert denied.status_code == 403, denied.text
 
     allowed = await proxy_client.post(
         "/team/update",
-        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        headers={"Authorization": f"Bearer {world.keys[Actor.ORG_ADMIN].cleartext}"},
         json={"team_id": scratch.prefix, "team_alias": MARKER_ALIAS},
     )
     assert allowed.status_code == 200, allowed.text
 
 
 # Relocation gate — moving a team to a different org. The scratch team starts
-# in ORG_A; each scenario relocates it to ORG_B. PROXY_ADMIN bypasses;
-# ORG_B_ADMIN clears the route gate (dest-org admin) but fails
-# _verify_team_access on the source team (403); the rest fail the route gate
-# (401). The relocation-*allowed* branch (caller is org admin of both orgs) is
-# covered by test_team_update_org_relocation_allowed_for_dual_org_admin below.
+# in ORG_A; each scenario relocates it to ORG_B. PROXY_ADMIN bypasses (200).
+# ORG_B_ADMIN and ORG_ADMIN and TEAM_ADMIN all reach the handler (self-managed
+# route) but are denied (403): ORG_B_ADMIN fails _verify_team_access on the
+# ORG_A source team; ORG_ADMIN and TEAM_ADMIN clear _verify_team_access on the
+# source but fail the relocation gate (not an admin of the ORG_B destination);
+# INTERNAL_USER is only a member and fails _verify_team_access. The
+# relocation-*allowed* branch (caller is org admin of both orgs) is covered by
+# test_team_update_org_relocation_allowed_for_dual_org_admin below.
 _RELOCATION = [
     ("proxy_admin", Actor.PROXY_ADMIN, 200),
     ("org_b_admin", Actor.ORG_B_ADMIN, 403),
-    ("org_admin", Actor.ORG_ADMIN, 401),
-    ("team_admin", Actor.TEAM_ADMIN, 401),
-    ("internal_user", Actor.INTERNAL_USER, 401),
+    ("org_admin", Actor.ORG_ADMIN, 403),
+    ("team_admin", Actor.TEAM_ADMIN, 403),
+    ("internal_user", Actor.INTERNAL_USER, 403),
 ]
 
 

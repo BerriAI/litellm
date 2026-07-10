@@ -35,6 +35,7 @@ export interface ModelSelectProps {
   value?: string[];
   onChange: (values: string[]) => void;
   style?: React.CSSProperties;
+  disabled?: boolean;
 }
 
 type FilterContextArgs = {
@@ -92,7 +93,7 @@ const filterModels = (
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
-  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
+  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style, disabled } = props;
   const { includeUserModels, showAllTeamModelsOption, showAllProxyModelsOverride, includeSpecialOptions } =
     options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
@@ -143,6 +144,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
       data-testid={dataTestId}
       value={value}
       onChange={handleChange}
+      disabled={disabled}
       style={style}
       options={[
         ...(includeSpecialOptions

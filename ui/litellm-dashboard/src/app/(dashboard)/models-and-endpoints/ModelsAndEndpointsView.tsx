@@ -14,7 +14,13 @@ import { getCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { transformModelData } from "./utils/modelDataTransformer";
-import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  isProxyAdminRole,
+  isUserTeamAdminForAnyTeam,
+  isUserTeamAdminForSingleTeam,
+} from "@/utils/roles";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
@@ -284,8 +290,14 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
           teamId={selectedTeamId}
           onClose={() => setSelectedTeamId(null)}
           accessToken={accessToken}
-          is_team_admin={userRole === "Admin"}
-          is_proxy_admin={userRole === "Proxy Admin"}
+          is_team_admin={
+            !!userID &&
+            isUserTeamAdminForSingleTeam(
+              teams?.find((team) => team.team_id === selectedTeamId)?.members_with_roles ?? null,
+              userID,
+            )
+          }
+          is_proxy_admin={!!userRole && isProxyAdminRole(userRole)}
           userModels={allModelsOnProxy}
           editTeam={false}
           onUpdate={handleRefreshClick}

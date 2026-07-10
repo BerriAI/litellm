@@ -617,6 +617,36 @@ describe("TeamInfoView", () => {
       });
     });
 
+    it("lets a team admin edit settings but locks budget, rate limits, and models", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={true} is_proxy_admin={false} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      const settingsTab = screen.getByRole("tab", { name: "Settings" });
+      await user.click(settingsTab);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+
+      expect(screen.getByLabelText("Team Name")).toBeEnabled();
+      expect(screen.getByLabelText("Max Budget (USD)")).toBeDisabled();
+      expect(screen.getByLabelText("Soft Budget (USD)")).toBeDisabled();
+      expect(screen.getByLabelText("Tokens per minute Limit (TPM)")).toBeDisabled();
+      expect(screen.getByLabelText("Requests per minute Limit (RPM)")).toBeDisabled();
+    });
+
     it("should close edit mode when cancel button is clicked", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());

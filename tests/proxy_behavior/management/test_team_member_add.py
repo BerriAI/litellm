@@ -10,8 +10,8 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # POST /team/member_add — actor x team-shape matrix, pinned against
 # _validate_team_member_add_permissions: PROXY_ADMIN, the team's team admin,
 # or an org admin of the team's org may add members; everyone else is 403.
-# Unlike /team/update there is no route gate in front, so the team-admin
-# branch is reachable (TEAM_ADMIN, an internal_user, is allowed on its team).
+# It is a self-managed route, so the team-admin branch is reachable (TEAM_ADMIN,
+# an internal_user, is allowed on its team).
 _MATRIX = [
     ("alpha/proxy_admin", Actor.PROXY_ADMIN, "alpha", 200),
     ("alpha/org_admin", Actor.ORG_ADMIN, "alpha", 200),

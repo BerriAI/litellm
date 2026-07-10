@@ -856,41 +856,57 @@ async def _check_user_team_limits(
         )
 
 
-def _check_team_budget_update_authority(
+_TEAM_ADMIN_LOCKED_TEAM_FIELDS: Tuple[str, ...] = (
+    "max_budget",
+    "soft_budget",
+    "budget_duration",
+    "budget_limits",
+    "tpm_limit",
+    "rpm_limit",
+    "models",
+)
+
+
+def _normalize_locked_field_value(value: object) -> object:
+    if value is None or value == {} or value == []:
+        return None
+    return value
+
+
+def _reject_team_admin_locked_field_updates(
     data: UpdateTeamRequest,
-    user_api_key_dict: UserAPIKeyAuth,
-    existing_team_max_budget: Optional[float],
+    existing_team_row: LiteLLM_TeamTable,
 ) -> None:
     """
-    Restrict who can grow a standalone team's spend ceiling on /team/update.
+    Block a plain team admin from changing a team's budget, rate limits, or
+    models on /team/update.
 
-    A team admin (already authorized via _verify_team_access) may keep or lower
-    the team budget, but only a proxy admin may grow it - by raising max_budget
-    above the team's current value or by removing the cap (setting it to None).
-    Setting a finite budget on a team that has no cap is a restriction and is
-    allowed. Org-scoped teams are governed by _check_org_team_limits().
+    Callers that reach this guard are neither a proxy admin nor an org admin of
+    the team's org (both of whom may change these), so they are a plain team
+    admin. Per the Team Admin docs these fields are read-only for them. Re-sending
+    the stored value unchanged - which the UI does on every save - is a no-op and
+    is allowed; only an actual change is rejected.
     """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
-    if existing_team_max_budget is None:
+    fields_set = getattr(data, "model_fields_set", None) or set()
+    changed = tuple(
+        field
+        for field in _TEAM_ADMIN_LOCKED_TEAM_FIELDS
+        if field in fields_set
+        and _normalize_locked_field_value(getattr(data, field, None))
+        != _normalize_locked_field_value(getattr(existing_team_row, field, None))
+    )
+    if not changed:
         return
 
-    budget_explicitly_set = "max_budget" in (getattr(data, "model_fields_set", None) or set())
-    if budget_explicitly_set and data.max_budget is None:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"Only a proxy admin can remove a team's max_budget. Team's current max_budget={existing_team_max_budget}."
-            },
-        )
-
-    if data.max_budget is not None and data.max_budget > existing_team_max_budget:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"Only a proxy admin can raise a team's max_budget. Team's current max_budget={existing_team_max_budget}, requested={data.max_budget}."
-            },
-        )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": (
+                "Team admins cannot modify a team's budget, rate limits, or models. "
+                "Ask a proxy admin or your org admin to change: " + ", ".join(changed) + "."
+            )
+        },
+    )
 
 
 #### TEAM MANAGEMENT ####
@@ -1794,13 +1810,14 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # Only a proxy admin may grow a standalone team's spend ceiling.
-        # Org-scoped teams are validated by _check_org_team_limits() above.
-        if org_id_to_check is None:
-            _check_team_budget_update_authority(
+        caller_is_org_admin_for_team = await _is_user_org_admin_for_team(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+        )
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and not caller_is_org_admin_for_team:
+            _reject_team_admin_locked_field_updates(
                 data=data,
-                user_api_key_dict=user_api_key_dict,
-                existing_team_max_budget=existing_team_row.max_budget,
+                existing_team_row=existing_team_row,
             )
 
         updated_kv = data.json(exclude_unset=True)

@@ -4866,24 +4866,28 @@ async def test_update_team_standalone_budget_removal_blocked_for_team_admin():
             )
 
         assert exc_info.value.code == "403"
-        assert "remove" in str(exc_info.value.message).lower()
+        assert "proxy admin" in str(exc_info.value.message).lower()
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
+async def test_update_team_standalone_uncapped_team_admin_sets_finite_blocked():
     """
-    When a team currently has NO cap (max_budget=None / unlimited), a team admin
-    setting a finite max_budget is a RESTRICTION, not a raise, and is
-    intentionally allowed.
+    A team admin may not set a team's max_budget at all, even to add a finite
+    cap to a team that currently has none. Per the Team Admin docs, team budget
+    is read-only for team admins; only a proxy admin or org admin can change it.
 
     Scenario:
     - Team admin manages a team with current max_budget=None (unlimited)
-    - Admin sets max_budget=1000 (unlimited -> finite is more restrictive)
-    - Expected: 200
+    - Admin sets max_budget=1000
+    - Expected: 403
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     team_admin_user = UserAPIKeyAuth(
@@ -4941,31 +4945,32 @@ async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
             return_value=mock_updated_team
         )
 
-        result = await update_team(
-            data=update_request,
-            http_request=dummy_request,
-            user_api_key_dict=team_admin_user,
-        )
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=team_admin_user,
+            )
 
-        assert result is not None
-        assert result["data"].max_budget == 1000.0
+        assert exc_info.value.code == "403"
+        assert "proxy admin" in str(exc_info.value.message).lower()
 
 
 @pytest.mark.asyncio
 async def test_update_team_standalone_unchanged_budget_allowed():
     """
-    Test that /team/update for a standalone team does NOT compare against the
-    caller's personal max_budget when the budget is unchanged.
+    Test that a team admin can update an allowed field while the UI re-sends the
+    unchanged, locked budget field.
 
     This is the LiteLLM UI scenario: the UI sends the full team object on every
-    update (including the unchanged max_budget). A team admin only changing
-    tpm_limit should not be blocked by a budget the team already has.
+    update (including the unchanged max_budget). A team admin changing an allowed
+    field (team_alias) must not be blocked by the locked budget it re-sends
+    unchanged.
 
     Scenario:
-    - User (team admin) has personal max_budget=$100
     - Standalone team exists with current budget=$500
-    - User updates tpm_limit and re-sends the unchanged max_budget=$500
-    - Expected: Should succeed (budget unchanged, not an increase)
+    - Team admin renames the team and re-sends the unchanged max_budget=$500
+    - Expected: Should succeed (locked budget unchanged; alias is allowed)
     """
     from fastapi import Request
 
@@ -4982,11 +4987,11 @@ async def test_update_team_standalone_unchanged_budget_allowed():
         models=[],
     )
 
-    # UI re-sends the unchanged max_budget alongside the tpm_limit change.
+    # UI re-sends the unchanged max_budget alongside the allowed team_alias change.
     update_request = UpdateTeamRequest(
         team_id="standalone-unchanged-budget-123",
         max_budget=500.0,  # Unchanged from the team's current budget
-        tpm_limit=50000,
+        team_alias="renamed-by-team-admin",
     )
 
     dummy_request = MagicMock(spec=Request)
@@ -5053,22 +5058,23 @@ async def test_update_team_standalone_unchanged_budget_allowed():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_lower_budget_allowed():
+async def test_update_team_standalone_lower_budget_blocked():
     """
-    Test that /team/update for a standalone team allows lowering the budget
-    below the team's current value even when the new value still exceeds the
-    caller's personal max_budget.
+    Test that /team/update for a standalone team blocks a team admin from
+    lowering the budget. Team budget is read-only for team admins per the Team
+    Admin docs; even a decrease is a modification only a proxy admin or org
+    admin may make.
 
     Scenario:
-    - User (team admin) has personal max_budget=$100
     - Standalone team exists with current budget=$500
-    - User lowers team budget to $300 (a decrease, still above user's $100)
-    - Expected: Should succeed (decrease is not an increase above team budget)
+    - Team admin lowers team budget to $300
+    - Expected: 403
     """
     from fastapi import Request
 
     from litellm.proxy._types import (
         LiteLLM_UserTable,
+        ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
     )
@@ -5134,14 +5140,93 @@ async def test_update_team_standalone_lower_budget_allowed():
             return_value=mock_updated_team
         )
 
-        result = await update_team(
-            data=update_request,
-            http_request=dummy_request,
-            user_api_key_dict=team_admin_user,
-        )
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=team_admin_user,
+            )
 
-        assert result is not None
-        assert result["data"].max_budget == 300.0
+        assert exc_info.value.code == "403"
+        assert "proxy admin" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field_name, existing_value, new_value",
+    [
+        ("tpm_limit", 1000, 5000),
+        ("rpm_limit", 100, 500),
+        ("models", ["gpt-3.5-turbo"], ["gpt-4"]),
+    ],
+)
+async def test_update_team_standalone_locked_fields_blocked_for_team_admin(
+    field_name, existing_value, new_value
+):
+    """
+    A team admin may not change a team's rate limits or model list on
+    /team/update. Per the Team Admin docs these are read-only for team admins;
+    only a proxy admin or org admin can change them.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    team_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="locked-fields-admin",
+        models=[],
+    )
+
+    update_request = UpdateTeamRequest(
+        team_id="standalone-locked-123",
+        **{field_name: new_value},
+    )
+    assert field_name in update_request.model_fields_set
+
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ),
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "standalone-locked-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.max_budget = None
+        mock_existing_team.model_id = None
+        setattr(mock_existing_team, field_name, existing_value)
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "standalone-locked-123",
+            "organization_id": None,
+            field_name: existing_value,
+            "members_with_roles": [
+                {"user_id": "locked-fields-admin", "role": "admin"}
+            ],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=team_admin_user,
+            )
+
+        assert exc_info.value.code == "403"
+        assert "proxy admin" in str(exc_info.value.message).lower()
 
 
 @pytest.mark.asyncio
@@ -5236,19 +5321,16 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_models_not_gated_by_user_limit():
+async def test_update_team_standalone_models_change_allowed_for_proxy_admin():
     """
-    Test that /team/update for a standalone team does NOT gate the team's models
-    by the caller's personal allowed models.
-
-    A team admin authorized via _verify_team_access() may set the team's models
-    independently of their own personal model list on update.
+    Test that a proxy admin can change a standalone team's models on
+    /team/update. Proxy admins are exempt from the team-admin field lock (which
+    makes models read-only for plain team admins), so the change goes through.
 
     Scenario:
-    - Team admin has personal models=['gpt-3.5-turbo']
-    - Standalone team exists (no organization_id)
-    - Admin updates team models to ['gpt-4'] (not in their personal list)
-    - Expected: Should succeed (personal models are irrelevant on /team/update)
+    - Proxy admin (personal models=[]) updates team models to ['gpt-4']
+    - Standalone team exists (no organization_id) with models=['gpt-3.5-turbo']
+    - Expected: Should succeed
     """
     from fastapi import Request
 
@@ -5256,14 +5338,14 @@ async def test_update_team_standalone_models_not_gated_by_user_limit():
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     team_admin_user = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id="non-admin-update-models-test",
-        models=["gpt-3.5-turbo"],  # Restrictive personal model list
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="proxy-admin-update-models-test",
+        models=[],
     )
 
     update_request = UpdateTeamRequest(
         team_id="standalone-team-models-123",
-        models=["gpt-4"],  # Not in the admin's personal allowed models
+        models=["gpt-4"],
     )
 
     dummy_request = MagicMock(spec=Request)
@@ -5377,6 +5459,10 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5487,6 +5573,10 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5678,6 +5768,10 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5746,11 +5840,11 @@ async def test_update_team_tpm_limit_not_gated_by_user_limit():
     Test that /team/update does NOT gate the team's tpm_limit by the caller's
     personal tpm_limit.
 
-    A team admin authorized via _verify_team_access() may raise the team's
+    A proxy admin (exempt from the team-admin field lock) may raise the team's
     tpm_limit above their own personal tpm_limit on update.
 
     Scenario:
-    - Team admin has personal tpm_limit=1000
+    - Proxy admin has personal tpm_limit=1000
     - Standalone team exists with tpm_limit=500
     - Admin updates team tpm_limit to 5000 (above their personal 1000)
     - Expected: Should succeed (personal tpm is irrelevant on /team/update)
@@ -5761,7 +5855,7 @@ async def test_update_team_tpm_limit_not_gated_by_user_limit():
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     team_admin_user = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id="tpm-limit-user",
         models=[],
         tpm_limit=1000,  # Restrictive personal TPM limit
@@ -5829,8 +5923,11 @@ async def test_update_team_rpm_limit_not_gated_by_user_limit():
     Test that /team/update does NOT gate the team's rpm_limit by the caller's
     personal rpm_limit.
 
+    A proxy admin (exempt from the team-admin field lock) may raise the team's
+    rpm_limit above their own personal rpm_limit on update.
+
     Scenario:
-    - Team admin has personal rpm_limit=100
+    - Proxy admin has personal rpm_limit=100
     - Standalone team exists with rpm_limit=50
     - Admin updates team rpm_limit to 500 (above their personal 100)
     - Expected: Should succeed (personal rpm is irrelevant on /team/update)
@@ -5841,7 +5938,7 @@ async def test_update_team_rpm_limit_not_gated_by_user_limit():
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     team_admin_user = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id="rpm-limit-user",
         models=[],
         rpm_limit=100,  # Restrictive personal RPM limit
@@ -6396,6 +6493,10 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
         ),
     ):
         # Mock existing org-scoped team

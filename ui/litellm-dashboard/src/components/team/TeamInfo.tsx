@@ -233,6 +233,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }, [selectedModelsInForm, teamData, userModels]);
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+  const canEditPrivilegedTeamFields = is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -1011,6 +1012,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       rules={[{ required: true, message: "Please select at least one model" }]}
                     >
                       <ModelSelect
+                        disabled={!canEditPrivilegedTeamFields}
                         value={form.getFieldValue("models") || []}
                         onChange={(values) => form.setFieldValue("models", values)}
                         teamID={teamId}
@@ -1027,11 +1029,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Max Budget (USD)" name="max_budget">
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                      <NumericalInput
+                        step={0.01}
+                        precision={2}
+                        style={{ width: "100%" }}
+                        disabled={!canEditPrivilegedTeamFields}
+                      />
                     </Form.Item>
 
                     <Form.Item label="Soft Budget (USD)" name="soft_budget">
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                      <NumericalInput
+                        step={0.01}
+                        precision={2}
+                        style={{ width: "100%" }}
+                        disabled={!canEditPrivilegedTeamFields}
+                      />
                     </Form.Item>
 
                     <Form.Item
@@ -1115,7 +1127,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Accordion>
 
                     <Form.Item label="Reset Budget" name="budget_duration">
-                      <Select placeholder="n/a">
+                      <Select placeholder="n/a" disabled={!canEditPrivilegedTeamFields}>
                         <Select.Option value="24h">daily</Select.Option>
                         <Select.Option value="7d">weekly</Select.Option>
                         <Select.Option value="30d">monthly</Select.Option>
@@ -1123,11 +1135,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                      <NumericalInput step={1} style={{ width: "100%" }} />
+                      <NumericalInput step={1} style={{ width: "100%" }} disabled={!canEditPrivilegedTeamFields} />
                     </Form.Item>
 
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                      <NumericalInput step={1} style={{ width: "100%" }} />
+                      <NumericalInput step={1} style={{ width: "100%" }} disabled={!canEditPrivilegedTeamFields} />
                     </Form.Item>
 
                     <Form.Item
@@ -1162,6 +1174,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                     showSearch
                                     placeholder="Select model"
                                     allowClear
+                                    disabled={!canEditPrivilegedTeamFields}
                                     options={availableRateLimitModels.map((m) => ({
                                       value: m,
                                       label: m,
@@ -1183,16 +1196,32 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                     },
                                   ]}
                                 >
-                                  <InputNumber placeholder="TPM Limit" min={0} />
+                                  <InputNumber
+                                    placeholder="TPM Limit"
+                                    min={0}
+                                    disabled={!canEditPrivilegedTeamFields}
+                                  />
                                 </Form.Item>
                                 <Form.Item {...restField} name={[name, "rpm"]}>
-                                  <InputNumber placeholder="RPM Limit" min={0} />
+                                  <InputNumber
+                                    placeholder="RPM Limit"
+                                    min={0}
+                                    disabled={!canEditPrivilegedTeamFields}
+                                  />
                                 </Form.Item>
-                                <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ef4444" }} />
+                                {canEditPrivilegedTeamFields && (
+                                  <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ef4444" }} />
+                                )}
                               </Space>
                             ))}
                             <Form.Item>
-                              <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                              <Button
+                                type="dashed"
+                                onClick={() => add()}
+                                block
+                                icon={<PlusOutlined />}
+                                disabled={!canEditPrivilegedTeamFields}
+                              >
                                 Add Model Limit
                               </Button>
                             </Form.Item>
