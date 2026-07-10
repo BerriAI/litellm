@@ -186,7 +186,7 @@ def test_openrouter_qwen36_plus_model_info():
         "github_copilot/mai-code-1-flash-picker",
     ],
 )
-def test_github_copilot_mai_code_1_flash_pricing(model):
+def test_github_copilot_mai_code_1_flash_picker_pricing(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
