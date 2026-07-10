@@ -31,6 +31,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 

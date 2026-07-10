@@ -54,7 +54,7 @@ class _MalformedToolBlockingResponseError(Exception):
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     @classmethod
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [GuardrailEventHooks.post_call]
+        return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
     def __init__(
         self,

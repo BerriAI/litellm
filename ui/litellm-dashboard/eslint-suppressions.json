@@ -1563,9 +1563,6 @@
     }
   },
   "src/components/guardrails/add_guardrail_form.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     },

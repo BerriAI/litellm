@@ -71,8 +71,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.logging_only,
+            GuardrailEventHooks.pre_mcp_call,
         ]
 
     # Class variables or attributes
