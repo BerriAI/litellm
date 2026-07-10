@@ -44,6 +44,7 @@ except ImportError:
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.proxy._experimental.mcp_server.db import DRAFT_MCP_SERVER_TTL_SECONDS
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
     collect_env_var_references,
@@ -66,7 +67,7 @@ router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
 MCP_AVAILABLE: bool = True
 
-TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
+TEMPORARY_MCP_SERVER_TTL_SECONDS = DRAFT_MCP_SERVER_TTL_SECONDS
 
 
 def does_mcp_server_exist(mcp_server_records: Iterable[Any], mcp_server_id: str) -> bool:
@@ -106,6 +107,7 @@ if MCP_AVAILABLE:
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
+        _delete_draft_mcp_server,
         approve_mcp_server,
         create_draft_mcp_server,
         create_mcp_server,
@@ -346,11 +348,11 @@ if MCP_AVAILABLE:
     async def _get_draft_mcp_server_as_mcp_server(
         server_id: str,
     ) -> Optional[MCPServer]:
-        from litellm.proxy.proxy_server import prisma_client as _prisma_client  # noqa: PLC0415
-
-        if _prisma_client is None:
+        try:
+            prisma_client = get_prisma_client_or_throw("")
+        except HTTPException:
             return None
-        draft = await get_draft_mcp_server(_prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS)
+        draft = await get_draft_mcp_server(prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS)
         if draft is None:
             return None
         return await global_mcp_server_manager.build_mcp_server_from_table(draft, credentials_are_encrypted=True)
@@ -1230,10 +1232,6 @@ if MCP_AVAILABLE:
             )
 
         if payload.server_id is not None:
-            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
-                _delete_draft_mcp_server,
-            )
-
             await _delete_draft_mcp_server(prisma_client, payload.server_id)
 
             mcp_server = await get_mcp_server(prisma_client, payload.server_id)

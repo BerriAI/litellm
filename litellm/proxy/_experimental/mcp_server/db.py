@@ -46,6 +46,8 @@ from litellm.types.mcp import MCPCredentials
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+DRAFT_MCP_SERVER_TTL_SECONDS = 300
+
 _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
     {
         "authorization_url",
