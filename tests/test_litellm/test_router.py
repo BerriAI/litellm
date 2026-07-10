@@ -1111,6 +1111,33 @@ def test_router_leaves_plain_xai_deployment_untouched():
     assert not deployment.get("use_xai_oauth")
 
 
+def test_normalize_xai_oauth_alias_model_helper():
+    assert litellm.Router._normalize_xai_oauth_alias_model("xai-oauth/grok-4.5", None) == "xai/grok-4.5"
+    assert litellm.Router._normalize_xai_oauth_alias_model("grok-4.5", "xai_oauth") == "xai/grok-4.5"
+    assert litellm.Router._normalize_xai_oauth_alias_model("xai/grok-4.5", "xai-oauth") == "xai/grok-4.5"
+    assert litellm.Router._normalize_xai_oauth_alias_model("xai/grok-4.5", None) is None
+    assert litellm.Router._normalize_xai_oauth_alias_model("openai/gpt-4o", None) is None
+
+
+def test_apply_xai_oauth_alias_helper():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "grok-4.5", "litellm_params": {"model": "xai/grok-4.5"}}
+        ]
+    )
+
+    normalized = router._apply_xai_oauth_alias(
+        {"model": "grok-4.5", "custom_llm_provider": "xai-oauth", "api_base": "https://x"}
+    )
+    assert normalized["model"] == "xai/grok-4.5"
+    assert normalized["use_xai_oauth"] is True
+    assert "custom_llm_provider" not in normalized
+    assert normalized["api_base"] == "https://x"
+
+    untouched = {"model": "openai/gpt-4o"}
+    assert router._apply_xai_oauth_alias(untouched) is untouched
+
+
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():
     """
