@@ -49,6 +49,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   users: "users",
   teams: "teams",
   organizations: "organizations",
+  "secure-share": "secure-share",
 };
 
 function uiBase(): string {
