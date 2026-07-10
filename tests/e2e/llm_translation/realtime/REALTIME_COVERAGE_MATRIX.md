@@ -17,14 +17,12 @@ transcript, and that `response.done` carries normalized usage.
 normalized `response.function_call_arguments.done` with valid JSON arguments and
 a matching `function_call` output item, the test sends a `function_call_output`
 back, and the follow-up response incorporates the result (the temperature 72
-appears).
+appears). That raw-websocket tool path is the source of truth for tool calling.
 
-`test_realtime_pipecat_e2e` is a realism layer that drives the same providers
-through pipecat's GA `OpenAIRealtimeLLMService` (base_url pointed at the proxy)
-rather than speaking the protocol by hand. Its assertions are coarse (the tool
-callback fired, assistant text was produced); the raw-websocket suite is the
-source of truth. It skips unless `pipecat-ai` is installed
-(`uv pip install "pipecat-ai[openai]"`).
+Pipecat audio coverage lives in `test_realtime_pipecat_audio_e2e.py` (VAD / audio
+I/O). A former pipecat *tool* smoke was removed: when raw-ws tool tests pass and
+pipecat tool smoke fails, that tracks upstream pipecat tool-call flake
+(pipecat-ai/pipecat#2544), not a proxy regression.
 
 ## Provisioning
 
