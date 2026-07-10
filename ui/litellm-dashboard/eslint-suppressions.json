@@ -2075,7 +2075,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/PolicySelector.tsx": {
+  "src/components/policies/PolicySelector.tsx": {
     "no-nested-ternary": {
       "count": 1
     }
