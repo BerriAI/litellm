@@ -31,12 +31,6 @@ vi.mock("antd", async () => {
   return { Table, Progress };
 });
 
-vi.mock("@/utils/dataUtils", () => ({
-  formatNumberWithCommas: (value: number, decimals?: number) => {
-    return value.toFixed(decimals || 0);
-  },
-}));
-
 describe("EndpointUsageTable", () => {
   it("should render", () => {
     const mockEndpointData = {

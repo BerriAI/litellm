@@ -61,6 +61,10 @@ class LiteLLMBudgetTable(BaseModel):
 
 
 class KeyInfo(BaseModel):
+    key_alias: str | None = None
+    models: list[str] = []
+    tpm_limit: int | None = None
+    team_id: str | None = None
     spend: float | None = None
     max_budget: float | None = None
     budget_reset_at: str | None = None
@@ -216,6 +220,25 @@ class SpendLogsParams(BaseModel):
     api_key: str | None = None
 
 
+class SpendLogsPageParams(BaseModel):
+    """Query for /spend/logs/v2, which requires an explicit date window and
+    serves pages of at most 100 rows."""
+
+    start_date: str
+    end_date: str
+    page: int
+    page_size: int
+    api_key: str | None = None
+
+
+class SpendLogsPage(BaseModel):
+    data: list[SpendLogRow] = []
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 # ---------- spend calculate ----------
 
 
@@ -353,6 +376,7 @@ class LiteLLMParamsBody(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    realtime_protocol: str | None = None
     aws_region_name: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
@@ -367,9 +391,16 @@ class LiteLLMParamsBody(BaseModel):
     output_cost_per_token: float | None = None
 
 
+ModelMode = Literal["batch", "realtime", "image_generation"]
+
+
 class ModelInfoBody(BaseModel):
-    id: str
-    mode: Literal["batch", "realtime", "image_generation"] | None = None
+    # id is left unset so the proxy assigns a unique model_id per deployment.
+    # Pinning it to the model_name made re-registrations of a fixed-name model
+    # (e.g. the batch suite's openai-batch) collide on the model_id unique
+    # constraint when a prior run's teardown had not removed the row.
+    id: str | None = None
+    mode: ModelMode | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -384,5 +415,140 @@ class ModelNewResponse(BaseModel):
     model_id: str
 
 
+class ModelListEntry(BaseModel):
+    id: str
+
+
+class ModelsListResponse(BaseModel):
+    """GET /v1/models on the data plane: the deployments the gateway can actually
+    serve right now. Used to confirm a freshly created model has propagated from
+    the control plane before a test calls it."""
+
+    data: tuple[ModelListEntry, ...] = ()
+
+
 class ModelDeleteBody(BaseModel):
     id: str
+
+
+# ---------- key / team / user / organization management ----------
+
+
+class KeyUpdateBody(BaseModel):
+    key: str
+    models: list[str]
+
+
+class KeyListParams(BaseModel):
+    key_alias: str
+
+
+class KeyListResponse(BaseModel):
+    total_count: int
+
+
+class TeamMemberEntry(BaseModel):
+    role: Literal["admin", "user"]
+    user_id: str
+
+
+class TeamNewBody(BaseModel):
+    team_alias: str
+    models: list[str] = []
+    team_id: str | None = None
+
+
+class TeamNewResponse(BaseModel):
+    team_id: str
+
+
+class TeamInfoParams(BaseModel):
+    team_id: str
+
+
+class TeamData(BaseModel):
+    team_alias: str | None = None
+    models: list[str] = []
+    members_with_roles: list[TeamMemberEntry] = []
+
+
+class TeamInfoResponse(BaseModel):
+    team_id: str
+    team_info: TeamData
+
+
+class TeamMemberAddBody(BaseModel):
+    team_id: str
+    member: TeamMemberEntry
+
+
+class TeamMemberDeleteBody(BaseModel):
+    team_id: str
+    user_id: str
+
+
+class TeamDeleteBody(BaseModel):
+    team_ids: list[str]
+
+
+UserRole = Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]
+
+
+class UserNewBody(BaseModel):
+    user_email: str
+    user_role: UserRole
+    user_id: str | None = None
+
+
+class UserNewResponse(BaseModel):
+    user_id: str
+
+
+class UserInfoParams(BaseModel):
+    user_id: str
+
+
+class UserData(BaseModel):
+    user_id: str | None = None
+    user_email: str | None = None
+    user_role: str | None = None
+
+
+class UserInfoResponse(BaseModel):
+    user_id: str
+    user_info: UserData
+
+
+class UserDeleteBody(BaseModel):
+    user_ids: list[str]
+
+
+class UserListParams(BaseModel):
+    user_ids: str
+
+
+class UserListResponse(BaseModel):
+    total: int
+
+
+class OrgNewBody(BaseModel):
+    organization_alias: str
+    models: list[str] = []
+
+
+class OrgNewResponse(BaseModel):
+    organization_id: str
+
+
+class OrgInfoParams(BaseModel):
+    organization_id: str
+
+
+class OrgInfoResponse(BaseModel):
+    organization_id: str
+    organization_alias: str | None = None
+    models: list[str] = []
+
+
+class OrgDeleteBody(BaseModel):
+    organization_ids: list[str]

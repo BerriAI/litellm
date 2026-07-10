@@ -25,6 +25,10 @@ configs:
         fallbacks:
           - gemini-2.5-flash: ["gpt-5.5", "claude-haiku-4-5"]
 
+      finetune_settings:
+        - custom_llm_provider: openai
+          api_key: os.environ/OPENAI_API_KEY
+
       model_list:
         - model_name: gpt-5.5
           litellm_params:
@@ -58,6 +62,8 @@ services:
     environment:
       LITELLM_MASTER_KEY: sk-1234
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      UI_USERNAME: admin
+      UI_PASSWORD: sk-1234
     ports:
       - "4000:4000"
     configs:

@@ -2523,6 +2523,23 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     the client is driving a stateful session. Absent for stateless calls.
     """
 
+    mcp_auth_mode: Optional[str]
+    """
+    The server's auth_type for this call (e.g. `true_passthrough`, `oauth_delegate`,
+    `oauth2`). For the client-forwarded token modes this records that the caller's own
+    upstream token was relayed, so an audit can attribute a relayed request to its mode
+    without logging any credential.
+    """
+
+    mcp_server_resource: Optional[str]
+    """
+    The origin (scheme + host + port) of the upstream MCP server the tool call was forwarded
+    to. Redacted for logging: userinfo, the path, the query string, and the fragment are all
+    stripped, because hosted MCP servers routinely embed the credential in the URL path and
+    this value is readable by callers via request logs.
+    Records which upstream received a relayed request; never a credential.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -3048,6 +3065,17 @@ class CustomPricingLiteLLMParams(BaseModel):
     regional_processing_uplift_multiplier_eu: Optional[float] = None
     regional_processing_uplift_multiplier_us: Optional[float] = None
 
+    @classmethod
+    def strip_custom_pricing_fields(cls, model_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of ``model_info`` without per-deployment custom pricing fields.
+
+        Used when registering a deployment's info under the shared
+        ``{provider}/{model}`` key in ``litellm.model_cost``, so one deployment's
+        pricing overrides don't pollute sibling deployments that share the same
+        backend model. Full pricing stays under the deployment's unique model id.
+        """
+        return {k: v for k, v in model_info.items() if k not in cls.model_fields}
+
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
 # (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
@@ -3370,6 +3398,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
+    META = "meta"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

@@ -368,7 +368,11 @@ class OpenTelemetryV2(CustomLogger):
                 # it (named provisionally) so it isn't leaked as an open span.
                 carrier.span.end(end_time=to_ns(end_time))
             return None
-        data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=self.config.capture_span_content)
+        data = LLMCallSpanData.from_standard_logging_payload(
+            payload,
+            capture_content=self.config.capture_span_content,
+            time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
+        )
         end_time_ns = to_ns(end_time)
         if carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
