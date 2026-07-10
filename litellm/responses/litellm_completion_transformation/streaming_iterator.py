@@ -72,6 +72,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False
         self.sent_output_item_added_event: bool = False
+        self.sent_message_output_item_added_event: bool = False
         self.sent_content_part_added_event: bool = False
         self.sent_output_text_done_event: bool = False
         self.sent_output_content_part_done_event: bool = False
@@ -734,12 +735,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
         # Change: Never return a value, just enqueue output item events
-        if self.sent_output_item_added_event:
+        if not chunk.choices:
             return
         delta = chunk.choices[0].delta
-
-        self._sequence_number += 1
-        self.sent_output_item_added_event = True
 
         # Reasoning-first
         if hasattr(delta, "reasoning_content") and delta.reasoning_content:
@@ -747,6 +745,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
             self._reasoning_item_id = self._cached_reasoning_item_id
+            if self.sent_output_item_added_event:
+                return
+            self._sequence_number += 1
+            self.sent_output_item_added_event = True
 
             event = OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -771,6 +773,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         # Default: message
+        if self.sent_message_output_item_added_event:
+            return
+        self._sequence_number += 1
+        self.sent_message_output_item_added_event = True
         self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
         event = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -1008,7 +1014,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"rs_{hash(str(reasoning_content))}",
+                item_id=self._reasoning_item_id or self._cached_reasoning_item_id or item_id,
                 output_index=0,
                 delta=reasoning_content,
             )
