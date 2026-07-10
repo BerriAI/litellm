@@ -155,9 +155,7 @@ def map_system_message_pt(messages: list) -> list:
                 )
                 merged_content = None
                 if can_merge_role:
-                    merged_content = _merge_message_content(
-                        m.get("content"), next_m.get("content")
-                    )
+                    merged_content = _merge_message_content(m.get("content"), next_m.get("content"))
                 if merged_content is not None:
                     next_m = dict(next_m)
                     next_m["content"] = merged_content
