@@ -47,6 +47,24 @@ Example final stream chunk (simplified):
 }
 ```
 
+Quick curl example (streaming, requesting usage)
+
+```bash
+curl -N -X POST "http://localhost:4000/v1/chat/completions" \
+  -H "Authorization: Bearer sk-xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role":"user","content":"Say hi"}],
+    "stream": true,
+    "stream_options": {"include_usage": true}
+  }'
+```
+
+Notes for reviewers and tests
+- See streaming tests that exercise this flow for examples and expected shapes: [tests/local_testing/test_streaming.py](tests/local_testing/test_streaming.py) and [tests/test_litellm/proxy/response_api_endpoints/test_endpoints.py](tests/test_litellm/proxy/response_api_endpoints/test_endpoints.py).
+- The implementation reads the same `usage` shape used for non-streaming responses and injects it into the last chunk; reviewers should ensure the example aligns with the live site formatting.
+
 Where to contribute
 - The public docs site (`litellm-docs`) hosts user-facing documentation. Add this snippet to the cost-tracking or streaming usage page in `litellm-docs` and link back to the `x-litellm-response-cost` docs if relevant.
 
