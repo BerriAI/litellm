@@ -1455,6 +1455,99 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         assert result.output_cost_per_token is None
 
 
+def test_model_group_info_string_costs_do_not_raise():
+    """
+    Cost/token values in model_info can arrive as strings — e.g. PyYAML parses
+    integer-mantissa scientific notation like `1e-05` as a str (templated/Helm
+    configs commonly render floats that way).
+
+    With 2+ deployments in a group, the comparison against the typed
+    ModelGroupInfo float previously raised
+    `TypeError: '>' not supported between instances of 'str' and 'float'`.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/32787
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-string-cost-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-a",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {
+                    "input_cost_per_token": "1e-06",
+                    "output_cost_per_token": "1e-05",
+                },
+            },
+            {
+                "model_name": "my-string-cost-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-b",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {
+                    "input_cost_per_token": "2e-06",
+                    "output_cost_per_token": "2e-05",
+                },
+            },
+        ]
+    )
+
+    # Force the fallback branch that reads raw (uncoerced) db model_info —
+    # in production this happens when the deployment id is missing from
+    # litellm.model_cost (e.g. after a cost map reload).
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-string-cost-model")
+        assert result is not None
+        # max of the two deployments, coerced to float
+        assert result.input_cost_per_token == 2e-06
+        assert result.output_cost_per_token == 2e-05
+        assert isinstance(result.input_cost_per_token, float)
+        assert isinstance(result.output_cost_per_token, float)
+
+
+def test_model_group_info_non_numeric_string_cost_ignored():
+    """Non-numeric string costs are skipped instead of raising."""
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-bad-cost-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-a",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {},
+            },
+            {
+                "model_name": "my-bad-cost-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-b",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {"output_cost_per_token": "not-a-number"},
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-bad-cost-model")
+        assert result is not None
+        assert result.output_cost_per_token is None
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result

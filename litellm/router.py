@@ -8623,6 +8623,27 @@ class Router:
 
         return model_info
 
+    @staticmethod
+    def _cast_optional_float(value: Any) -> Optional[float]:
+        """
+        Cast numeric model_info values (cost per token, max tokens) to float.
+
+        Deployment ``model_info`` values can arrive as strings — e.g. PyYAML
+        parses integer-mantissa scientific notation like ``1e-05`` as a str
+        (only ``1.0e-05`` / ``0.00001`` parse as float), and templated configs
+        (Helm) often render floats that way. Comparing such a str against a
+        float raises ``TypeError`` — see
+        https://github.com/BerriAI/litellm/issues/32787.
+
+        Returns None for None or non-numeric values.
+        """
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     def _set_model_group_info(self, model_group: str, user_facing_model_group_name: str) -> Optional[ModelGroupInfo]:
         """
         For a given model group name, return the combined model info
@@ -8719,8 +8740,8 @@ class Router:
                 # Get mode from database model_info if available, otherwise default to "chat"
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
-                input_cost_per_token = db_model_info.get("input_cost_per_token")
-                output_cost_per_token = db_model_info.get("output_cost_per_token")
+                input_cost_per_token = self._cast_optional_float(db_model_info.get("input_cost_per_token"))
+                output_cost_per_token = self._cast_optional_float(db_model_info.get("output_cost_per_token"))
 
                 model_info = ModelMapInfo(
                     key=model_group,
@@ -8753,34 +8774,29 @@ class Router:
                 # supports_function_calling == True
                 if llm_provider not in model_group_info.providers:
                     model_group_info.providers.append(llm_provider)
-                if (
-                    model_info.get("max_input_tokens", None) is not None
-                    and model_info["max_input_tokens"] is not None
-                    and (
-                        model_group_info.max_input_tokens is None
-                        or model_info["max_input_tokens"] > model_group_info.max_input_tokens
-                    )
+                _max_input_tokens = self._cast_optional_float(model_info.get("max_input_tokens"))
+                if _max_input_tokens is not None and (
+                    model_group_info.max_input_tokens is None or _max_input_tokens > model_group_info.max_input_tokens
                 ):
-                    model_group_info.max_input_tokens = model_info["max_input_tokens"]
-                if (
-                    model_info.get("max_output_tokens", None) is not None
-                    and model_info["max_output_tokens"] is not None
-                    and (
-                        model_group_info.max_output_tokens is None
-                        or model_info["max_output_tokens"] > model_group_info.max_output_tokens
-                    )
+                    model_group_info.max_input_tokens = _max_input_tokens
+                _max_output_tokens = self._cast_optional_float(model_info.get("max_output_tokens"))
+                if _max_output_tokens is not None and (
+                    model_group_info.max_output_tokens is None
+                    or _max_output_tokens > model_group_info.max_output_tokens
                 ):
-                    model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                if model_info.get("input_cost_per_token", None) is not None and (
+                    model_group_info.max_output_tokens = _max_output_tokens
+                _input_cost_per_token = self._cast_optional_float(model_info.get("input_cost_per_token"))
+                if _input_cost_per_token is not None and (
                     model_group_info.input_cost_per_token is None
-                    or (model_info["input_cost_per_token"] or 0.0) > (model_group_info.input_cost_per_token or 0.0)
+                    or _input_cost_per_token > (model_group_info.input_cost_per_token or 0.0)
                 ):
-                    model_group_info.input_cost_per_token = model_info["input_cost_per_token"]
-                if model_info.get("output_cost_per_token", None) is not None and (
+                    model_group_info.input_cost_per_token = _input_cost_per_token
+                _output_cost_per_token = self._cast_optional_float(model_info.get("output_cost_per_token"))
+                if _output_cost_per_token is not None and (
                     model_group_info.output_cost_per_token is None
-                    or (model_info["output_cost_per_token"] or 0.0) > (model_group_info.output_cost_per_token or 0.0)
+                    or _output_cost_per_token > (model_group_info.output_cost_per_token or 0.0)
                 ):
-                    model_group_info.output_cost_per_token = model_info["output_cost_per_token"]
+                    model_group_info.output_cost_per_token = _output_cost_per_token
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True  # type: ignore
