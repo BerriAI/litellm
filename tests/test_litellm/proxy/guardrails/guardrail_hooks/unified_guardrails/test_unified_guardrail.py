@@ -1133,6 +1133,84 @@ class TestStreamingTransform:
             await _drive_stream(UnifiedLLMGuardrails(), _ToolCallBlocker(), [tool_chunk])
 
     @pytest.mark.asyncio
+    async def test_mixed_content_and_tool_call_chunk_does_not_leak_text(self):
+        """A chunk carrying BOTH delta.content and a tool call must not be yielded
+        raw: the text has to go through the transform, only tool-call fields pass
+        through raw (content stripped)."""
+        guardrail = _StreamingTextGuardrail()
+
+        mixed = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content="secret",
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, [mixed])
+
+        streamed = "".join(_delta_text(i) for i in out)
+        # Raw text never reaches the client; only the transformed text does.
+        assert "secret" not in streamed
+        assert "SECRET" in streamed
+        # The tool call is delivered, but its chunk carries no text.
+        tool_chunks = [i for i in out if i.choices[0].delta.tool_calls]
+        assert tool_chunks
+        assert all(not (c.choices[0].delta.content or "") for c in tool_chunks)
+
+    @pytest.mark.asyncio
+    async def test_n_gt_1_text_and_tool_call_in_same_chunk_no_text_leak(self):
+        """n>1 chunk where one choice streams text and another a tool call: the
+        text choice must be transformed, not emitted raw alongside the tool call."""
+        guardrail = _StreamingTextGuardrail()
+
+        chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content="secret", role="assistant"), finish_reason=None),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            ],
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, [chunk])
+
+        # choice 0's text is transformed, never delivered raw on the tool chunk.
+        for item in out:
+            for c in item.choices:
+                if c.delta.tool_calls:
+                    assert not (c.delta.content or "")
+        all_text = "".join(c.delta.content or "" for i in out for c in i.choices)
+        assert "secret" not in all_text
+        assert "SECRET" in all_text
+
+    @pytest.mark.asyncio
     async def test_guardrail_always_sees_raw_accumulated_text(self):
         """The guardrail must receive the raw accumulated output each round, not a
         transformed-prefix + raw-suffix mix (responses_so_far stays untouched)."""

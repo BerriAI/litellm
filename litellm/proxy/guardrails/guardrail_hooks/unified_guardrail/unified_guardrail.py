@@ -568,18 +568,22 @@ class UnifiedLLMGuardrails(CustomLogger):
         try:
             async for item in response:
                 # v1 transforms only text. A chunk carrying tool_calls is passed
-                # through raw so function-calling turns are not dropped by the
-                # withhold-and-diff path, and it is not text-accumulated (its
-                # content, if any, would otherwise be re-emitted as a synthetic
-                # delta). Its finish_reason is deliberately NOT recorded (it rides
-                # on the raw chunk). It IS kept in responses_so_far so the guardrail
-                # still inspects the assembled tool calls at end of stream (see the
-                # block inspection below), matching block_only.
+                # through raw so function-calling turns are not dropped, but ONLY
+                # its tool-call fields are forwarded: content is stripped so any
+                # response text (in the same delta, or in another choice of an n>1
+                # chunk) can never bypass the transform. The original chunk is kept
+                # in responses_so_far so its text is still accumulated + redacted +
+                # emitted as synthetic deltas, and so the guardrail inspects the
+                # assembled tool calls at end of stream (see the block inspection
+                # below), matching block_only. finish_reason rides on the raw
+                # tool-only chunk, so it is not recorded for the text flush.
                 if self._chunk_has_tool_calls(item):
                     saw_tool_calls = True
+                    tool_only = self._tool_call_passthrough_chunk(item)
+                    responses_yielded.append(tool_only)
+                    yield tool_only
                     responses_so_far.append(item)
-                    responses_yielded.append(item)
-                    yield item
+                    last_chunk = item
                     continue
 
                 chunk_counter += 1
@@ -666,6 +670,36 @@ class UnifiedLLMGuardrails(CustomLogger):
             if getattr(delta, "tool_calls", None):
                 return True
         return False
+
+    @staticmethod
+    def _tool_call_passthrough_chunk(item: Any) -> ModelResponseStream:
+        """Copy of a chunk carrying tool calls with all text content stripped.
+
+        Only tool_calls, role and finish_reason are forwarded; content is set to
+        None so response text can never be delivered raw (it flows through the
+        transform instead). Applies per choice so an n>1 chunk mixing a text
+        choice and a tool-call choice does not leak the text choice.
+        """
+        synthetic_choices: list[StreamingChoices] = []
+        for choice in getattr(item, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            synthetic_choices.append(
+                StreamingChoices(
+                    index=getattr(choice, "index", 0) or 0,
+                    delta=Delta(
+                        content=None,
+                        role=getattr(delta, "role", None),
+                        tool_calls=getattr(delta, "tool_calls", None),
+                    ),
+                    finish_reason=getattr(choice, "finish_reason", None),
+                )
+            )
+        return ModelResponseStream(
+            id=getattr(item, "id", None),
+            created=getattr(item, "created", None),
+            model=getattr(item, "model", None),
+            choices=synthetic_choices,
+        )
 
     @staticmethod
     def _record_finish_reasons(item: Any, finish_reason_per_choice: dict[int, Optional[str]]) -> None:
