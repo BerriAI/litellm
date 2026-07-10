@@ -257,10 +257,6 @@ async def test_delete_tag():
 
 @pytest.mark.asyncio
 async def test_new_tag_duplicate_returns_400_not_500():
-    """
-    Regression test: new_tag() must preserve a 400 for a duplicate tag name
-    instead of letting a bare `except Exception` downgrade it to 500.
-    """
     from unittest.mock import AsyncMock, Mock
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
@@ -290,10 +286,6 @@ async def test_new_tag_duplicate_returns_400_not_500():
 
 @pytest.mark.asyncio
 async def test_update_tag_missing_returns_404_not_500():
-    """
-    Regression test: update_tag() must preserve a 404 for a missing tag
-    instead of letting a bare `except Exception` downgrade it to 500.
-    """
     from unittest.mock import AsyncMock, Mock
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
@@ -322,10 +314,6 @@ async def test_update_tag_missing_returns_404_not_500():
 
 @pytest.mark.asyncio
 async def test_info_tag_missing_returns_404_not_500():
-    """
-    Regression test: info_tag() must preserve a 404 for missing tags
-    instead of letting a bare `except Exception` downgrade it to 500.
-    """
     from unittest.mock import AsyncMock, Mock
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import info_tag
@@ -352,10 +340,6 @@ async def test_info_tag_missing_returns_404_not_500():
 
 @pytest.mark.asyncio
 async def test_delete_tag_missing_returns_404_not_500():
-    """
-    Regression test: delete_tag() must preserve a 404 for a missing tag
-    instead of letting a bare `except Exception` downgrade it to 500.
-    """
     from unittest.mock import AsyncMock, Mock
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
