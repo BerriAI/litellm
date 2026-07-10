@@ -149,6 +149,24 @@ describe("Fallbacks", () => {
     expect(deleteButtons.length).toBe(2);
   });
 
+  it("should show an edit button for each fallback row and open the edit modal", async () => {
+    const user = userEvent.setup();
+    render(<Fallbacks {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+    });
+
+    const editButtons = screen.getAllByTestId("edit-fallback-button");
+    expect(editButtons.length).toBe(2);
+
+    await user.click(editButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText("Configure Model Fallbacks")).toBeInTheDocument();
+    });
+  });
+
   it("should open delete modal when delete icon is clicked", async () => {
     const user = userEvent.setup();
     render(<Fallbacks {...defaultProps} />);
