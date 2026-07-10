@@ -669,6 +669,85 @@ def test_gemma_4_bedrock_mantle_model_metadata(
     )
 
 
+def _mantle_tool_call_chunk(index: int, *, tool_id: str, name: str, args: str) -> str:
+    return "data: " + json.dumps(
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1733529600,
+            "model": "openai.gpt-5.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": index,
+                                "id": tool_id,
+                                "type": "function",
+                                "function": {"name": name, "arguments": args},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+    )
+
+
+def _collect_tool_call_indices(chunks):
+    from litellm.llms.bedrock_mantle.chat.streaming_handler import (
+        BedrockMantleChatCompletionStreamingHandler,
+    )
+
+    from litellm.types.utils import ModelResponseStream
+
+    handler = BedrockMantleChatCompletionStreamingHandler(
+        streaming_response=iter(chunks),
+        sync_stream=True,
+    )
+    return [
+        tool_call.index
+        for parsed in handler
+        if isinstance(parsed, ModelResponseStream)
+        for choice in parsed.choices
+        for tool_call in (choice.delta.tool_calls or [])
+    ]
+
+
+class TestBedrockMantleStreamingToolCallIndex:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/32759
+
+    Mantle streams the first tool call with index 1; the OpenAI spec (and any
+    client aggregating the deltas) expects the first index to be 0.
+    """
+
+    def test_first_tool_call_index_rebased_to_zero(self):
+        chunks = [
+            _mantle_tool_call_chunk(1, tool_id="call_a", name="get_weather", args=""),
+            _mantle_tool_call_chunk(1, tool_id="call_a", name="get_weather", args='{"city": "NYC"}'),
+            "data: [DONE]",
+        ]
+        assert _collect_tool_call_indices(chunks) == [0, 0]
+
+    def test_parallel_tool_call_indices_rebased_contiguously(self):
+        chunks = [
+            _mantle_tool_call_chunk(1, tool_id="call_a", name="get_weather", args="{}"),
+            _mantle_tool_call_chunk(2, tool_id="call_b", name="get_time", args="{}"),
+            "data: [DONE]",
+        ]
+        assert _collect_tool_call_indices(chunks) == [0, 1]
+
+    def test_already_zero_based_stream_is_untouched(self):
+        chunks = [
+            _mantle_tool_call_chunk(0, tool_id="call_a", name="get_weather", args="{}"),
+            _mantle_tool_call_chunk(1, tool_id="call_b", name="get_time", args="{}"),
+            "data: [DONE]",
+        ]
+        assert _collect_tool_call_indices(chunks) == [0, 1]
+
+
 @pytest.mark.parametrize(
     "model_id",
     [

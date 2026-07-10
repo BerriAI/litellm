@@ -110,11 +110,11 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:
-        from litellm.llms.openai.chat.gpt_transformation import (
-            OpenAIChatCompletionStreamingHandler,
+        from litellm.llms.bedrock_mantle.chat.streaming_handler import (
+            BedrockMantleChatCompletionStreamingHandler,
         )
 
-        return OpenAIChatCompletionStreamingHandler(
+        return BedrockMantleChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
