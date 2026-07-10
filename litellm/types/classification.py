@@ -22,7 +22,7 @@ class ClassificationData(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     index: int
-    label: str | None
+    label: str | None = None
     probs: list[float]
     num_classes: int
 

@@ -69,7 +69,13 @@ async def test_aclassify_accepts_token_ids() -> None:
             "priority": 0,
             "add_special_tokens": False,
         }
-        return httpx.Response(status_code=200, json=CLASSIFICATION_RESPONSE)
+        return httpx.Response(
+            status_code=200,
+            json={
+                **CLASSIFICATION_RESPONSE,
+                "data": [{"index": 0, "probs": [0.1, 0.9], "num_classes": 2}],
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as async_client:
         response = await litellm.aclassify(
@@ -82,3 +88,4 @@ async def test_aclassify_accepts_token_ids() -> None:
 
     assert isinstance(response, ClassificationResponse)
     assert response.id == "classify-test"
+    assert response.data[0].label is None

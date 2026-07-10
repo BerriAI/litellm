@@ -384,7 +384,8 @@ def classification_passthrough_request(
         client=client,
         timeout=timeout,
     )
-    assert isinstance(response, httpx.Response)
+    if not isinstance(response, httpx.Response):
+        raise TypeError(f"Expected httpx.Response from classify passthrough, got {type(response).__name__}")
     return response
 
 
@@ -411,7 +412,8 @@ async def aclassification_passthrough_request(
         client=client,
         timeout=timeout,
     )
-    assert isinstance(response, httpx.Response)
+    if not isinstance(response, httpx.Response):
+        raise TypeError(f"Expected httpx.Response from classify passthrough, got {type(response).__name__}")
     return response
 
 
