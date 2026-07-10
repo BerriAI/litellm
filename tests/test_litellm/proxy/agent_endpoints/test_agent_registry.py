@@ -21,6 +21,47 @@ def _sample_agent_card_params() -> dict:
     }
 
 
+def test_load_agents_from_db_and_config_preserves_config_agents_when_db_object_reload():
+    """
+    Regression for #32799: with store_model_in_db, _init_agents_in_db calls
+    load_agents_from_db_and_config() without passing the config agents. Config
+    agents registered at startup must not be wiped; they should be re-registered
+    from the config stored on the registry.
+    """
+    registry = AgentRegistry()
+
+    config_agent = {
+        "agent_name": "Config Agent",
+        "agent_card_params": _sample_agent_card_params(),
+    }
+    registry.load_agents_from_config([config_agent])
+    assert [a.agent_name for a in registry.get_agent_list()] == ["Config Agent"]
+
+    # Simulate the DB reload path with no db agents and no explicit config passed.
+    registry.load_agents_from_db_and_config(db_agents=[])
+
+    assert [a.agent_name for a in registry.get_agent_list()] == ["Config Agent"]
+
+
+def test_load_agents_from_config_preserves_agent_access_groups():
+    """
+    Regression for #32799: agent_access_groups declared on config agents must be
+    retained on the AgentResponse so config agents can be scoped via access groups.
+    """
+    registry = AgentRegistry()
+
+    config_agent = {
+        "agent_name": "Scoped Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "agent_access_groups": ["group-a", "group-b"],
+    }
+    registry.load_agents_from_config([config_agent])
+
+    agents = registry.get_agent_list()
+    assert len(agents) == 1
+    assert agents[0].agent_access_groups == ["group-a", "group-b"]
+
+
 @pytest.mark.asyncio
 async def test_update_agent_in_db_clears_static_headers_and_extra_headers_when_omitted():
     """

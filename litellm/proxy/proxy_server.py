@@ -605,8 +605,6 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
-from litellm.types.agents import AgentConfig
-
 # import enterprise folder
 enterprise_router = APIRouter()
 try:
@@ -1885,7 +1883,6 @@ config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
-config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared session for connection reuse
@@ -6380,7 +6377,7 @@ class ProxyConfig:
 
         try:
             db_agents = await AGENT_REGISTRY.get_all_agents_from_db(prisma_client=prisma_client)
-            AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents, agent_config=config_agents)
+            AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - {}".format(str(e))
