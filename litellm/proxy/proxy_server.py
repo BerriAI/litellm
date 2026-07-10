@@ -6062,6 +6062,11 @@ class ProxyConfig:
                 # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
                 # wildcard patterns like "anthropic/*" include any newly added models.
                 litellm.add_known_models(model_cost_map=new_model_cost_map)
+                # Replacing model_cost wholesale drops per-deployment overrides
+                # (custom pricing, mode, ...); replay them so e.g. a configured
+                # mode=responses isn't reverted to the built-in mode=chat.
+                if llm_router is not None:
+                    llm_router.re_register_deployments_in_model_cost()
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -15131,6 +15136,11 @@ async def reload_model_cost_map(
         # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
         # wildcard patterns like "anthropic/*" include any newly added models.
         litellm.add_known_models(model_cost_map=new_model_cost_map)
+        # Replacing model_cost wholesale drops per-deployment overrides
+        # (custom pricing, mode, ...); replay them so e.g. a configured
+        # mode=responses isn't reverted to the built-in mode=chat.
+        if llm_router is not None:
+            llm_router.re_register_deployments_in_model_cost()
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
