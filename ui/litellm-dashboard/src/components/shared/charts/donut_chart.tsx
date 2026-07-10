@@ -15,6 +15,10 @@ export type DonutChartProps<TDatum extends Record<string, unknown>> = {
   variant?: "donut" | "pie";
   valueFormatter?: (value: number) => string;
   showTooltip?: boolean;
+  showLabel?: boolean;
+  label?: string;
+  startAngle?: number;
+  endAngle?: number;
   className?: string;
   style?: React.CSSProperties;
 };
@@ -27,6 +31,10 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
   variant = "donut",
   valueFormatter,
   showTooltip = true,
+  showLabel = false,
+  label,
+  startAngle = 0,
+  endAngle = 360,
   className,
   style,
 }: DonutChartProps<TDatum>) {
@@ -37,16 +45,27 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
       return [name, { label: name }];
     }),
   );
+  const total = data.reduce((sum, datum) => {
+    const value = datum[category];
+    return sum + (typeof value === "number" ? value : 0);
+  }, 0);
+  const centerLabel = label ?? (valueFormatter ? valueFormatter(total) : String(total));
+  const showCenterLabel = showLabel && variant === "donut" && data.length > 0;
 
   return (
     <ChartContainer config={config} className={cn("aspect-auto h-40 w-full", className)} style={style}>
       <PieChart>
         {showTooltip && (
           <ChartTooltip
-            content={({ active, payload, label }) => (
-              <ValueTooltip active={active} payload={payload} label={label} valueFormatter={valueFormatter} />
+            content={({ active, payload, label: tooltipLabel }) => (
+              <ValueTooltip active={active} payload={payload} label={tooltipLabel} valueFormatter={valueFormatter} />
             )}
           />
+        )}
+        {showCenterLabel && (
+          <text className="fill-foreground text-base" x="50%" y="50%" textAnchor="middle" dominantBaseline="middle">
+            {centerLabel}
+          </text>
         )}
         <Pie
           data={[...data]}
@@ -54,6 +73,8 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
           nameKey={index}
           innerRadius={variant === "pie" ? "0%" : "75%"}
           outerRadius="100%"
+          startAngle={startAngle}
+          endAngle={endAngle}
           strokeWidth={1}
           isAnimationActive={false}
         >

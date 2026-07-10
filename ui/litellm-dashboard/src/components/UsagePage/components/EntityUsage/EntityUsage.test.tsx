@@ -575,7 +575,7 @@ describe("EntityUsage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Tag 1")).toBeInTheDocument();
+      expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(0);
     });
   });
 
@@ -587,7 +587,7 @@ describe("EntityUsage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Tag 1")).toBeInTheDocument();
+      expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(0);
     });
   });
 
@@ -700,8 +700,35 @@ describe("EntityUsage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("tag-1")).toBeInTheDocument();
+      expect(screen.getAllByText("tag-1").length).toBeGreaterThan(0);
     });
+  });
+
+  it("renders daily spend bars, per-entity bars, and the provider donut with cyan fills and a $ center total", async () => {
+    const { container } = render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+    });
+
+    const barFills = new Set(
+      Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) => rect.getAttribute("fill")),
+    );
+    expect(barFills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+
+    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(1);
+
+    const sectors = container.querySelectorAll(".recharts-pie-sector path");
+    expect(sectors).toHaveLength(1);
+    expect(sectors[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+
+    const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
+    expect(centerLabels).toContain("$100.50");
   });
 
   it("should label the chart with user_email metadata instead of the raw UUID (LIT-3889)", async () => {

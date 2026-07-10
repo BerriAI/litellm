@@ -83,6 +83,41 @@ describe("TopModelView", () => {
     expect(tableViewButton).toHaveClass("bg-blue-100");
   });
 
+  it("renders one cyan bar per model with model names on the axis in chart view", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <TopModelView
+        topModels={[
+          {
+            key: "gpt-4",
+            spend: 150.5,
+            successful_requests: 100,
+            failed_requests: 5,
+            tokens: 50000,
+          },
+          {
+            key: "claude-3",
+            spend: 75.25,
+            successful_requests: 50,
+            failed_requests: 2,
+            tokens: 25000,
+          },
+        ]}
+        topModelsLimit={5}
+        setTopModelsLimit={mockSetTopModelsLimit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Chart View" }));
+
+    const bars = container.querySelectorAll("path.recharts-rectangle");
+    expect(bars).toHaveLength(2);
+    const fills = new Set(Array.from(bars).map((bar) => bar.getAttribute("fill")));
+    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("claude-3").length).toBeGreaterThan(0);
+  });
+
   it("should call setTopModelsLimit when limit is changed via Segmented control", async () => {
     const user = userEvent.setup();
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);

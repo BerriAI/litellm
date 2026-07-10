@@ -302,14 +302,6 @@ vi.mock("@tremor/react", async () => {
     return React.createElement("p", { ...props, "data-testid": "tremor-text" }, children);
   }
 
-  function BarChart({ data, valueFormatter, yAxisWidth, showLegend, customTooltip, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-bar-chart" }, "Bar Chart");
-  }
-
-  function DonutChart({ data, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-donut-chart" }, "Donut Chart");
-  }
-
   function Button({ children, icon, onClick, ...props }: any) {
     return React.createElement(
       "button",
@@ -331,8 +323,6 @@ vi.mock("@tremor/react", async () => {
     Col,
     Title,
     Text,
-    BarChart,
-    DonutChart,
     Button,
   };
 });
@@ -604,6 +594,26 @@ describe("UsagePage", () => {
     // Check for chart titles (these are in the Cost tab)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
+  it("should render the daily spend and top models charts with cyan bars", async () => {
+    const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+    });
+
+    const fills = new Set(
+      Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) => rect.getAttribute("fill")),
+    );
+    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+
+    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
   it("should switch between usage views correctly", async () => {
