@@ -115,7 +115,7 @@ class BaseAWSLLM:
 
         return get_ssl_verify(ssl_verify=ssl_verify)
 
-    def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
+    def get_cache_key(self, credential_args: Dict[str, Any]) -> str:
         """
         Generate a unique cache key based on the credential arguments.
         """

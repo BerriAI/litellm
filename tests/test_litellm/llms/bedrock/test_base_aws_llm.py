@@ -2093,6 +2093,107 @@ def test_assume_role_without_session_tags():
         )
 
 
+def _mock_irsa_sts_client():
+    mock_sts_client = MagicMock()
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    mock_sts_client.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "temp-key",
+            "SecretAccessKey": "temp-secret",
+            "SessionToken": "temp-token",
+            "Expiration": expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-key",
+            "SecretAccessKey": "assumed-secret",
+            "SessionToken": "assumed-token",
+            "Expiration": expiry,
+        }
+    }
+    return mock_sts_client
+
+
+def test_irsa_cross_account_assume_role_with_session_tags():
+    """IRSA cross-account path must pass session Tags to the target-role AssumeRole call."""
+    base_aws_llm = BaseAWSLLM()
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write("test-web-identity-token")
+        token_file = f.name
+
+    try:
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_WEB_IDENTITY_TOKEN_FILE": token_file,
+                "AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/eks-service-account-role",
+                "AWS_REGION": "eu-west-1",
+            },
+            clear=True,
+        ):
+            mock_sts_client = _mock_irsa_sts_client()
+            with patch("boto3.client", return_value=mock_sts_client):
+                base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::222222222222:role/target-role",
+                    aws_session_name="test-session",
+                    aws_session_tags={"Team": "dept-a"},
+                )
+
+            mock_sts_client.assume_role.assert_called_once_with(
+                RoleArn="arn:aws:iam::222222222222:role/target-role",
+                RoleSessionName="test-session",
+                Tags=[{"Key": "Team", "Value": "dept-a"}],
+            )
+    finally:
+        os.unlink(token_file)
+
+
+def test_irsa_same_account_assume_role_with_session_tags():
+    """IRSA same-account path must pass session Tags to the AssumeRole call."""
+    base_aws_llm = BaseAWSLLM()
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write("test-web-identity-token")
+        token_file = f.name
+
+    try:
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_WEB_IDENTITY_TOKEN_FILE": token_file,
+                "AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/eks-service-account-role",
+                "AWS_REGION": "eu-west-1",
+            },
+            clear=True,
+        ):
+            mock_sts_client = _mock_irsa_sts_client()
+            with patch("boto3.client", return_value=mock_sts_client):
+                # Same role as AWS_ROLE_ARN -> same-account IRSA path
+                base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::111111111111:role/eks-service-account-role",
+                    aws_session_name="test-session",
+                    aws_session_tags={"Team": "dept-a"},
+                )
+
+            mock_sts_client.assume_role.assert_called_once_with(
+                RoleArn="arn:aws:iam::111111111111:role/eks-service-account-role",
+                RoleSessionName="test-session",
+                Tags=[{"Key": "Team", "Value": "dept-a"}],
+            )
+    finally:
+        os.unlink(token_file)
+
+
 def test_converse_handler_external_id_extraction():
     """Test that BedrockConverseLLM properly extracts and passes aws_external_id parameter"""
     from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
