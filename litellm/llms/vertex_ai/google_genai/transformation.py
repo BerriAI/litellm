@@ -84,7 +84,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
         vertex_contents = (
             [
-                {**content, "role": content.get("role", "user")} if isinstance(content, dict) else content
+                ({**content, "role": "user"} if "role" not in content else content)
+                if isinstance(content, dict)
+                else content
                 for content in contents
             ]
             if isinstance(contents, list)

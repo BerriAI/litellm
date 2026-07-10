@@ -8,6 +8,7 @@ def test_transform_generate_content_request_defaults_omitted_role():
     contents = [
         {"parts": [{"text": "Hello"}]},
         {"role": "model", "parts": [{"text": "Hi"}]},
+        "Raw content",
     ]
 
     result = config.transform_generate_content_request(
@@ -20,5 +21,6 @@ def test_transform_generate_content_request_defaults_omitted_role():
     assert result["contents"] == [
         {"role": "user", "parts": [{"text": "Hello"}]},
         {"role": "model", "parts": [{"text": "Hi"}]},
+        "Raw content",
     ]
     assert "role" not in contents[0]
