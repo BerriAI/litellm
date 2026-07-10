@@ -2,7 +2,7 @@ import { CACHE_FIELDS, CacheField, CacheSection, RedisType } from "./cacheSettin
 
 export type CacheFormValue = string | number | boolean | undefined;
 export type CacheFormValues = Record<string, CacheFormValue>;
-export type CacheSavePayloadValue = string | number | boolean | unknown[];
+export type CacheSavePayloadValue = string | number | boolean | unknown[] | null;
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
 
 export const isFieldVisible = (field: CacheField, redisType: RedisType): boolean =>
@@ -68,13 +68,22 @@ const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePay
 export const buildCachePayload = (
   redisType: RedisType,
   values: CacheFormValues,
-  { forTesting }: { forTesting: boolean },
+  { forTesting, semanticEnabled = false }: { forTesting: boolean; semanticEnabled?: boolean },
 ): CacheSavePayload => {
-  const type = !forTesting && redisType === "semantic" ? "redis-semantic" : "redis";
+  const type = !forTesting && semanticEnabled ? "redis-semantic" : "redis";
 
-  const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
+  const entries = CACHE_FIELDS.filter((field) => {
+    if (!isFieldVisible(field, redisType)) {
+      return false;
+    }
+    return true;
+  }).flatMap((field) => {
+    // Send explicit null to clear semantic fields when semantic caching is disabled
+    if (field.section === "semantic" && !semanticEnabled) {
+      return [[field.name, null] as [string, CacheSavePayloadValue]];
+    }
     const value = saveValueForField(field, values[field.name]);
-    return value === undefined ? [] : [[field.name, value] as const];
+    return value === undefined ? [] : [[field.name, value] as [string, CacheSavePayloadValue]];
   });
 
   return { type, ...Object.fromEntries(entries) };

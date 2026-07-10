@@ -63,12 +63,27 @@ describe("CacheSettings", () => {
     });
   });
 
-  describe("when the redis type is semantic", () => {
-    it("should reveal the semantic fields", async () => {
+  describe("when semantic caching is detected from existing config", () => {
+    it("should reveal the semantic fields when similarity_threshold is present", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { similarity_threshold: 0.8 } });
+      renderSettings();
+      expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
+    });
+
+    it("should reveal the semantic fields when redis_type is semantic", async () => {
       getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "semantic" } });
       renderSettings();
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
+    });
+
+    it("should NOT reveal the semantic fields when similarity_threshold is null", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { similarity_threshold: null } });
+      renderSettings();
+      expect(await screen.findByText("Connection Settings")).toBeInTheDocument();
+      expect(screen.queryByText("Similarity Threshold")).not.toBeInTheDocument();
+      expect(screen.queryByText("Embedding Model")).not.toBeInTheDocument();
     });
   });
 
@@ -128,6 +143,8 @@ describe("CacheSettings", () => {
           port: "6379",
           ssl: false,
           ssl_check_hostname: false,
+          similarity_threshold: null,
+          redis_semantic_cache_embedding_model: null,
         }),
       );
     });

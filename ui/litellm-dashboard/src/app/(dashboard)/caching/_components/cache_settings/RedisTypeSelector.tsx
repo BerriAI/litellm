@@ -15,7 +15,6 @@ const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({ redisType, redisT
         <SelectItem value="node">Node (Single Instance)</SelectItem>
         <SelectItem value="cluster">Cluster</SelectItem>
         <SelectItem value="sentinel">Sentinel</SelectItem>
-        <SelectItem value="semantic">Semantic</SelectItem>
       </Select>
       <p className="text-xs text-gray-500">
         {redisTypeDescriptions[redisType] || "Select the type of Redis deployment you're using"}
