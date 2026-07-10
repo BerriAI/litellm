@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -31,6 +32,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    _get_passthrough_model_from_url,
     _update_metadata_with_tags_in_header,
     HttpPassThroughEndpointHelpers,
 )
@@ -279,6 +281,21 @@ athropic_request_body = {
 }
 
 
+@pytest.mark.parametrize(
+    ("url", "expected_model"),
+    [
+        ("https://fal.run/fal-ai/flux/schnell", "fal-ai/flux/schnell"),
+        ("https://fal.run/fal-ai/flux/", "fal-ai/flux"),
+        ("https://fal.run/", "unknown"),
+        ("https://fal.run", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_get_passthrough_model_from_url(url, expected_model):
+    parsed_url = httpx.URL(url) if url is not None else None
+    assert _get_passthrough_model_from_url(parsed_url) == expected_model
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_logging_failure(
     mock_request, mock_user_api_key_dict
@@ -335,6 +352,58 @@ async def test_pass_through_request_logging_failure(
         # Verify we got the mock response content
         # For FastAPI Response objects, content is accessed via the body attribute
         assert response.body == b'{"mock": "response"}'
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_uses_url_path_as_model_fallback(
+    mock_request, mock_user_api_key_dict
+):
+    logged_models = []
+    logging_tasks: list[asyncio.Task[None]] = []
+
+    async def capture_success_logging(*args, **kwargs):
+        logged_models.append(kwargs["logging_obj"].model_call_details["model"])
+
+    def run_success_logging(*, async_coroutine):
+        logging_tasks.append(asyncio.create_task(async_coroutine))
+
+    mock_response = httpx.Response(
+        200,
+        json={"mock": "response"},
+        request=httpx.Request("POST", "https://fal.run/fal-ai/flux/schnell"),
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughEndpointLogging.pass_through_async_success_handler",
+            new=capture_success_logging,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
+            side_effect=run_success_logging,
+        ),
+        patch(
+            "httpx.AsyncClient.send",
+            return_value=mock_response,
+        ),
+        patch(
+            "httpx.AsyncClient.request",
+            return_value=mock_response,
+        ),
+    ):
+        request = mock_request(
+            headers={}, method="POST", request_body={"prompt": "test"}
+        )
+        response = await pass_through_request(
+            request=request,
+            target="https://fal.run/fal-ai/flux/schnell",
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+        await asyncio.gather(*logging_tasks)
+
+    assert response.status_code == 200
+    assert logged_models == ["fal-ai/flux/schnell"]
 
 
 @pytest.mark.asyncio
