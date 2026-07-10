@@ -1,5 +1,6 @@
 import re
-from typing import Dict, List, Optional, Set, Tuple, cast
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Set, Tuple, assert_never, cast
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
@@ -7,6 +8,14 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+    BridgeEnvelopeAdmitted,
+    BridgeEnvelopeInvalid,
+    NotBridgeEnvelope,
+    envelope_keys_from_master_key,
+    is_bridge_envelope_shaped,
+    resolve_bridge_envelope,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_TeamTable,
@@ -23,6 +32,7 @@ from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: Optional[List[str]] = None) -> Optional[List[str]]:
@@ -226,6 +236,27 @@ class MCPRequestHandler:
             client_ip=IPAddressUtils.get_mcp_client_ip(request),
         ):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            (
+                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
+            is not None
+            and oauth2_headers
+            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+        ):
+            # A single DCR-bridge oauth_delegate target carrying an envelope-shaped
+            # Authorization: open the envelope, admit under its recovered identity, and
+            # inject the inner upstream token for egress. A non-envelope bearer on the same
+            # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
+            validated_user_api_key_auth, mcp_server_auth_headers = MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=bridge_delegate_target,
+                authorization_value=oauth2_headers["Authorization"],
+                mcp_server_auth_headers=mcp_server_auth_headers,
+            )
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
             # LiteLLM credential, so a failed validation is a genuine 401/403 and
@@ -431,6 +462,70 @@ class MCPRequestHandler:
             if server is None or server.auth_type != MCPAuth.true_passthrough:
                 return False
         return True
+
+    @staticmethod
+    def _single_dcr_bridge_delegate_target(
+        path: str, mcp_servers: Optional[List[str]], client_ip: Optional[str]
+    ) -> Optional[MCPServer]:
+        """The one DCR-bridge ``oauth_delegate`` server this request targets, or ``None``.
+
+        Returns the server only when EXACTLY ONE target resolves and it is both
+        ``is_oauth_delegate`` and ``is_dcr_bridge``. Fails closed (``None``) on a
+        multi-target request, an unresolved target, or a non-matching server, so the
+        envelope admission arm never fires for an aggregate scope or a server that did not
+        opt into the bridge. Mirrors :meth:`_target_servers_are_true_passthrough`.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        if len(target_names) != 1:
+            return None
+        server = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
+        if server is None or not server.is_oauth_delegate or not server.is_dcr_bridge:
+            return None
+        # Egress resolves the injected per-server token only by alias / server_name; a server with
+        # neither cannot receive the forwarded token, so fail closed rather than admit-and-drop.
+        if not (server.server_name or server.alias):
+            return None
+        return server
+
+    @staticmethod
+    def _admit_dcr_bridge_delegate(
+        server: MCPServer,
+        authorization_value: str,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+    ) -> Tuple[UserAPIKeyAuth, Optional[Dict[str, Dict[str, str]]]]:
+        """Open the bridge envelope and admit the caller under its recovered identity.
+
+        The envelope's signature is itself the proof the user authenticated when it was
+        minted, so the recovered ``user_id`` is admitted without any re-validation. The
+        inner upstream token is injected under the server's per-server auth-header key so
+        egress forwards it via the ``PassthroughConfig`` override; the envelope
+        ``Authorization`` the leak-defense strips never reaches the upstream. A new headers
+        dict is returned rather than mutating the input. Fails closed with a 401 on an
+        invalid or expired envelope.
+        """
+        from litellm.proxy.proxy_server import master_key
+
+        if not master_key:
+            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+
+        keys = envelope_keys_from_master_key(master_key)
+        result = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
+        match result:
+            case BridgeEnvelopeAdmitted():
+                header_key = server.server_name or server.alias
+                if header_key is None:
+                    raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+                injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+                new_headers = {**(mcp_server_auth_headers or {}), **injected}
+                return UserAPIKeyAuth(user_id=result.identity.user_id), new_headers
+            case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
+                raise HTTPException(status_code=401, detail="Invalid or expired credential")
+            case _:
+                assert_never(result)
 
     @staticmethod
     def _resolve_target_server_names(path: str, mcp_servers_header: Optional[List[str]]) -> List[str]:
