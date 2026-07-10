@@ -295,13 +295,13 @@ class BaseResponsesAPIStreamingIterator:
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        cost_response_obj: Optional[Any] = getattr(openai_responses_api_chunk, "response", None)
-                        if cost_response_obj:
-                            usage_obj: Optional[Any] = getattr(cost_response_obj, "usage", None)
+                        response_obj: Optional[Any] = getattr(openai_responses_api_chunk, "response", None)
+                        if response_obj:
+                            usage_obj: Optional[Any] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
                                     cost: Optional[float] = self.logging_obj._response_cost_calculator(
-                                        result=cost_response_obj
+                                        result=response_obj
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
