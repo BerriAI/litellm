@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from litellm.types.mcp import MCPAuth
+
 
 # Fixture to mock IP address check for all MCP tests
 # This prevents tests from failing due to IP-based access control
@@ -117,6 +119,61 @@ async def test_authorize_endpoint_includes_response_type():
     assert "https://provider.com/oauth/authorize" in response.headers["location"]
     assert "client_id=test_client_id" in response.headers["location"]
     assert "scope=read+write" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type_value", ["true_passthrough", "oauth_delegate"])
+async def test_authorize_endpoint_allows_client_forwarded_modes(auth_type_value):
+    """The browser-only Authorize relays the gateway authorize flow for the client-forwarded
+    token modes; the oauth2-only gate must let them through and redirect to the upstream IdP."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    server = MCPServer(
+        server_id="test_cf_server",
+        name="test_cf",
+        server_name="test_cf",
+        alias="test_cf",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth(auth_type_value),
+        # Discovery stamps these onto the in-memory registry entry at build time.
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
+        mock_encrypt.return_value = "mocked_encrypted_state"
+
+        response = await authorize(
+            request=mock_request,
+            client_id="dcr_client_id",
+            mcp_server_name="test_cf",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="test_state",
+        )
+
+    assert response.status_code == 307
+    assert "https://provider.com/oauth/authorize" in response.headers["location"]
+    assert "client_id=dcr_client_id" in response.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -3346,6 +3403,83 @@ async def test_token_exchange_passes_through_upstream_expires_in():
         {"access_token": "tok", "token_type": "Bearer", "expires_in": 43200}
     )
     assert body["expires_in"] == 43200
+
+
+async def _exchange_persistence_attempted_for_auth_type(auth_type) -> bool:
+    """Run exchange_token_with_server for a server of ``auth_type`` and report whether it attempted
+    to persist the exchanged token server-side. The client-forwarded token modes must not persist:
+    their contract is that the upstream token stays browser-held, minted/stored/refreshed nowhere."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="t",
+        name="t",
+        server_name="t",
+        alias="t",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        client_id="cid",
+        client_secret="cs",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"access_token": "tok", "refresh_token": "r", "token_type": "Bearer"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new_callable=AsyncMock,
+            return_value="admin-user",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._store_per_user_token_server_side",
+            new_callable=AsyncMock,
+        ) as mock_store,
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="c",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+    return mock_store.await_count > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+async def test_token_exchange_does_not_persist_for_client_forwarded_modes(auth_type):
+    """The browser-only Authorize for true_passthrough / oauth_delegate must not write the upstream
+    token to the DB: these modes forward a browser-held token and persist nothing server-side."""
+    assert await _exchange_persistence_attempted_for_auth_type(auth_type) is False
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_persists_for_oauth2():
+    """Guard the test's own discriminator: a genuine oauth2 (authorization_code) server DOES persist,
+    so the passthrough no-persist assertion above is meaningful and not vacuously true."""
+    assert await _exchange_persistence_attempted_for_auth_type(MCPAuth.oauth2) is True
 
 
 # -------------------------------------------------------------------

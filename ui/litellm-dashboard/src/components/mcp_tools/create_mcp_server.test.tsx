@@ -30,6 +30,7 @@ const oauthHook = vi.hoisted(() => ({
   onTokenReceived: null as
     | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
     | null,
+  getCredentials: null as (() => Record<string, unknown> | undefined) | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
@@ -37,8 +38,10 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
       token: Record<string, unknown> | null,
       registeredClient?: { clientId?: string; clientSecret?: string },
     ) => void;
+    getCredentials?: () => Record<string, unknown> | undefined;
   }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
+    oauthHook.getCredentials = opts.getCredentials ?? null;
     return {
       startOAuthFlow: vi.fn(),
       status: "idle",
@@ -162,6 +165,57 @@ describe("CreateMCPServer", () => {
       await waitFor(() => {
         expect(screen.getByText("Authentication Value")).toBeInTheDocument();
       });
+    });
+
+    it("should warn that LiteLLM auth is disabled when True Passthrough is selected", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("True Passthrough disables LiteLLM authentication for this server"),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("should not show the True Passthrough warning when OAuth Delegate is selected", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+
+      await waitFor(() => {
+        expect(screen.getAllByText("OAuth Delegate (client-supplied upstream token)").length).toBeGreaterThan(0);
+      });
+      expect(
+        screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
+      ).not.toBeInTheDocument();
+    });
+
+    it.each([["True Passthrough (no LiteLLM auth)"], ["OAuth Delegate (client-supplied upstream token)"]])(
+      "should show the browser-only authorize section when %s is selected",
+      async (optionLabel) => {
+        await selectHttpTransport();
+
+        await selectAntOption("Authentication", optionLabel);
+
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
+        });
+        expect(screen.getByText("OAuth Client ID (optional, not saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional, not saved)")).toBeInTheDocument();
+      },
+    );
+
+    it("should not show the browser-only authorize section for API Key auth", async () => {
+      await selectHttpTransport();
+
+      await selectAntOption("Authentication", "API Key");
+
+      await waitFor(() => {
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).not.toBeInTheDocument();
     });
 
     it("should not require auth value when creating a server with API Key auth type", async () => {
@@ -296,6 +350,28 @@ describe("CreateMCPServer", () => {
       const [token, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(token).toBe("test-token");
       expect(payload.credentials).toEqual({ auth_value: "my-secret-key" });
+    });
+
+    it("does not write the browser-authorized token into form.credentials for true_passthrough", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "PT_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      // Simulate the browser Authorize & Fetch flow handing back an upstream token.
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+      });
+
+      // For a browser-only mode the token must never land in form.credentials, which the OAuth flow's
+      // getCredentials reads for preview requests and the redirect-persist cache serializes. Without
+      // the guard, onTokenReceived writes it here and this returns { access_token: "upstream-tok" }.
+      const credentials = oauthHook.getCredentials?.() ?? {};
+      expect(credentials.access_token).toBeUndefined();
     });
 
     it("should not show auth value field when None auth type is selected", async () => {
