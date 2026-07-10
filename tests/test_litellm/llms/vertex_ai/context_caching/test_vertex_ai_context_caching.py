@@ -1402,6 +1402,64 @@ class TestContextCachingEndpoints:
         self._token_check_patcher.start()
 
     @pytest.mark.parametrize(
+        "model, expected_min",
+        [
+            ("gemini-3.5-flash", 4096),
+            ("gemini/gemini-3.5-flash", 4096),
+            ("gemini-3.1-pro-preview", 4096),
+            ("gemini-2.5-flash", 2048),
+            ("gemini-2.5-pro", 2048),
+        ],
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    def test_check_and_create_cache_uses_model_specific_min_tokens(
+        self, mock_separate, model, expected_min
+    ):
+        """The Gemini per-model floor must be forwarded to the token-count guard.
+
+        A flat 1024 floor let content between 1024 and the real minimum (2048 for
+        2.5, 4096 for 3.x) reach Gemini and 400. Assert the model-derived floor is
+        passed so the guard skips instead of erroring.
+        """
+        self._token_check_patcher.stop()
+
+        cached_messages = [
+            {
+                "role": "system",
+                "content": "cached",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        non_cached_messages = [{"role": "user", "content": "Hello"}]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+
+        with patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt",
+            return_value=False,
+        ) as mock_valid:
+            self.context_caching.check_and_create_cache(
+                messages=cached_messages + non_cached_messages,
+                optional_params=self.sample_optional_params.copy(),
+                api_key="test_key",
+                api_base=None,
+                model=model,
+                client=self.mock_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                cached_content=None,
+                custom_llm_provider="gemini",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="test_token",
+            )
+
+        assert mock_valid.call_args.kwargs["min_token_count"] == expected_min
+
+        self._token_check_patcher.start()
+
+    @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
     )
     @patch(

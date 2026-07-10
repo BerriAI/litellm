@@ -4,7 +4,6 @@ import httpx
 
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
-from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -22,6 +21,7 @@ from litellm.types.llms.vertex_ai import (
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    get_gemini_context_caching_min_tokens,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -308,17 +308,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
-        # Gemini requires a minimum of 1024 tokens for context caching.
-        # Skip caching if the cached content is too small to avoid API errors.
+        # Gemini's explicit context caching minimum varies by model; creating a
+        # cache below it returns a 400. Skip caching when the cached content is
+        # too small to avoid the error.
+        min_token_count = get_gemini_context_caching_min_tokens(model)
         if not is_prompt_caching_valid_prompt(
             model=model,
             messages=cached_messages,
             custom_llm_provider=custom_llm_provider,
+            min_token_count=min_token_count,
         ):
             verbose_logger.debug(
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
-                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+                min_token_count,
             )
             return messages, optional_params, None
 
@@ -459,17 +462,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
-        # Gemini requires a minimum of 1024 tokens for context caching.
-        # Skip caching if the cached content is too small to avoid API errors.
+        # Gemini's explicit context caching minimum varies by model; creating a
+        # cache below it returns a 400. Skip caching when the cached content is
+        # too small to avoid the error.
+        min_token_count = get_gemini_context_caching_min_tokens(model)
         if not is_prompt_caching_valid_prompt(
             model=model,
             messages=cached_messages,
             custom_llm_provider=custom_llm_provider,
+            min_token_count=min_token_count,
         ):
             verbose_logger.debug(
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
-                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+                min_token_count,
             )
             return messages, optional_params, None
 

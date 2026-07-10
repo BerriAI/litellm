@@ -9097,6 +9097,8 @@ def is_prompt_caching_valid_prompt(
     nothing here and would silently fall back to the default.
 
     OpenAI's minimum is a flat 1024 across models, which the default already covers.
+    Pass min_token_count to override this for providers with a different floor
+    (e.g. Gemini, whose explicit context caching minimum varies by model).
     """
     try:
         if messages is None and tools is None:
