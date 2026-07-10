@@ -1,4 +1,33 @@
 model_list:
+  - model_name: gpt-5-mini-end-user-test
+    litellm_params:
+      model: gpt-5-mini
+      region_name: "eu"
+    model_info:
+      id: "1"
+  - model_name: gpt-5-mini-end-user-test
+    litellm_params:
+      model: openai/gpt-5-mini
+      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+  - model_name: gpt-3.5-turbo-large
+    litellm_params:
+      model: "gpt-4.1"
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 480
+      timeout: 300
+      stream_timeout: 60
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to OpenAI
+      rpm: 480
+      timeout: 300
+      stream_timeout: 60
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
