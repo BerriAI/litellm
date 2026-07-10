@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchClient } from "./api";
-import { registerAuthHeaderNameGetter, registerBaseUrlGetter, setAuthToken } from "./runtime";
+import { registerAuthHeaderNameGetter, registerBaseUrlGetter, registerErrorHandler, setAuthToken } from "./runtime";
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -18,6 +18,7 @@ describe("typed api client middleware", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "");
     registerAuthHeaderNameGetter(() => "Authorization");
+    registerErrorHandler(() => {});
     setAuthToken(null);
   });
 
@@ -74,5 +75,25 @@ describe("typed api client middleware", () => {
 
     expect(error).toBeUndefined();
     expect(data).toEqual(body);
+  });
+
+  it("reports the derived message to the registered error handler on a non-2xx response", async () => {
+    const onError = vi.fn();
+    registerErrorHandler(onError);
+    const { fetch } = capturingFetch(jsonResponse(401, { error: { message: "Authentication Error - Expired Key" } }));
+
+    await expect(fetchClient.GET("/model_group/info", { fetch })).rejects.toBeInstanceOf(Error);
+
+    expect(onError).toHaveBeenCalledWith("Authentication Error - Expired Key");
+  });
+
+  it("does not call the error handler on a successful response", async () => {
+    const onError = vi.fn();
+    registerErrorHandler(onError);
+    const { fetch } = capturingFetch(jsonResponse(200, { data: [] }));
+
+    await fetchClient.GET("/model_group/info", { fetch });
+
+    expect(onError).not.toHaveBeenCalled();
   });
 });

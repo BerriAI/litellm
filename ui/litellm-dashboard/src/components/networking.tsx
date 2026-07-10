@@ -33,7 +33,7 @@ import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
-import { registerAuthHeaderNameGetter, registerBaseUrlGetter } from "@/lib/http/runtime";
+import { registerAuthHeaderNameGetter, registerBaseUrlGetter, registerErrorHandler } from "@/lib/http/runtime";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -369,6 +369,7 @@ const apiClient = createApiClient({
 
 registerBaseUrlGetter(getProxyBaseUrl);
 registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
+registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;

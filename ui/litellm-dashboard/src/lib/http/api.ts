@@ -1,7 +1,7 @@
 import createFetchClient, { type Middleware } from "openapi-fetch";
 import type { paths } from "./schema";
 import { ApiError, deriveErrorMessage } from "./client";
-import { getAuthHeaderName, getAuthToken, getRequestBaseUrl } from "./runtime";
+import { getAuthHeaderName, getAuthToken, getRequestBaseUrl, reportError } from "./runtime";
 
 const rebaseUrl = (requestUrl: string, base: string): string => {
   const { pathname, search } = new URL(requestUrl);
@@ -29,6 +29,7 @@ const middleware: Middleware = {
     } catch {
       message = raw || `HTTP ${response.status}`;
     }
+    reportError(message);
     throw new ApiError(message, response.status, body);
   },
 };
