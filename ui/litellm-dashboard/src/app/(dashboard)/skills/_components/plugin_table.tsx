@@ -12,9 +12,9 @@ import { Badge, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell,
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
-import NotificationsManager from "../molecules/notifications_manager";
-import { getCategoryBadgeColor } from "./helpers";
-import { Plugin } from "./types";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { getCategoryBadgeColor } from "@/components/claude_code_plugins/helpers";
+import { Plugin } from "@/components/claude_code_plugins/types";
 
 interface PluginTableProps {
   pluginsList: Plugin[];
