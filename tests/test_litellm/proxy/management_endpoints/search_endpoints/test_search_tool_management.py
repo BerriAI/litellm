@@ -815,3 +815,21 @@ async def test_list_search_tools_admin_with_restricted_key_still_sees_all():
     assert response.status_code == 200
     names = {t["search_tool_name"] for t in response.json()["search_tools"]}
     assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}
+
+
+@pytest.mark.asyncio
+async def test_test_search_tool_connection_missing_search_provider_returns_400():
+    """
+    Regression: test_search_tool_connection() raised HTTPException(400) for a
+    missing search_provider, but that raise sat inside a try block whose broad
+    `except Exception` caught it and returned an ordinary error-shaped dict, so
+    FastAPI responded 200 even though the request was invalid. The validation
+    failure must propagate as a real HTTP 400.
+    """
+    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+
+    with _override_auth(admin_user):
+        response = TestClient(app).post("/search_tools/test_connection", json={"litellm_params": {}})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "search_provider is required in litellm_params"

@@ -583,6 +583,8 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             "results_count": (len(response.results) if response and response.results else 0),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         error_message = str(e)
         error_type = type(e).__name__
