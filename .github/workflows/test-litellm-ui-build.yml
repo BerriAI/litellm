@@ -22,9 +22,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
+      - name: Detect UI changes
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only "$BASE_SHA"...HEAD -- . | grep -q .; then
+            echo "ui_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No ui/litellm-dashboard changes in this PR; skipping build."
+          fi
+
       - name: Setup Node.js
+        if: steps.changed.outputs.ui_changed == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "20"
@@ -32,9 +46,11 @@ jobs:
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
+        if: steps.changed.outputs.ui_changed == 'true'
         run: npm ci
 
       - name: Build
+        if: steps.changed.outputs.ui_changed == 'true'
         run: npm run build
 
   frontend-lint:
