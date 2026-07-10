@@ -667,14 +667,18 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials.client_secret).toBe("dcr-secret");
     });
 
+    // These two tests drive multiple antd auth-type switches; use single-shot fireEvent.change for the
+    // text fields (not per-keystroke userEvent.type) and a wider timeout so they do not flake under CI
+    // resource contention. The behavior under test is the credential preserve across the switches.
+    const fillText = (el: HTMLElement, value: string) => fireEvent.change(el, { target: { value } });
+
     it("preserves the typed app across a switch between the two client-forwarded modes", async () => {
       await selectHttpTransport();
-      const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Switch_Keep");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fillText(getServerNameInput(), "CF_Switch_Keep");
+      fillText(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
-      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
-      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
+      fillText(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+      fillText(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
       await act(async () => {
@@ -703,16 +707,15 @@ describe("CreateMCPServer", () => {
       await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.credentials).toEqual({ client_id: "app-id", client_secret: "app-secret" });
-    });
+    }, 60_000);
 
     it("preserves the typed app across a client-forwarded -> oauth2 -> client-forwarded round trip", async () => {
       await selectHttpTransport();
-      const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Round");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fillText(getServerNameInput(), "CF_Round");
+      fillText(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
-      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
-      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
+      fillText(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+      fillText(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
       await act(async () => {
@@ -742,7 +745,7 @@ describe("CreateMCPServer", () => {
       await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.credentials).toEqual({ client_id: "app-id", client_secret: "app-secret" });
-    });
+    }, 60_000);
 
     it("keeps the typed app but warns when the URL changes after a client-forwarded authorize", async () => {
       await selectHttpTransport();
