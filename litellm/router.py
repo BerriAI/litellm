@@ -8061,10 +8061,11 @@ class Router:
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
 
-        # add to model list
-        _deployment = deployment.to_json(exclude_none=True)
         # initialize client
         self._add_deployment(deployment=deployment)
+
+        # add to model list
+        _deployment = deployment.to_json(exclude_none=True)
 
         _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
         for field in CustomPricingLiteLLMParams.model_fields.keys():

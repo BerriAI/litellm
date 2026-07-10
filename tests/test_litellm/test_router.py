@@ -1138,6 +1138,33 @@ def test_apply_xai_oauth_alias_helper():
     assert router._apply_xai_oauth_alias(untouched) is untouched
 
 
+def test_add_deployment_normalizes_xai_oauth_alias():
+    """add_deployment (used for runtime/DB deployments) must normalize the alias too."""
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "grok-4.5", "litellm_params": {"model": "xai/grok-4.5"}}
+        ]
+    )
+
+    router.add_deployment(
+        Deployment(
+            model_name="grok-4.5",
+            litellm_params={"model": "xai-oauth/grok-4.5"},
+        )
+    )
+
+    added = [
+        m
+        for m in router.get_model_list()
+        if m["litellm_params"].get("use_xai_oauth")
+    ]
+    assert len(added) == 1
+    assert added[0]["litellm_params"]["model"] == "xai/grok-4.5"
+    assert added[0]["litellm_params"].get("custom_llm_provider") is None
+
+
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():
     """
