@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import AgentsPanel from "./index";
+import AgentsPanel from "./AgentsPanel";
 import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({

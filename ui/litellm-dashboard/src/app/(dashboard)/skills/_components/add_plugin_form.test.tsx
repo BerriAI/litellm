@@ -1,12 +1,12 @@
 import React from "react";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import AddPluginForm from "./add_plugin_form";
-import { registerClaudeCodePlugin } from "../networking";
+import { registerClaudeCodePlugin } from "@/components/networking";
 import MessageManager from "@/components/molecules/message_manager";
 
-vi.mock("../networking", () => ({
+vi.mock("@/components/networking", () => ({
   registerClaudeCodePlugin: vi.fn().mockResolvedValue({ status: "success" }),
 }));
 

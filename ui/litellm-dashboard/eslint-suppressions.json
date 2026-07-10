@@ -1261,7 +1261,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/agents/_components/index.tsx": {
+  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1363,7 +1363,7 @@
       "count": 2
     }
   },
-  "src/components/claude_code_plugins.tsx": {
+  "src/app/(dashboard)/skills/_components/ClaudeCodePluginsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1379,12 +1379,12 @@
       "count": 1
     }
   },
-  "src/components/claude_code_plugins/add_plugin_form.tsx": {
+  "src/app/(dashboard)/skills/_components/add_plugin_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/claude_code_plugins/plugin_table.tsx": {
+  "src/app/(dashboard)/skills/_components/plugin_table.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -1534,7 +1534,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/index.tsx": {
+  "src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }

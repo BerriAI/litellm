@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "@tremor/react";
 import { Modal } from "antd";
-import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "./networking";
-import AddPluginForm from "./claude_code_plugins/add_plugin_form";
-import PluginTable from "./claude_code_plugins/plugin_table";
-import SkillDetail from "./claude_code_plugins/skill_detail";
+import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/networking";
+import AddPluginForm from "./add_plugin_form";
+import PluginTable from "./plugin_table";
+import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "./molecules/notifications_manager";
-import { Plugin, ListPluginsResponse } from "./claude_code_plugins/types";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;
