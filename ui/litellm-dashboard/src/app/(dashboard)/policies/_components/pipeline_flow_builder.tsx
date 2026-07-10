@@ -11,12 +11,17 @@ import {
   PolicyCreateRequest,
   PolicyUpdateRequest,
   Policy,
-} from "./types";
-import { Guardrail } from "../guardrails/types";
-import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
-import { getComplianceDatasetPrompts, getFrameworks } from "../../data/compliancePrompts";
-import type { CompliancePrompt } from "../../data/compliancePrompts";
+} from "@/components/policies/types";
+import { Guardrail } from "@/components/guardrails/types";
+import {
+  testPipelineCall,
+  listPolicyVersions,
+  createPolicyVersion,
+  updatePolicyVersionStatus,
+} from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
+import type { CompliancePrompt } from "@/data/compliancePrompts";
 
 const TEST_SOURCE_QUICK = "quick_chat";
 const TEST_SOURCE_ALL = "__all__";

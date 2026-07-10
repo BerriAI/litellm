@@ -1,5 +1,5 @@
 import { screen } from "@testing-library/react";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { describe, expect, it } from "vitest";
 import ImpactPreviewAlert from "./impact_preview_alert";
 

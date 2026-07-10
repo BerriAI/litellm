@@ -11,7 +11,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { DateCell } from "@/components/shared/table_cells";
-import { Policy } from "./types";
+import { Policy } from "@/components/policies/types";
 
 /** One row per policy name; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
 interface PolicyRow {

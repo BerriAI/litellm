@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Card, Badge, Button } from "@tremor/react";
 import { ArrowLeftIcon, PencilIcon } from "@heroicons/react/outline";
 import { Descriptions, Tag, Spin, Divider, Typography, Alert } from "antd";
-import { Policy } from "./types";
+import { Policy } from "@/components/policies/types";
 import { PipelineInfoDisplay } from "./pipeline_flow_builder";
-import { getResolvedGuardrails } from "../networking";
+import { getResolvedGuardrails } from "@/components/networking";
 
 const { Title, Text } = Typography;
 

@@ -28,10 +28,10 @@ import {
   createPolicyAttachmentCall,
   createGuardrailCall,
   enrichPolicyTemplate,
-} from "../networking";
-import { Policy, PolicyAttachment } from "./types";
-import { Guardrail } from "../guardrails/types";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
+} from "@/components/networking";
+import { Policy, PolicyAttachment } from "@/components/policies/types";
+import { Guardrail } from "@/components/guardrails/types";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 
 interface PoliciesPanelProps {
   accessToken: string | null;

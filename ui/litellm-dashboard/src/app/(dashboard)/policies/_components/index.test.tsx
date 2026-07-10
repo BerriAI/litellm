@@ -1,7 +1,7 @@
 import React from "react";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PoliciesPanel from "./index";
 
@@ -48,7 +48,7 @@ const networkingMocks = vi.hoisted(() => ({
   enrichPolicyTemplate: vi.fn(),
 }));
 
-vi.mock("../networking", () => ({
+vi.mock("@/components/networking", () => ({
   ...networkingMocks,
 }));
 

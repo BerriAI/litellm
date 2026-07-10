@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Alert, Tag, Empty, Typography } from "antd";
 import { Button } from "@tremor/react";
-import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "../networking";
+import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;

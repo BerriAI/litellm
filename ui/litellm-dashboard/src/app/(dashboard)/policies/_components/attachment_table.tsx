@@ -11,7 +11,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { DateCell, IdCell } from "@/components/shared/table_cells";
-import { PolicyAttachment } from "./types";
+import { PolicyAttachment } from "@/components/policies/types";
 import ImpactPopover from "./impact_popover";
 
 interface AttachmentTableProps {

@@ -8,7 +8,12 @@ import {
   DownOutlined,
   RightOutlined,
 } from "@ant-design/icons";
-import { suggestPolicyTemplates, modelHubCall, testPolicyTemplate, enrichPolicyTemplateStream } from "../networking";
+import {
+  suggestPolicyTemplates,
+  modelHubCall,
+  testPolicyTemplate,
+  enrichPolicyTemplateStream,
+} from "@/components/networking";
 
 const { TextArea } = Input;
 const { Text } = Typography;

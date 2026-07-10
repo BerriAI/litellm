@@ -1,10 +1,10 @@
 import React from "react";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AttachmentTable from "./attachment_table";
-import { PolicyAttachment } from "./types";
+import { PolicyAttachment } from "@/components/policies/types";
 
 vi.mock("./impact_popover", () => ({
   default: () => <button aria-label="View blast radius" />,

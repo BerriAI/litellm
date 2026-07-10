@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { Icon } from "@tremor/react";
 import { EyeIcon } from "@heroicons/react/outline";
 import { Tooltip, Tag, Popover, Spin } from "antd";
-import { PolicyAttachment } from "./types";
-import { estimateAttachmentImpactCall } from "../networking";
+import { PolicyAttachment } from "@/components/policies/types";
+import { estimateAttachmentImpactCall } from "@/components/networking";
 
 const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: string | null }> = ({
   attachment,

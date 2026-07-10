@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "antd";
 import { Button, TextInput, Textarea } from "@tremor/react";
-import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
-import { Guardrail } from "../guardrails/types";
-import { getResolvedGuardrails, modelAvailableCall } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
+import { Guardrail } from "@/components/guardrails/types";
+import { getResolvedGuardrails, modelAvailableCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;
