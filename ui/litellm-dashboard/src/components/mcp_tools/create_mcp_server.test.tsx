@@ -202,8 +202,8 @@ describe("CreateMCPServer", () => {
         await waitFor(() => {
           expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
         });
-        expect(screen.getByText("OAuth Client ID (optional, not saved)")).toBeInTheDocument();
-        expect(screen.getByText("OAuth Client Secret (optional, not saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client ID (optional, saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional, saved)")).toBeInTheDocument();
       },
     );
 
@@ -435,6 +435,73 @@ describe("CreateMCPServer", () => {
         undefined,
       );
     });
+
+    it.each([
+      ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
+      ["oauth_delegate", "OAuth Delegate (client-supplied upstream token)"],
+    ])(
+      "persists admin-entered OAuth app credentials on create for %s while the token stays browser-held",
+      async (_authType, optionLabel) => {
+        oauthHook.tokenResponse = { access_token: "upstream-tok", token_type: "Bearer" };
+        await selectHttpTransport();
+
+        const user = userEvent.setup({ delay: null });
+        await user.type(getServerNameInput(), "CF_App_Server");
+        await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+        await selectAntOption("Authentication", optionLabel);
+
+        // Admin declares the org's pre-registered upstream app; unlike the browser-authorized
+        // token, this is config and must survive onto the server row so internal users'
+        // Tools-page Authorize relays through it (required for non-DCR upstreams like Slack).
+        await user.type(
+          screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+          "org-app-client-id",
+        );
+        await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+
+        await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+        await act(async () => {
+          oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+        });
+
+        const createdServer = {
+          server_id: "new-cf-app-server",
+          server_name: "CF_App_Server",
+          alias: "CF_App_Server",
+          url: "https://example.com/mcp",
+          transport: "http",
+          auth_type: _authType,
+          created_at: "2024-01-01T00:00:00Z",
+          created_by: "user-1",
+          updated_at: "2024-01-01T00:00:00Z",
+          updated_by: "user-1",
+        };
+        vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+
+        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+        await act(async () => {
+          fireEvent.click(submitButton);
+        });
+
+        await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+        const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+
+        // The declared app persists; the browser-authorized token still appears nowhere in the
+        // payload and no per-user DB credential is written.
+        expect(payload.credentials).toEqual({
+          client_id: "org-app-client-id",
+          client_secret: "org-app-secret",
+        });
+        expect(JSON.stringify(payload)).not.toContain("upstream-tok");
+        expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+        expect(setToken).toHaveBeenCalledWith(
+          "new-cf-app-server",
+          expect.objectContaining({ access_token: "upstream-tok" }),
+          undefined,
+        );
+      },
+    );
 
     it("should not show auth value field when None auth type is selected", async () => {
       await selectHttpTransport();

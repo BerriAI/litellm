@@ -60,6 +60,8 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
   AUTH_TYPE.AWS_SIGV4,
+  AUTH_TYPE.TRUE_PASSTHROUGH,
+  AUTH_TYPE.OAUTH_DELEGATE,
 ];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
@@ -209,7 +211,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // edit form's onTokenReceived early return.
         setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
         NotificationsManager.success(
-          "Token held for this browser session. Tools can now be previewed and configured; nothing will be saved to LiteLLM.",
+          "Token held for this browser session. Tools can now be previewed and configured; the token is not saved to LiteLLM.",
         );
         return;
       }
