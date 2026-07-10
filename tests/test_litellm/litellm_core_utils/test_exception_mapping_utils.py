@@ -233,17 +233,24 @@ def test_openai_insufficient_quota_maps_to_distinct_rate_limit_subtype(body):
     assert litellm.InsufficientQuotaError in litellm.LITELLM_EXCEPTION_TYPES
 
 
-def test_openai_transient_429_remains_rate_limit_error():
-    original_exception = OpenAIError(
-        status_code=429,
-        message="Error code: 429 - Rate limit reached for requests",
-        headers={},
-        body={
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {
             "message": "Rate limit reached for requests",
             "type": "requests",
             "param": None,
             "code": "rate_limit_exceeded",
         },
+    ],
+)
+def test_openai_transient_429_remains_rate_limit_error(body):
+    original_exception = OpenAIError(
+        status_code=429,
+        message="Error code: 429 - Rate limit reached for requests",
+        headers={},
+        body=body,
     )
 
     with pytest.raises(litellm.RateLimitError) as exc_info:

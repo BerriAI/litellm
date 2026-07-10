@@ -12,7 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import urllib.parse
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import litellm
 from litellm import main as litellm_main
@@ -2081,3 +2081,40 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.prompt_tokens > 0
     assert response.usage.completion_tokens > 0
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+@pytest.mark.parametrize(
+    "retry_function",
+    [litellm.completion_with_retries, litellm.responses_with_retries],
+)
+def test_sync_retry_helpers_stop_on_insufficient_quota(retry_function):
+    error = litellm.InsufficientQuotaError(
+        message="You exceeded your current quota",
+        llm_provider="openai",
+        model="gpt-5.5",
+    )
+    original_function = Mock(side_effect=error)
+
+    with pytest.raises(litellm.InsufficientQuotaError):
+        retry_function(num_retries=3, original_function=original_function)
+
+    assert original_function.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_function",
+    [litellm.acompletion_with_retries, litellm.aresponses_with_retries],
+)
+async def test_async_retry_helpers_stop_on_insufficient_quota(retry_function):
+    error = litellm.InsufficientQuotaError(
+        message="You exceeded your current quota",
+        llm_provider="openai",
+        model="gpt-5.5",
+    )
+    original_function = AsyncMock(side_effect=error)
+
+    with pytest.raises(litellm.InsufficientQuotaError):
+        await retry_function(num_retries=3, original_function=original_function)
+
+    assert original_function.await_count == 1

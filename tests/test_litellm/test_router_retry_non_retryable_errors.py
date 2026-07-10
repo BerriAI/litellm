@@ -267,25 +267,6 @@ def test_insufficient_quota_error_ignores_rate_limit_retry_policy():
     assert retries == 0
 
 
-def test_completion_with_retries_stops_on_insufficient_quota():
-    call_count = 0
-
-    def raise_insufficient_quota(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise _make_insufficient_quota_error()
-
-    with pytest.raises(litellm.InsufficientQuotaError):
-        litellm.completion_with_retries(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "hi"}],
-            num_retries=3,
-            original_function=raise_insufficient_quota,
-        )
-
-    assert call_count == 1
-
-
 @pytest.mark.asyncio
 async def test_not_found_error_in_retry_loop_raises_immediately():
     """
