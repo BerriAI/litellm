@@ -110,6 +110,42 @@ def test_is_oauth_passthrough_false_without_authorization_header():
     assert server.is_oauth_passthrough is False
 
 
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_is_dcr_bridge_true_for_flagged_client_forwarded_modes(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    assert server.is_dcr_bridge is True
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_is_dcr_bridge_false_when_flag_unset(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+    assert server.dcr_bridge is None
+    assert server.is_dcr_bridge is False
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.none, MCPAuth.api_key, None])
+def test_is_dcr_bridge_false_for_non_client_forwarded_auth_types(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    assert server.is_dcr_bridge is False
+
+
 def test_is_oauth_passthrough_false_without_extra_headers():
     server = MCPServer(
         server_id="s1",

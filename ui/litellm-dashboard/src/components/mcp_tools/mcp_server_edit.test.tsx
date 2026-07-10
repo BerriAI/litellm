@@ -10,6 +10,7 @@ vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
+  testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -22,15 +23,22 @@ vi.mock("../molecules/notifications_manager", () => ({
 const mockOauth: {
   tokenResponse: any;
   getTemporaryPayload: (() => Record<string, unknown> | null) | null;
-} = { tokenResponse: null, getTemporaryPayload: null };
+  onTokenReceived: ((token: Record<string, unknown> | null) => void) | null;
+  reset: ReturnType<typeof vi.fn>;
+} = { tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: (opts: { getTemporaryPayload?: () => Record<string, unknown> | null }) => {
+  useMcpOAuthFlow: (opts: {
+    getTemporaryPayload?: () => Record<string, unknown> | null;
+    onTokenReceived?: (token: Record<string, unknown> | null) => void;
+  }) => {
     mockOauth.getTemporaryPayload = opts?.getTemporaryPayload ?? null;
+    mockOauth.onTokenReceived = opts?.onTokenReceived ?? null;
     return {
       startOAuthFlow: vi.fn(),
       status: "idle",
       error: null,
       tokenResponse: mockOauth.tokenResponse,
+      reset: mockOauth.reset,
     };
   },
 }));
@@ -92,10 +100,12 @@ vi.mock("./mcp_tool_configuration", () => ({
 const mockGetToken = vi.fn();
 const mockIsTokenValid = vi.fn();
 const mockSetToken = vi.fn();
+const mockRemoveToken = vi.fn();
 vi.mock("@/utils/mcpTokenStore", () => ({
   getToken: (...args: any[]) => mockGetToken(...args),
   isTokenValid: (...args: any[]) => mockIsTokenValid(...args),
   setToken: (...args: any[]) => mockSetToken(...args),
+  removeToken: (...args: unknown[]) => mockRemoveToken(...args),
 }));
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
@@ -448,6 +458,159 @@ describe("MCPServerEdit (auth type switch)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.auth_type).toBe("oauth2");
     expect(payload.token_url).toBe("https://idp.example.com/oauth/token");
+  });
+});
+
+describe("MCPServerEdit OAuth token invalidation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const renderOAuthEdit = () =>
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+  it("invalidates a session-authorized token when the transport switches to stdio", async () => {
+    // Switching to stdio clears url/auth_type via programmatic form.setFieldsValue, which antd does
+    // not report through onValuesChange; the explicit recheck in handleTransportChange must catch it.
+    // Regression: the token used to survive this switch (sessionStorage + hook state kept the old
+    // token minted for the http url).
+    renderOAuthEdit();
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    await selectAntOption("Transport Type", "Standard Input/Output (stdio)");
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
+  });
+
+  it("invalidates a session-authorized token when the server URL changes", async () => {
+    renderOAuthEdit();
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://other.example.com/mcp" } });
+    });
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
+  });
+
+  it("previews tools with a staged interactive OAuth token before it is saved", async () => {
+    // Regression: for authorization_code the fetch went by server_id only, relying on the stored DB
+    // credential, so a token authorized in this edit session gave an empty preview until the admin
+    // saved; the create form previews the identical state via the config-based preview endpoint.
+    mockOauth.tokenResponse = { access_token: "staged-obo-tok" };
+
+    renderOAuthEdit();
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
+        "access-token",
+        // oauth2_flow must be explicit: the preview endpoint infers client_credentials from
+        // inherited client_id/client_secret/token_url and would strip the staged bearer.
+        expect.objectContaining({
+          server_id: "oauth_server_1",
+          url: "https://example.com/mcp",
+          oauth2_flow: "authorization_code",
+        }),
+        "staged-obo-tok",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
+    // Previewing must stay stateless: the staged token is committed only by an explicit Save
+    // (storeMCPOAuthUserCredential for authorization_code, setToken for the client-forwarded modes).
+    expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+    expect(mockSetToken).not.toHaveBeenCalled();
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    mockOauth.tokenResponse = null;
+  });
+
+  it("previews an OpenAPI server's staged token against its spec_path", async () => {
+    mockOauth.tokenResponse = { access_token: "staged-obo-tok" };
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          transport: "openapi",
+          url: null,
+          spec_path: "https://example.com/openapi.json",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({ spec_path: "https://example.com/openapi.json" }),
+        "staged-obo-tok",
+      );
+    });
+    mockOauth.tokenResponse = null;
+  });
+
+  it("keeps the admin's in-flight endpoint edits when the token is invalidated", async () => {
+    // Regression: invalidation used to form.resetFields the endpoint fields; with the edit Form's
+    // initialValues that silently reverted an admin-corrected token_url back to the saved (wrong)
+    // value while still looking plausible. Only credentials (the minted material) may be wiped.
+    renderOAuthEdit();
+
+    const tokenUrlInput = screen.getByPlaceholderText("https://example.com/oauth/token");
+    await act(async () => {
+      fireEvent.change(tokenUrlInput, { target: { value: "https://corrected.example.com/token" } });
+    });
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://moved.example.com/mcp" } });
+    });
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect((screen.getByPlaceholderText("https://example.com/oauth/token") as HTMLInputElement).value).toBe(
+      "https://corrected.example.com/token",
+    );
+  });
+
+  it("keeps a session-authorized token on an http to sse switch with the same url", async () => {
+    // Same url means the same resource/audience (RFC 8707): the minted token is still valid, so a
+    // pure transport swap between the two MCP wire protocols must not force a re-authorize.
+    renderOAuthEdit();
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    await selectAntOption("Transport Type", "Server-Sent Events (SSE)");
+
+    expect(mockOauth.reset).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
   });
 });
 
@@ -1210,6 +1373,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
       const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
       expect(payload.credentials).toBeUndefined();
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
     },
   );
 

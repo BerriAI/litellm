@@ -471,7 +471,8 @@ def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
     through: the caller owns the upstream token, and this relayed flow is how a browser obtains
     one against the upstream IdP (the admin UI's browser-only Authorize uses it). The minted
     token is upstream-audienced and held by the caller; the gateway persists nothing for these
-    modes (DCR persistence is opt-in and never enabled on this path).
+    modes (``_persist_dcr_client_registration`` skips them unconditionally, so even the admin
+    Authorize path with ``persist_credentials`` enabled writes nothing to the server row).
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
@@ -807,7 +808,7 @@ async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> boo
     return bool(mcp_server.client_id)
 
 
-DcrRegistrationPersistenceResult = Literal["persisted", "reused", "failed"]
+DcrRegistrationPersistenceResult = Literal["persisted", "reused", "skipped", "failed"]
 
 
 async def _persist_dcr_client_registration(
@@ -821,7 +822,16 @@ async def _persist_dcr_client_registration(
     full re-authorization instead of a silent refresh. Mirrors the ``encrypt_credentials``
     write that ``client_credentials`` and token exchange already use. Failures are logged,
     never raised: registration still returns to the caller even when persistence fails.
+
+    The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are skipped
+    unconditionally: the caller holds the upstream token and the gateway must hold no OAuth
+    client identity for these servers. Persisting here would stamp ``oauth2_flow`` and a
+    ``client_id`` onto a server whose mode promises the gateway stores nothing, making a
+    fresh pass-through server read as gateway-authorized.
     """
+    if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+        return "skipped"
+
     try:
         registration = _DcrClientRegistration.model_validate(registration_response)
     except ValidationError as exc:

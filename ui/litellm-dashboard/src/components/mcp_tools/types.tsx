@@ -57,6 +57,55 @@ export const OAUTH_FLOW = {
   M2M: "m2m",
 };
 
+// The fields that determine which upstream OAuth token "Authorize & Fetch" mints: the resource/audience
+// (url, or spec_path for OpenAPI servers), the OAuth mode/grant (auth_type, oauth_flow_type), the OAuth
+// client and requested scope (credentials.client_id / client_secret / scopes), and the authorization-server
+// endpoints (authorization_url / token_url / registration_url). Grounded in RFC 8707 / RFC 8693 and the MCP
+// auth spec: an access token is bound to exactly this tuple (resource/audience + scope + client + issuer), so
+// a previously authorized token is stale if and only if this identity changes and must be re-minted.
+// url and spec_path are compared independently rather than selected by transport: the create form keeps
+// transport in component state, not in form values, so a transport-conditional target would silently pin the
+// audience to a missing url and never fire for spec_path edits on OpenAPI servers. Mirrors the backend's
+// mcp_oauth_token_identity. Deliberately EXCLUDES: transport itself (http<->sse on the same url is the same
+// audience; a switch to/from OpenAPI shows up as url/spec_path changes because each form clears the field the
+// new transport does not use), delegate_auth_to_upstream (a downstream-usage toggle that is never sent to the
+// authorize request), and all metadata/RBAC/routing fields. Shared by the create and edit forms so their
+// invalidation logic cannot drift.
+export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): string => {
+  const credentials = (values.credentials ?? {}) as Record<string, unknown>;
+  const identity = {
+    url: typeof values.url === "string" ? values.url : null,
+    spec_path: typeof values.spec_path === "string" ? values.spec_path : null,
+    auth_type: values.auth_type ?? null,
+    oauth_flow_type: values.oauth_flow_type ?? null,
+    client_id: credentials.client_id ?? null,
+    client_secret: credentials.client_secret ?? null,
+    scopes: credentials.scopes ?? null,
+    authorization_url: values.authorization_url ?? null,
+    token_url: values.token_url ?? null,
+    registration_url: values.registration_url ?? null,
+  };
+  return JSON.stringify(identity);
+};
+
+// The form fields wiped when a held OAuth token is invalidated: only `credentials`, which holds the
+// minted material (the fetched token + DCR client). The authorization/token/registration endpoint
+// fields are deliberately NOT wiped: nothing programmatic ever writes them (upstream discovery happens
+// backend-side), so they only ever hold admin input, and resetting them would wipe it (create) or
+// silently revert it to the saved record (edit, whose Form has initialValues). Shared by the create and
+// edit forms so what gets wiped cannot drift.
+export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
+
+// True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the
+// form's current identity no longer matches it. Every invalidation decision in both forms goes through
+// this single check: onValuesChange for user edits, and an explicit recheck after any programmatic
+// form.setFieldsValue (antd does not fire onValuesChange for those), so a missed event path cannot let a
+// stale token survive.
+export const isHeldOAuthTokenStale = (
+  values: Record<string, unknown>,
+  authorizedIdentity: string | undefined,
+): boolean => authorizedIdentity !== undefined && getOAuthAuthorizationIdentity(values) !== authorizedIdentity;
+
 // Backend value of `oauth2_flow` that marks a machine-to-machine server. Distinct
 // from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
 export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
