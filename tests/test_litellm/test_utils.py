@@ -885,6 +885,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/ocr",
                             "/vertex_ai/live",
                             "/v1/realtime/transcription_sessions",
+                            "/v1/messages",
                         ],
                     },
                 },
