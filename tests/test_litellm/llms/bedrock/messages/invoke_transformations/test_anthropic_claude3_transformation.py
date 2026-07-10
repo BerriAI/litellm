@@ -2090,3 +2090,174 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     assert changed is False
     assert request["thinking"] == {"type": "enabled", "budget_tokens": 8000}
     assert "output_config" not in request
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    reload_beta_headers_config()
+
+
+def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: Bedrock InvokeModel supports automatic tool-call clearing via
+    ``clear_tool_uses_20250919`` under the ``context-management-2025-06-27``
+    beta. Before the LIT-3393 fix, the transformation stripped this edit (only
+    ``compact_20260112`` survived) AND the beta was filtered out by
+    ``filter_and_transform_beta_headers`` for ``bedrock``, producing a Bedrock
+    400 ``"context_management: Extra inputs are not permitted"``.
+
+    Post-fix, the edit must reach the body and the beta must reach
+    ``anthropic_beta``.
+
+    AWS docs ("Automatic tool call clearing (Beta)"):
+    https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "clear_tool_uses_20250919"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("context_management") == {
+        "edits": [{"type": "clear_tool_uses_20250919"}]
+    }, "clear_tool_uses_20250919 edit must reach Bedrock InvokeModel body"
+    assert "context-management-2025-06-27" in result.get("anthropic_beta", []), (
+        "context-management-2025-06-27 beta must reach the InvokeModel body so "
+        "the tool-call-clearing edit is accepted"
+    )
+
+
+def test_bedrock_messages_preserves_mixed_compact_and_clear_tool_uses_edits(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: a request mixing ``compact_20260112`` and
+    ``clear_tool_uses_20250919`` must keep BOTH edits and emit BOTH
+    anthropic-beta values (``compact-2026-01-12`` + ``context-management-2025-06-27``).
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "compact_20260112"},
+                {"type": "clear_tool_uses_20250919"},
+            ]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-6-20250929-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    cm = result.get("context_management")
+    assert cm is not None
+    edit_types = sorted(e.get("type") for e in cm["edits"])
+    assert edit_types == ["clear_tool_uses_20250919", "compact_20260112"]
+
+    betas = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in betas
+    assert "context-management-2025-06-27" in betas
+
+
+def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: ``clear_thinking_20251015`` remains LiteLLM-internal (consumed via
+    thinking-injection) and MUST be stripped from the body, while
+    ``clear_tool_uses_20250919`` (officially supported on Bedrock InvokeModel)
+    survives in the same request.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "clear_thinking_20251015", "keep": "all"},
+                {"type": "clear_tool_uses_20250919"},
+            ]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    cm = result.get("context_management")
+    assert cm is not None
+    assert [e.get("type") for e in cm["edits"]] == [
+        "clear_tool_uses_20250919"
+    ], "clear_thinking_20251015 must still be stripped (LiteLLM-internal)"
+
+    betas = result.get("anthropic_beta", [])
+    assert "context-management-2025-06-27" in betas
+    # ``compact-2026-01-12`` was not requested.
+    assert "compact-2026-01-12" not in betas
+
+
+def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock(
+    local_beta_headers_config,
+):
+    """
+    LIT-3393: ``anthropic_beta_headers_config.json`` previously mapped
+    ``bedrock.context-management-2025-06-27`` to ``null``, so
+    ``filter_and_transform_beta_headers`` dropped the header even when the
+    transformation tried to set it. This regression guard locks the bundled
+    mapping in place.
+
+    Pinned to the bundled local config via ``LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS``
+    so the assertion is not subject to whatever the upstream remote currently
+    serves or what previous tests left in the module cache.
+    """
+    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+
+    out = filter_and_transform_beta_headers(
+        ["context-management-2025-06-27"],
+        provider="bedrock",
+    )
+    assert out == ["context-management-2025-06-27"]
+
+    # Bedrock_converse genuinely lacks it per AWS docs; this guard prevents
+    # an accidental flip there.
+    out_converse = filter_and_transform_beta_headers(
+        ["context-management-2025-06-27"],
+        provider="bedrock_converse",
+    )
+    assert out_converse == []
+

@@ -9023,7 +9023,7 @@ class TestValidateKeyAliasFormat:
         litellm.enable_key_alias_format_validation = False
 
     def test_validation_skipped_when_flag_disabled(self):
-        """When enable_key_alias_format_validation is False (default), no validation occurs."""
+        """When enable_key_alias_format_validation is False (default), no charset/length validation occurs."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
@@ -9033,6 +9033,33 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("")
         _validate_key_alias_format("!invalid!")
         _validate_key_alias_format("a" * 256)
+
+    @pytest.mark.parametrize(
+        "unsafe_alias",
+        [
+            "../../../other-app/creds",
+            "litellm/../../secret",
+            "foo\n- !grant\n  role: !!admin\n  member: attacker",
+            "foo\rbar",
+            "foo\x00bar",
+        ],
+    )
+    def test_validate_key_alias_format_rejects_traversal_and_control_chars_even_when_flag_disabled(
+        self, unsafe_alias
+    ):
+        """
+        Regression test: this check must reject an invalid key_alias unconditionally,
+        even when enable_key_alias_format_validation (the separate, opt-in charset
+        rule) is disabled.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format(unsafe_alias)
+        assert str(exc.value.code) == "400"
+        assert "Invalid key_alias" in str(exc.value.message)
 
     def test_validate_key_alias_format_valid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import (

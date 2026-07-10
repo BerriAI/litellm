@@ -27020,7 +27020,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -48633,6 +48633,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description request_id to get spend logs for specific request_id */
                 request_id?: string | null;
+                /** @description Filter spend logs by session_id (partial string match) */
+                session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */
@@ -48739,6 +48741,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description request_id to get spend logs for specific request_id */
                 request_id?: string | null;
+                /** @description Filter spend logs by session_id (partial string match) */
+                session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */

@@ -158,7 +158,7 @@ describe("KeyModelUsageView", () => {
       },
     ];
     render(<KeyModelUsageView topModels={modelsWithZeros} />);
-    expect(screen.getByText("$0.00")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
     expect(screen.getAllByText("0").length).toBeGreaterThan(0);
   });
 
