@@ -3,7 +3,7 @@ import { Table, Tooltip } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { EyeOutlined, CopyOutlined, DeleteOutlined } from "@ant-design/icons";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
-import { DocumentUpload } from "./types";
+import { DocumentUpload } from "@/components/vector_store_management/types";
 
 interface DocumentsTableProps {
   documents: DocumentUpload[];

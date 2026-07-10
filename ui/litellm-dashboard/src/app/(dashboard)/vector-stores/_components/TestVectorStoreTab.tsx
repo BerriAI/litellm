@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Card, Select, Typography } from "antd";
 import { VectorStoreTester } from "./VectorStoreTester";
-import { VectorStore } from "./types";
+import { VectorStore } from "@/components/vector_store_management/types";
 
 const { Text, Title } = Typography;
 

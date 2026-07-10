@@ -12,16 +12,21 @@ import {
   TabPanel,
 } from "@tremor/react";
 import { RefreshIcon } from "@heroicons/react/outline";
-import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
-import { VectorStore } from "./types";
+import {
+  vectorStoreListCall,
+  vectorStoreDeleteCall,
+  credentialListCall,
+  CredentialItem,
+} from "@/components/networking";
+import { VectorStore } from "@/components/vector_store_management/types";
 import VectorStoreTable from "./VectorStoreTable";
 import VectorStoreForm from "./VectorStoreForm";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import VectorStoreInfoView from "./vector_store_info";
 import CreateVectorStore from "./CreateVectorStore";
 import TestVectorStoreTab from "./TestVectorStoreTab";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface VectorStoreProps {
   accessToken: string | null;

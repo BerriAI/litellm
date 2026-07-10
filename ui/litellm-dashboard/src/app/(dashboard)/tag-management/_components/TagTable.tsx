@@ -11,7 +11,7 @@ import { Badge, Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, T
 import { Tooltip } from "antd";
 import React from "react";
 import { DateCell, IdCell } from "@/components/shared/table_cells";
-import { Tag } from "./types";
+import { Tag } from "@/components/tag_management/types";
 
 interface TagTableProps {
   data: Tag[];

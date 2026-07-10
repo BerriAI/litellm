@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import TestVectorStoreTab from "./TestVectorStoreTab";
-import { VectorStore } from "./types";
+import { VectorStore } from "@/components/vector_store_management/types";
 
 // Mock VectorStoreTester component
 vi.mock("./VectorStoreTester", () => ({
