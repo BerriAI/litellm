@@ -66,14 +66,19 @@ class TeamMember(BaseModel):
 class TeamNewBody(BaseModel):
     team_alias: str
     max_budget: float | None = None
+    team_member_budget: float | None = None
+    team_member_budget_duration: str | None = None
     organization_id: str | None = None
     budget_limits: list[BudgetWindow] | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    metadata: dict[str, object] | None = None
 
 
 class TeamUpdateBody(BaseModel):
     team_id: str
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    team_member_budget: float | None = None
+    max_budget: float | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -111,9 +116,17 @@ class TeamInfoParams(BaseModel):
     team_id: str
 
 
+class TeamMemberBudgetTable(BaseModel):
+    max_budget: float | None = None
+    budget_duration: str | None = None
+
+
 class TeamInfoDetail(BaseModel):
     team_id: str
     model_max_budget: dict[str, ModelBudgetEntry | dict[str, float | str]] | None = None
+    is_from_config: bool = False
+    team_member_budget_table: TeamMemberBudgetTable | None = None
+    metadata: dict[str, object] | None = None
 
 
 class TeamInfoResponse(BaseModel):
@@ -349,9 +362,12 @@ class BudgetClient:
         *,
         alias: str,
         max_budget: float | None = None,
+        team_member_budget: float | None = None,
+        team_member_budget_duration: str | None = None,
         organization_id: str | None = None,
         budget_limits: list[BudgetWindow] | None = None,
         model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> str:
         return unwrap(
             self.gateway.transport.post(
@@ -360,9 +376,12 @@ class BudgetClient:
                 json=TeamNewBody(
                     team_alias=alias,
                     max_budget=max_budget,
+                    team_member_budget=team_member_budget,
+                    team_member_budget_duration=team_member_budget_duration,
                     organization_id=organization_id,
                     budget_limits=budget_limits,
                     model_max_budget=model_max_budget,
+                    metadata=metadata,
                 ),
                 response_type=TeamNewResponse,
             )
@@ -373,6 +392,8 @@ class BudgetClient:
         team_id: str,
         *,
         model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        team_member_budget: float | None = None,
+        max_budget: float | None = None,
     ) -> None:
         resp = self.gateway.transport.send(
             "/team/update",
@@ -380,9 +401,30 @@ class BudgetClient:
             json=TeamUpdateBody(
                 team_id=team_id,
                 model_max_budget=model_max_budget,
+                team_member_budget=team_member_budget,
+                max_budget=max_budget,
             ),
         )
         assert resp.ok, resp.body
+
+    def update_team_raw(
+        self,
+        team_id: str,
+        *,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        team_member_budget: float | None = None,
+        max_budget: float | None = None,
+    ):
+        return self.gateway.transport.send(
+            "/team/update",
+            headers=self.gateway.transport.master,
+            json=TeamUpdateBody(
+                team_id=team_id,
+                model_max_budget=model_max_budget,
+                team_member_budget=team_member_budget,
+                max_budget=max_budget,
+            ),
+        )
 
     def team_model_max_budget(self, team_id: str) -> dict[str, ModelBudgetEntry | dict[str, float | str]] | None:
         result = self.gateway.transport.get(

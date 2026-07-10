@@ -856,6 +856,7 @@ async def _common_key_generation_helper(
         llm_router,
         premium_user,
         prisma_client,
+        user_api_key_cache,
     )
 
     common_key_access_checks(
@@ -877,6 +878,15 @@ async def _common_key_generation_helper(
     # default_key_generate_params injected.
     _requested_max_budget = data.max_budget
     _requested_team_id = data.team_id
+
+    from litellm.proxy.management_helpers.config_teams_sync import apply_team_member_budget_to_sa_key
+
+    await apply_team_member_budget_to_sa_key(
+        data=data,
+        team_table=team_table,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     _apply_model_max_budget_generation_policy(
         data,

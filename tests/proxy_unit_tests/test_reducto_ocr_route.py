@@ -29,6 +29,11 @@ def client_no_auth(fake_env_vars):
     original_disable_aiohttp = litellm.disable_aiohttp_transport
     litellm.disable_aiohttp_transport = True
     litellm.in_memory_llm_clients_cache.flush_cache()
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm.failure_callback = []
+    litellm._async_success_callback = []
+    litellm._async_failure_callback = []
     cleanup_router_config_variables()
 
     filepath = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +54,11 @@ def client_no_auth(fake_env_vars):
     finally:
         litellm.disable_aiohttp_transport = original_disable_aiohttp
         litellm.in_memory_llm_clients_cache.flush_cache()
+        litellm.callbacks = []
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
 
 
 def test_proxy_reducto_ocr_json_rejects_reducto_id(client_no_auth):

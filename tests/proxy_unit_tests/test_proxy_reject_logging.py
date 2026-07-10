@@ -110,6 +110,14 @@ def _register_proxy_test_logger(callback_logger: testLogger) -> None:
     litellm._async_failure_callback = [callback_logger]
 
 
+def _clear_proxy_test_loggers() -> None:
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm.failure_callback = []
+    litellm._async_success_callback = []
+    litellm._async_failure_callback = []
+
+
 @pytest.mark.parametrize(
     "route, body",
     [
@@ -174,43 +182,46 @@ async def test_chat_completion_request_with_redaction(route, body):
     request.body = return_body
 
     try:
-        if route == "/v1/chat/completions":
-            response = await chat_completion(
-                request=request,
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
-                    rpm_limit=0,
-                    request_route=route,
-                ),
-                fastapi_response=Response(),
-            )
-        elif route == "/v1/completions":
-            response = await completion(
-                request=request,
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
-                    rpm_limit=0,
-                    request_route=route,
-                ),
-                fastapi_response=Response(),
-            )
-        elif route == "/v1/embeddings":
-            response = await embeddings(
-                request=request,
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
-                    rpm_limit=0,
-                    request_route=route,
-                ),
-                fastapi_response=Response(),
-            )
-    except Exception:
-        pass
-    await asyncio.sleep(3)
+        try:
+            if route == "/v1/chat/completions":
+                await chat_completion(
+                    request=request,
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-12345",
+                        token="hashed_sk-12345",
+                        rpm_limit=0,
+                        request_route=route,
+                    ),
+                    fastapi_response=Response(),
+                )
+            elif route == "/v1/completions":
+                await completion(
+                    request=request,
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-12345",
+                        token="hashed_sk-12345",
+                        rpm_limit=0,
+                        request_route=route,
+                    ),
+                    fastapi_response=Response(),
+                )
+            elif route == "/v1/embeddings":
+                await embeddings(
+                    request=request,
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-12345",
+                        token="hashed_sk-12345",
+                        rpm_limit=0,
+                        request_route=route,
+                    ),
+                    fastapi_response=Response(),
+                )
+        except Exception:
+            pass
+        await asyncio.sleep(3)
 
-    assert _test_logger.reaches_async_failure_event is True
+        assert _test_logger.reaches_async_failure_event is True
 
-    assert _test_logger.reaches_sync_failure_event is True
+        assert _test_logger.reaches_sync_failure_event is True
+    finally:
+        _clear_proxy_test_loggers()

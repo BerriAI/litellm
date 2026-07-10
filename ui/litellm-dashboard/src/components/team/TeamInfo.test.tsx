@@ -670,6 +670,42 @@ describe("TeamInfoView", () => {
       });
     });
 
+    it("should show Config badge and disable budget fields for config teams", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          is_from_config: true,
+          team_member_budget_table: {
+            max_budget: 100,
+            budget_duration: "30d",
+            tpm_limit: null,
+            rpm_limit: null,
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Test Team")).toBeInTheDocument();
+      });
+
+      const settingsTab = screen.getByRole("tab", { name: "Settings" });
+      await user.click(settingsTab);
+
+      await waitFor(() => {
+        expect(screen.getAllByText("Config").length).toBeGreaterThan(0);
+      });
+
+      const editButton = screen.getByRole("button", { name: /edit settings/i });
+      await user.click(editButton);
+
+      await waitFor(() => {
+        const maxBudget = screen.getByLabelText("Max Budget (USD)");
+        expect(maxBudget).toBeDisabled();
+      });
+    });
+
     it("should enable per-model budget editor when team has all proxy models", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(

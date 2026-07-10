@@ -84,12 +84,16 @@ interface ModelMaxBudgetEditorProps {
   value?: ModelMaxBudgetValue | null;
   onChange?: (value: ModelMaxBudgetValue | null) => void;
   modelOptions: string[];
+  disabled?: boolean;
 }
 
-export function ModelMaxBudgetEditor({ value, onChange, modelOptions }: ModelMaxBudgetEditorProps) {
+export function ModelMaxBudgetEditor({ value, onChange, modelOptions, disabled = false }: ModelMaxBudgetEditorProps) {
   const entries = modelMaxBudgetEntriesFromValue(value);
 
   const updateEntries = (nextEntries: ModelMaxBudgetEntry[]) => {
+    if (disabled) {
+      return;
+    }
     onChange?.(modelMaxBudgetValueFromEntries(nextEntries));
   };
 
@@ -120,6 +124,7 @@ export function ModelMaxBudgetEditor({ value, onChange, modelOptions }: ModelMax
             style={{ width: 220 }}
             placeholder="Select model"
             options={modelOptions.map((model) => ({ value: model, label: model }))}
+            disabled={disabled}
           />
           <InputNumber
             step={0.01}
@@ -130,14 +135,23 @@ export function ModelMaxBudgetEditor({ value, onChange, modelOptions }: ModelMax
             placeholder="Max spend ($)"
             style={{ width: 160 }}
             prefix="$"
+            disabled={disabled}
           />
           <Select
             value={entry.time_period}
             onChange={(nextPeriod) => updateEntry(index, "time_period", nextPeriod)}
             style={{ width: 140 }}
             options={TIME_PERIOD_OPTIONS}
+            disabled={disabled}
           />
-          <Button type="text" danger size="small" onClick={() => removeEntry(index)} style={{ padding: "0 4px" }}>
+          <Button
+            type="text"
+            danger
+            size="small"
+            onClick={() => removeEntry(index)}
+            style={{ padding: "0 4px" }}
+            disabled={disabled}
+          >
             ✕
           </Button>
         </div>
@@ -145,7 +159,7 @@ export function ModelMaxBudgetEditor({ value, onChange, modelOptions }: ModelMax
       <Button
         size="small"
         onClick={addEntry}
-        disabled={modelOptions.length === 0}
+        disabled={disabled || modelOptions.length === 0}
         data-testid="add-model-budget-button"
       >
         + Add Model Budget

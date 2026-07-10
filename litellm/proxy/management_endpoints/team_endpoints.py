@@ -202,6 +202,36 @@ async def _verify_team_access(
     )
 
 
+def _reject_config_team_budget_mutation(
+    *,
+    team_metadata: Optional[dict],
+    payload: dict,
+    field_names: frozenset,
+) -> None:
+    from litellm.proxy.management_helpers.config_teams_sync import (
+        budget_fields_in_payload,
+        is_config_team_sync_active,
+        team_is_from_config,
+    )
+
+    if is_config_team_sync_active():
+        return
+    if not team_is_from_config(team_metadata):
+        return
+    locked = budget_fields_in_payload(payload, field_names)
+    if not locked:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": (
+                "Budget fields for this team are managed in the proxy config file and cannot be "
+                f"edited via the API/UI. Locked fields: {', '.join(locked)}"
+            )
+        },
+    )
+
+
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
@@ -1105,6 +1135,11 @@ async def new_team(
                 if default_budget is not None:
                     data.max_budget = default_budget
 
+        # Config teams never use a shared team pool; member budgets are per-user/SA.
+        if isinstance(data.metadata, dict) and data.metadata.get("is_from_config"):
+            data.max_budget = None
+            data.budget_duration = None
+
         if (
             user_api_key_dict.user_role is None or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         ):  # don't restrict proxy admin
@@ -1694,6 +1729,20 @@ async def update_team(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        from litellm.proxy.management_helpers.config_teams_sync import CONFIG_TEAM_BUDGET_FIELDS
+
+        existing_metadata = existing_team_row.metadata
+        if isinstance(existing_metadata, str):
+            try:
+                existing_metadata = json.loads(existing_metadata)
+            except Exception:
+                existing_metadata = {}
+        _reject_config_team_budget_mutation(
+            team_metadata=existing_metadata if isinstance(existing_metadata, dict) else None,
+            payload=data.model_dump(exclude_unset=True),
+            field_names=CONFIG_TEAM_BUDGET_FIELDS,
+        )
+
         # Verify caller has access to manage this team
         await _verify_team_access(
             team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
@@ -1804,6 +1853,19 @@ async def update_team(
         # be written by the same code path that creates the underlying rows.
         if isinstance(updated_kv.get("metadata"), dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
+            from litellm.proxy.management_helpers.config_teams_sync import (
+                CONFIG_TEAM_METADATA_KEY,
+                team_is_from_config,
+            )
+
+            existing_meta = existing_team_row.metadata
+            if isinstance(existing_meta, str):
+                try:
+                    existing_meta = json.loads(existing_meta)
+                except Exception:
+                    existing_meta = {}
+            if team_is_from_config(existing_meta if isinstance(existing_meta, dict) else None):
+                updated_kv["metadata"][CONFIG_TEAM_METADATA_KEY] = True
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
@@ -2818,6 +2880,14 @@ async def team_member_update(
         )
     existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
 
+    from litellm.proxy.management_helpers.config_teams_sync import CONFIG_MEMBER_BUDGET_FIELDS
+
+    _reject_config_team_budget_mutation(
+        team_metadata=existing_team_row.metadata,
+        payload=data.model_dump(exclude_unset=True),
+        field_names=CONFIG_MEMBER_BUDGET_FIELDS,
+    )
+
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
     if (
@@ -3536,6 +3606,10 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        from litellm.proxy.management_helpers.config_teams_sync import team_is_from_config
+
+        _team_info.is_from_config = team_is_from_config(_team_info.metadata)
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
