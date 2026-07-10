@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
-import Navbar from "@/components/navbar";
+import { DashboardHeader } from "@/components/DashboardHeader";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -102,34 +102,36 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const { mode } = usePluginMode();
 
   const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
+  const isGateway = mode === "ai-gateway";
 
   const navigateToPage = (newPage: string) => {
     const migratedRoute = MIGRATED_PAGES[newPage];
     router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
   };
 
+  // Standard app shell: the viewport is fixed height and never scrolls. The
+  // sidebar owns its own scroll and the content column scrolls independently,
+  // so the page can't be dragged past the end of the nav.
   return (
-    <div className="flex flex-col min-h-screen">
-      <Navbar
-        accessToken={accessToken}
-        isPublicPage={false}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
-      />
-      <DebugWarningBanner accessToken={accessToken} />
-      <LicenseExpiryBanner accessToken={accessToken} />
-      <div className="flex flex-1">
-        {mode !== "ai-gateway" ? (
-          <div className="flex-1 flex">
-            <AgentControlPlaneView />
-          </div>
+    <div className="flex h-screen overflow-hidden bg-background">
+      {isGateway && (
+        <SidebarProvider
+          setPage={navigateToPage}
+          defaultSelectedKey={page}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+        />
+      )}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <DashboardHeader page={page} />
+        <DebugWarningBanner accessToken={accessToken} />
+        <LicenseExpiryBanner accessToken={accessToken} />
+        {isGateway ? (
+          <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
         ) : (
-          <>
-            <div className="mt-2">
-              <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
-            </div>
-            <main className="flex-1 min-w-0">{children}</main>
-          </>
+          <main className="flex min-w-0 flex-1 overflow-hidden">
+            <AgentControlPlaneView />
+          </main>
         )}
       </div>
     </div>

@@ -1,0 +1,145 @@
+import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
+import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
+import { getDaysUntilExpiration } from "@/utils/licenseUtils";
+import { cn } from "@/lib/cva.config";
+import { useQuery } from "@tanstack/react-query";
+import { Award, ChevronDown, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { getRemainingUsers } from "./networking";
+
+interface SidebarUsageCardProps {
+  accessToken: string | null;
+  collapsed: boolean;
+  onExpandRail: () => void;
+}
+
+interface Meter {
+  label: string;
+  used: number;
+  total: number;
+}
+
+const formatExpiration = (daysRemaining: number | null): string => {
+  if (daysRemaining === null) return "No expiration";
+  if (daysRemaining < 0) return "Expired";
+  if (daysRemaining === 0) return "Expires today";
+  if (daysRemaining === 1) return "1 day remaining";
+  if (daysRemaining < 30) return `${daysRemaining} days remaining`;
+  if (daysRemaining < 60) return "1 month remaining";
+  return `${Math.floor(daysRemaining / 30)} months remaining`;
+};
+
+const meterBarClass = (pct: number): string => {
+  if (pct > 100) return "bg-destructive";
+  if (pct >= 90) return "bg-amber-500";
+  return "bg-sidebar-primary";
+};
+
+const Meter = ({ label, used, total }: Meter) => {
+  const pct = total > 0 ? (used / total) * 100 : 0;
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-xs font-medium tabular-nums">
+          <span className="text-foreground">{used.toLocaleString()}</span>
+          <span className="text-muted-foreground"> / {total.toLocaleString()}</span>
+        </span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn("h-full rounded-full transition-[width] duration-300", meterBarClass(pct))}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+};
+
+type RemainingUsage = NonNullable<Awaited<ReturnType<typeof getRemainingUsers>>>;
+
+const remainingUsersQuery = (accessToken: string | null) => ({
+  queryKey: ["sidebarRemainingUsers", accessToken] as const,
+  queryFn: () => getRemainingUsers(accessToken as string),
+  enabled: Boolean(accessToken),
+  retry: false as const,
+  staleTime: 5 * 60 * 1000,
+});
+
+const buildMeters = (data: RemainingUsage | null): Meter[] => {
+  if (!data) return [];
+  return [
+    ...(data.total_users != null ? [{ label: "Seats", used: data.total_users_used, total: data.total_users }] : []),
+    ...(data.total_teams != null ? [{ label: "Teams", used: data.total_teams_used, total: data.total_teams }] : []),
+  ];
+};
+
+/**
+ * Bottom-dock "Enterprise usage" card for the sidebar. Backed only by data
+ * LiteLLM actually exposes: seat (user) and team allocations from the license,
+ * plus the license expiry. There is no plan-level spend or request cap, so the
+ * design's Spend / API-request meters are intentionally omitted.
+ */
+export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail }: SidebarUsageCardProps) {
+  const disableUsageIndicator = useDisableUsageIndicator();
+  const [open, setOpen] = useState(true);
+  const licenseInfo = useLicenseInfo(accessToken).data ?? null;
+  const { data: usageData, isLoading } = useQuery(remainingUsersQuery(accessToken));
+  const data = usageData ?? null;
+
+  const hasData = data !== null && (data.total_users !== null || data.total_teams !== null);
+  const noUsableData = !isLoading && !hasData;
+  if (disableUsageIndicator || !accessToken || noUsableData) {
+    return null;
+  }
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={onExpandRail}
+        title="Enterprise usage"
+        className="flex h-9 w-full items-center justify-center rounded-lg border border-sidebar-border bg-sidebar text-sidebar-primary transition-colors hover:bg-sidebar-accent"
+      >
+        <Award className="size-[18px]" strokeWidth={1.75} />
+      </button>
+    );
+  }
+
+  const daysUntilExpiration = licenseInfo?.expiration_date ? getDaysUntilExpiration(licenseInfo.expiration_date) : null;
+  const subtitle = licenseInfo?.expiration_date ? formatExpiration(daysUntilExpiration) : "Active plan";
+  const meters = buildMeters(data);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-sidebar-border bg-sidebar">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent"
+      >
+        <span className="flex size-[26px] flex-none items-center justify-center rounded-md bg-sidebar-primary/10 text-sidebar-primary">
+          <Award className="size-4" strokeWidth={1.75} />
+        </span>
+        <span className="min-w-0 flex-1 leading-tight">
+          <span className="block text-[13px] font-semibold text-foreground">Enterprise usage</span>
+          <span className="block truncate text-[11px] text-muted-foreground">{subtitle}</span>
+        </span>
+        <ChevronDown
+          className={cn("size-4 flex-none text-muted-foreground transition-transform", !open && "-rotate-90")}
+        />
+      </button>
+
+      {open && (
+        <div className="flex flex-col gap-3 px-3 pt-0.5 pb-3">
+          {isLoading && meters.length === 0 ? (
+            <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" /> Loading…
+            </div>
+          ) : (
+            meters.map((m) => <Meter key={m.label} {...m} />)
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
