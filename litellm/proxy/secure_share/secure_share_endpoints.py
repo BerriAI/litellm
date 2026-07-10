@@ -143,7 +143,7 @@ def _require_read_access(user_api_key_dict: UserAPIKeyAuth) -> None:
 )
 async def create_secure_share(
     request: SecureShareCreateRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves auth from this default
 ) -> SecureShareCreateResponse:
     _require_proxy_admin(user_api_key_dict)
 
@@ -171,7 +171,7 @@ async def create_secure_share(
 )
 async def get_secure_share(
     share_id: str = Path(description="id returned by /secure_share/create"),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves auth from this default
 ) -> SecureShareGetResponse:
     _require_read_access(user_api_key_dict)
 
@@ -194,7 +194,7 @@ async def get_secure_share(
 )
 async def delete_secure_share(
     share_id: str = Path(description="id returned by /secure_share/create"),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves auth from this default
 ) -> dict[str, str]:
     _require_proxy_admin(user_api_key_dict)
 
