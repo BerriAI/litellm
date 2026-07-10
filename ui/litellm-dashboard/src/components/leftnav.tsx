@@ -5,6 +5,7 @@ import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadine
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -584,14 +585,13 @@ const Sidebar_: React.FC<SidebarProps> = ({
               />
             </Link>
             {version && (
-              <a
-                href="https://docs.litellm.ai/release_notes"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded border border-border px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground group-data-[collapsed=true]/sidebar:hidden"
+              <Badge
+                variant="outline"
+                render={<a href="https://docs.litellm.ai/release_notes" target="_blank" rel="noopener noreferrer" />}
+                className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsed=true]/sidebar:hidden"
               >
                 v{version}
-              </a>
+              </Badge>
             )}
           </div>
           {onToggleCollapsed && (

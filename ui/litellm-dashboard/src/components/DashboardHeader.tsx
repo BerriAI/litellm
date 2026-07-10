@@ -1,6 +1,13 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { getBreadcrumb } from "@/components/leftnav";
 import { BlogDropdown } from "@/components/Navbar/BlogDropdown/BlogDropdown";
@@ -35,15 +42,19 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
 
   return (
     <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4">
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-        {section && (
-          <>
-            <span className="whitespace-nowrap text-muted-foreground">{section}</span>
-            <ChevronRight className="size-4 flex-none text-muted-foreground" aria-hidden />
-          </>
-        )}
-        <span className="truncate font-medium text-foreground">{title}</span>
-      </nav>
+      <Breadcrumb className="min-w-0">
+        <BreadcrumbList className="flex-nowrap">
+          {section && (
+            <>
+              <BreadcrumbItem className="whitespace-nowrap">{section}</BreadcrumbItem>
+              <BreadcrumbSeparator />
+            </>
+          )}
+          <BreadcrumbItem className="min-w-0">
+            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
 
       <div className="flex flex-none items-center gap-1">
         {showWorkerSwitch && (
@@ -52,14 +63,15 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
             <Separator orientation="vertical" className="mx-1.5 h-5" />
           </>
         )}
-        <a
-          href="https://docs.litellm.ai/docs/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex h-8 items-center rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        <Button
+          variant="ghost"
+          size="sm"
+          nativeButton={false}
+          render={<a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" />}
+          className="text-muted-foreground"
         >
           Docs
-        </a>
+        </Button>
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <Separator orientation="vertical" className="mx-1.5 h-5" />
