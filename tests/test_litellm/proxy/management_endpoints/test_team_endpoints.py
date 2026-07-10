@@ -1475,6 +1475,7 @@ async def test_process_team_members_single_member():
             default_team_budget_id="budget-123",
             allowed_models=None,
             budget_duration=None,
+            model_max_budget_in_team=None,
         )
 
 

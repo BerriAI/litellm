@@ -12417,7 +12417,7 @@ async def test_regenerate_virtual_key_without_enterprise_license():
 
 @pytest.mark.asyncio
 async def test_regenerate_fake_new_master_key_does_not_rotate_master():
-    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy._types import ProxyException, RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         regenerate_key_fn,
     )
@@ -12434,7 +12434,7 @@ async def test_regenerate_fake_new_master_key_does_not_rotate_master():
             "litellm.proxy.management_endpoints.key_management_endpoints._rotate_master_key",
             new_callable=AsyncMock,
         ) as mock_rotate_master_key,
-        pytest.raises(HTTPException) as exc_info,
+        pytest.raises(ProxyException) as exc_info,
     ):
         await regenerate_key_fn(
             key="sk-not-master",
@@ -12442,7 +12442,7 @@ async def test_regenerate_fake_new_master_key_does_not_rotate_master():
             user_api_key_dict=_non_admin_user_api_key_dict(),
         )
 
-    assert exc_info.value.status_code == 404
+    assert int(exc_info.value.code) == 404
     mock_rotate_master_key.assert_not_called()
 
 
