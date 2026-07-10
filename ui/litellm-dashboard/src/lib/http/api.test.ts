@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchClient } from "./api";
-import { registerAuthHeaderNameGetter, registerBaseUrlGetter, registerErrorHandler, setAuthToken } from "./runtime";
+import {
+  registerAuthHeaderNameGetter,
+  registerAuthTokenGetter,
+  registerBaseUrlGetter,
+  registerErrorHandler,
+} from "./runtime";
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -19,7 +24,7 @@ describe("typed api client middleware", () => {
     registerBaseUrlGetter(() => "");
     registerAuthHeaderNameGetter(() => "Authorization");
     registerErrorHandler(() => {});
-    setAuthToken(null);
+    registerAuthTokenGetter(() => null);
   });
 
   afterEach(() => {
@@ -27,7 +32,7 @@ describe("typed api client middleware", () => {
   });
 
   it("injects the bearer token under the registered auth header name", async () => {
-    setAuthToken("sk-test");
+    registerAuthTokenGetter(() => "sk-test");
     registerAuthHeaderNameGetter(() => "x-litellm-key");
     const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
 
