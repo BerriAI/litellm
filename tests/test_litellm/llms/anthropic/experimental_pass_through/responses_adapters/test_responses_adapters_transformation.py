@@ -873,6 +873,16 @@ def _make_mock_response(
     return resp
 
 
+def _make_response_with_usage(usage: Any) -> MagicMock:
+    resp = MagicMock()
+    resp.id = "resp_usage"
+    resp.model = "gpt-4o"
+    resp.status = "completed"
+    resp.output = []
+    resp.usage = usage
+    return resp
+
+
 def _make_output_message(texts: List[str]) -> MagicMock:
     """Build a mock ResponseOutputMessage with output_text parts."""
     from openai.types.responses import ResponseOutputMessage  # type: ignore[import]
@@ -997,6 +1007,55 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+
+    def test_openai_responses_cached_tokens_map_to_anthropic_usage(self):
+        """Responses cached_tokens becomes Anthropic cache_read_input_tokens."""
+        usage = MagicMock()
+        usage.input_tokens = 1000
+        usage.output_tokens = 75
+        usage.input_tokens_details = MagicMock()
+        usage.input_tokens_details.cached_tokens = 800
+
+        result: Any = _ADAPTER.translate_response(_make_response_with_usage(usage))
+        assert result["usage"] == {
+            "input_tokens": 200,
+            "output_tokens": 75,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 800,
+        }
+
+    def test_dict_responses_cached_tokens_map_to_anthropic_usage(self):
+        """Dict-shaped Responses usage is handled the same as SDK objects."""
+        usage = {
+            "input_tokens": 1000,
+            "output_tokens": 75,
+            "input_tokens_details": {"cached_tokens": 800},
+        }
+
+        result: Any = _ADAPTER.translate_response(_make_response_with_usage(usage))
+        assert result["usage"] == {
+            "input_tokens": 200,
+            "output_tokens": 75,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 800,
+        }
+
+    def test_anthropic_usage_fallback_does_not_double_subtract_input_tokens(self):
+        """Anthropic-style usage already reports uncached input tokens."""
+        usage = MagicMock()
+        usage.input_tokens = 200
+        usage.output_tokens = 75
+        usage.cache_read_input_tokens = 800
+        usage.cache_creation_input_tokens = 10
+        usage.input_tokens_details = None
+
+        result: Any = _ADAPTER.translate_response(_make_response_with_usage(usage))
+        assert result["usage"] == {
+            "input_tokens": 200,
+            "output_tokens": 75,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 800,
+        }
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""

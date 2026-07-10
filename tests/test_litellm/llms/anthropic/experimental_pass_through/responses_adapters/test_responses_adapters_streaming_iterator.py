@@ -5,6 +5,7 @@ Tests for AnthropicResponsesStreamWrapper
 
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
@@ -20,6 +21,72 @@ def _process_all(events: list) -> list:
     for event in events:
         wrapper._process_event(event)
     return list(wrapper._chunk_queue)
+
+
+def _completed_event_with_usage(usage: object) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="response.completed",
+        response=SimpleNamespace(status="completed", usage=usage, output=[]),
+    )
+
+
+def _message_delta_usage(chunks: list) -> dict:
+    for chunk in chunks:
+        if chunk.get("type") == "message_delta":
+            return chunk["usage"]
+    raise AssertionError("message_delta chunk not found")
+
+
+class TestProcessEventUsageMapping:
+    """Responses usage is translated to Anthropic Messages usage."""
+
+    def test_openai_responses_cached_tokens_map_to_cache_read_tokens(self):
+        usage = SimpleNamespace(
+            input_tokens=1000,
+            output_tokens=75,
+            input_tokens_details=SimpleNamespace(cached_tokens=800),
+        )
+
+        chunks = _process_all([_completed_event_with_usage(usage)])
+
+        assert _message_delta_usage(chunks) == {
+            "input_tokens": 200,
+            "output_tokens": 75,
+            "cache_read_input_tokens": 800,
+        }
+
+    def test_dict_responses_cached_tokens_map_to_cache_read_tokens(self):
+        usage = SimpleNamespace(
+            input_tokens=1000,
+            output_tokens=75,
+            input_tokens_details={"cached_tokens": 800},
+        )
+
+        chunks = _process_all([_completed_event_with_usage(usage)])
+
+        assert _message_delta_usage(chunks) == {
+            "input_tokens": 200,
+            "output_tokens": 75,
+            "cache_read_input_tokens": 800,
+        }
+
+    def test_anthropic_usage_fallback_does_not_double_subtract_input_tokens(self):
+        usage = SimpleNamespace(
+            input_tokens=200,
+            output_tokens=75,
+            input_tokens_details=None,
+            cache_creation_input_tokens=10,
+            cache_read_input_tokens=800,
+        )
+
+        chunks = _process_all([_completed_event_with_usage(usage)])
+
+        assert _message_delta_usage(chunks) == {
+            "input_tokens": 200,
+            "output_tokens": 75,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 800,
+        }
 
 
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
