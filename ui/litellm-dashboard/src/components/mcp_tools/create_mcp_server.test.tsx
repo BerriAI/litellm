@@ -1509,3 +1509,166 @@ describe("CreateMCPServer oauth2_flow persistence", () => {
     expect(payload.oauth2_flow).toBeUndefined();
   });
 });
+
+describe("CreateMCPServer dcr_bridge toggle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    oauthHook.tokenResponse = null;
+    oauthHook.onTokenReceived = null;
+  });
+
+  const createdServer = {
+    server_id: "new-cf-server",
+    server_name: "CF_Server",
+    alias: "CF_Server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "true_passthrough",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+  };
+
+  const getDcrToggle = () => document.getElementById("dcr_bridge");
+
+  async function setupHttpServerForm() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.change(getServerNameInput(), { target: { value: "CF_Server" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
+    });
+  }
+
+  async function submitCreate() {
+    const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+    await waitFor(() => {
+      expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it.each([["True Passthrough (no LiteLLM auth)"], ["OAuth Delegate (client-supplied upstream token)"]])(
+    "renders the toggle default-checked when %s is selected",
+    async (optionLabel) => {
+      await setupHttpServerForm();
+
+      await selectAntOption("Authentication", optionLabel);
+
+      await waitFor(() => {
+        expect(getDcrToggle()).toBeInTheDocument();
+      });
+      expect(screen.getByText("Gateway-hosted sign-in (DCR bridge)")).toBeInTheDocument();
+      expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+    },
+  );
+
+  it.each([["None"], ["API Key"], ["OAuth"]])("does not render the toggle for %s", async (optionLabel) => {
+    await setupHttpServerForm();
+
+    await selectAntOption("Authentication", optionLabel);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Gateway-hosted sign-in (DCR bridge)")).not.toBeInTheDocument();
+    });
+    expect(getDcrToggle()).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
+    ["oauth_delegate", "OAuth Delegate (client-supplied upstream token)"],
+  ])("sends dcr_bridge: true by default on create for %s", async (authType, optionLabel) => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: authType });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", optionLabel);
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(true);
+  });
+
+  it("sends an explicit dcr_bridge: false when the toggle is unchecked", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "oauth_delegate" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(getDcrToggle()!);
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "false");
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it.each([
+    ["none", "None"],
+    ["api_key", "API Key"],
+    ["oauth2", "OAuth"],
+  ])("forces an explicit dcr_bridge: false for %s", async (authType, optionLabel) => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: authType });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", optionLabel);
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("forces dcr_bridge: false when the auth type is switched away after toggling", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "none" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(getDcrToggle()!);
+    });
+
+    await selectAntOption("Authentication", "None");
+    await waitFor(() => {
+      expect(getDcrToggle()).not.toBeInTheDocument();
+    });
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("preserves the toggle value when switching between the two client-forwarded modes", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "oauth_delegate" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    // The Form.Item is mounted in both client-forwarded modes, so switching between them keeps the
+    // live toggle value rather than forcing it back to the default or to false.
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(true);
+  });
+});

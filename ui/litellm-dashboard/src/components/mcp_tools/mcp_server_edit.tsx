@@ -23,6 +23,7 @@ import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import TruePassthroughWarning from "./TruePassthroughWarning";
+import DcrBridgeToggle from "./DcrBridgeToggle";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
@@ -276,6 +277,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
+      dcr_bridge: Boolean(mcpServer.dcr_bridge),
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -627,6 +629,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         oauth_passthrough: oauthPassthroughRaw,
+        dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -837,6 +840,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
             : false;
         })(),
+        // ``dcr_bridge`` is only meaningful for the client-forwarded token
+        // modes (true_passthrough / oauth_delegate). The Form.Item is
+        // conditionally rendered so the value drops out of the form on
+        // auth_type change; force false for any other configuration to avoid
+        // persisting a stale ``true`` that would silently re-activate if the
+        // mode is later switched back.
+        dcr_bridge: isClientForwardedTokenMode(restValues.auth_type)
+          ? Boolean(dcrBridgeRaw ?? mcpServer.dcr_bridge)
+          : false,
         ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && restValues.oauth_flow_type
           ? {
               oauth2_flow:
@@ -1032,6 +1044,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   </Select>
                 </Form.Item>
                 <TruePassthroughWarning authType={authType} />
+                <DcrBridgeToggle authType={authType} />
                 <PassthroughAuthorizeSection
                   authType={authType}
                   oauthFlow={{
