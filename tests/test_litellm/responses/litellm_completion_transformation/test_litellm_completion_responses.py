@@ -930,6 +930,58 @@ class TestFunctionCallTransformation:
         assert function.get("arguments") == '{"query": "attribute objects"}'
 
 
+class TestEmptyToolsTransformation:
+    """Empty tools must be omitted, not forwarded as `tools: []`.
+
+    Strict OpenAI-compatible backends (e.g. vLLM) reject an empty tools array
+    with a 422 ("`tools` must not be an empty array. Either provide at least
+    one tool or omit the field entirely.").
+    """
+
+    def test_absent_tools_omits_tools_field(self):
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="hosted_vllm/some-model",
+            input="hi",
+            responses_api_request={"temperature": 0.7},
+        )
+
+        assert "tools" not in result
+        # tool_choice is meaningless without tools and must not leak either.
+        assert "tool_choice" not in result
+
+    def test_empty_tools_list_omits_tools_field(self):
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="hosted_vllm/some-model",
+            input="hi",
+            responses_api_request={"tools": []},
+        )
+
+        assert "tools" not in result
+
+    def test_non_empty_tools_are_preserved(self):
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get current temperature for a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            }
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="hosted_vllm/some-model",
+            input="hi",
+            responses_api_request={"tools": tools},
+        )
+
+        assert "tools" in result
+        assert len(result["tools"]) == 1
+
+
 class TestToolChoiceTransformation:
     """Test the tool_choice transformation fix for Cursor IDE bug"""
 
