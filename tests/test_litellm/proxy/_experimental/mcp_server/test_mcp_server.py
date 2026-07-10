@@ -6869,6 +6869,7 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
         (None, None),
         ("", None),
         ("not a url", None),
+        ("http://[::1", None),
     ],
 )
 def test_redact_mcp_resource_url_strips_credentials(url, expected):
