@@ -524,11 +524,22 @@ describe("parseSkillSource — security boundary", () => {
     }
   });
 
-  it("rejects URLs with embedded credentials", () => {
-    expect(parseSkillSource("https://user:token@gitlab.com/org/repo")).toBeNull();
-    expect(parseSkillSource("https://user@gitlab.com/org/repo")).toBeNull();
-    // userinfo confusion: the real host is evil.com, not github.com
-    expect(parseSkillSource("https://github.com@evil.com/org/repo")).toBeNull();
+  it("accepts URLs with credentials and strips them", () => {
+    // Credentials are stripped; the repo URL parses normally afterward
+    expect(parseSkillSource("https://user:token@gitlab.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.com/org/repo",
+    });
+    expect(parseSkillSource("https://user@gitlab.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.com/org/repo",
+    });
+    // userinfo confusion: the real host is evil.com — stripping credentials
+    // correctly identifies evil.com as the host, NOT github.com
+    expect(parseSkillSource("https://github.com@evil.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://evil.com/org/repo",
+    });
   });
 
   it("rejects IP-literal hosts (loopback, private, metadata, obfuscated, IPv6)", () => {
