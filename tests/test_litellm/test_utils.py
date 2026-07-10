@@ -247,7 +247,7 @@ def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
     assert (
         "/v1/images/generations"
@@ -271,6 +271,7 @@ def test_gpt_image_2_snapshot_model_info(local_model_cost_map):
     model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
     assert model_info["litellm_provider"] == "openai"
     assert model_info["mode"] == "image_generation"
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
 
 
@@ -289,8 +290,32 @@ def test_azure_gpt_image_2_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
+
+
+def test_gpt_image_2_cost_maps_have_no_text_output_price():
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    cost_map_paths = (
+        os.path.join(repo_root, "model_prices_and_context_window.json"),
+        os.path.join(
+            repo_root, "litellm", "model_prices_and_context_window_backup.json"
+        ),
+    )
+    model_names = (
+        "gpt-image-2",
+        "gpt-image-2-2026-04-21",
+        "azure/gpt-image-2",
+        "azure/gpt-image-2-2026-04-21",
+    )
+
+    for cost_map_path in cost_map_paths:
+        with open(cost_map_path) as cost_map_file:
+            cost_map = json.load(cost_map_file)
+
+        for model_name in model_names:
+            assert "output_cost_per_token" not in cost_map[model_name]
+            assert cost_map[model_name]["output_cost_per_image_token"] == 3e-05
 
 
 def test_all_model_configs():
