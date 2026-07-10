@@ -32,17 +32,6 @@ jobs:
           path: docs/my-website
           persist-credentials: false
 
-      # Private repo: needs a PAT with contents:read on BerriAI/litellm-ops.
-      # Prefer LITELLM_OPS_READ_TOKEN; fall back to GH_TOKEN if that PAT can read ops.
-      - name: Checkout litellm-ops (stage secrets source of truth)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          repository: BerriAI/litellm-ops
-          ref: main
-          path: litellm-ops
-          persist-credentials: false
-          token: ${{ secrets.LITELLM_OPS_READ_TOKEN != '' && secrets.LITELLM_OPS_READ_TOKEN || secrets.GH_TOKEN }}
-
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
@@ -131,6 +120,16 @@ jobs:
 
       - name: documentation_test_env_keys
         run: uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
+
+      # Private repo: PAT with contents:read on BerriAI/litellm-ops
+      # (LITELLM_OPS_READ_TOKEN, or GH_TOKEN if it can read ops).
+      - name: Fetch stage litellm-secrets.yaml
+        env:
+          GH_TOKEN: ${{ secrets.LITELLM_OPS_READ_TOKEN != '' && secrets.LITELLM_OPS_READ_TOKEN || secrets.GH_TOKEN }}
+        run: |
+          gh api "repos/BerriAI/litellm-ops/contents/apps/overlays/berrie-litellm-stage/litellm-secrets.yaml?ref=main" \
+            --jq .content | base64 -d > litellm-secrets.yaml
+          test -s litellm-secrets.yaml
 
       - name: documentation_test_e2e_stage_provider_keys
         run: uv run --no-sync python ./tests/documentation_tests/test_e2e_stage_provider_keys.py

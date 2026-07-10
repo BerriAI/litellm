@@ -3,14 +3,12 @@ import re
 
 # Mirror of test_env_keys.py for stage e2e:
 #   code keys  = os.environ/KEY refs under tests/e2e
-#   source of truth = ExternalSecret litellm-provider-keys in litellm-ops
-#                     (checked out to ./litellm-ops in CI, same idea as docs/)
+#   source of truth = ExternalSecret litellm-provider-keys from litellm-ops
+#                     (CI drops that yaml at ./litellm-secrets.yaml)
 #   fail if code has keys not on that ExternalSecret
 
 e2e_root = "./tests/e2e"
-secrets_path = (
-    "./litellm-ops/apps/overlays/berrie-litellm-stage/litellm-secrets.yaml"
-)
+secrets_path = "./litellm-secrets.yaml"
 
 os_environ_ref_pattern = re.compile(r"""['"]os\.environ/([A-Z][A-Z0-9_]*)['"]""")
 env_ref_pattern = re.compile(r"""_env_ref\(\s*['"]([A-Z][A-Z0-9_]*)['"]""")
@@ -56,7 +54,7 @@ for key in sorted(e2e_keys):
 
 if not os.path.isfile(secrets_path):
     raise Exception(
-        f"Error reading litellm-ops secrets: missing {secrets_path}, "
+        f"Error reading stage secrets: missing {secrets_path}, "
         f"cwd files - {os.listdir('.')}"
     )
 
