@@ -2,6 +2,7 @@
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
 import { DashboardHeader } from "@/components/DashboardHeader";
+import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -109,30 +110,39 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
   };
 
+  // Non-gateway (agent control plane) mode keeps the original full-width Navbar,
+  // which carries the account menu; the redesigned sidebar + header shell is
+  // scoped to the ai-gateway dashboard. Chat and the public model hub are
+  // separate routes that likewise keep the old Navbar.
+  if (!isGateway) {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <Navbar accessToken={accessToken} isPublicPage={false} />
+        <DebugWarningBanner accessToken={accessToken} />
+        <LicenseExpiryBanner accessToken={accessToken} />
+        <main className="flex min-h-0 flex-1 overflow-hidden">
+          <AgentControlPlaneView />
+        </main>
+      </div>
+    );
+  }
+
   // Standard app shell: the viewport is fixed height and never scrolls. The
   // sidebar owns its own scroll and the content column scrolls independently,
   // so the page can't be dragged past the end of the nav.
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {isGateway && (
-        <SidebarProvider
-          setPage={navigateToPage}
-          defaultSelectedKey={page}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
-        />
-      )}
+      <SidebarProvider
+        setPage={navigateToPage}
+        defaultSelectedKey={page}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+      />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader page={page} />
         <DebugWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
-        {isGateway ? (
-          <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
-        ) : (
-          <main className="flex min-w-0 flex-1 overflow-hidden">
-            <AgentControlPlaneView />
-          </main>
-        )}
+        <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   );

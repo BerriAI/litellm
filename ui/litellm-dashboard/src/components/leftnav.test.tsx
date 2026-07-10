@@ -235,11 +235,17 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByText("Virtual Keys").closest("a")).not.toHaveAttribute("data-active");
   });
 
-  it("hides labels but keeps items when collapsed to the rail", () => {
+  it("hides labels but keeps items reachable (icon + link) when collapsed to the rail", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} collapsed />);
     expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsed", "true");
-    // Items still render (icons), so navigation is reachable in rail mode.
-    expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
+    // The item stays navigable in the icon-only rail: its link still renders with
+    // an icon (asserting the <a> + svg, not the text, so a removed icon would
+    // fail here), while the label is present but CSS-hidden.
+    const label = screen.getByText("Virtual Keys");
+    const link = label.closest("a");
+    expect(link).not.toBeNull();
+    expect(link!.querySelector("svg")).not.toBeNull();
+    expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
   });
 });
 
