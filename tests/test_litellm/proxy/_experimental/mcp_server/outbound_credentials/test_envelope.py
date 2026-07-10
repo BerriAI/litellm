@@ -387,6 +387,24 @@ def test_open_size_guard_measures_bytes_not_characters():
     decode.assert_not_called()
 
 
+def test_open_size_guard_rejects_oversize_character_count_before_decode():
+    """A candidate whose character count already exceeds the cap is rejected up front, before the
+    decode path, so an arbitrarily long hostile string is not run through HMAC/decrypt. The cheap
+    character precheck makes this O(1) since UTF-8 byte length is never below character length."""
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import envelope
+
+    candidate = ENVELOPE_PREFIX + ("a" * (MAX_ENVELOPE_BYTES + 1))
+    assert len(candidate) > MAX_ENVELOPE_BYTES
+
+    with patch.object(envelope, "_decode_claims", side_effect=AssertionError("decode reached")) as decode:
+        result = open_envelope(candidate, _KEYS, _NOW)
+
+    assert isinstance(result, MalformedPayload)
+    decode.assert_not_called()
+
+
 def test_is_envelope_detects_only_prefixed_values():
     assert is_envelope(_sealed_token(_full_grant()))
     raw_jwt = jwt.encode({"sub": "user-123"}, _SIGNING_KEY, algorithm="HS256")
