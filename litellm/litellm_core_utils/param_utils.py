@@ -2,18 +2,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-LITELLM_INTERNAL_PARAM_NAMES = {
-    "litellm_params",
-    "proxy_server_request",
-    "model_info",
-    "metadata",
-    "preset_cache_key",
-    "litellm_metadata",
-    "acompletion",
-}
+LITELLM_INTERNAL_PARAM_NAMES = frozenset(
+    (
+        "litellm_params",
+        "proxy_server_request",
+        "model_info",
+        "metadata",
+        "preset_cache_key",
+        "litellm_metadata",
+        "acompletion",
+    )
+)
 
 
-def strip_litellm_internal_params(data: dict[str, object]) -> dict[str, object]:
+def strip_litellm_internal_params(
+    data: dict[str, object],  # mutable-ok: interface expects mutable dict payload
+) -> dict[str, object]:  # mutable-ok: returns mutable dict payload
     """
     Remove LiteLLM internal params (e.g. litellm_params, proxy_server_request, _litellm_ prefixed keys)
     from request data before passing to client libraries (e.g. OpenAI).
@@ -25,13 +29,13 @@ def strip_litellm_internal_params(data: dict[str, object]) -> dict[str, object]:
 
     try:
         # Create a shallow copy so we don't modify the input dictionary in-place
-        cleaned_data: dict[str, object] = {}
+        cleaned_data: dict[str, object] = {}  # mutable-ok: building cleaned payload dict
         for key, value in data.items():
             if key in LITELLM_INTERNAL_PARAM_NAMES or key.startswith("_litellm_"):
                 continue
             if key == "extra_body" and isinstance(value, dict):
-                cleaned_extra_body: dict[str, object] = {}
-                extra_body_dict: dict[object, object] = value  # pyright: ignore[reportUnknownVariableType]  # cast from dynamic dict
+                cleaned_extra_body: dict[str, object] = {}  # mutable-ok: building cleaned extra_body dict
+                extra_body_dict: dict[object, object] = value  # pyright: ignore[reportUnknownVariableType]  # mutable-ok: reading from extra_body
                 for k, v in extra_body_dict.items():
                     if isinstance(k, str) and (k in LITELLM_INTERNAL_PARAM_NAMES or k.startswith("_litellm_")):
                         continue
