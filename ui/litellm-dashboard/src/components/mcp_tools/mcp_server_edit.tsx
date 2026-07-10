@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import {
   AUTH_TYPE,
+  isClientForwardedTokenMode,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -18,6 +19,8 @@ import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import TruePassthroughWarning from "./TruePassthroughWarning";
+import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
@@ -128,6 +131,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   };
 
+  // The auth mode every decision must key off: the admin's in-flight form selection wins over the
+  // saved record, so authorizing, loading tools, and saving all agree with what the form shows. Paths
+  // that read only mcpServer.auth_type go stale the moment the admin switches modes in the form.
+  const getEffectiveAuthType = () => form.getFieldValue("auth_type") ?? mcpServer.auth_type;
+
   const {
     startOAuthFlow,
     status: oauthStatus,
@@ -161,7 +169,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         description: values.description || mcpServer.description,
         url,
         transport,
-        auth_type: AUTH_TYPE.OAUTH2,
+        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
@@ -171,20 +179,36 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       };
     },
     onTokenReceived: (token) => {
-      if (token?.access_token) {
-        const credentials = {
-          access_token: token.access_token,
-          ...(token.refresh_token && { refresh_token: token.refresh_token }),
-          ...(token.expires_in && { expires_in: token.expires_in }),
-          ...(token.scope && { scope: token.scope }),
-        };
-
-        form.setFieldsValue({ credentials });
-
-        NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
-        );
+      if (!token?.access_token) {
+        return;
       }
+
+      if (isClientForwardedTokenMode(getEffectiveAuthType())) {
+        const browserHeldToken = {
+          access_token: token.access_token,
+          expires_in: token.expires_in,
+          refresh_token: token.refresh_token,
+          token_type: token.token_type,
+        };
+        setToken(mcpServer.server_id, browserHeldToken, userID);
+        NotificationsManager.success(
+          "Token held for this browser session. Tools can now be loaded and configured; nothing was saved to LiteLLM.",
+        );
+        return;
+      }
+
+      const credentials = {
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+      };
+
+      form.setFieldsValue({ credentials });
+
+      NotificationsManager.success(
+        "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
+      );
     },
     onBeforeRedirect: persistEditUiState,
     flowSource: "edit",
@@ -368,7 +392,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         oauth2_flow: mcpServer.oauth2_flow,
         delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
       }) === "passthrough";
-    if (isPassthrough) {
+    const isBrowserHeldTokenMode = isClientForwardedTokenMode(getEffectiveAuthType());
+    if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
         (isTokenValid(mcpServer.server_id, userID)
@@ -376,7 +401,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           : null);
       if (!token) {
         setTools([]);
-        setToolsError("Authenticate with this server in the Tools tab to load and configure its tools.");
+        setToolsError(
+          isBrowserHeldTokenMode
+            ? "Authorize with the upstream (browser-only, in the Authentication section) to load and configure this server's tools."
+            : "Authenticate with this server in the Tools tab to load and configure its tools.",
+        );
         return;
       }
       customHeaders = buildMcpPassthroughAuthHeader(mcpServer.alias, token);
@@ -439,7 +468,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const handleTransportChange = (value: string) => {
     // Clear fields that are not relevant for the selected transport.
     if (value === "stdio") {
-      form.setFieldsValue({
+      const clearedForStdio = {
         url: undefined,
         spec_path: undefined,
         auth_type: undefined,
@@ -447,15 +476,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         authorization_url: undefined,
         token_url: undefined,
         registration_url: undefined,
-      });
+      };
+      form.setFieldsValue(clearedForStdio);
     } else if (value === TRANSPORT.OPENAPI) {
-      form.setFieldsValue({
+      const clearedForOpenapi = {
         url: undefined,
         command: undefined,
         args: undefined,
         env_json: undefined,
         stdio_config: undefined,
-      });
+      };
+      form.setFieldsValue(clearedForOpenapi);
     } else {
       form.setFieldsValue({
         spec_path: undefined,
@@ -722,8 +753,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       const updated = await updateMCPServer(accessToken, payload);
 
       // Persist the token staged via "Authorize & Fetch" (mirrors the create flow's
-      // commit-on-submit): OBO writes the per-user token to the DB, passthrough keeps
-      // it in sessionStorage. M2M/static auth resolve server-side and need neither.
+      // commit-on-submit): OBO writes the per-user token to the DB; legacy passthrough and the
+      // client-forwarded modes (true_passthrough / oauth_delegate) keep it in sessionStorage and
+      // never in the server row. M2M/static auth resolve server-side and need neither.
       if (oauthTokenResponse?.access_token) {
         const oauthMode = getMcpOAuthMode({
           auth_type: restValues.auth_type,
@@ -733,23 +765,21 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         try {
           if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
-            await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, {
+            const oauthCredentialPayload = {
               access_token: oauthTokenResponse.access_token,
               refresh_token: oauthTokenResponse.refresh_token,
               expires_in: oauthTokenResponse.expires_in,
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
-            });
-          } else if (oauthMode === "passthrough") {
-            setToken(
-              mcpServer.server_id,
-              {
-                access_token: oauthTokenResponse.access_token,
-                expires_in: oauthTokenResponse.expires_in,
-                refresh_token: oauthTokenResponse.refresh_token,
-                token_type: oauthTokenResponse.token_type,
-              },
-              userID,
-            );
+            };
+            await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, oauthCredentialPayload);
+          } else if (oauthMode === "passthrough" || isClientForwardedTokenMode(restValues.auth_type)) {
+            const browserHeldToken = {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            };
+            setToken(mcpServer.server_id, browserHeldToken, userID);
           }
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : "";
@@ -874,18 +904,34 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {/* Authentication - for HTTP, SSE, and OpenAPI */}
             {!isStdioTransport && (
-              <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
-                <Select>
-                  <Select.Option value="none">None</Select.Option>
-                  <Select.Option value="api_key">API Key</Select.Option>
-                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                  <Select.Option value="token">Token</Select.Option>
-                  <Select.Option value="basic">Basic Auth</Select.Option>
-                  <Select.Option value="oauth2">OAuth</Select.Option>
-                  <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
-                  <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
-                </Select>
-              </Form.Item>
+              <>
+                <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
+                  <Select>
+                    <Select.Option value="none">None</Select.Option>
+                    <Select.Option value="api_key">API Key</Select.Option>
+                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                    <Select.Option value="token">Token</Select.Option>
+                    <Select.Option value="basic">Basic Auth</Select.Option>
+                    <Select.Option value="oauth2">OAuth</Select.Option>
+                    <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
+                    <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                    <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
+                    <Select.Option value="oauth_delegate">
+                      OAuth Delegate (client-supplied upstream token)
+                    </Select.Option>
+                  </Select>
+                </Form.Item>
+                <TruePassthroughWarning authType={authType} />
+                <PassthroughAuthorizeSection
+                  authType={authType}
+                  oauthFlow={{
+                    startOAuthFlow,
+                    status: oauthStatus,
+                    error: oauthError,
+                    tokenResponse: oauthTokenResponse,
+                  }}
+                />
+              </>
             )}
 
             {isStdioTransport && (
