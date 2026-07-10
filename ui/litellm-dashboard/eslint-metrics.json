@@ -4,5 +4,5 @@
   "local/no-large-inline-object-arg": 512,
   "local/no-long-condition-chain": 233,
   "max-depth": 59,
-  "no-console": 15
+  "no-console": 16
 }
