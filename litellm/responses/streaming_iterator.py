@@ -230,7 +230,8 @@ class BaseResponsesAPIStreamingIterator:
                 if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
                     output_item = getattr(openai_responses_api_chunk, "item", None)
                     output_index = getattr(openai_responses_api_chunk, "output_index", None)
-                    if type(output_index) is int and output_index >= 0:
+                    raw_output_index = parsed_chunk.get("output_index")
+                    if type(raw_output_index) is int and raw_output_index >= 0 and output_index == raw_output_index:
                         if isinstance(output_item, BaseLiteLLMOpenAIResponseObject):
                             output_item = output_item.model_dump()
                         if isinstance(output_item, dict):
@@ -242,11 +243,15 @@ class BaseResponsesAPIStreamingIterator:
                     output_index = getattr(openai_responses_api_chunk, "output_index", None)
                     content_index = getattr(openai_responses_api_chunk, "content_index", None)
                     output_text = getattr(openai_responses_api_chunk, "text", None)
+                    raw_output_index = parsed_chunk.get("output_index")
+                    raw_content_index = parsed_chunk.get("content_index")
                     if (
-                        type(output_index) is int
-                        and output_index >= 0
-                        and type(content_index) is int
-                        and content_index >= 0
+                        type(raw_output_index) is int
+                        and raw_output_index >= 0
+                        and output_index == raw_output_index
+                        and type(raw_content_index) is int
+                        and raw_content_index >= 0
+                        and content_index == raw_content_index
                         and isinstance(output_text, str)
                     ):
                         record_output_text_chunk(

@@ -388,7 +388,7 @@ class TestBaseResponsesAPIStreamingIterator:
             custom_llm_provider="chatgpt",
         )
 
-        iterator._process_chunk(json.dumps({"type": "response.output_item.done"}))
+        iterator._process_chunk(json.dumps({"type": "response.output_item.done", "output_index": 1}))
         iterator._process_chunk(json.dumps({"type": "response.output_item.done"}))
         iterator._process_chunk(json.dumps({"type": "response.completed", "response": {"output": []}}))
 
