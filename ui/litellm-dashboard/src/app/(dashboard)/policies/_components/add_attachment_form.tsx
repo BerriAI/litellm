@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
 import { Button } from "@tremor/react";
-import { Policy } from "./types";
-import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { Policy } from "@/components/policies/types";
+import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { buildAttachmentData } from "./build_attachment_data";
 import { getInvalidTeamEntries } from "./scope_validation";

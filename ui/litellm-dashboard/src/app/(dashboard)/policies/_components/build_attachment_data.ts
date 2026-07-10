@@ -1,4 +1,4 @@
-import { PolicyAttachmentCreateRequest } from "./types";
+import { PolicyAttachmentCreateRequest } from "@/components/policies/types";
 
 /**
  * Builds a PolicyAttachmentCreateRequest from form values.

@@ -2080,7 +2080,7 @@
       "count": 1
     }
   },
-  "src/components/policies/add_attachment_form.tsx": {
+  "src/app/(dashboard)/policies/_components/add_attachment_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2088,7 +2088,7 @@
       "count": 1
     }
   },
-  "src/components/policies/add_policy_form.tsx": {
+  "src/app/(dashboard)/policies/_components/add_policy_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2099,7 +2099,7 @@
       "count": 1
     }
   },
-  "src/components/policies/ai_suggestion_modal.tsx": {
+  "src/app/(dashboard)/policies/_components/ai_suggestion_modal.tsx": {
     "no-nested-ternary": {
       "count": 10
     },
@@ -2110,12 +2110,12 @@
       "count": 1
     }
   },
-  "src/components/policies/attachment_table.test.tsx": {
+  "src/app/(dashboard)/policies/_components/attachment_table.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/policies/attachment_table.tsx": {
+  "src/app/(dashboard)/policies/_components/attachment_table.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -2123,7 +2123,7 @@
       "count": 1
     }
   },
-  "src/components/policies/guardrail_selection_modal.tsx": {
+  "src/app/(dashboard)/policies/_components/guardrail_selection_modal.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -2131,12 +2131,12 @@
       "count": 1
     }
   },
-  "src/components/policies/impact_popover.test.tsx": {
+  "src/app/(dashboard)/policies/_components/impact_popover.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/policies/impact_popover.tsx": {
+  "src/app/(dashboard)/policies/_components/impact_popover.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -2144,12 +2144,12 @@
       "count": 1
     }
   },
-  "src/components/policies/index.test.tsx": {
+  "src/app/(dashboard)/policies/_components/index.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/policies/index.tsx": {
+  "src/app/(dashboard)/policies/_components/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2157,7 +2157,7 @@
       "count": 1
     }
   },
-  "src/components/policies/pipeline_flow_builder.tsx": {
+  "src/app/(dashboard)/policies/_components/pipeline_flow_builder.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -2168,7 +2168,7 @@
       "count": 2
     }
   },
-  "src/components/policies/policy_info.tsx": {
+  "src/app/(dashboard)/policies/_components/policy_info.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2176,12 +2176,12 @@
       "count": 1
     }
   },
-  "src/components/policies/policy_table.test.tsx": {
+  "src/app/(dashboard)/policies/_components/policy_table.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/policies/policy_table.tsx": {
+  "src/app/(dashboard)/policies/_components/policy_table.tsx": {
     "no-nested-ternary": {
       "count": 2
     },
@@ -2189,7 +2189,7 @@
       "count": 1
     }
   },
-  "src/components/policies/policy_test_panel.tsx": {
+  "src/app/(dashboard)/policies/_components/policy_test_panel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2197,7 +2197,7 @@
       "count": 1
     }
   },
-  "src/components/policies/template_parameter_modal.tsx": {
+  "src/app/(dashboard)/policies/_components/template_parameter_modal.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
