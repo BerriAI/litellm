@@ -5,8 +5,13 @@ name: Publish platform proxy image
 # and PRs run .github/workflows/test.yml instead.
 # Triggers on v* tags (local git tag push, GitHub Release, or UI tag creation).
 #
-# Role ARN and ECR URI are platform conventions (same style as
-# bitovi-platform-services/.github/workflows/publish-chart.yml), not secrets.
+# Role ARN and ECR URI come from ESO (External Secrets Operator), pushed as
+# Actions secrets on this repo by bitovi-platform-services'
+# charts/platform-app-resources (gated on this repo's own deploy/values.yaml
+# app.repo: bitovi/litellm) - same secrets.ECR_PUSH_ROLE_ARN /
+# secrets.ECR_REPOSITORY convention every other platform container app reads
+# (see bitovi-platform-services .github/skills/add-app/assets/
+# workflow-container-deploy.yml). Nothing to derive or hardcode here.
 # Auth is GitHub OIDC; trust is iam.oidcSubjects in this repo's own
 # deploy/values.yaml (repo:bitovi/litellm:ref:refs/tags/v*).
 #
@@ -29,10 +34,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_ACCOUNT_ID: "486491621059"
   AWS_REGION: us-east-1
-  PLATFORM_ECR_PUSH_ROLE_ARN: arn:aws:iam::486491621059:role/platform-managed/claude-usage-proxy-github-ecr-push
-  ECR_REPOSITORY: 486491621059.dkr.ecr.us-east-1.amazonaws.com/claude-usage-proxy
   DEPLOY_BRANCH: platform-deploy
 
 jobs:
@@ -47,7 +49,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.PLATFORM_ECR_PUSH_ROLE_ARN }}
+          role-to-assume: ${{ secrets.ECR_PUSH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -55,7 +57,7 @@ jobs:
 
       - name: Build and push proxy image
         env:
-          IMAGE: ${{ env.ECR_REPOSITORY }}:${{ github.ref_name }}
+          IMAGE: ${{ secrets.ECR_REPOSITORY }}:${{ github.ref_name }}
         run: |
           docker build -f docker/Dockerfile.database -t "$IMAGE" .
           docker push "$IMAGE"

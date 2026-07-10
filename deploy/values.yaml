@@ -6,7 +6,13 @@ iam:
 
 app:
   name: claude-usage-proxy
-  repo: bitovi/claude-usage-proxy
+  # This repo, not claude-usage-proxy: ESO's per-app PushSecret
+  # (bitovi-platform-services charts/platform-app-resources
+  # container/github-secrets.yaml) targets whatever repo app.repo names, and
+  # THIS repo is the one that actually runs the release workflow and needs
+  # ECR_PUSH_ROLE_ARN/ECR_REPOSITORY - claude-usage-proxy builds no image and
+  # needs neither.
+  repo: bitovi/litellm
   port: 4000
   logLevel: info
   healthPath: /health/liveliness
