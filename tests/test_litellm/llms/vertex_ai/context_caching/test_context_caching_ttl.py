@@ -14,6 +14,9 @@ class TestGeminiContextCachingMinTokens:
     @pytest.mark.parametrize(
         "model, expected",
         [
+            ("gemini-1.5-pro", 32768),
+            ("gemini-1.5-flash", 32768),
+            ("vertex_ai/gemini-1.5-pro-001", 32768),
             ("gemini-2.5-flash", 2048),
             ("gemini-2.5-pro", 2048),
             ("gemini/gemini-2.5-pro", 2048),
@@ -21,7 +24,7 @@ class TestGeminiContextCachingMinTokens:
             ("gemini-3.5-flash", 4096),
             ("gemini-3.1-pro-preview", 4096),
             ("gemini/gemini-3.5-flash", 4096),
-            ("gemini-1.5-pro", 4096),
+            ("gemini-unknown-future-model", 32768),
         ],
     )
     def test_min_tokens_by_model(self, model, expected):

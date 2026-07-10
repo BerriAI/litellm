@@ -326,7 +326,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 target["cache_control"] = cache_control  # type: ignore[typeddict-item]
             else:
                 # Fallback for non-dict objects (shouldn't happen in practice)
-                cast(Dict[str, Any], target)["cache_control"] = cache_control
+                setattr(target, "cache_control", cache_control)
 
     def translatable_anthropic_params(self) -> List:
         """
