@@ -31,6 +31,7 @@ from litellm.responses.sse_output_recovery import (
     record_output_text_chunk,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
@@ -227,7 +228,16 @@ class BaseResponsesAPIStreamingIterator:
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type = getattr(openai_responses_api_chunk, "type", None)
                 if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                    record_output_item_chunk(parsed_chunk, self._streamed_output_items)
+                    output_item = getattr(openai_responses_api_chunk, "item", None)
+                    output_index = getattr(openai_responses_api_chunk, "output_index", None)
+                    if isinstance(output_index, int) and output_index >= 0:
+                        if isinstance(output_item, BaseLiteLLMOpenAIResponseObject):
+                            output_item = output_item.model_dump()
+                        if isinstance(output_item, dict):
+                            record_output_item_chunk(
+                                {"item": output_item, "output_index": output_index},
+                                self._streamed_output_items,
+                            )
                 elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
                     record_output_text_chunk(
                         parsed_chunk,
@@ -252,7 +262,7 @@ class BaseResponsesAPIStreamingIterator:
                         for _, item in sorted({**self._streamed_text_only_items, **self._streamed_output_items}.items())
                     ]
                     if (
-                        _chunk_type != openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED
+                        _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
                         and response_obj is not None
                         and not response_output
                         and recovered_output
