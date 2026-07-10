@@ -834,3 +834,69 @@ class TestStoreBackgroundResponseInManagedObjects:
             )
 
         managed_files_obj.store_unified_object_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_failure_is_swallowed(self):
+        import sys
+        import types
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _store_background_response_in_managed_objects,
+        )
+
+        fake_module = types.ModuleType(
+            "litellm_enterprise.proxy.hooks.managed_files"
+        )
+        fake_module._PROXY_LiteLLMManagedFiles = type("_FakeManagedFiles", (), {})
+
+        managed_files_obj = MagicMock()
+        managed_files_obj.store_unified_object_id = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+
+        with patch.dict(
+            sys.modules,
+            {"litellm_enterprise.proxy.hooks.managed_files": fake_module},
+        ):
+            # Storage failures must not propagate out of the endpoint.
+            await _store_background_response_in_managed_objects(
+                response=self._response(),
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        managed_files_obj.store_unified_object_id.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_noop_when_hook_missing(self):
+        import sys
+        import types
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _store_background_response_in_managed_objects,
+        )
+
+        fake_module = types.ModuleType(
+            "litellm_enterprise.proxy.hooks.managed_files"
+        )
+        fake_module._PROXY_LiteLLMManagedFiles = type("_FakeManagedFiles", (), {})
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=None)
+
+        with patch.dict(
+            sys.modules,
+            {"litellm_enterprise.proxy.hooks.managed_files": fake_module},
+        ):
+            await _store_background_response_in_managed_objects(
+                response=self._response(),
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files")
