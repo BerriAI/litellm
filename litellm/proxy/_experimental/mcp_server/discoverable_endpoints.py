@@ -1024,7 +1024,7 @@ async def register_client_with_server(
     if bridge_relay and not client_redirect_uris:
         raise HTTPException(
             status_code=400,
-            detail={"error": "redirect_uris is required to register a client with this server"},
+            detail="redirect_uris is required to register a client with this server",
         )
 
     register_data = {
@@ -1814,6 +1814,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
+                client_redirect_uris=data.get("redirect_uris"),
             )
         return dummy_return
 
