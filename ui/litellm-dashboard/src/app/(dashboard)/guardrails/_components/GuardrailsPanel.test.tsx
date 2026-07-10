@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import GuardrailsPanel from "./index";
+import GuardrailsPanel from "./GuardrailsPanel";
 import { getGuardrailsList } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
