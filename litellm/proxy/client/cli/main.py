@@ -87,6 +87,12 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
 
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
+    # `--base-url` defaults to localhost:4000 for local dev convenience, but
+    # apiKeyHelper is invoked bare (no flags) -- commands that must work
+    # unattended (print-token) need to tell "user didn't say" apart from
+    # "user said localhost:4000 on purpose" so they can fall back to
+    # whatever server the stored token was actually issued for.
+    ctx.obj["base_url_explicit"] = ctx.get_parameter_source("base_url") != click.core.ParameterSource.DEFAULT
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:
