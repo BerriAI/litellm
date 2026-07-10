@@ -61,6 +61,11 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
     assert generalized["supports_adaptive_thinking"] is True
 
 
+def test_get_model_info_surfaces_mid_conversation_system_messages(local_model_cost_map):
+    info = litellm.get_model_info(model="eu.anthropic.claude-opus-4-8")
+    assert info["supports_mid_conversation_system_messages"] is True
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -855,6 +860,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_mid_conversation_system_messages": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
@@ -4707,5 +4713,4 @@ class TestValidateEnvironmentTencent:
 
         assert result["keys_in_environment"] is False
         assert "TENCENT_API_KEY" in result["missing_keys"]
-
 

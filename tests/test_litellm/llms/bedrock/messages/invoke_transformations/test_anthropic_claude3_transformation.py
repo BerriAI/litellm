@@ -1906,6 +1906,45 @@ def test_bedrock_invoke_transform_normalizes_system_role_message_into_system():
     ]
 
 
+def test_bedrock_invoke_transform_preserves_opus_4_8_mid_conversation_system_message(
+    local_model_cost_map,
+):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Stable cached prefix.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Acknowledged."},
+        {"role": "user", "content": "Continue."},
+        {"role": "system", "content": "Use the new constraint."},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="eu.anthropic.claude-opus-4-8",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": "Stable top-level system prompt.",
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "mid-conversation-system-2026-04-07"},
+    )
+
+    assert result["messages"] == messages
+    assert result["system"] == "Stable top-level system prompt."
+    assert "anthropic_beta" not in result
+
+
 def test_bedrock_invoke_transform_merges_system_role_into_existing_system():
     """A ``role: "system"`` message is appended to any pre-existing top-level
     ``system`` content rather than replacing it."""
@@ -2260,4 +2299,3 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
         provider="bedrock_converse",
     )
     assert out_converse == []
-

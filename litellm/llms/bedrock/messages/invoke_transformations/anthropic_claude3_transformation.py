@@ -93,20 +93,40 @@ class AmazonAnthropicClaudeMessagesConfig(
             return [{"type": "text", "text": value}]
         return [value]
 
-    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict) -> None:
-        """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
-        some Claude aliases; Anthropic Messages carries that content in the
-        top-level ``system`` field. Move any such entries into ``system`` before
-        the Invoke request is built."""
+    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict, model: str) -> None:
         messages = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        system_role_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
+        preserve_mid_conversation_system_messages = AnthropicModelInfo._supports_model_capability(
+            model,
+            "supports_mid_conversation_system_messages",
+        )
+        first_non_system_index = next(
+            (
+                index
+                for index, message in enumerate(messages)
+                if not (isinstance(message, dict) and message.get("role") == "system")
+            ),
+            len(messages),
+        )
+        system_role_messages = [
+            message
+            for index, message in enumerate(messages)
+            if isinstance(message, dict)
+            and message.get("role") == "system"
+            and (not preserve_mid_conversation_system_messages or index < first_non_system_index)
+        ]
         if not system_role_messages:
             return
 
         anthropic_messages_request["messages"] = [
-            m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
+            message
+            for index, message in enumerate(messages)
+            if not (
+                isinstance(message, dict)
+                and message.get("role") == "system"
+                and (not preserve_mid_conversation_system_messages or index < first_non_system_index)
+            )
         ]
         system_content = [
             block
@@ -669,7 +689,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request)
+        self._normalize_system_role_messages_for_bedrock(
+            anthropic_messages_request,
+            model,
+        )
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
