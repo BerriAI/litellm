@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import NoBody, ProbeResult, StreamingResponse, unwrap
+from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, UnknownApiError, unwrap
 from models import (
     ChatBody,
     ChatMessage,
@@ -53,14 +53,28 @@ class ManagementClient:
         return self.gateway.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
     def update_key_models(self, key: str, models: list[str]) -> None:
-        _ = unwrap(
-            self.gateway.transport.post(
+        import time
+
+        last: Result[NoBody] | None = None
+        for attempt in range(5):
+            last = self.gateway.transport.post(
                 "/key/update",
                 headers=self.gateway.transport.master,
                 json=KeyUpdateBody(key=key, models=models),
                 response_type=NoBody,
             )
-        )
+            match last:
+                case Success():
+                    return
+                case UnknownApiError(body=body) if (
+                    "connecting to redis" in body.lower() or "name resolution" in body.lower()
+                ):
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                case _:
+                    break
+        assert last is not None
+        _ = unwrap(last)
 
     def delete_key_strict(self, key: str) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard

@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     SpendLogsRepository,
+    TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -47,10 +48,11 @@ class SpendCounterReseed:
         spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+        spend:tag:{tag_name}              -> LiteLLM_TagTable.spend
 
-    End-user and tag spend counters intentionally do not reseed here. Their
-    auth paths already load the corresponding objects via get_end_user_object()
-    and get_tag_objects_batch(); callers pass those values as fallback_spend.
+    End-user spend counters intentionally do not reseed here (no single DB
+    row maps cleanly). Tag counters reseed from LiteLLM_TagTable.spend so a
+    cold redis counter still enforces after the spend writer has flushed.
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -109,7 +111,8 @@ class SpendCounterReseed:
             elif counter_key.startswith("spend:end_user:"):
                 return None
             elif counter_key.startswith("spend:tag:"):
-                return None
+                tag_name = counter_key[len("spend:tag:") :]
+                row = await TagRepository(prisma_client).table.find_unique(where={"tag_name": tag_name})
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
                 row = await OrganizationRepository(prisma_client).table.find_unique(where={"organization_id": org_id})

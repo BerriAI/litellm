@@ -38,6 +38,17 @@ pytestmark = pytest.mark.e2e
 
 pytest.importorskip("pipecat", reason="pipecat-ai not installed")
 
+try:
+    import nltk
+
+    nltk.data.find("tokenizers/punkt_tab")
+except LookupError:
+    import nltk
+
+    nltk.download("punkt_tab", quiet=True)
+except Exception:
+    pass
+
 from pipecat.adapters.schemas.function_schema import FunctionSchema  # noqa: E402
 from pipecat.adapters.schemas.tools_schema import ToolsSchema  # noqa: E402
 from pipecat.frames.frames import (  # noqa: E402

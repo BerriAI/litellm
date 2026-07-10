@@ -2332,6 +2332,21 @@ async def increment_spend_counters(
             )
 
         team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
+        if team_obj is None and prisma_client is not None:
+            try:
+                from litellm.repositories.team_repository import TeamRepository
+
+                team_row = await TeamRepository(prisma_client).table.find_unique(
+                    where={"team_id": scope_team_id}
+                )
+                if team_row is not None:
+                    team_obj = team_row
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "increment_spend_counters: team %s not in cache and DB load failed",
+                    scope_team_id,
+                    exc_info=True,
+                )
         if team_obj is None:
             return
         team_budget_limits = getattr(team_obj, "budget_limits", None) or (
