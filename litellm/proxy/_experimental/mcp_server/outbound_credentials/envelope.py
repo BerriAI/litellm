@@ -160,12 +160,17 @@ EnvelopeOpenError: TypeAlias = NotAnEnvelope | BadSignature | Expired | Malforme
 
 
 class _EnvelopeClaims(BaseModel):
+    """Decoded-claims boundary. ``user_id``/``server_id`` mirror the ``min_length``
+    constraints of :class:`EnvelopeIdentity` so any claim set that validates here also
+    constructs an identity, keeping :func:`open_envelope` raise-free: a correctly signed
+    JWT with an empty identity claim fails here and maps to ``MalformedPayload``."""
+
     model_config = ConfigDict(frozen=True)
     iss: str
     iat: int
     exp: int
-    user_id: str
-    server_id: str
+    user_id: str = Field(min_length=1)
+    server_id: str = Field(min_length=1)
     grant: str = Field(min_length=1)
 
 
