@@ -2018,6 +2018,81 @@ def test_assume_role_without_external_id():
         )
 
 
+def test_assume_role_with_session_tags():
+    """Test that assume_role STS call includes Tags parameter when aws_session_tags is provided"""
+    base_aws_llm = BaseAWSLLM()
+
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    mock_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "test-access-key",
+            "SecretAccessKey": "test-secret-key",
+            "SessionToken": "test-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+
+    with patch("boto3.client", return_value=mock_sts_client):
+        # Call _auth_with_aws_role with session tags
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name="arn:aws:iam::123456789012:role/ExampleRole",
+            aws_session_name="test-session",
+            aws_session_tags={"Team": "dept-a", "App": "invoicing"},
+        )
+
+        # Verify assume_role was called with Tags in the STS wire format
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::123456789012:role/ExampleRole",
+            RoleSessionName="test-session",
+            Tags=[
+                {"Key": "Team", "Value": "dept-a"},
+                {"Key": "App", "Value": "invoicing"},
+            ],
+        )
+
+
+def test_assume_role_without_session_tags():
+    """Test that assume_role STS call excludes Tags parameter when aws_session_tags is not provided"""
+    base_aws_llm = BaseAWSLLM()
+
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    mock_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "test-access-key",
+            "SecretAccessKey": "test-secret-key",
+            "SessionToken": "test-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+
+    with patch("boto3.client", return_value=mock_sts_client):
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name="arn:aws:iam::123456789012:role/ExampleRole",
+            aws_session_name="test-session",
+            aws_session_tags={},
+        )
+
+        # Empty tags dict behaves like no tags: no Tags parameter sent to STS
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::123456789012:role/ExampleRole",
+            RoleSessionName="test-session",
+        )
+
+
 def test_converse_handler_external_id_extraction():
     """Test that BedrockConverseLLM properly extracts and passes aws_external_id parameter"""
     from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM

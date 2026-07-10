@@ -32,6 +32,7 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_external_id",
+        "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
         "tpm",

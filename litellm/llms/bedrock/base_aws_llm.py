@@ -97,6 +97,7 @@ class BaseAWSLLM:
             "aws_sts_endpoint",
             "aws_bedrock_runtime_endpoint",
             "aws_external_id",
+            "aws_session_tags",
         ]
 
     def _get_ssl_verify(self, ssl_verify: Optional[Union[bool, str]] = None):
@@ -196,6 +197,7 @@ class BaseAWSLLM:
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
+        aws_session_tags: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ):
         """
@@ -305,6 +307,7 @@ class BaseAWSLLM:
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
                 aws_external_id=aws_external_id,
+                aws_session_tags=aws_session_tags,
                 ssl_verify=ssl_verify,
             )
             return credentials
@@ -927,6 +930,7 @@ class BaseAWSLLM:
         web_identity_token_file: str,
         aws_external_id: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
+        aws_session_tags: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
@@ -988,6 +992,10 @@ class BaseAWSLLM:
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
 
+        # Add session Tags parameter if provided (requires sts:TagSession in the role trust policy)
+        if aws_session_tags:
+            assume_role_params["Tags"] = [{"Key": k, "Value": v} for k, v in aws_session_tags.items()]
+
         return sts_client_with_creds.assume_role(**assume_role_params)
 
     def _handle_irsa_same_account(
@@ -996,6 +1004,7 @@ class BaseAWSLLM:
         aws_session_name: str,
         aws_external_id: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
+        aws_session_tags: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
@@ -1028,6 +1037,10 @@ class BaseAWSLLM:
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
 
+        # Add session Tags parameter if provided (requires sts:TagSession in the role trust policy)
+        if aws_session_tags:
+            assume_role_params["Tags"] = [{"Key": k, "Value": v} for k, v in aws_session_tags.items()]
+
         return sts_client.assume_role(**assume_role_params)
 
     def _extract_credentials_and_ttl(self, sts_response: dict) -> Tuple[Credentials, Optional[int]]:
@@ -1057,6 +1070,7 @@ class BaseAWSLLM:
         aws_region_name: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
+        aws_session_tags: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
         """
@@ -1086,6 +1100,7 @@ class BaseAWSLLM:
                         web_identity_token_file,
                         aws_external_id,
                         aws_sts_endpoint=aws_sts_endpoint,
+                        aws_session_tags=aws_session_tags,
                         ssl_verify=ssl_verify,
                     )
                 else:
@@ -1094,6 +1109,7 @@ class BaseAWSLLM:
                         aws_session_name,
                         aws_external_id,
                         aws_sts_endpoint=aws_sts_endpoint,
+                        aws_session_tags=aws_session_tags,
                         ssl_verify=ssl_verify,
                     )
 
@@ -1138,6 +1154,10 @@ class BaseAWSLLM:
         # Add ExternalId parameter if provided
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
+
+        # Add session Tags parameter if provided (requires sts:TagSession in the role trust policy)
+        if aws_session_tags:
+            assume_role_params["Tags"] = [{"Key": k, "Value": v} for k, v in aws_session_tags.items()]
 
         try:
             sts_response = sts_client.assume_role(**assume_role_params)
@@ -1338,6 +1358,7 @@ class BaseAWSLLM:
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_external_id = optional_params.pop("aws_external_id", None)
+        aws_session_tags = optional_params.pop("aws_session_tags", None)
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -1350,6 +1371,7 @@ class BaseAWSLLM:
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
 
         return Boto3CredentialsInfo(
