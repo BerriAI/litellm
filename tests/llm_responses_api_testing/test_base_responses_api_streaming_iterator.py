@@ -400,8 +400,13 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        text_done = Mock()
-        text_done.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE
+        text_done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            output_index=0,
+            content_index=0,
+            item_id="msg_partial",
+            text="partial",
+        )
         incomplete_response = Mock(spec=ResponsesAPIResponse)
         incomplete_response.output = []
         incomplete_event = Mock(spec=ResponseIncompleteEvent)
@@ -437,8 +442,14 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        output_item_done = Mock(spec=OutputItemDoneEvent)
-        output_item_done.type = ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        output_item_done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                type="message",
+                content=[{"type": "output_text", "text": "partial"}],
+            ),
+        )
         failed_response = Mock(spec=ResponsesAPIResponse)
         failed_response.output = []
         failed_event = Mock(spec=ResponseFailedEvent)
