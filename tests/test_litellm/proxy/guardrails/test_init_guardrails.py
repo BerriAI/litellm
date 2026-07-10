@@ -5,9 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -36,8 +34,31 @@ def test_initialize_presidio_guardrail():
     )
 
     assert result["guardrail_name"] == "test_presidio_guardrail"
-    assert (
-        result["litellm_params"].guardrail
-        == SupportedGuardrailIntegrations.PRESIDIO.value
-    )
+    assert result["litellm_params"].guardrail == SupportedGuardrailIntegrations.PRESIDIO.value
     assert result["litellm_params"].mode == "pre_call"
+
+
+def test_initialize_guardrail_preserves_guardrail_info():
+    """
+    Regression (LIT-2529): initialize_guardrail must carry guardrail_info into the
+    stored in-memory Guardrail. Dropping it left the Guardrail Monitor's usage
+    endpoints unable to render type/description for YAML-defined guardrails.
+    """
+    test_guardrail = {
+        "guardrail_name": "test_presidio_with_info",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+            "mode": "pre_call",
+            "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+            "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+        },
+        "guardrail_info": {"type": "PII", "description": "masks PII"},
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    assert result is not None
+    assert result["guardrail_info"] == {"type": "PII", "description": "masks PII"}
+    stored = guardrail_handler.IN_MEMORY_GUARDRAILS[result["guardrail_id"]]
+    assert stored["guardrail_info"] == {"type": "PII", "description": "masks PII"}
