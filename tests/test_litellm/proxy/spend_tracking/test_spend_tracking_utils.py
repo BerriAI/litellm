@@ -1357,6 +1357,33 @@ def test_sanitize_guardrail_information_none_passthrough(mock_should_store):
     assert _sanitize_guardrail_information_for_spend_logs(None) is None
 
 
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_absent_prompt_fields(mock_should_store):
+    """
+    Entries that never carried guardrail_request or guardrail_response must
+    not gain those keys after sanitization; consumers keying on presence
+    (`"guardrail_request" in entry`) would otherwise flip from absent to
+    the sentinel string.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "demo-echo-guard",
+            "guardrail_status": "success",
+            "guardrail_response": {"verdict": "allow", "evaluated_input": "hi"},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert "guardrail_request" not in entry
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "demo-echo-guard"
+    assert entry["guardrail_status"] == "success"
+
+
 @patch("litellm.proxy.proxy_server.master_key", "sk-master")
 @patch(
     "litellm.proxy.proxy_server.general_settings",

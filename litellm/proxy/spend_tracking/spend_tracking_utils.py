@@ -892,8 +892,8 @@ def _redact_prompt_fields_in_guardrail_entry(
 ) -> StandardLoggingGuardrailInformation:
     return {
         **entry,
-        "guardrail_request": REDACTED_BY_LITELM_STRING,
-        "guardrail_response": REDACTED_BY_LITELM_STRING,
+        **({"guardrail_request": REDACTED_BY_LITELM_STRING} if "guardrail_request" in entry else {}),
+        **({"guardrail_response": REDACTED_BY_LITELM_STRING} if "guardrail_response" in entry else {}),
     }
 
 
