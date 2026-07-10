@@ -1737,3 +1737,155 @@ describe("MCPServerEdit (max concurrent requests)", () => {
     expect(payload.max_concurrent_requests).toBeNull();
   });
 });
+
+describe("MCPServerEdit (dcr_bridge toggle)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOauth.tokenResponse = null;
+  });
+
+  const getDcrToggle = () => document.getElementById("dcr_bridge");
+
+  function renderEdit(server: Record<string, unknown>) {
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+  }
+
+  async function saveAndGetPayload() {
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])("renders the toggle for a %s server", async (authType) => {
+    renderEdit({ auth_type: authType });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(screen.getByText("Gateway-hosted sign-in (DCR bridge)")).toBeInTheDocument();
+  });
+
+  it.each([["oauth2"], ["api_key"], ["none"]])("does not render the toggle for an %s server", async (authType) => {
+    renderEdit({ auth_type: authType });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Save Changes" }).length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("Gateway-hosted sign-in (DCR bridge)")).not.toBeInTheDocument();
+    expect(getDcrToggle()).not.toBeInTheDocument();
+  });
+
+  it("initializes unchecked from a null stored value and saves an explicit false", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: null });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "false");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("initializes checked from a stored true and saves an explicit true", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth_delegate",
+      dcr_bridge: true,
+    });
+    renderEdit({ auth_type: "oauth_delegate", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(true);
+  });
+
+  it("saves an explicit false after the admin unchecks a stored true", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+      dcr_bridge: false,
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(getDcrToggle()!);
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "false");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("forces dcr_bridge: false when the auth type is switched away", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "api_key",
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+
+    await selectAntOption("Authentication", "API Key");
+    await waitFor(() => {
+      expect(getDcrToggle()).not.toBeInTheDocument();
+    });
+
+    // Mirrors the sibling delegate_auth_to_upstream / oauth_passthrough force-false: a stale true is
+    // never left behind to silently re-activate if the mode is switched back.
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("preserves the toggle value when switching between the two client-forwarded modes", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth_delegate",
+      dcr_bridge: true,
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    // The Form.Item stays mounted across the two client-forwarded modes, so the live toggle value is
+    // preserved rather than forced false by the switch.
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(true);
+  });
+});
