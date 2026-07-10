@@ -318,7 +318,20 @@ def store_batch_managed_object(
     **kwargs,
 ) -> None:
     try:
-        from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+
+        if general_settings.get("passthrough_managed_object_ids", False):
+            # managed_id_rewriter.rewrite_response_ids already minted and
+            # persisted a LiteLLM_ManagedObjectTable row (file_purpose="batch")
+            # for this same batch from the HTTP response path, using the id the
+            # client actually received. Persisting a second row here under a
+            # different unified_object_id would make CheckBatchCost retrieve
+            # and cost-track the same provider batch twice.
+            verbose_proxy_logger.debug(
+                "Skipping duplicate batch managed object store: "
+                "passthrough_managed_object_ids already persisted one via managed_id_rewriter"
+            )
+            return
 
         managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_hook is None or not hasattr(managed_files_hook, "store_unified_object_id"):
@@ -354,17 +367,23 @@ def store_batch_managed_object(
             model_spend={},
         )
 
-        import asyncio
+        # store_batch_managed_object runs both on the main event loop thread
+        # (Anthropic's sync dispatch path) and inside an asyncify worker thread
+        # with no running loop (OpenAI's asyncify-wrapped dispatch path).
+        # asyncio.create_task() requires a running loop in the current thread,
+        # so it silently raised RuntimeError and never persisted the managed
+        # object under the latter. run_async_function handles both cases and
+        # blocks until the store completes, so failures surface here instead.
+        from litellm.litellm_core_utils.asyncify import run_async_function
 
-        asyncio.create_task(
-            managed_files_hook.store_unified_object_id(  # type: ignore
-                unified_object_id=unified_object_id,
-                file_object=batch_object,
-                litellm_parent_otel_span=None,
-                model_object_id=model_object_id,
-                file_purpose="batch",
-                user_api_key_dict=user_api_key_dict,
-            )
+        run_async_function(
+            managed_files_hook.store_unified_object_id,  # type: ignore
+            unified_object_id=unified_object_id,
+            file_object=batch_object,
+            litellm_parent_otel_span=None,
+            model_object_id=model_object_id,
+            file_purpose="batch",
+            user_api_key_dict=user_api_key_dict,
         )
 
         verbose_proxy_logger.info(

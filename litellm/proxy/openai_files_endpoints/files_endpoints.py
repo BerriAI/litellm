@@ -119,6 +119,98 @@ def get_model_from_json_obj(json_object: dict) -> Optional[str]:
     return model
 
 
+def _resolve_provider_model_for_batch_upload(llm_router: Optional[Router], model: str) -> Optional[str]:
+    """Resolve *model* (a proxy model_name/alias) to the bare provider model name.
+
+    Returns ``None`` when the alias can't be resolved to a deployment, or when
+    the deployment's model already matches (no rewrite needed).
+    """
+    if llm_router is None:
+        return None
+    deployment = llm_router.get_deployment(model_id=model) or llm_router.get_deployment_by_model_group_name(
+        model_group_name=model
+    )
+    if deployment is None:
+        return None
+
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    try:
+        provider_model, _, _, _ = get_llm_provider(
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
+    except Exception:  # noqa: BLE001 - a failed provider/model split must fall back to uploading the alias as-is
+        return None
+
+    return provider_model if provider_model != model else None
+
+
+def _rewrite_batch_jsonl_model_field(
+    file_source: Union[bytes, BinaryIO], provider_model: str
+) -> Union[bytes, BinaryIO]:
+    """Rewrite each JSONL line's ``body.model`` to *provider_model*.
+
+    Batch JSONL files reference the proxy's model_name/alias, which the
+    upstream provider has no notion of; the provider must receive its own
+    model name instead. Returns *file_source* unchanged if nothing needed
+    rewriting (e.g. malformed content, or the model already matches).
+    """
+    if isinstance(file_source, (bytes, bytearray)):
+        content = bytes(file_source)
+    else:
+        file_source.seek(0)
+        content = file_source.read()
+        file_source.seek(0)
+
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return file_source
+
+    changed = False
+    rewritten_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            rewritten_lines.append(line)
+            continue
+        try:
+            obj = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            rewritten_lines.append(line)
+            continue
+        body = obj.get("body")
+        if isinstance(body, dict) and body.get("model") not in (None, provider_model):
+            body["model"] = provider_model
+            changed = True
+            rewritten_lines.append(json.dumps(obj))
+        else:
+            rewritten_lines.append(line)
+
+    if not changed:
+        return file_source
+
+    return ("\n".join(rewritten_lines) + "\n").encode("utf-8")
+
+
+def _rewrite_batch_file_in_request(create_file_request: dict, provider_model: str) -> None:
+    """Rewrite ``create_file_request["file"]``'s JSONL body.model in place.
+
+    ``file`` may be raw bytes/a file-like object, or an (filename, content,
+    content_type, ...) tuple (the shape ``create_file`` builds for uploads) -
+    only the content element is rewritten; the rest of the tuple is preserved.
+    """
+    file_value = create_file_request.get("file")
+    if isinstance(file_value, tuple):
+        if len(file_value) < 2:
+            return
+        rewritten_content = _rewrite_batch_jsonl_model_field(file_value[1], provider_model)
+        create_file_request["file"] = (file_value[0], rewritten_content, *file_value[2:])
+    elif isinstance(file_value, (bytes, bytearray)) or hasattr(file_value, "read"):
+        create_file_request["file"] = _rewrite_batch_jsonl_model_field(file_value, provider_model)
+
+
 async def _deprecated_loadbalanced_create_file(
     llm_router: Optional[Router],
     router_model: str,
@@ -196,6 +288,14 @@ async def route_create_file(
             data=_create_file_request,  # type: ignore
             credentials=credentials,
         )
+
+        if purpose == "batch":
+            # Batch JSONL bodies reference the proxy's model alias, which the
+            # upstream provider has no notion of - rewrite each line's
+            # body.model to the provider's own model name before uploading.
+            provider_model = _resolve_provider_model_for_batch_upload(llm_router, model)
+            if provider_model is not None:
+                _rewrite_batch_file_in_request(cast(dict, _create_file_request), provider_model)
 
         # Create the file with model credentials
         response = await litellm.acreate_file(
