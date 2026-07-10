@@ -113,6 +113,21 @@ export const useKeys = (
   });
 };
 
+export const useKeyInfo = (keyId: string): UseQueryResult<KeyResponse | null> => {
+  const { accessToken } = useAuthorized();
+
+  return useQuery<KeyResponse | null>({
+    queryKey: keyKeys.detail(keyId),
+    queryFn: async () => {
+      const response: KeysResponse = await keyListCall(accessToken!, 1, 1, { keyHash: keyId, expand: "user" });
+      const keys = response?.keys ?? [];
+      return keys.find((key) => key.token === keyId) ?? keys[0] ?? null;
+    },
+    enabled: Boolean(accessToken && keyId),
+    staleTime: 30000, // 30 seconds
+  });
+};
+
 export const deletedKeyKeys = createQueryKeys("deletedKeys");
 export const useDeletedKeys = (
   page: number,

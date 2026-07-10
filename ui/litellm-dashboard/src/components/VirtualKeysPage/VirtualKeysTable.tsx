@@ -23,7 +23,8 @@ import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSele
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
-import KeyInfoView from "../templates/key_info_view";
+import { useRouter } from "next/navigation";
+import { migratedHref } from "@/utils/migratedPages";
 
 type KeyFilterState = {
   "Team ID": string;
@@ -57,7 +58,7 @@ const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
 export function VirtualKeysTable() {
   const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
   const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
-  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const router = useRouter();
   const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = React.useState<PaginationState>({
     pageIndex: 0,
@@ -135,7 +136,12 @@ export function VirtualKeysTable() {
         header: "Key ID",
         size: 100,
         enableSorting: true,
-        cell: (info) => <IdCell value={info.getValue() as string} onClick={() => setSelectedKey(info.row.original)} />,
+        cell: (info) => (
+          <IdCell
+            value={info.getValue() as string}
+            onClick={() => router.push(migratedHref(`api-keys/${encodeURIComponent(info.row.original.token)}/`))}
+          />
+        ),
       },
       {
         id: "key_alias",
@@ -522,7 +528,7 @@ export function VirtualKeysTable() {
         },
       },
     ],
-    [allTeams, resolvedOrganizations],
+    [allTeams, resolvedOrganizations, router],
   );
 
   const filterOptions: FilterOption[] = [
@@ -611,200 +617,191 @@ export function VirtualKeysTable() {
   const rangeLabel = `${start} - ${end}`;
   return (
     <div className="w-full h-full overflow-hidden">
-      {selectedKey ? (
-        <KeyInfoView
-          keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
-          keyData={selectedKey}
-          teams={allTeams}
-        />
-      ) : (
-        <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="w-full mb-6">
-            <FilterComponent
-              options={filterOptions}
-              onApplyFilters={handleFilterChange}
-              initialValues={filters}
-              onResetFilters={handleFilterReset}
-            />
+      <div className="border-b py-4 flex-1 overflow-hidden">
+        <div className="w-full mb-6">
+          <FilterComponent
+            options={filterOptions}
+            onApplyFilters={handleFilterChange}
+            initialValues={filters}
+            onResetFilters={handleFilterReset}
+          />
+        </div>
+
+        <div className="flex items-center justify-between w-full mb-4">
+          <div className="inline-flex items-center gap-2">
+            {isLoading ? (
+              <Skeleton.Node active style={{ width: 200, height: 20 }} />
+            ) : (
+              <span className="inline-flex text-sm text-gray-700">
+                Showing {rangeLabel} of {totalCount} results
+              </span>
+            )}
+
+            <AntButton
+              type="default"
+              icon={<SyncOutlined spin={isButtonLoading} />}
+              onClick={handleRefresh}
+              disabled={isButtonLoading}
+              title="Fetch data"
+            >
+              {isButtonLoading ? "Fetching" : "Fetch"}
+            </AntButton>
           </div>
 
-          <div className="flex items-center justify-between w-full mb-4">
-            <div className="inline-flex items-center gap-2">
-              {isLoading ? (
-                <Skeleton.Node active style={{ width: 200, height: 20 }} />
-              ) : (
-                <span className="inline-flex text-sm text-gray-700">
-                  Showing {rangeLabel} of {totalCount} results
-                </span>
-              )}
+          <div className="inline-flex items-center gap-2">
+            {isLoading ? (
+              <Skeleton.Node active style={{ width: 74, height: 20 }} />
+            ) : (
+              <span className="text-sm text-gray-700">
+                Page {pageIndex + 1} of {table.getPageCount()}
+              </span>
+            )}
 
-              <AntButton
-                type="default"
-                icon={<SyncOutlined spin={isButtonLoading} />}
-                onClick={handleRefresh}
-                disabled={isButtonLoading}
-                title="Fetch data"
+            {isLoading ? (
+              <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
+            ) : (
+              <button
+                onClick={() => table.previousPage()}
+                disabled={isLoading || !table.getCanPreviousPage()}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isButtonLoading ? "Fetching" : "Fetch"}
-              </AntButton>
-            </div>
+                Previous
+              </button>
+            )}
 
-            <div className="inline-flex items-center gap-2">
-              {isLoading ? (
-                <Skeleton.Node active style={{ width: 74, height: 20 }} />
-              ) : (
-                <span className="text-sm text-gray-700">
-                  Page {pageIndex + 1} of {table.getPageCount()}
-                </span>
-              )}
-
-              {isLoading ? (
-                <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
-              ) : (
-                <button
-                  onClick={() => table.previousPage()}
-                  disabled={isLoading || !table.getCanPreviousPage()}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-              )}
-
-              {isLoading ? (
-                <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
-              ) : (
-                <button
-                  onClick={() => table.nextPage()}
-                  disabled={isLoading || !table.getCanNextPage()}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              )}
-            </div>
+            {isLoading ? (
+              <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
+            ) : (
+              <button
+                onClick={() => table.nextPage()}
+                disabled={isLoading || !table.getCanNextPage()}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            )}
           </div>
-          <div className="h-[75vh] overflow-auto">
-            <div className="rounded-lg custom-border relative">
-              <div className="overflow-x-auto">
-                <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
-                  <TableHead>
-                    {table.getHeaderGroups().map((headerGroup) => (
-                      <TableRow key={headerGroup.id}>
-                        {headerGroup.headers.map((header) => (
-                          <TableHeaderCell
-                            key={header.id}
-                            data-header-id={header.id}
-                            className={`py-1 h-8 relative hover:bg-gray-50 ${
-                              header.id === "actions"
-                                ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
-                                : ""
-                            }`}
-                            style={{
-                              width: header.getSize(),
-                              position: "relative",
-                              cursor: header.column.getCanSort() ? "pointer" : "default",
-                            }}
-                            onMouseEnter={() => {
-                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
-                              if (resizer) {
-                                (resizer as HTMLElement).style.opacity = "0.5";
-                              }
-                            }}
-                            onMouseLeave={() => {
-                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
-                              if (resizer && !header.column.getIsResizing()) {
-                                (resizer as HTMLElement).style.opacity = "0";
-                              }
-                            }}
-                            onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center">
-                                {header.isPlaceholder
-                                  ? null
-                                  : flexRender(header.column.columnDef.header, header.getContext())}
-                              </div>
-                              {header.id !== "actions" && header.column.getCanSort() && (
-                                <div className="w-4">
-                                  {header.column.getIsSorted() ? (
-                                    {
-                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
-                                    }[header.column.getIsSorted() as string]
-                                  ) : (
-                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
-                                  )}
-                                </div>
-                              )}
-                              <div
-                                onDoubleClick={() => header.column.resetSize()}
-                                onMouseDown={header.getResizeHandler()}
-                                onTouchStart={header.getResizeHandler()}
-                                className={`resizer ${table.options.columnResizeDirection} ${header.column.getIsResizing() ? "isResizing" : ""}`}
-                                style={{
-                                  position: "absolute",
-                                  right: 0,
-                                  top: 0,
-                                  height: "100%",
-                                  width: "5px",
-                                  background: header.column.getIsResizing() ? "#3b82f6" : "transparent",
-                                  cursor: "col-resize",
-                                  userSelect: "none",
-                                  touchAction: "none",
-                                  opacity: header.column.getIsResizing() ? 1 : 0,
-                                }}
-                              />
+        </div>
+        <div className="h-[75vh] overflow-auto">
+          <div className="rounded-lg custom-border relative">
+            <div className="overflow-x-auto">
+              <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
+                <TableHead>
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <TableRow key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => (
+                        <TableHeaderCell
+                          key={header.id}
+                          data-header-id={header.id}
+                          className={`py-1 h-8 relative hover:bg-gray-50 ${
+                            header.id === "actions"
+                              ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                              : ""
+                          }`}
+                          style={{
+                            width: header.getSize(),
+                            position: "relative",
+                            cursor: header.column.getCanSort() ? "pointer" : "default",
+                          }}
+                          onMouseEnter={() => {
+                            const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
+                            if (resizer) {
+                              (resizer as HTMLElement).style.opacity = "0.5";
+                            }
+                          }}
+                          onMouseLeave={() => {
+                            const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
+                            if (resizer && !header.column.getIsResizing()) {
+                              (resizer as HTMLElement).style.opacity = "0";
+                            }
+                          }}
+                          onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center">
+                              {header.isPlaceholder
+                                ? null
+                                : flexRender(header.column.columnDef.header, header.getContext())}
                             </div>
-                          </TableHeaderCell>
+                            {header.id !== "actions" && header.column.getCanSort() && (
+                              <div className="w-4">
+                                {header.column.getIsSorted() ? (
+                                  {
+                                    asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
+                                    desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                                  }[header.column.getIsSorted() as string]
+                                ) : (
+                                  <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                )}
+                              </div>
+                            )}
+                            <div
+                              onDoubleClick={() => header.column.resetSize()}
+                              onMouseDown={header.getResizeHandler()}
+                              onTouchStart={header.getResizeHandler()}
+                              className={`resizer ${table.options.columnResizeDirection} ${header.column.getIsResizing() ? "isResizing" : ""}`}
+                              style={{
+                                position: "absolute",
+                                right: 0,
+                                top: 0,
+                                height: "100%",
+                                width: "5px",
+                                background: header.column.getIsResizing() ? "#3b82f6" : "transparent",
+                                cursor: "col-resize",
+                                userSelect: "none",
+                                touchAction: "none",
+                                opacity: header.column.getIsResizing() ? 1 : 0,
+                              }}
+                            />
+                          </div>
+                        </TableHeaderCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableHead>
+                <TableBody>
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={columns.length} className="h-8 text-center">
+                        <div className="text-center text-gray-500">
+                          <p>🚅 Loading keys...</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : keyList.length > 0 ? (
+                    table.getRowModel().rows.map((row) => (
+                      <TableRow key={row.id} className="h-8">
+                        {row.getVisibleCells().map((cell) => (
+                          <TableCell
+                            key={cell.id}
+                            style={{
+                              width: cell.column.getSize(),
+                              maxWidth: "8-x",
+                              whiteSpace: "pre-wrap",
+                              overflow: "hidden",
+                            }}
+                            className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && Array.isArray(cell.getValue()) && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
+                          >
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </TableCell>
                         ))}
                       </TableRow>
-                    ))}
-                  </TableHead>
-                  <TableBody>
-                    {isLoading ? (
-                      <TableRow>
-                        <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
-                            <p>🚅 Loading keys...</p>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ) : keyList.length > 0 ? (
-                      table.getRowModel().rows.map((row) => (
-                        <TableRow key={row.id} className="h-8">
-                          {row.getVisibleCells().map((cell) => (
-                            <TableCell
-                              key={cell.id}
-                              style={{
-                                width: cell.column.getSize(),
-                                maxWidth: "8-x",
-                                whiteSpace: "pre-wrap",
-                                overflow: "hidden",
-                              }}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && Array.isArray(cell.getValue()) && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
-                            >
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
-                            <p>No keys found</p>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={columns.length} className="h-8 text-center">
+                        <div className="text-center text-gray-500">
+                          <p>No keys found</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
             </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

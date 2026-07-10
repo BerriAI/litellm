@@ -7,6 +7,11 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
+const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}));
+
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -243,24 +248,19 @@ it("should handle column resizing hover events", () => {
   expect(resizer.style.opacity).toBe("0");
 });
 
-it("should open KeyInfoView when clicking on a key ID button", async () => {
+it("navigates to the key's detail route (with the key hash) when clicking the key ID button", async () => {
   renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
   });
 
+  fireEvent.click(screen.getByText("sk-1234567890abcdef"));
+
+  expect(mockRouterPush).toHaveBeenCalledTimes(1);
+  expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining("api-keys/sk-1234567890abcdef"));
+  // The row navigates away instead of swapping to an inline detail view: the table stays put.
   expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
-
-  const keyIdButton = screen.getByText("sk-1234567890abcdef");
-  fireEvent.click(keyIdButton);
-
-  await waitFor(() => {
-    expect(screen.getByText("Back to Keys")).toBeInTheDocument();
-    expect(screen.getByText("Created At")).toBeInTheDocument();
-  });
-
-  expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
 });
 
 it("should display 'Default Proxy Admin' for user_id when value is 'default_user_id'", async () => {
