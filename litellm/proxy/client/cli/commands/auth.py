@@ -667,11 +667,25 @@ def print_token(ctx: click.Context):
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
     contain only the token, so all diagnostics go to stderr.
     """
-    base_url = ctx.obj["base_url"]
     token_data = load_token()
-    if not token_data or token_data.get("base_url") != base_url.rstrip("/"):
-        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+    if not token_data:
+        click.echo("Not authenticated. Run 'lite login'.", err=True)
         sys.exit(1)
+
+    # apiKeyHelper is invoked bare (no --base-url), so unless the caller
+    # explicitly pointed us at a server, trust whichever one `lite login`
+    # actually issued this token for -- that's the whole point of not
+    # needing a wrapper command.
+    if ctx.obj.get("base_url_explicit"):
+        base_url = ctx.obj["base_url"]
+        if token_data.get("base_url") != base_url.rstrip("/"):
+            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+            sys.exit(1)
+    else:
+        base_url = token_data.get("base_url")
+        if not base_url:
+            click.echo("Not authenticated. Run 'lite login'.", err=True)
+            sys.exit(1)
 
     refresh_token = token_data.get("refresh_token")
     if refresh_token and not _cached_jwt_still_fresh(token_data):
