@@ -1713,8 +1713,16 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
 
         try:
             obj, end_idx = decoder.raw_decode(raw, idx)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             # Truncated / unparseable tail: keep what parsed so far.
+            verbose_logger.warning(
+                "split_concatenated_json_objects: discarding unparseable tail of "
+                "tool-call arguments at index %d (%s); %d complete object(s) kept. "
+                "Usually a provider stream that ended mid-tool-call.",
+                idx,
+                e,
+                len(results),
+            )
             break
         if isinstance(obj, dict):
             results.append(obj)
