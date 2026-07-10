@@ -1455,6 +1455,49 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         assert result.output_cost_per_token is None
 
 
+def test_model_group_info_casts_string_cost_from_model_info():
+    """
+    Regression for #32787: cost values round-tripped through the DB
+    (store_model_in_db) can come back as strings such as "1e-05". Comparing a
+    str against a float in _set_model_group_info raised
+    "TypeError: '>' not supported between instances of 'str' and 'float'".
+    Costs read from model_info must be cast to float.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/a", "api_key": "fake"},
+                "model_info": {"id": "d1"},
+            },
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/b", "api_key": "fake"},
+                "model_info": {"id": "d2"},
+            },
+        ]
+    )
+
+    def fake_model_info(model_id, model_name):
+        return {
+            "input_cost_per_token": "1e-05",
+            "output_cost_per_token": "2e-05",
+        }
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=fake_model_info
+    ):
+        result = router._cached_get_model_group_info("grp")
+
+    assert result is not None
+    assert isinstance(result.input_cost_per_token, float)
+    assert isinstance(result.output_cost_per_token, float)
+    assert result.input_cost_per_token == 1e-05
+    assert result.output_cost_per_token == 2e-05
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result

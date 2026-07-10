@@ -7,7 +7,32 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    safe_cast_to_float,
 )
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("1e-05", 1e-05),
+        ("0.0002", 0.0002),
+        (0.0002, 0.0002),
+        (5, 5.0),
+        (None, None),
+        ("not-a-number", None),
+        ({}, None),
+    ],
+)
+def test_safe_cast_to_float(value, expected):
+    result = safe_cast_to_float(value)
+    assert result == expected
+    if expected is not None:
+        assert isinstance(result, float)
+
+
+def test_safe_cast_to_float_custom_default():
+    assert safe_cast_to_float(None, default=0.0) == 0.0
+    assert safe_cast_to_float("junk", default=0.0) == 0.0
 
 
 def test_reconstruct_model_name_prefers_deployment_value():
