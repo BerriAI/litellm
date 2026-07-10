@@ -5,7 +5,7 @@ import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 
-export type EndUser = components["schemas"]["LiteLLM_EndUserTable"];
+export type EndUser = components["schemas"]["CustomerResponse"];
 
 const customersKeys = createQueryKeys("customers");
 
