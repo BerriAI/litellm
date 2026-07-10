@@ -19,10 +19,13 @@ a matching `function_call` output item, the test sends a `function_call_output`
 back, and the follow-up response incorporates the result (the temperature 72
 appears). That raw-websocket tool path is the source of truth for tool calling.
 
+`test_pipecat_tool_smoke` is a realism layer through pipecat for openai, azure,
+and gemini only (not vertex_ai: native-audio live is flaky under pipecat tool
+calling while raw-ws tools pass; see pipecat-ai/pipecat#2544). Assertions are
+coarse; raw-ws remains authoritative. Requires `pipecat-ai`.
+
 Pipecat audio coverage lives in `test_realtime_pipecat_audio_e2e.py` (VAD / audio
-I/O). A former pipecat *tool* smoke was removed: when raw-ws tool tests pass and
-pipecat tool smoke fails, that tracks upstream pipecat tool-call flake
-(pipecat-ai/pipecat#2544), not a proxy regression.
+I/O).
 
 ## Provisioning
 
