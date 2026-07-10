@@ -117,7 +117,10 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
     setIsSaving(true);
     try {
-      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, semanticEnabled, { forTesting: false }));
+      await updateCacheSettingsCall(
+        accessToken,
+        buildCachePayload(redisType, values, semanticEnabled, { forTesting: false }),
+      );
       NotificationsManager.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {

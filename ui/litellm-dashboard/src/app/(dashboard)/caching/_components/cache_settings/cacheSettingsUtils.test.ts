@@ -50,7 +50,9 @@ describe("buildInitialValues", () => {
 
 describe("buildCachePayload", () => {
   it("should tag the payload as redis and drop empty fields and the UI-only redis_type", () => {
-    const payload = buildCachePayload("node", { host: "localhost", port: "6379", username: "" }, false, { forTesting: false });
+    const payload = buildCachePayload("node", { host: "localhost", port: "6379", username: "" }, false, {
+      forTesting: false,
+    });
     expect(payload).toEqual({
       type: "redis",
       host: "localhost",
@@ -89,7 +91,9 @@ describe("buildCachePayload", () => {
   });
 
   it("should exclude fields that do not belong to the selected redis type", () => {
-    const payload = buildCachePayload("node", { sentinel_nodes: '[["localhost",26379]]' }, false, { forTesting: false });
+    const payload = buildCachePayload("node", { sentinel_nodes: '[["localhost",26379]]' }, false, {
+      forTesting: false,
+    });
     expect(payload).not.toHaveProperty("sentinel_nodes");
   });
 });
