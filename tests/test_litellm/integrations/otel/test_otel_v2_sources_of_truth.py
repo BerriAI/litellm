@@ -147,8 +147,6 @@ def test_attribute_keys_are_unique_across_namespaces():
     from litellm.integrations.otel import MCP, Client, JsonRpc, LiteLLMError, Network
 
     # prefixes are allowed to be substrings; exact keys must not collide.
-    # ``LiteLLMError`` shares the ``error.*`` prefix with ``Error`` by design
-    # (v1-parity); the assert below is the guarantee they never overlap.
     exact = set()
     for cls in (GenAI, Error, LiteLLMError, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
         for key in _all_constants(cls):
