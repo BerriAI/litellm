@@ -49,8 +49,8 @@ class ComplianceChecker:
         - ``None``            → treated as ``pre_call`` (the common default)
         - ``str``             → single mode, e.g. ``"pre_call"``
         - ``list``/``tuple``  → multi-mode guardrail, e.g. ``["pre_call", "post_call"]``
-        - ``dict``            → tag-based ``Mode``; only its ``default`` is trusted
-                                (see below)
+        - ``dict``            → tag-based ``Mode``; matched only when *every*
+                                branch runs in ``mode`` (see below)
 
         A prior implementation compared ``g_mode == mode`` directly, which
         silently failed for the list form (a list never equals a string), so a
@@ -58,14 +58,28 @@ class ComplianceChecker:
         counted for no mode at all and every mode-based compliance check
         reported NON-COMPLIANT.
 
-        For the tag-based ``dict`` form we deliberately look only at ``default``
-        and ignore per-tag overrides. The spend log stores the raw ``Mode`` config,
-        not which tags were active for the audited request, so unioning every tag
-        value would over-report: a guardrail like ``{"default": "pre_call",
-        "tags": {"pii": "post_call"}}`` would be counted as both pre_call and
-        post_call even though only one branch runs per request, letting a
-        pre-call compliance check pass on the strength of a post-call tag
-        override. Trusting only ``default`` is the safe, conservative reading.
+        In practice the ``dict`` branch is defensive. Every guardrail hook logs
+        the already-resolved concrete mode: ``guardrail_mode = event_type`` in
+        ``add_standard_logging_guardrail_information_to_request_data``, so an
+        executed guardrail's spend-log row carries a plain ``str`` and hits the
+        branch above. The raw ``Mode`` dict only survives when the event type
+        cannot be inferred, which does not happen on the standard hook paths.
+
+        For that residual ``dict`` form the spend log stores the raw ``Mode``
+        config, not which branch actually ran for the audited request. So a dict
+        is treated as running in ``mode`` only when it is guaranteed to regardless
+        of routing: the ``default`` AND every per-tag override must all establish
+        ``mode``. A missing ``default`` means an untagged request has no guaranteed
+        mode, so nothing is asserted (returns False).
+
+        Invariant: this never reports ``mode`` satisfied unless it holds for every
+        possible routing branch, so it can never report a request compliant when
+        the guardrail did not run in ``mode`` (no false-COMPLIANT). It may
+        under-report (a guardrail that ran pre-call via its default counts as
+        neither when a divergent tag exists), which is the safe direction for an
+        audit check; ``{"default": "pre_call", "tags": {"pii": "post_call"}}``
+        matches neither mode. The precise fix is to log the resolved event mode
+        and match that; this is the safe interim reading until that is available.
         """
         if g_mode is None:
             return mode == "pre_call"
@@ -75,13 +89,19 @@ class ComplianceChecker:
             return mode in g_mode
         if isinstance(g_mode, dict):
             default = g_mode.get("default")
-            if isinstance(default, str):
-                return default == mode
-            if isinstance(default, (list, tuple, set)):
-                return mode in default
-            # No usable default (e.g. only tag overrides): fall back to the
-            # pre_call convention rather than trusting tag-specific values.
-            return mode == "pre_call"
+            if default is None:
+                return False
+            tags = g_mode.get("tags")
+            tag_branches = list(tags.values()) if isinstance(tags, dict) else []
+
+            def _branch_runs_in_mode(branch: object) -> bool:
+                if isinstance(branch, str):
+                    return branch == mode
+                if isinstance(branch, (list, tuple, set)):
+                    return mode in branch
+                return False
+
+            return all(_branch_runs_in_mode(branch) for branch in [default, *tag_branches])
         return False
 
     def _has_guardrail_intervention(self, guardrails: List[Dict]) -> bool:
