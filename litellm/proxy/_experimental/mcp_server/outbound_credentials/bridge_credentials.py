@@ -38,7 +38,9 @@ _BEARER_PREFIX = "bearer "
 _SCRYPT_N = 2**15
 _SCRYPT_R = 8
 _SCRYPT_P = 1
-_SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * 2
+# scrypt's working-set is ~128 * N * r * p bytes; cap at twice that so the maxmem ceiling scales
+# with every work factor and a future p or r bump does not trip "memory limit exceeded".
+_SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
 _DERIVED_KEY_BYTES = 32
 
 
