@@ -716,18 +716,20 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
 
     Non-Anthropic Bedrock families (Nova, Llama, GPT-OSS) reject the field
-    outright. Anthropic models forward it unless their entry in
-    ``model_prices_and_context_window.json`` sets
-    ``bedrock_converse_supports_strict_tools: false`` — Bedrock routes those
-    (Opus 4.7/4.8, see #31582) through a stricter validator that rejects the
-    ``strict`` key on ``toolSpec`` even though Anthropic's native API accepts
-    it as a top-level tool field.
+    outright. Newer Anthropic models (Opus 4.7/4.8, Sonnet 4, Sonnet 5; see
+    #31582) also reject it because Bedrock routes them through a stricter
+    validator that maps ``toolSpec`` to the native Anthropic tool shape, which
+    has no ``strict`` key.
+
+    Defaults to ``False`` so newly released models don't break. An entry in
+    ``model_prices_and_context_window.json`` can opt in by setting
+    ``bedrock_converse_supports_strict_tools: true``.
     """
     base = get_bedrock_base_model(model)
     if not base.startswith("anthropic"):
         return False
     flag = _get_bedrock_converse_strict_tools_flag(base)
-    return flag if flag is not None else True
+    return flag if flag is not None else False
 
 
 def _get_bedrock_converse_strict_tools_flag(base_model: str) -> Optional[bool]:
