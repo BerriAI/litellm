@@ -3,6 +3,7 @@ Test Vertex AI files handler functionality
 """
 
 import asyncio
+import json
 from types import MappingProxyType
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -302,7 +303,23 @@ class TestVertexAIFilesHandler:
             assert final_result.response.content == expected_content
 
     @pytest.mark.asyncio
-    async def test_afile_content_uses_per_model_bucket_without_global_env(self):
+    @pytest.mark.parametrize(
+        ("litellm_params", "vertex_credentials", "expected_credentials"),
+        (
+            ({"gcs_bucket_name": "per-model-bucket"}, "/vertex/sa.json", "/vertex/sa.json"),
+            (
+                {"bucket_name": "per-model-bucket"},
+                {"type": "service_account", "project_id": "test-project"},
+                json.dumps({"type": "service_account", "project_id": "test-project"}),
+            ),
+        ),
+    )
+    async def test_afile_content_uses_model_gcs_config_without_global_env(
+        self,
+        litellm_params,
+        vertex_credentials,
+        expected_credentials,
+    ):
         handler = VertexAIFilesHandler()
         handler.BUCKET_NAME = None
         handler.path_service_account_json = None
@@ -327,19 +344,19 @@ class TestVertexAIFilesHandler:
 
             result = await handler.afile_content(
                 file_content_request=file_content_request,
-                vertex_credentials="/vertex/sa.json",
+                vertex_credentials=vertex_credentials,
                 vertex_project="test-project",
                 vertex_location="us-central1",
                 timeout=60.0,
                 max_retries=3,
-                litellm_params={"gcs_bucket_name": "per-model-bucket"},
+                litellm_params=litellm_params,
             )
 
         assert isinstance(result, HttpxBinaryResponseContent)
         mock_download.assert_called_once()
         dynamic_params = mock_download.call_args.kwargs["standard_callback_dynamic_params"]
         assert dynamic_params["gcs_bucket_name"] == "per-model-bucket"
-        assert dynamic_params["gcs_path_service_account"] == "/vertex/sa.json"
+        assert dynamic_params["gcs_path_service_account"] == expected_credentials
         assert (
             mock_download.call_args.kwargs["object_name"]
             == "litellm-vertex-files/uploads/abc-file.jsonl"
