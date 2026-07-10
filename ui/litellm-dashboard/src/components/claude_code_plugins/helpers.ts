@@ -36,7 +36,7 @@ const pathSegments = (url: URL): string[] => url.pathname.split("/").filter((seg
 
 /**
  * Validate and normalize a repository URL into a parsed URL, or null. Enforces https (rejects
- * http/ssh/git/etc.), rejects embedded credentials, and requires a dotted host, so the public
+ * http/ssh/git/etc.), strips embedded credentials, and requires a dotted host, so the public
  * skill feeds never serve an insecure or credentialed clone URL. Everything downstream parses
  * this normalized object rather than the raw string.
  */
@@ -60,10 +60,9 @@ const parseRepoUrl = (raw: string): URL | null => {
   ) {
     return null;
   }
-  // Allow credentials in the URL but strip them before downstream parsing
-  if (url.username !== "" || url.password !== "") {
-    url = new URL(url.pathname + url.search, url.origin);
-  }
+  // Strip embedded credentials in-place so the validated host cannot change
+  url.username = "";
+  url.password = "";
   return url;
 };
 
