@@ -54,13 +54,15 @@ const parseRepoUrl = (raw: string): URL | null => {
   }
   if (
     url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
     !url.hostname.includes(".") ||
     url.hostname.startsWith("[") ||
     IPV4_HOST_REGEX.test(url.hostname)
   ) {
     return null;
+  }
+  // Allow credentials in the URL but strip them before downstream parsing
+  if (url.username !== "" || url.password !== "") {
+    url = new URL(url.pathname + url.search, url.origin);
   }
   return url;
 };
