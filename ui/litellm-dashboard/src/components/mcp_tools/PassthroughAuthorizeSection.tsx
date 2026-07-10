@@ -47,7 +47,7 @@ export default function PassthroughAuthorizeSection({
       <Form.Item
         label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional, saved)</span>}
         name={["credentials", "client_id"]}
-        extra="Set this to make everyone authorize through a specific app; required for upstreams without dynamic client registration (e.g. a pre-registered Slack app)."
+        extra="Only needed when the upstream does not support dynamic client registration (e.g. a pre-registered Slack app)."
       >
         <Input.Password
           placeholder="Leave blank to use dynamic client registration"
