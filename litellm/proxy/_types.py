@@ -1881,6 +1881,16 @@ class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
 
 
+class KeyShareRequest(LiteLLMPydanticObjectBase):
+    key: str
+    expiration_hours: int = Field(default=24, ge=1, le=500)
+    max_views: int = Field(default=1, ge=1, le=100)
+
+
+class KeyShareResponse(LiteLLMPydanticObjectBase):
+    share_link: str
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = "success_and_failure"
