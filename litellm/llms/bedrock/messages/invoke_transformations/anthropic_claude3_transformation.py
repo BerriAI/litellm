@@ -94,25 +94,30 @@ class AmazonAnthropicClaudeMessagesConfig(
         return [value]
 
     def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict) -> None:
-        """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
-        some Claude aliases; Anthropic Messages carries that content in the
-        top-level ``system`` field. Move any such entries into ``system`` before
-        the Invoke request is built."""
+        """Bedrock Invoke rejects a conversation that opens with ``role: "system"``
+        entries inside ``messages`` ("messages.0: use the top-level 'system'
+        parameter for the initial system prompt"); Anthropic Messages carries that
+        content in the top-level ``system`` field, so hoist the leading run of
+        system entries there. Mid-conversation system entries (e.g. Claude Code's
+        ``mid-conversation-system-2026-04-07`` reminders) are accepted by Invoke in
+        place and MUST stay in place: hoisting one mutates the ``system`` prefix
+        and invalidates the prompt cache for the entire message history.
+        Billing-header system blocks are stripped from the top-level ``system``
+        field regardless of whether anything was hoisted."""
         messages = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        system_role_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
-        if not system_role_messages:
-            return
-
-        anthropic_messages_request["messages"] = [
-            m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
-        ]
+        leading_count = next(
+            (i for i, m in enumerate(messages) if not (isinstance(m, dict) and m.get("role") == "system")),
+            len(messages),
+        )
+        if leading_count:
+            anthropic_messages_request["messages"] = messages[leading_count:]
         system_content = [
             block
             for source in (
                 anthropic_messages_request.get("system"),
-                *(m.get("content") for m in system_role_messages),
+                *(m.get("content") for m in messages[:leading_count]),
             )
             for block in self._as_system_content_blocks(source)
         ]
