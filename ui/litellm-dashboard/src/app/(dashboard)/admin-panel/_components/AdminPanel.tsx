@@ -16,18 +16,18 @@ import {
 } from "@tremor/react";
 import { Alert, Button as Button2, Form, Input, Modal, Space, Tabs, Typography } from "antd";
 import React, { useEffect, useState } from "react";
-import NewBadge from "./common_components/NewBadge";
-import { useBaseUrl } from "./constants";
-import NotificationsManager from "./molecules/notifications_manager";
-import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "./networking";
-import SCIMConfig from "./SCIM";
-import LoggingSettings from "./Settings/AdminSettings/LoggingSettings/LoggingSettings";
-import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
-import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
-import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVault";
-import PluginSettings from "./Settings/AdminSettings/PluginSettings/PluginSettings";
-import SSOModals from "./SSOModals";
-import UIAccessControlForm from "./UIAccessControlForm";
+import NewBadge from "@/components/common_components/NewBadge";
+import { useBaseUrl } from "@/components/constants";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
+import SCIMConfig from "@/components/SCIM";
+import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
+import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
+import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
+import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
+import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
+import SSOModals from "@/components/SSOModals";
+import UIAccessControlForm from "@/components/UIAccessControlForm";
 
 const { Title, Paragraph, Text } = Typography;
 

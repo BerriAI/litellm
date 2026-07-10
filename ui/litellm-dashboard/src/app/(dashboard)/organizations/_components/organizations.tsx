@@ -28,16 +28,21 @@ import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
-import { ModelSelect } from "./ModelSelect/ModelSelect";
-import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, organizationCreateCall, organizationDeleteCall, organizationListCall } from "./networking";
-import OrganizationInfoView from "./organization/organization_view";
-import NumericalInput from "./shared/numerical_input";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
+import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import {
+  Organization,
+  organizationCreateCall,
+  organizationDeleteCall,
+  organizationListCall,
+} from "@/components/networking";
+import OrganizationInfoView from "@/components/organization/organization_view";
+import NumericalInput from "@/components/shared/numerical_input";
+import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 
 interface OrganizationsTableProps {
   userRole: string;
