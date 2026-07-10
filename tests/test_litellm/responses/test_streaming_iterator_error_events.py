@@ -124,6 +124,7 @@ async def test_async_iterator_raises_api_error_on_error_event():
     mock_response.aiter_bytes = mock_aiter_bytes
     mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {"litellm_params": {}}
+    mock_logging_obj.completion_start_time = None
     mock_config = Mock(spec=BaseResponsesAPIConfig)
 
     error_obj = ErrorEventError(
@@ -185,6 +186,7 @@ def test_sync_iterator_raises_api_error_on_error_event():
     mock_response.iter_bytes.return_value = iter([sse_bytes])
     mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {"litellm_params": {}}
+    mock_logging_obj.completion_start_time = None
     mock_config = Mock(spec=BaseResponsesAPIConfig)
 
     error_obj = ErrorEventError(

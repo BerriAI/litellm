@@ -752,6 +752,7 @@ class TestMaybeRaiseForErrorEvent:
         mock_response.aiter_bytes = mock_aiter_bytes
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
         mock_config = Mock(spec=BaseResponsesAPIConfig)
 
         error_obj = ErrorEventError(
