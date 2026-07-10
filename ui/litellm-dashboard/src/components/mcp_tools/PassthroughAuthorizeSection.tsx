@@ -1,5 +1,6 @@
 import React from "react";
 import { Button, Form, Input } from "antd";
+import DcrBridgeToggle from "./DcrBridgeToggle";
 import { isClientForwardedTokenMode } from "./types";
 
 interface PassthroughOAuthFlow {
@@ -11,20 +12,23 @@ interface PassthroughOAuthFlow {
 
 /**
  * Browser-only Authorize & Fetch for the client-forwarded token modes
- * (true_passthrough / oauth_delegate). LiteLLM never stores upstream
- * credentials for these modes, so the token obtained here lives in this
- * browser session only: it is forwarded per-server for the tools preview and
- * allowlist configuration, and is never written to the server row or the
- * per-user credential store. The optional client credentials cover IdPs
- * without dynamic client registration (e.g. a pre-registered Slack app) and
- * ride the temporary authorize session only.
+ * (true_passthrough / oauth_delegate). Tokens are never stored: the token
+ * obtained here lives in this browser session only, forwarded per-server for
+ * the tools preview and allowlist configuration, and is never written to the
+ * server row or the per-user credential store. The optional OAuth client
+ * credentials cover IdPs without dynamic client registration (e.g. a
+ * pre-registered Slack app); unlike the token they ARE saved onto the server
+ * as declared config, so internal users' Authorize relays through the org's
+ * app instead of dead-ending on upstreams that cannot mint clients.
  */
 export default function PassthroughAuthorizeSection({
   authType,
   oauthFlow,
+  dcrBridgeInitialChecked,
 }: {
   authType?: string | null;
   oauthFlow: PassthroughOAuthFlow;
+  dcrBridgeInitialChecked?: boolean;
 }) {
   if (!isClientForwardedTokenMode(authType)) return null;
   const authorizeButtonLabels: Record<string, string> = {
@@ -35,14 +39,15 @@ export default function PassthroughAuthorizeSection({
   return (
     <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2 mb-4">
       <p className="text-sm text-gray-600">
-        Callers bring their own upstream token for this auth type, so LiteLLM stores no upstream credentials. To preview
-        tools and configure the tool allowlist, authorize against the upstream here: the token stays in this browser
-        session only and is never saved to LiteLLM.
+        Callers bring their own upstream token for this auth type, so LiteLLM never stores tokens. To preview tools and
+        configure the tool allowlist, authorize against the upstream here: the token stays in this browser session only
+        and is never saved to LiteLLM. An OAuth app configured below IS saved with the server, so internal users who
+        authorize from the Tools page go through it.
       </p>
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional, not saved)</span>}
+        label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional, saved)</span>}
         name={["credentials", "client_id"]}
-        extra="Only needed when the upstream does not support dynamic client registration (e.g. a pre-registered Slack app). Used for this browser authorization only."
+        extra="Set this to make everyone authorize through a specific app; required for upstreams without dynamic client registration (e.g. a pre-registered Slack app)."
       >
         <Input.Password
           placeholder="Leave blank to use dynamic client registration"
@@ -50,7 +55,7 @@ export default function PassthroughAuthorizeSection({
         />
       </Form.Item>
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional, not saved)</span>}
+        label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional, saved)</span>}
         name={["credentials", "client_secret"]}
       >
         <Input.Password
@@ -58,6 +63,7 @@ export default function PassthroughAuthorizeSection({
           className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
         />
       </Form.Item>
+      <DcrBridgeToggle authType={authType} initialChecked={dcrBridgeInitialChecked} />
       <Button
         onClick={oauthFlow.startOAuthFlow}
         disabled={oauthFlow.status === "authorizing" || oauthFlow.status === "exchanging"}

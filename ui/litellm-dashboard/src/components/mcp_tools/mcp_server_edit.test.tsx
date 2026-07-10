@@ -1789,6 +1789,19 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     expect(getDcrToggle()).not.toBeInTheDocument();
   });
 
+  it("renders the toggle between the OAuth client fields and the Authorize button", async () => {
+    renderEdit({ auth_type: "true_passthrough" });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    const toggle = getDcrToggle() as HTMLElement;
+    const secretInput = screen.getByPlaceholderText("Leave blank for public clients / PKCE");
+    const authorizeButton = screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" });
+    expect(secretInput.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(authorizeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("initializes unchecked from a null stored value and saves an explicit false", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...interactiveOAuthServer,

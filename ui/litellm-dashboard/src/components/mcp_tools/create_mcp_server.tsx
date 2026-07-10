@@ -21,7 +21,6 @@ import {
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
-import DcrBridgeToggle from "./DcrBridgeToggle";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -994,10 +993,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
                         <TruePassthroughWarning authType={authType} />
 
-                        <DcrBridgeToggle authType={authType} initialChecked />
-
                         <PassthroughAuthorizeSection
                           authType={authType}
+                          dcrBridgeInitialChecked
                           oauthFlow={{
                             startOAuthFlow,
                             status: oauthStatus,
