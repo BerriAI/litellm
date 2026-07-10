@@ -2698,7 +2698,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]]
-    guardrail_request: Optional[Union[dict, str]]
+    guardrail_request: Optional[Union[str, dict]]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: GuardrailStatus
     start_time: Optional[float]
@@ -2729,10 +2729,10 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     confidence_score: Optional[float]
     """For LLM-judge guardrails: confidence score 0.0-1.0"""
 
-    classification: Optional[Union[dict, str]]
+    classification: Optional[Union[str, dict]]
     """For LLM-judge guardrails: structured classification output"""
 
-    match_details: Optional[Union[List[dict], str]]
+    match_details: Optional[Union[str, List[dict]]]
     """Detailed match information for each detected pattern"""
 
     patterns_checked: Optional[int]
