@@ -34,7 +34,7 @@ import type {
   CoordinationRedisSettings,
   CoordinationRedisSettingsResponse,
   CoordinationRedisTestResponse,
-} from "@/app/(dashboard)/caching/components/coordination_redis_settings/types";
+} from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";

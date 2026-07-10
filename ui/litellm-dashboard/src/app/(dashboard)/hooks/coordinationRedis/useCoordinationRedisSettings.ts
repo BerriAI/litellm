@@ -9,7 +9,7 @@ import type {
   CoordinationRedisSettings,
   CoordinationRedisSettingsResponse,
   CoordinationRedisTestResponse,
-} from "@/app/(dashboard)/caching/components/coordination_redis_settings/types";
+} from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
 export const coordinationRedisKeys = createQueryKeys("coordinationRedis");
