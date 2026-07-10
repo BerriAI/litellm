@@ -69,6 +69,15 @@ def test_key_derivation_signing_key_meets_hs256_floor_for_short_master_key():
     assert len(keys.signing_key.get_secret_value()) >= 32
 
 
+def test_key_derivation_is_cached_so_the_memory_hard_kdf_runs_once_per_key():
+    """The scrypt KDF is intentionally expensive to resist offline guessing, so it must be cached:
+    repeated calls for the same master key return the identical object rather than re-deriving,
+    keeping the per-request admission path free. Returning a distinct object each call would mean
+    the cache was dropped and every open would pay the memory-hard cost."""
+    first = envelope_keys_from_master_key("sk-cache-probe-key-9988776655")
+    assert envelope_keys_from_master_key("sk-cache-probe-key-9988776655") is first
+
+
 def test_derived_keys_round_trip_mint_and_open():
     keys = envelope_keys_from_master_key(_MASTER_KEY)
     result = resolve_bridge_envelope(_sealed_token(keys), keys, _NOW, _SERVER_ID)
