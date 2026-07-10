@@ -499,16 +499,20 @@ def _raise_unless_oauth2_discovery_server(
     mcp_server_name: Optional[str],
     description: str,
 ) -> None:
-    """404 a NAMED discovery request unless it resolves to an oauth2 server.
+    """404 a NAMED discovery request unless it resolves to an oauth2 or DCR-bridge server.
 
     A named server that is unknown (or hidden from the caller) and one that exists
     but is non-oauth2 both return the same 404, so the well-known discovery paths
     cannot be used to enumerate non-OAuth server names. Root discovery (no name) is
     unaffected, and pass-through servers are resolved by the caller before this runs.
+    DCR-bridge servers are admitted because they serve the gateway's own authorization
+    server metadata (the register, authorize, and token relays).
     """
     if mcp_server_name is None:
         return
     if mcp_server is not None and mcp_server.auth_type == MCPAuth.oauth2:
+        return
+    if mcp_server is not None and mcp_server.is_dcr_bridge:
         return
     raise HTTPException(
         status_code=404,
@@ -735,7 +739,17 @@ async def exchange_token_with_server(
             detail="MCP upstream token endpoint returned no response",
         )
 
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if "invalid_target" in exc.response.text:
+            verbose_logger.warning(
+                "MCP server %s: the upstream authorization server rejected the token request with "
+                "invalid_target; it may require RFC 8707 resource indicators, which the gateway "
+                "does not send yet (tracked as LIT-4339)",
+                mcp_server.server_id,
+            )
+        raise
     token_response = response.json()
     access_token = token_response["access_token"]
 
@@ -984,6 +998,7 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
+    client_redirect_uris: Optional[list] = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
@@ -1005,12 +1020,19 @@ async def register_client_with_server(
     if mcp_server.registration_url is None:
         return dummy_return
 
+    bridge_relay = _dcr_bridge_relays_client_registration(mcp_server)
+    if bridge_relay and not client_redirect_uris:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "redirect_uris is required to register a client with this server"},
+        )
+
     register_data = {
         "client_name": client_name,
-        "redirect_uris": [f"{request_base_url}/callback"],
-        "grant_types": grant_types or [],
-        "response_types": response_types or [],
-        "token_endpoint_auth_method": token_endpoint_auth_method or "",
+        "redirect_uris": client_redirect_uris if bridge_relay else [f"{request_base_url}/callback"],
+        "grant_types": grant_types or (["authorization_code", "refresh_token"] if bridge_relay else []),
+        "response_types": response_types or (["code"] if bridge_relay else []),
+        "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
     }
     headers = {
         "Content-Type": "application/json",
@@ -1032,7 +1054,7 @@ async def register_client_with_server(
 
     token_response = response.json()
 
-    if persist_credentials:
+    if persist_credentials and not bridge_relay:
         persistence_result = await _persist_dcr_client_registration(mcp_server, token_response)
         if persistence_result == "reused":
             return dummy_return
@@ -1456,6 +1478,13 @@ async def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    if mcp_server is not None and mcp_server_name and mcp_server.is_dcr_bridge:
+        return {
+            "authorization_servers": [f"{request_base_url}/{mcp_server_name}"],
+            "resource": resource_url,
+            "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+        }
+
     # Pass-through branch: proxy the upstream's own metadata so discovery
     # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
     if mcp_server is not None and (
@@ -1799,4 +1828,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
+        client_redirect_uris=data.get("redirect_uris"),
     )
