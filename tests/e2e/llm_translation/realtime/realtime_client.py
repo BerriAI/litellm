@@ -11,19 +11,19 @@ models, matching the suite's no-raw-dicts rule.
 from __future__ import annotations
 
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, TypeVar
 from urllib.parse import urlencode
 
-import pytest
 from pydantic import BaseModel, ConfigDict
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from e2e_config import PROXY_BASE_URL
+from e2e_config import PROXY_BASE_URL, unique_marker
 from e2e_gateway import Gateway, build_gateway
+from models import LiteLLMParamsBody
 
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -41,25 +41,76 @@ def realtime_ws_url(model: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class RealtimeProvider:
+    """A realtime provider the suite exercises. `litellm_params` is the deployment
+    the suite registers through /model/new (the gateway resolves the os.environ/*
+    credential refs), so the suite is self-contained and never depends on a static
+    gateway model_list. Every provider here is provisioned and asserted: per
+    tests/e2e/CLAUDE.md the suite never skips a provider, so a provider whose
+    credentials or upstream realtime model are missing on the gateway is a hard
+    failure, not a skip."""
+
     id: str
-    model: str
+    alias: str
+    litellm_params: LiteLLMParamsBody
 
 
 PROVIDERS = (
-    RealtimeProvider("openai", "openai-realtime"),
-    RealtimeProvider("azure", "azure-realtime"),
-    RealtimeProvider("gemini", "gemini-realtime"),
-    RealtimeProvider("vertex_ai", "vertex-realtime"),
-    # RealtimeProvider("bedrock", "bedrock-realtime"), # TODO: Enable this when Bedrock is passing
-    RealtimeProvider("xai", "xai-realtime"),
+    RealtimeProvider(
+        "openai",
+        "openai-realtime",
+        LiteLLMParamsBody(
+            model="openai/gpt-realtime-2",
+            api_key="os.environ/OPENAI_API_KEY",
+        ),
+    ),
+    RealtimeProvider(
+        "azure",
+        "azure-realtime",
+        LiteLLMParamsBody(
+            model="azure/gpt-realtime",
+            api_key="os.environ/AZURE_API_KEY",
+            api_version="2025-08-28",
+            realtime_protocol="GA",
+        ),
+    ),
+    RealtimeProvider(
+        "gemini",
+        "gemini-realtime",
+        LiteLLMParamsBody(
+            model="gemini/gemini-3.1-flash-live-preview",
+            api_key="os.environ/GEMINI_API_KEY",
+        ),
+    ),
+    RealtimeProvider(
+        "vertex_ai",
+        "vertex-realtime",
+        LiteLLMParamsBody(
+            model="vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025",
+            vertex_location="us-central1",
+            vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
+        ),
+    ),
+    # RealtimeProvider("bedrock", "bedrock-realtime", ...) # TODO: Enable when Bedrock is passing
+    # RealtimeProvider(
+    #     "xai",
+    #     "xai-realtime",
+    #     LiteLLMParamsBody(
+    #         model="xai/grok-4-1-fast",
+    #         api_key="os.environ/XAI_API_KEY",
+    #     ),
+    # ),  # TODO: Enable once xai Grok Voice realtime is passing end-to-end here
 )
 
 
-def skip_if_unconfigured(
-    provider: RealtimeProvider, configured: frozenset[str]
-) -> None:
-    if provider.model not in configured:
-        pytest.skip(f"{provider.model} not configured on proxy")
+def realtime_model(provider: RealtimeProvider, provisioned: Mapping[str, str]) -> str:
+    """Return the provisioned deployment name for this provider. Every provider in
+    PROVIDERS is provisioned at session start, so a missing entry is a harness bug,
+    never an environment skip - the suite hard-fails instead (see tests/e2e/CLAUDE.md)."""
+    model = provisioned.get(provider.id)
+    assert model is not None, (
+        f"{provider.id} was not provisioned; the realtime_models fixture is broken"
+    )
+    return model
 
 
 # ---- sent events -------------------------------------------------------
@@ -280,12 +331,17 @@ class RealtimeSession:
 class RealtimeClient:
     gateway: Gateway
 
-    def configured_models(self) -> frozenset[str]:
-        return frozenset(
-            entry.model_name
-            for entry in self.gateway.model_info()
-            if entry.model_info.mode == "realtime"
+    def provision(self, provider: RealtimeProvider) -> tuple[str, str]:
+        """Register this provider's realtime deployment through /model/new and return
+        (model_name, model_id). The name is marker-unique so it never collides with a
+        same-named deployment already on the shared proxy, and mode=realtime makes it
+        show up as a realtime model on /model/info. add_deployment runs synchronously,
+        so the deployment is connectable as soon as this returns."""
+        model_name = f"{provider.alias}-{unique_marker()}"
+        model_id = self.gateway.create_model(
+            model_name, provider.litellm_params, mode="realtime"
         )
+        return model_name, model_id
 
     @contextmanager
     def connect(

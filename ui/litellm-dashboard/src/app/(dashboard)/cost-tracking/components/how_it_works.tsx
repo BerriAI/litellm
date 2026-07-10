@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { Text, TextInput } from "@tremor/react";
-import CodeBlock from "@/app/(dashboard)/api-reference/components/CodeBlock";
+import CodeBlock from "@/components/CodeBlock";
 
 const HowItWorks: React.FC = () => {
   const [responseCost, setResponseCost] = useState("");

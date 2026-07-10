@@ -578,7 +578,7 @@ export function VirtualKeysTable() {
     },
     {
       name: "Key Hash",
-      label: "Key Hash",
+      label: "Key ID",
       isSearchable: false,
     },
   ];

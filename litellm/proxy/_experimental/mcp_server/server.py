@@ -27,6 +27,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -103,6 +104,27 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
+
+
+def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
+
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
+    Returns None when the URL has no host to identify (nothing safe to log).
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if not parts.hostname:
+        return None
+    netloc = f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -3064,6 +3086,8 @@ if MCP_AVAILABLE:
                 mcp_server_logo_url=mcp_info.get("logo_url"),
                 namespaced_tool_name=namespaced_tool_name,
                 mcp_session_id=session_id,
+                mcp_auth_mode=mcp_server.auth_type,
+                mcp_server_resource=_redact_mcp_resource_url(mcp_server.url),
             )
         else:
             return StandardLoggingMCPToolCall(

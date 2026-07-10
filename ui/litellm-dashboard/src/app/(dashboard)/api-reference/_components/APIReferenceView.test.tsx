@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import APIReferenceView from "./APIReferenceView";
 
-vi.mock("./components/CodeBlock", () => ({
+vi.mock("@/components/CodeBlock", () => ({
   __esModule: true,
   default: ({ code }: { code: string }) => <pre data-testid="api-reference-code-block">{code}</pre>,
 }));

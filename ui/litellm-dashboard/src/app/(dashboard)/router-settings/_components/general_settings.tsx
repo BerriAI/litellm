@@ -13,14 +13,14 @@ import {
   Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
-import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
+import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
 import { InputNumber } from "antd";
 import { TrashIcon } from "@heroicons/react/outline";
 import { StatusBadge } from "@/components/shared/table_cells";
 
-import RouterSettings from "./router_settings";
-import Fallbacks from "./Settings/RouterSettings/Fallbacks/Fallbacks";
-import RoutingGroups from "./routing_groups";
+import RouterSettings from "@/components/router_settings";
+import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
+import RoutingGroups from "@/components/routing_groups";
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
