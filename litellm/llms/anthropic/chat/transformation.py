@@ -1432,7 +1432,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
-                        optional_params["output_format"] = _output_format
+                        optional_params.setdefault("output_config", {})["format"] = _output_format
                 else:
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
@@ -1713,10 +1713,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         if optional_params.get("context_management") is not None:
             self._ensure_context_management_beta_header(headers, optional_params["context_management"])
-        output_config = optional_params.get("output_config")
-        if optional_params.get("output_format") is not None or (
-            isinstance(output_config, dict) and output_config.get("format") is not None
-        ):
+        # Legacy output_format passthrough still needs the beta header
+        if optional_params.get("output_format") is not None:
             self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
         if optional_params.get("speed") == "fast":
             self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
