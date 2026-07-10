@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import NoBody, StreamingResponse, Success, unwrap
+from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from models import (
     AnthropicMessagesBody,
     BudgetWindow,
@@ -328,18 +328,21 @@ class BudgetClient:
         )
 
     def _wait_for_team(self, team_id: str) -> None:
+        last: Result[TeamInfoResponse] | None = None
         for _ in range(_TEAM_READY_ATTEMPTS):
-            result = self.gateway.transport.get(
+            last = self.gateway.transport.get(
                 "/team/info",
                 headers=self.gateway.transport.master,
                 params=TeamInfoParams(team_id=team_id),
                 response_type=TeamInfoResponse,
             )
-            match result:
+            match last:
                 case Success():
                     return
                 case _:
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
+        assert last is not None
+        _ = unwrap(last)
 
     def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
         last_body = ""

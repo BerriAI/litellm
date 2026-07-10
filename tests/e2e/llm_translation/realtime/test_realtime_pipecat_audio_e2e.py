@@ -43,11 +43,7 @@ try:
 
     nltk.data.find("tokenizers/punkt_tab")
 except LookupError:
-    import nltk
-
-    nltk.download("punkt_tab", quiet=True)
-except Exception:
-    pass
+    pytest.skip("NLTK punkt_tab data is not installed", allow_module_level=True)
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema  # noqa: E402
 from pipecat.adapters.schemas.tools_schema import ToolsSchema  # noqa: E402

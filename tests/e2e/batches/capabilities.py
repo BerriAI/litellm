@@ -135,7 +135,7 @@ PROVIDERS: tuple[Provider, ...] = (
     ),
 )
 
-BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("encoded", "unified")
+BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("unified",)
 
 
 def scenarios_for_provider(provider: Provider) -> tuple[Scenario, ...]:

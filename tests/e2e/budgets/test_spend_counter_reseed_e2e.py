@@ -150,8 +150,8 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
 
     with ThreadPoolExecutor(max_workers=BURST) as pool:
         burst_results = list(pool.map(one, range(BURST)))
-    assert any(r.ok for r in burst_results), (
-        "burst produced no successful calls; cannot exercise reseed. "
+    assert all(r.ok for r in burst_results), (
+        "some burst calls failed; cannot exercise concurrent reseed. "
         f"statuses={[r.status_code for r in burst_results]}"
     )
 

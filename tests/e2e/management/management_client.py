@@ -133,10 +133,21 @@ class ManagementClient:
         return self.gateway.transport.probe("/team/info", params=TeamInfoParams(team_id=team_id))
 
     def _wait_for_team(self, team_id: str) -> None:
+        last: Result[TeamInfoResponse] | None = None
         for _ in range(_TEAM_READY_ATTEMPTS):
-            if self.team_info_status(team_id).healthy:
-                return
-            time.sleep(_TEAM_READY_SLEEP_SECONDS)
+            last = self.gateway.transport.get(
+                "/team/info",
+                headers=self.gateway.transport.master,
+                params=TeamInfoParams(team_id=team_id),
+                response_type=TeamInfoResponse,
+            )
+            match last:
+                case Success():
+                    return
+                case _:
+                    time.sleep(_TEAM_READY_SLEEP_SECONDS)
+        assert last is not None
+        _ = unwrap(last)
 
     def add_team_member(self, team_id: str, user_id: str) -> None:
         last: Result[NoBody] | None = None
