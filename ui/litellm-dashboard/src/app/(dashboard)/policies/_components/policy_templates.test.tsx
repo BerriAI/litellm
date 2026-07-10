@@ -1,12 +1,12 @@
 import React from "react";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as networking from "../networking";
+import * as networking from "@/components/networking";
 import PolicyTemplates from "./policy_templates";
 
-vi.mock("../networking");
+vi.mock("@/components/networking");
 
 vi.mock("@heroicons/react/outline", () => ({
   ShieldCheckIcon: function ShieldCheckIcon() {

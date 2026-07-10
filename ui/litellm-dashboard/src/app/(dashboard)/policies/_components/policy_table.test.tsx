@@ -1,10 +1,10 @@
 import React from "react";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PolicyTable from "./policy_table";
-import { Policy } from "./types";
+import { Policy } from "@/components/policies/types";
 
 vi.mock("@heroicons/react/outline", () => ({
   TrashIcon: function TrashIcon() {

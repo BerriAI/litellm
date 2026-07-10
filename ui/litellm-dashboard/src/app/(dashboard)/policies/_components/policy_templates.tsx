@@ -8,7 +8,7 @@ import {
   CurrencyDollarIcon,
   CheckCircleIcon,
 } from "@heroicons/react/outline";
-import { getPolicyTemplates } from "../networking";
+import { getPolicyTemplates } from "@/components/networking";
 
 interface PolicyTemplateCardProps {
   title: string;
