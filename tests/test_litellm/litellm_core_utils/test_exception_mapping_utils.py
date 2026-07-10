@@ -230,6 +230,7 @@ def test_openai_insufficient_quota_maps_to_distinct_rate_limit_subtype(body):
     assert isinstance(exc_info.value, litellm.RateLimitError)
     assert exc_info.value.code == "insufficient_quota"
     assert exc_info.value.type == "insufficient_quota"
+    assert str(exc_info.value).count("InsufficientQuotaError") == 1
     assert litellm.InsufficientQuotaError in litellm.LITELLM_EXCEPTION_TYPES
 
 
@@ -263,6 +264,24 @@ def test_openai_transient_429_remains_rate_limit_error(body):
     assert type(exc_info.value) is litellm.RateLimitError
     assert exc_info.value.code == "429"
     assert exc_info.value.type == "throttling_error"
+
+
+def test_openai_non_429_insufficient_quota_body_is_not_quota_error():
+    original_exception = OpenAIError(
+        status_code=403,
+        message="Forbidden",
+        headers={},
+        body={"error": {"code": "insufficient_quota"}},
+    )
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        exception_type(
+            model="gpt-5.5",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert type(exc_info.value) is litellm.APIError
 
 
 gemini_context_window_test_cases = [

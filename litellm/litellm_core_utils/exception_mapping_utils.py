@@ -250,12 +250,15 @@ class _ProviderHTTPException(Protocol):
 
 @runtime_checkable
 class _ProviderQuotaException(Protocol):
+    status_code: int
     body: object
     response: httpx.Response
 
 
 def _get_insufficient_quota_response(original_exception: object) -> Optional[httpx.Response]:
     if not isinstance(original_exception, _ProviderQuotaException):
+        return None
+    if original_exception.status_code != 429:
         return None
     body = original_exception.body
     if not isinstance(body, Mapping):
@@ -301,7 +304,7 @@ def _map_openai_exception(
     insufficient_quota_response = _get_insufficient_quota_response(original_exception)
     if insufficient_quota_response is not None:
         raise InsufficientQuotaError(
-            message=f"InsufficientQuotaError: {exception_provider} - {message}",
+            message=f"{exception_provider} - {message}",
             model=model,
             llm_provider=custom_llm_provider,
             response=insufficient_quota_response,
