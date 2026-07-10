@@ -96,29 +96,49 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
 // edit forms so what gets wiped cannot drift.
 export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
 
-// The carve-out to the wipe above for the client-forwarded token modes: their onTokenReceived branch
-// never writes minted material into form.credentials, so for them the field only ever holds the
-// admin-DECLARED upstream app (persisted as server config since the modes joined
-// AUTH_TYPES_REQUIRING_CREDENTIALS), and an intra-mode identity change (e.g. a URL edit after
-// Authorize) must not silently discard it. Two guards make the preserve safe: it never applies when
-// auth_type itself changed (the previous mode's onTokenReceived may have written a fetched token or
-// DCR client into the same field, and those are minted for the old mode), and it only ever keeps the
-// declared-app keys, so token-shaped keys can never ride through a preserve. Shared by the create and
-// edit forms so the carve-out cannot drift.
+// The declared-app filter over form.credentials. It is a pure key filter with no mode/transition
+// guard because the surrounding code establishes that a client_id/client_secret in form.credentials
+// is ALWAYS admin-typed in every reachable state: the create form holds the DCR-minted client in a
+// ref and never writes it into the form store, the edit form's onTokenReceived never writes client
+// keys, and the invalidation reset clears the whole object atomically. So preserving the string
+// client keys across any invalidation (URL/endpoint edit, true_passthrough<->oauth_delegate switch,
+// or a round trip through another mode) is always legitimate, while the output key filter excludes
+// token-shaped keys so a preserve can never carry minted material through. Shared by both forms.
 const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
 
+// Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
+// snapshots and from any credentials that transit to the temp-session preview so a stale token never
+// reaches the backend or a client-forwarded server row.
+export const MINTED_TOKEN_CREDENTIAL_KEYS = ["access_token", "refresh_token", "expires_in", "scope"] as const;
+
 export const preservedDeclaredAppCredentials = (
-  authType: string | null | undefined,
-  authTypeChanged: boolean,
   credentials: Record<string, unknown> | null | undefined,
 ): Record<string, string> | undefined => {
-  if (!isClientForwardedTokenMode(authType) || authTypeChanged || !credentials) return undefined;
+  if (!credentials) return undefined;
   const kept = Object.fromEntries(
     DECLARED_APP_CREDENTIAL_KEYS.filter((key) => typeof credentials[key] === "string" && credentials[key] !== "").map(
       (key) => [key, credentials[key] as string],
     ),
   );
   return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// Drop minted token keys, keeping everything else (the declared app plus any non-token config).
+export const withoutMintedTokenCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined => {
+  if (!credentials) return undefined;
+  return Object.fromEntries(
+    Object.entries(credentials).filter(([key]) => !(MINTED_TOKEN_CREDENTIAL_KEYS as readonly string[]).includes(key)),
+  );
+};
+
+// The client-forwarded modes share one credential class (same declared app, same authorize relay), so
+// a switch between them must NOT be treated as an app change. Mirrors the backend _credential_auth_class
+// in db.py; kept in sync so the UI's keep-existing copy and the backend's merge cannot disagree.
+export const credentialAuthClass = (authType: string | null | undefined): string | null => {
+  if (authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE) return "client_forwarded";
+  return authType ?? null;
 };
 
 // True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the

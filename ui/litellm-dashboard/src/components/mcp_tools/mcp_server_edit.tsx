@@ -9,6 +9,7 @@ import {
   CLEARED_ON_INVALIDATION,
   isHeldOAuthTokenStale,
   preservedDeclaredAppCredentials,
+  withoutMintedTokenCredentials,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -183,7 +184,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         url,
         transport,
         auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
-        credentials: values.credentials,
+        credentials: isClientForwardedTokenMode(values.auth_type)
+          ? preservedDeclaredAppCredentials(values.credentials)
+          : values.credentials,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
         command: values.command,
@@ -211,14 +214,18 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
 
-      const credentials = {
+      const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
+      const nextCredentials = {
+        ...(preservedDeclaredAppCredentials(current) ?? {}),
+        ...(current.scopes !== undefined && { scopes: current.scopes }),
         access_token: token.access_token,
         ...(token.refresh_token && { refresh_token: token.refresh_token }),
         ...(token.expires_in && { expires_in: token.expires_in }),
         ...(token.scope && { scope: token.scope }),
       };
-
-      form.setFieldsValue({ credentials });
+      // Path-replace (not deep-merge) so a re-authorize with fewer token fields does not leave stale
+      // siblings behind; the admin-typed client keys and scopes are carried explicitly above.
+      form.setFieldValue("credentials", nextCredentials);
       // Re-capture after writing credentials so the token is not invalidated by its own credential write.
       authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
 
@@ -336,8 +343,19 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
       if (parsed.formValues) {
-        setPendingRestoredValues({ ...mcpServer, ...parsed.formValues });
+        // Strip minted token material from restored credentials so a stale token never rehydrates into
+        // the form store (defense in depth for pre-fix snapshots); the declared app is kept.
+        const restoredValues = {
+          ...mcpServer,
+          ...parsed.formValues,
+          ...(parsed.formValues.credentials
+            ? { credentials: withoutMintedTokenCredentials(parsed.formValues.credentials) }
+            : {}),
+        };
+        setPendingRestoredValues(restoredValues);
       }
+      // The ref is re-armed by onTokenReceived when the redirect completes the code exchange, so there
+      // is no separate restore-side re-arm here (writing a ref inside an effect is disallowed).
       if (parsed.costConfig) {
         setCostConfig(parsed.costConfig);
       }
@@ -411,11 +429,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     setTools([]);
     resetOAuthFlow();
-    const keptAppCredentials = preservedDeclaredAppCredentials(
-      getEffectiveAuthType(),
-      "auth_type" in changedValues,
-      form.getFieldValue("credentials"),
-    );
+    // The admin-typed app is upstream-scoped config, not minted material, so it survives every
+    // invalidation; only the held token is discarded. Token-shaped keys are excluded by the filter.
+    const keptAppCredentials = preservedDeclaredAppCredentials(form.getFieldValue("credentials"));
     form.resetFields([...CLEARED_ON_INVALIDATION]);
     if (keptAppCredentials) {
       form.setFieldsValue({ credentials: keptAppCredentials });
@@ -862,14 +878,20 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
-      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
-        payload.credentials = credentialsPayload;
+      // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
+      // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
+      const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
+        ? preservedDeclaredAppCredentials(credentialsPayload)
+        : credentialsPayload;
+
+      if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
+        payload.credentials = submitCredentials;
       }
 
-      // Explicit removal of a saved app for the client-forwarded modes. Blank fields are the
-      // keep-existing convention (the backend merges partial credential updates), so removal must be
-      // an explicit-null write: encrypt skips nulls and the merge overrides the stored keys, which
-      // returns the server to dynamic client registration.
+      // Explicit removal of a saved app for the client-forwarded modes, applied AFTER the filter so it
+      // always wins. Blank fields are the keep-existing convention (the backend merges partial
+      // credential updates), so removal must be an explicit-null write: encrypt skips nulls and the
+      // merge overrides the stored keys, returning the server to dynamic client registration.
       if (removeStoredApp && isClientForwardedTokenMode(restValues.auth_type)) {
         payload.credentials = { client_id: null, client_secret: null };
       }
@@ -1061,6 +1083,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     tokenResponse: oauthTokenResponse,
                   }}
                   isEditing
+                  savedAuthType={mcpServer.auth_type}
                   removeStoredApp={removeStoredApp}
                   onRemoveStoredAppChange={setRemoveStoredApp}
                 />
