@@ -1,19 +1,19 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import GuardrailsPanel from "./guardrails";
-import { getGuardrailsList } from "./networking";
+import GuardrailsPanel from "./index";
+import { getGuardrailsList } from "@/components/networking";
 
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
   deleteGuardrailCall: vi.fn(),
 }));
 
-vi.mock("./guardrails/add_guardrail_form", () => ({
+vi.mock("./add_guardrail_form", () => ({
   __esModule: true,
   default: () => <div>Mock Add Guardrail Form</div>,
 }));
 
-vi.mock("./guardrails/guardrail_table", () => ({
+vi.mock("./guardrail_table", () => ({
   __esModule: true,
   default: ({ guardrailsList, onDeleteClick }: any) => (
     <div>
@@ -30,17 +30,17 @@ vi.mock("./guardrails/guardrail_table", () => ({
   ),
 }));
 
-vi.mock("./guardrails/guardrail_info", () => ({
+vi.mock("./guardrail_info", () => ({
   __esModule: true,
   default: () => <div>Mock Guardrail Info View</div>,
 }));
 
-vi.mock("./guardrails/GuardrailTestPlayground", () => ({
+vi.mock("./GuardrailTestPlayground", () => ({
   __esModule: true,
   default: () => <div>Mock Guardrail Test Playground</div>,
 }));
 
-vi.mock("./guardrails/TeamGuardrailsTab", () => ({
+vi.mock("./TeamGuardrailsTab", () => ({
   TeamGuardrailsTab: () => <div>Mock Team Guardrails Tab</div>,
 }));
 
@@ -48,7 +48,7 @@ vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn((role: string) => role === "admin"),
 }));
 
-vi.mock("./guardrails/guardrail_info_helpers", () => ({
+vi.mock("./guardrail_info_helpers", () => ({
   getGuardrailLogoAndName: vi.fn(() => ({
     logo: null,
     displayName: "Test Provider",

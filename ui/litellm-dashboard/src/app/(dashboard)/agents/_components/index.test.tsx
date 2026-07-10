@@ -1,19 +1,19 @@
 import React from "react";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import AgentsPanel from "./agents";
-import * as networking from "./networking";
+import AgentsPanel from "./index";
+import * as networking from "@/components/networking";
 
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
   deleteAgentCall: vi.fn(),
 }));
 
-vi.mock("./agents/add_agent_form", () => ({
+vi.mock("./add_agent_form", () => ({
   default: () => <div data-testid="add-agent-form" />,
 }));
 
-vi.mock("./agents/agent_info", () => ({
+vi.mock("./agent_info", () => ({
   default: () => <div data-testid="agent-info" />,
 }));
 

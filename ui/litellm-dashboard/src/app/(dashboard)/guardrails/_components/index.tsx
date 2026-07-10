@@ -8,7 +8,7 @@ import { isAdminRole } from "@/utils/roles";
 import GuardrailInfoView from "./guardrail_info";
 import GuardrailTestPlayground from "./GuardrailTestPlayground";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { Guardrail, GuardrailDefinitionLocation } from "@/components/guardrails/types";
+import { Guardrail } from "@/components/guardrails/types";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
 import { CustomCodeModal } from "./custom_code";
@@ -18,20 +18,6 @@ import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
 interface GuardrailsPanelProps {
   accessToken: string | null;
   userRole?: string;
-}
-
-interface GuardrailItem {
-  guardrail_id?: string;
-  guardrail_name: string | null;
-  litellm_params: {
-    guardrail: string;
-    mode: string;
-    default_on: boolean;
-  };
-  guardrail_info: Record<string, any> | null;
-  created_at?: string;
-  updated_at?: string;
-  guardrail_definition_location: GuardrailDefinitionLocation;
 }
 
 interface GuardrailsResponse {
