@@ -202,6 +202,12 @@ class BaseAWSLLM:
     ):
         """
         Return a boto3.Credentials object
+
+        Note on aws_session_tags: like every aws_* param, this can be supplied
+        per-request by an authenticated caller, and a request value overrides the
+        deployment config value. Deployments that rely on session tags for billing
+        attribution or tag-gated IAM policies should restrict caller-supplied
+        aws_* params so tags stay deployment-controlled.
         """
         # Only config-sourced credentials are expanded against the environment.
         # os.environ/<VAR> references in the model config are resolved at load time,
