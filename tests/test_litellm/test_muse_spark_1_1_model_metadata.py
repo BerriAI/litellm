@@ -21,9 +21,9 @@ def test_muse_spark_1_1_model_info():
     assert info["output_cost_per_token"] == 4.25e-06
     assert info["cache_read_input_token_cost"] == 1.5e-07
 
-    assert info["max_input_tokens"] == 1048576
-    assert info["max_output_tokens"] == 1048576
-    assert info["max_tokens"] == 1048576
+    assert info["max_input_tokens"] == 1000000
+    assert info["max_output_tokens"] == 32000
+    assert info["max_tokens"] == 32000
 
     assert info["supports_function_calling"] is True
     assert info["supports_parallel_function_calling"] is True
