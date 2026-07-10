@@ -5,12 +5,14 @@ import json
 import time
 import traceback
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional, TypeVar
 
 import httpx
 from openai._streaming import SSEDecoder
+from pydantic import BaseModel
 
 import litellm
 from litellm.constants import (
@@ -27,7 +29,22 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ContentPartAddedEvent,
+    ContentPartDoneEvent,
+    ContentPartDonePartOutputText,
+    ContentPartDonePartRefusal,
+    FunctionCallArgumentsDoneEvent,
+    OutputItemAddedEvent,
+    OutputItemDoneEvent,
+    OutputTextDoneEvent,
+    RefusalDoneEvent,
+    ResponseCreatedEvent,
+    ResponseInProgressEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
@@ -45,6 +62,393 @@ def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -
     exception = task.exception()
     if exception is not None:
         verbose_logger.error("%s failed: %s", task_name, exception)
+
+
+def _obj_get(obj: object, key: str, default: Optional[object] = None) -> object:
+    """Read ``key`` from a dict or a pydantic/attr object uniformly."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        source: Mapping[object, object] = obj
+        return source.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _safe_int(value: object, default: int) -> int:
+    """Narrow a dynamically-read value to int, falling back for missing/malformed input."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _safe_str(value: object, default: str) -> str:
+    return value if isinstance(value, str) else default
+
+
+_ResponseModelT = TypeVar("_ResponseModelT", bound=BaseModel)
+
+
+def _build_bag(
+    model_cls: type[_ResponseModelT],
+    **fields: object,  # kwargs-ok: generic forwarder for extra-allow Responses payload models
+) -> _ResponseModelT:
+    """
+    Construct a Responses API pydantic payload from keyword fields.
+
+    ``BaseLiteLLMOpenAIResponseObject`` (and the loosely-typed content-part models)
+    accept extra fields but declare none, so direct ``Cls(id=..., type=...)`` calls
+    trip the type checker. Funnelling construction through this generic keeps callers
+    strongly typed while the ``**fields`` splat keeps the field kwargs valid.
+    """
+    return model_cls(**fields)
+
+
+@dataclass(slots=True)
+class _ResponsesStreamItemState:
+    """Per-``output_index`` lifecycle bookkeeping for one streamed output item."""
+
+    item_id: str
+    output_index: int
+    content_index: int = 0
+    has_content_part: bool = True  # message/refusal have a content part; function_call does not
+    part_kind: str = "output_text"  # "output_text" | "refusal"
+    accumulated_text: str = ""
+    output_item_added_seen: bool = False
+    content_part_added_seen: bool = False
+    leaf_done_seen: bool = False  # output_text.done / refusal.done / function_call_arguments.done
+    content_part_done_seen: bool = False
+    output_item_done_seen: bool = False
+
+
+_ItemStateMap = dict[int, _ResponsesStreamItemState]
+
+
+class _ResponsesLifecycleGapFiller:
+    """
+    Guarantee the Responses API streaming lifecycle wrapper events are present.
+
+    Native providers whose upstream emits only ``response.output_text.delta`` +
+    ``response.completed`` (e.g. github_copilot, ollama cloud, Azure gpt-5) leave
+    strict clients (OpenAI Codex CLI) without an "active item", which they reject
+    with ``OutputTextDelta without active item``. Given the one event a provider
+    just produced, ``expand`` prepends any missing openers
+    (``response.created``/``response.in_progress`` before the first event;
+    ``output_item.added``/``content_part.added`` before the first delta of an
+    item) and, right before ``response.completed``, any missing teardown
+    (``*.done``). Every injection is gated on a not-already-seen flag, so a
+    provider that already emits the full sequence passes through unchanged and
+    is never double-wrapped.
+    """
+
+    def __init__(self, *, model: str, response_id: str) -> None:
+        self._model = model
+        self._response_id = response_id
+        self._created_seen = False
+        self._in_progress_seen = False
+        # Per-output-index lifecycle state accumulated across streamed SSE chunks.
+        self._items: _ItemStateMap = {}  # mutable-ok: per-chunk streaming state
+
+    def expand(self, event: object) -> tuple[object, ...]:
+        """
+        Given the one event a provider just produced, return the ordered events to
+        emit: any missing openers, then the event itself (and, for a terminal
+        event, any missing teardown before it). Response-level openers are tied to
+        the first item/content event, so a stream with no output (e.g. a lone
+        ``response.completed``) passes through untouched.
+        """
+        ev = ResponsesAPIStreamEvents
+        etype = _obj_get(event, "type")
+
+        if etype == ev.RESPONSE_CREATED:
+            self._created_seen = True
+            return (event,)
+        if etype == ev.RESPONSE_IN_PROGRESS:
+            self._created_seen = True
+            self._in_progress_seen = True
+            return (event,)
+        if etype == ev.OUTPUT_ITEM_ADDED:
+            openers = self._response_openers()
+            self._observe_output_item_added(event)
+            return (*openers, event)
+        if etype == ev.CONTENT_PART_ADDED:
+            openers = self._response_openers()
+            self._observe_content_part_added(event)
+            return (*openers, event)
+        if etype in (ev.OUTPUT_TEXT_DELTA, ev.REFUSAL_DELTA):
+            openers = (
+                *self._response_openers(),
+                *self._ensure_message_item(event, is_refusal=(etype == ev.REFUSAL_DELTA)),
+            )
+            self._accumulate(event, _safe_str(_obj_get(event, "delta", ""), ""))
+            return (*openers, event)
+        if etype == ev.FUNCTION_CALL_ARGUMENTS_DELTA:
+            openers = (
+                *self._response_openers(),
+                *self._ensure_function_call_item(event),
+            )
+            self._accumulate(event, _safe_str(_obj_get(event, "delta", ""), ""))
+            return (*openers, event)
+        if etype in (
+            ev.OUTPUT_TEXT_DONE,
+            ev.REFUSAL_DONE,
+            ev.FUNCTION_CALL_ARGUMENTS_DONE,
+        ):
+            self._mark_seen(event, "leaf_done_seen")
+            return (event,)
+        if etype == ev.CONTENT_PART_DONE:
+            self._mark_seen(event, "content_part_done_seen")
+            return (event,)
+        if etype == ev.OUTPUT_ITEM_DONE:
+            self._observe_output_item_done(event)
+            return (event,)
+        if etype in (ev.RESPONSE_COMPLETED, ev.RESPONSE_INCOMPLETE, ev.RESPONSE_FAILED):
+            openers = self._response_openers() if (self._items or self._created_seen) else ()
+            return (*openers, *self._teardown(), event)
+        return (event,)
+
+    def _response_openers(self) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+        need_created = not self._created_seen
+        need_in_progress = not self._in_progress_seen
+        self._created_seen = True
+        self._in_progress_seen = True
+        return (
+            *((self._status_event(is_created=True),) if need_created else ()),
+            *((self._status_event(is_created=False),) if need_in_progress else ()),
+        )
+
+    def _status_event(self, *, is_created: bool) -> BaseLiteLLMOpenAIResponseObject:
+        # Known caveat: when these openers are synthesized (truncated upstream), the
+        # real response id only arrives on response.completed, so response.created /
+        # response.in_progress carry the placeholder _response_id and will not match
+        # completed's id. Clients must correlate synthesized events by output_index,
+        # not response.id. We do not rewrite completed's real id (clients store it for
+        # follow-up GETs). Providers that emit their own response.created are passed
+        # through untouched and keep their real id.
+        response = _build_bag(
+            ResponsesAPIResponse,
+            id=self._response_id,
+            created_at=int(time.time()),
+            model=self._model,
+            object="response",
+            status="in_progress",
+            output=(),
+        )
+        if is_created:
+            return ResponseCreatedEvent(type=ResponsesAPIStreamEvents.RESPONSE_CREATED, response=response)
+        return ResponseInProgressEvent(type=ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, response=response)
+
+    def _item_for(self, event: object) -> _ResponsesStreamItemState:
+        output_index = _safe_int(_obj_get(event, "output_index", 0), 0)
+        existing = self._items.get(output_index)
+        if existing is not None:
+            return existing
+        state = _ResponsesStreamItemState(
+            item_id=_safe_str(_obj_get(event, "item_id", ""), "") or self._response_id,
+            output_index=output_index,
+            content_index=_safe_int(_obj_get(event, "content_index", 0), 0),
+        )
+        self._items[output_index] = state
+        return state
+
+    def _ensure_message_item(self, event: object, *, is_refusal: bool) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+        state = self._item_for(event)
+        state.has_content_part = True
+        state.part_kind = "refusal" if is_refusal else "output_text"
+        need_item = not state.output_item_added_seen
+        need_part = not state.content_part_added_seen
+        state.output_item_added_seen = True
+        state.content_part_added_seen = True
+        return (
+            *((self._build_output_item_added(state),) if need_item else ()),
+            *((self._build_content_part_added(state),) if need_part else ()),
+        )
+
+    def _ensure_function_call_item(self, event: object) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+        state = self._item_for(event)
+        state.has_content_part = False
+        if state.output_item_added_seen:
+            return ()
+        state.output_item_added_seen = True
+        return (self._build_output_item_added(state),)
+
+    def _accumulate(self, event: object, delta: str) -> None:
+        self._item_for(event).accumulated_text += delta
+
+    def _mark_seen(self, event: object, flag: str) -> None:
+        setattr(self._item_for(event), flag, True)
+
+    def _observe_output_item_added(self, event: object) -> None:
+        output_index = _safe_int(_obj_get(event, "output_index", 0), 0)
+        item = _obj_get(event, "item")
+        item_id = (
+            _safe_str(_obj_get(item, "id", ""), "")
+            or _safe_str(_obj_get(event, "item_id", ""), "")
+            or self._response_id
+        )
+        state = self._items.get(output_index) or _ResponsesStreamItemState(item_id=item_id, output_index=output_index)
+        state.output_item_added_seen = True
+        item_type = _obj_get(item, "type")
+        if item_type is not None:
+            state.has_content_part = item_type in ("message", "refusal")
+        self._items[output_index] = state
+
+    def _observe_content_part_added(self, event: object) -> None:
+        self._item_for(event).content_part_added_seen = True
+
+    def _observe_output_item_done(self, event: object) -> None:
+        output_index = _safe_int(_obj_get(event, "output_index", 0), 0)
+        state = self._items.get(output_index)
+        if state is not None:
+            state.output_item_done_seen = True
+
+    def _teardown(self) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+        return tuple(event for _, state in sorted(self._items.items()) for event in self._item_teardown(state))
+
+    def _item_teardown(self, state: _ResponsesStreamItemState) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+        if state.output_item_done_seen:
+            return ()
+        need_leaf = not state.leaf_done_seen
+        need_content_part = state.has_content_part and not state.content_part_done_seen
+        state.leaf_done_seen = True
+        state.content_part_done_seen = True
+        state.output_item_done_seen = True
+        return (
+            *((self._build_leaf_done(state),) if need_leaf else ()),
+            *((self._build_content_part_done(state),) if need_content_part else ()),
+            self._build_output_item_done(state),
+        )
+
+    def _build_output_item_added(self, state: _ResponsesStreamItemState) -> OutputItemAddedEvent:
+        if state.has_content_part:
+            item = _build_bag(
+                BaseLiteLLMOpenAIResponseObject,
+                id=state.item_id,
+                type="message",
+                status="in_progress",
+                role="assistant",
+                content=(),
+            )
+        else:
+            item = _build_bag(
+                BaseLiteLLMOpenAIResponseObject,
+                id=state.item_id,
+                type="function_call",
+                status="in_progress",
+            )
+        return OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=state.output_index,
+            item=item,
+        )
+
+    def _build_content_part_added(self, state: _ResponsesStreamItemState) -> ContentPartAddedEvent:
+        if state.part_kind == "refusal":
+            part = _build_bag(BaseLiteLLMOpenAIResponseObject, type="refusal", refusal="")
+        else:
+            part = _build_bag(
+                BaseLiteLLMOpenAIResponseObject,
+                type="output_text",
+                text="",
+                annotations=(),
+            )
+        return ContentPartAddedEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+            item_id=state.item_id,
+            output_index=state.output_index,
+            content_index=state.content_index,
+            part=part,
+        )
+
+    def _build_leaf_done(self, state: _ResponsesStreamItemState) -> BaseLiteLLMOpenAIResponseObject:
+        if not state.has_content_part:
+            return FunctionCallArgumentsDoneEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+                item_id=state.item_id,
+                output_index=state.output_index,
+                arguments=state.accumulated_text,
+            )
+        if state.part_kind == "refusal":
+            return RefusalDoneEvent(
+                type=ResponsesAPIStreamEvents.REFUSAL_DONE,
+                item_id=state.item_id,
+                output_index=state.output_index,
+                content_index=state.content_index,
+                refusal=state.accumulated_text,
+            )
+        return OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id=state.item_id,
+            output_index=state.output_index,
+            content_index=state.content_index,
+            text=state.accumulated_text,
+        )
+
+    def _build_content_part_done(self, state: _ResponsesStreamItemState) -> ContentPartDoneEvent:
+        if state.part_kind == "refusal":
+            part: BaseLiteLLMOpenAIResponseObject = _build_bag(
+                ContentPartDonePartRefusal,
+                type="refusal",
+                refusal=state.accumulated_text,
+            )
+        else:
+            part = _build_bag(
+                ContentPartDonePartOutputText,
+                type="output_text",
+                text=state.accumulated_text,
+                annotations=(),
+                logprobs=None,
+            )
+        return ContentPartDoneEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            item_id=state.item_id,
+            output_index=state.output_index,
+            content_index=state.content_index,
+            part=part,
+        )
+
+    def _build_output_item_done(self, state: _ResponsesStreamItemState) -> OutputItemDoneEvent:
+        if not state.has_content_part:
+            item = _build_bag(
+                BaseLiteLLMOpenAIResponseObject,
+                id=state.item_id,
+                type="function_call",
+                status="completed",
+                arguments=state.accumulated_text,
+            )
+        else:
+            if state.part_kind == "refusal":
+                content_part = _build_bag(
+                    BaseLiteLLMOpenAIResponseObject,
+                    type="refusal",
+                    refusal=state.accumulated_text,
+                )
+            else:
+                content_part = _build_bag(
+                    BaseLiteLLMOpenAIResponseObject,
+                    type="output_text",
+                    text=state.accumulated_text,
+                    annotations=(),
+                )
+            item = _build_bag(
+                BaseLiteLLMOpenAIResponseObject,
+                id=state.item_id,
+                type="message",
+                status="completed",
+                role="assistant",
+                content=(content_part,),
+            )
+        return OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=state.output_index,
+            item=item,
+        )
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -78,6 +482,17 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+
+        # Guarantee the Responses API streaming lifecycle wrapper events are present
+        # even when the upstream provider truncates them (issue #20975). Only the live
+        # __anext__/__next__ loops drain this; Mock/Cached iterators override the loop
+        # and build their own event list, so they never invoke it.
+        # FIFO buffer draining one upstream chunk's expanded events across __anext__ calls.
+        self._pending_events: list[Any] = []  # mutable-ok: streaming drain buffer
+        self._lifecycle_gap_filler = _ResponsesLifecycleGapFiller(
+            model=model or "",
+            response_id=f"resp_{uuid.uuid4().hex}",
+        )
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -598,6 +1013,11 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             self._check_max_streaming_duration()
             while True:
+                # Drain events the gap-filler already expanded (openers, the hooked
+                # provider chunk, teardown) before pulling the next SSE line.
+                if self._pending_events:
+                    return self._pending_events.pop(0)
+
                 # Get the next chunk from the stream
                 try:
                     sse = await self.stream_iterator.__anext__()
@@ -611,13 +1031,14 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
-                    # Await hook directly instead of run_async_function
-                    # (which spawns a thread + event loop per call)
-                    result = await self._call_post_streaming_deployment_hook(
+                    # Run the deployment hook on the real chunk before the gap-filler
+                    # accumulates it, so synthesized *.done events carry post-hook
+                    # (e.g. guardrail-redacted) text, not the raw provider delta.
+                    hooked = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
-                    return result
-                # If result is None, continue the loop to get the next chunk
+                    self._pending_events.extend(self._lifecycle_gap_filler.expand(hooked))
+                # Loop back to drain pending (or read the next chunk if none).
 
         except StopAsyncIteration:
             # Normal end of stream - don't log as failure
@@ -672,6 +1093,11 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             self._check_max_streaming_duration()
             while True:
+                # Drain events the gap-filler already expanded before pulling the next
+                # SSE line (see the async path for the hook-ordering rationale).
+                if self._pending_events:
+                    return self._pending_events.pop(0)
+
                 # Get the next chunk from the stream
                 try:
                     sse = next(self.stream_iterator)
@@ -685,13 +1111,12 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopIteration
                 elif result is not None:
-                    # Sync path: use run_async_function for the hook
-                    result = run_async_function(
+                    hooked = run_async_function(
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
-                    return result
-                # If result is None, continue the loop to get the next chunk
+                    self._pending_events.extend(self._lifecycle_gap_filler.expand(hooked))
+                # Loop back to drain pending (or read the next chunk if none).
 
         except StopIteration:
             # Normal end of stream - don't log as failure
