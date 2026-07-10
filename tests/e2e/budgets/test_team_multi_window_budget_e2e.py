@@ -41,19 +41,19 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
         ],
     )
     resources.defer(lambda: client.delete_team(team_id))
-    key = client.generate_key(team_id=team_id)
+    key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
     resources.defer(lambda: client.delete_key(key))
 
     # 1. exhaust the tight window -> litellm returns budget_exceeded
     start = time.monotonic()
     blocked = False
-    for _ in range(20):
+    for _ in range(30):
         result = _call(client, key)
         if is_budget_block(result):
             blocked = True
             break
         require_successful_call(result)
-        time.sleep(2)
+        time.sleep(1)
     assert blocked, f"team {WINDOW_SECONDS}s window never enforced"
 
     # 2. the window resets at the next wall-clock-aligned boundary (up to a window

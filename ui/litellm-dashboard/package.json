@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@ant-design/cssinjs": "1.24.0",
+    "@ant-design/icons": "5.6.1",
     "@anthropic-ai/sdk": "0.92.0",
     "@base-ui/react": "^1.6.0",
     "@headlessui/tailwindcss": "0.2.2",
@@ -50,6 +51,7 @@
     "react-json-view-lite": "2.5.0",
     "react-markdown": "9.1.0",
     "react-syntax-highlighter": "15.6.6",
+    "recharts": "3.9.2",
     "remark-gfm": "4.0.1",
     "tailwind-merge": "3.4.0",
     "uuid": "14.0.0"

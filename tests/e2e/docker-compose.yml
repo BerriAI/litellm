@@ -6,6 +6,8 @@ configs:
         master_key: os.environ/LITELLM_MASTER_KEY
         database_url: os.environ/DATABASE_URL
         store_prompts_in_spend_logs: true
+        proxy_budget_rescheduler_min_time: 5
+        proxy_budget_rescheduler_max_time: 10
 
       litellm_settings:
         drop_params: true
@@ -24,6 +26,18 @@ configs:
         cooldown_time: 30
         fallbacks:
           - gemini-2.5-flash: ["gpt-5.5", "claude-haiku-4-5"]
+
+      finetune_settings:
+        - custom_llm_provider: openai
+          api_key: os.environ/OPENAI_API_KEY
+
+      files_settings:
+        - custom_llm_provider: openai
+          api_key: os.environ/OPENAI_API_KEY
+        - custom_llm_provider: azure
+          api_base: os.environ/AZURE_API_BASE
+          api_key: os.environ/AZURE_API_KEY
+          api_version: "2024-05-01-preview"
 
       model_list:
         - model_name: gpt-5.5
@@ -60,6 +74,19 @@ services:
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       UI_USERNAME: admin
       UI_PASSWORD: sk-1234
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-${AWS_BATCH_S3_BUCKET:-}}
+      AWS_BATCH_S3_BUCKET: ${AWS_BATCH_S3_BUCKET:-${AWS_S3_BUCKET_NAME:-}}
+      AWS_BATCH_ROLE_ARN: ${AWS_BATCH_ROLE_ARN:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      GCS_BUCKET_NAME: ${GCS_BUCKET_NAME:-}
+      VERTEXAI_PROJECT: ${VERTEXAI_PROJECT:-}
+      VERTEXAI_CREDENTIALS: ${VERTEXAI_CREDENTIALS:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      AZURE_API_BASE: ${AZURE_API_BASE:-}
+      AZURE_API_KEY: ${AZURE_API_KEY:-}
     ports:
       - "4000:4000"
     configs:

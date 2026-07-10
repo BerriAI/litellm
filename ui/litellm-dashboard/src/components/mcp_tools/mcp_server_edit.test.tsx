@@ -10,6 +10,7 @@ vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
+  testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -19,14 +20,27 @@ vi.mock("../molecules/notifications_manager", () => ({
   },
 }));
 
-const mockOauth: { tokenResponse: any } = { tokenResponse: null };
+const mockOauth: {
+  tokenResponse: any;
+  getTemporaryPayload: (() => Record<string, unknown> | null) | null;
+  onTokenReceived: ((token: Record<string, unknown> | null) => void) | null;
+  reset: ReturnType<typeof vi.fn>;
+} = { tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: () => ({
-    startOAuthFlow: vi.fn(),
-    status: "idle",
-    error: null,
-    tokenResponse: mockOauth.tokenResponse,
-  }),
+  useMcpOAuthFlow: (opts: {
+    getTemporaryPayload?: () => Record<string, unknown> | null;
+    onTokenReceived?: (token: Record<string, unknown> | null) => void;
+  }) => {
+    mockOauth.getTemporaryPayload = opts?.getTemporaryPayload ?? null;
+    mockOauth.onTokenReceived = opts?.onTokenReceived ?? null;
+    return {
+      startOAuthFlow: vi.fn(),
+      status: "idle",
+      error: null,
+      tokenResponse: mockOauth.tokenResponse,
+      reset: mockOauth.reset,
+    };
+  },
 }));
 
 vi.mock("./mcp_server_cost_config", () => ({
@@ -86,10 +100,12 @@ vi.mock("./mcp_tool_configuration", () => ({
 const mockGetToken = vi.fn();
 const mockIsTokenValid = vi.fn();
 const mockSetToken = vi.fn();
+const mockRemoveToken = vi.fn();
 vi.mock("@/utils/mcpTokenStore", () => ({
   getToken: (...args: any[]) => mockGetToken(...args),
   isTokenValid: (...args: any[]) => mockIsTokenValid(...args),
   setToken: (...args: any[]) => mockSetToken(...args),
+  removeToken: (...args: unknown[]) => mockRemoveToken(...args),
 }));
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
@@ -307,6 +323,69 @@ describe("MCPServerEdit (delegate auth)", () => {
   });
 });
 
+describe("MCPServerEdit (true passthrough warning)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const renderWithAuthType = (authType: string) =>
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: authType,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+  it("warns that LiteLLM auth is disabled for a true_passthrough server", async () => {
+    renderWithAuthType("true_passthrough");
+
+    await waitFor(() => {
+      expect(screen.getByText("True Passthrough disables LiteLLM authentication for this server")).toBeInTheDocument();
+    });
+  });
+
+  it("does not warn for an oauth_delegate server", async () => {
+    renderWithAuthType("oauth_delegate");
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Save Changes" }).length).toBeGreaterThan(0);
+    });
+    expect(
+      screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("browser-authorize temp payload uses the selected auth_type, not the stored one", async () => {
+    // Stored server is oauth2; the admin switches the dropdown to true_passthrough before saving.
+    // The temp OAuth-relay payload must reflect the selection so the exchange is treated as
+    // browser-held (no DB persistence), matching onTokenReceived and the create form.
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "oauth2" }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await waitFor(() => {
+      expect(mockOauth.getTemporaryPayload).toBeTruthy();
+    });
+    const payload = mockOauth.getTemporaryPayload!();
+    expect(payload).toBeTruthy();
+    expect(payload?.auth_type).toBe("true_passthrough");
+  });
+});
+
 describe("MCPServerEdit (auth type switch)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -379,6 +458,159 @@ describe("MCPServerEdit (auth type switch)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.auth_type).toBe("oauth2");
     expect(payload.token_url).toBe("https://idp.example.com/oauth/token");
+  });
+});
+
+describe("MCPServerEdit OAuth token invalidation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const renderOAuthEdit = () =>
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+  it("invalidates a session-authorized token when the transport switches to stdio", async () => {
+    // Switching to stdio clears url/auth_type via programmatic form.setFieldsValue, which antd does
+    // not report through onValuesChange; the explicit recheck in handleTransportChange must catch it.
+    // Regression: the token used to survive this switch (sessionStorage + hook state kept the old
+    // token minted for the http url).
+    renderOAuthEdit();
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    await selectAntOption("Transport Type", "Standard Input/Output (stdio)");
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
+  });
+
+  it("invalidates a session-authorized token when the server URL changes", async () => {
+    renderOAuthEdit();
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://other.example.com/mcp" } });
+    });
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
+  });
+
+  it("previews tools with a staged interactive OAuth token before it is saved", async () => {
+    // Regression: for authorization_code the fetch went by server_id only, relying on the stored DB
+    // credential, so a token authorized in this edit session gave an empty preview until the admin
+    // saved; the create form previews the identical state via the config-based preview endpoint.
+    mockOauth.tokenResponse = { access_token: "staged-obo-tok" };
+
+    renderOAuthEdit();
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
+        "access-token",
+        // oauth2_flow must be explicit: the preview endpoint infers client_credentials from
+        // inherited client_id/client_secret/token_url and would strip the staged bearer.
+        expect.objectContaining({
+          server_id: "oauth_server_1",
+          url: "https://example.com/mcp",
+          oauth2_flow: "authorization_code",
+        }),
+        "staged-obo-tok",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
+    // Previewing must stay stateless: the staged token is committed only by an explicit Save
+    // (storeMCPOAuthUserCredential for authorization_code, setToken for the client-forwarded modes).
+    expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+    expect(mockSetToken).not.toHaveBeenCalled();
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    mockOauth.tokenResponse = null;
+  });
+
+  it("previews an OpenAPI server's staged token against its spec_path", async () => {
+    mockOauth.tokenResponse = { access_token: "staged-obo-tok" };
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          transport: "openapi",
+          url: null,
+          spec_path: "https://example.com/openapi.json",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.testMCPToolsListRequest)).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({ spec_path: "https://example.com/openapi.json" }),
+        "staged-obo-tok",
+      );
+    });
+    mockOauth.tokenResponse = null;
+  });
+
+  it("keeps the admin's in-flight endpoint edits when the token is invalidated", async () => {
+    // Regression: invalidation used to form.resetFields the endpoint fields; with the edit Form's
+    // initialValues that silently reverted an admin-corrected token_url back to the saved (wrong)
+    // value while still looking plausible. Only credentials (the minted material) may be wiped.
+    renderOAuthEdit();
+
+    const tokenUrlInput = screen.getByPlaceholderText("https://example.com/oauth/token");
+    await act(async () => {
+      fireEvent.change(tokenUrlInput, { target: { value: "https://corrected.example.com/token" } });
+    });
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://moved.example.com/mcp" } });
+    });
+
+    await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
+    expect((screen.getByPlaceholderText("https://example.com/oauth/token") as HTMLInputElement).value).toBe(
+      "https://corrected.example.com/token",
+    );
+  });
+
+  it("keeps a session-authorized token on an http to sse switch with the same url", async () => {
+    // Same url means the same resource/audience (RFC 8707): the minted token is still valid, so a
+    // pure transport swap between the two MCP wire protocols must not force a re-authorize.
+    renderOAuthEdit();
+
+    act(() => {
+      mockOauth.onTokenReceived?.({ access_token: "tok-1" });
+    });
+    mockOauth.reset.mockClear();
+
+    await selectAntOption("Transport Type", "Server-Sent Events (SSE)");
+
+    expect(mockOauth.reset).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
   });
 });
 
@@ -883,6 +1115,55 @@ describe("MCPServerEdit (tool list fetch)", () => {
     expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
   });
 
+  it("forwards the sessionStorage token as the x-mcp header for an oauth_delegate server", async () => {
+    mockIsTokenValid.mockReturnValue(true);
+    mockGetToken.mockReturnValue({ access_token: "browser-token" });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "oauth_delegate" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(networking.listMCPTools).toHaveBeenCalledWith(
+        "access-token",
+        "oauth_server_1",
+        { "x-mcp-oauth_server-authorization": "Bearer browser-token" },
+        true,
+      );
+    });
+    expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
+  });
+
+  it("prompts for the browser-only authorize when a true_passthrough server has no token", async () => {
+    mockIsTokenValid.mockReturnValue(false);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
+        "Authorize with the upstream (browser-only",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
+  });
+
   it("uses the staged OAuth token to load passthrough tools after authorize", async () => {
     const passthroughServer = { ...interactiveOAuthServer, delegate_auth_to_upstream: true };
     mockIsTokenValid.mockReturnValue(false);
@@ -1053,6 +1334,77 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     );
     expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
     expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "persists the staged token to sessionStorage on save for the %s mode",
+    async (authType) => {
+      // Regression: the save path classified the staged token with getMcpOAuthMode, which returns
+      // null for the client-forwarded modes, so setToken was never called and the browser-held
+      // token was dropped on save; the create form's submit path already committed it.
+      mockOauth.tokenResponse = { access_token: "cf-tok", expires_in: 1800, token_type: "bearer" };
+      vi.mocked(networking.updateMCPServer).mockResolvedValue({
+        ...interactiveOAuthServer,
+        auth_type: authType,
+      });
+
+      render(
+        <MCPServerEdit
+          mcpServer={{ ...interactiveOAuthServer, auth_type: authType }}
+          accessToken="access-token"
+          userID="user-1"
+          onCancel={vi.fn()}
+          onSuccess={vi.fn()}
+          availableAccessGroups={[]}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+
+      await waitFor(() => {
+        expect(mockSetToken).toHaveBeenCalledWith(
+          "oauth_server_1",
+          expect.objectContaining({ access_token: "cf-tok" }),
+          "user-1",
+        );
+      });
+      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+      expect(payload.credentials).toBeUndefined();
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
+    },
+  );
+
+  it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
+    // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
+    // after switching the form to true_passthrough and authorizing, the fresh token was not sent as
+    // the x-mcp header until the server was saved.
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: [], error: null });
+    mockIsTokenValid.mockReturnValue(false);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "api_key" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    mockOauth.tokenResponse = { access_token: "fresh-tok", token_type: "bearer" };
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await waitFor(() => {
+      const withHeaders = vi
+        .mocked(networking.listMCPTools)
+        .mock.calls.find(([, , headers]) => headers && JSON.stringify(headers).includes("fresh-tok"));
+      expect(withHeaders).toBeTruthy();
+    });
   });
 
   it("persists the passthrough token to sessionStorage on save after authorize", async () => {

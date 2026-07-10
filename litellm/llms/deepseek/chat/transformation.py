@@ -35,7 +35,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Map OpenAI params to DeepSeek params.
 
         Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
-        DeepSeek only supports `{"type": "enabled"}` - no budget_tokens like Anthropic.
+        DeepSeek supports `{"type": "enabled"}` and `{"type": "disabled"}` - no budget_tokens
+        like Anthropic. `reasoning_effort="none"` is the OpenAI-style way to ask for thinking
+        off, so it maps to `{"type": "disabled"}`; any other effort keeps thinking on.
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
@@ -47,15 +49,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        # Handle thinking parameter - only accept {"type": "enabled"}
-        if thinking_value is not None:
-            if isinstance(thinking_value, dict) and thinking_value.get("type") == "enabled":
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
-                optional_params["thinking"] = {"type": "enabled"}
+        # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
+        if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
+            optional_params["thinking"] = {"type": thinking_value["type"]}
 
-        # Handle reasoning_effort - map to thinking enabled
-        elif reasoning_effort is not None and reasoning_effort != "none":
-            optional_params["thinking"] = {"type": "enabled"}
+        # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
+        elif reasoning_effort is not None:
+            optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
 
         return optional_params
 
