@@ -6,7 +6,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import os
 import sys
-from typing import Dict
+from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +16,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm import Router
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
@@ -1309,3 +1310,544 @@ class TestLLMClassifier:
         assert result.model == "o1-preview"  # REASONING tier model
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == request_metadata
+
+
+class TestLexicalKeywordTierRules:
+    """Test deterministic (literal) keyword_tier_rules overrides."""
+
+    @pytest.fixture
+    def rule_config(self, basic_config) -> Dict:
+        return {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["deploy to k8s"], "tier": "REASONING"},
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_matching_rule_overrides_scoring(
+        self, mock_router_instance, rule_config
+    ):
+        """A prompt hitting a rule keyword routes to that tier, not the scored tier."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=rule_config,
+        )
+        prompt = "please deploy to k8s now"
+        # Without the rule this short prompt would not score into REASONING.
+        scored_tier, _, _ = router.classify(prompt)
+        assert scored_tier != ComplexityTier.REASONING
+
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING tier model
+
+    @pytest.mark.asyncio
+    async def test_most_severe_tier_wins_regardless_of_rule_order(self, mock_router_instance, basic_config):
+        """When several rules match, the highest-severity tier wins, independent of list order."""
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["database"], "tier": "SIMPLE"},  # listed first, lower tier
+                {"keywords": ["database"], "tier": "REASONING"},  # listed later, higher tier
+            ],
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "tell me about the database"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING wins over the earlier SIMPLE rule
+
+    @pytest.mark.asyncio
+    async def test_distinct_keywords_escalate_to_highest_tier(self, mock_router_instance, basic_config):
+        """A prompt hitting keywords across tiers routes to the most complex one."""
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["hi"], "tier": "SIMPLE"},
+                {"keywords": ["advise"], "tier": "COMPLEX"},
+                {"keywords": ["kubernetes"], "tier": "REASONING"},
+            ],
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi, advise me on kubernetes"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING, the highest of SIMPLE/COMPLEX/REASONING
+
+    def test_lexical_override_returns_most_severe_matched_tier(self, mock_router_instance, basic_config):
+        """Unit-level check of the escalation helper across mixed matches."""
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["hi"], "tier": "SIMPLE"},
+                {"keywords": ["advise"], "tier": "COMPLEX"},
+            ],
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        assert router._lexical_tier_override("hi there, please advise") == ComplexityTier.COMPLEX
+        assert router._lexical_tier_override("just saying hi") == ComplexityTier.SIMPLE
+        assert router._lexical_tier_override("nothing relevant here") is None
+
+    @pytest.mark.asyncio
+    async def test_no_rule_match_falls_back_to_scoring(
+        self, mock_router_instance, basic_config
+    ):
+        """A prompt that matches no rule is classified by the scorer as usual."""
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["zzznomatch"], "tier": "REASONING"},
+            ],
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"  # SIMPLE via scoring, rule did not fire
+
+    def test_word_boundary_avoids_substring_false_positive(
+        self, mock_router_instance, basic_config
+    ):
+        """A single-word rule keyword must not match inside a larger word."""
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["k8s"], "tier": "REASONING"}],
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        assert router._lexical_tier_override("running my k8s cluster") == ComplexityTier.REASONING
+        assert router._lexical_tier_override("what is a k8scluster thing") is None
+
+
+def _make_embedding_response(vectors: List[List[float]]) -> "litellm.EmbeddingResponse":
+    return litellm.EmbeddingResponse(
+        model="fake-embed",
+        data=[
+            {"embedding": vec, "index": idx, "object": "embedding"}
+            for idx, vec in enumerate(vectors)
+        ],
+        object="list",
+    )
+
+
+class FakeEmbeddingRouter:
+    """A stand-in router whose embeddings are deterministic 2D unit vectors.
+
+    Any text mentioning a cluster/container concept maps to [1, 0]; everything
+    else maps to [0, 1]. This lets the real SemanticRouter compute exact cosine
+    similarities (1.0 or 0.0) so threshold behavior is testable without a network call.
+    """
+
+    _CLUSTER_MARKERS = ("k8s", "kube", "container", "cluster", "orchestrat")
+
+    def __init__(self):
+        self.async_embedding_calls: List[List[str]] = []
+        self.async_embedding_kwargs: List[Dict] = []
+        self.sync_embedding_thread_ids: List[int] = []
+
+    def _vectors(self, docs: List[str]) -> List[List[float]]:
+        return [
+            [1.0, 0.0] if any(marker in doc.lower() for marker in self._CLUSTER_MARKERS) else [0.0, 1.0]
+            for doc in docs
+        ]
+
+    @staticmethod
+    def _as_list(text) -> List[str]:
+        return text if isinstance(text, list) else [text]
+
+    def embedding(self, input, model, **kwargs):
+        # Record the thread this synchronous (route-index build) call ran on, so tests can
+        # assert it is offloaded off the event-loop thread.
+        import threading
+
+        self.sync_embedding_thread_ids.append(threading.get_ident())
+        return _make_embedding_response(self._vectors(self._as_list(input)))
+
+    async def aembedding(self, input, model, **kwargs):
+        docs = self._as_list(input)
+        self.async_embedding_calls.append(docs)
+        self.async_embedding_kwargs.append(kwargs)
+        return _make_embedding_response(self._vectors(docs))
+
+
+class TestSemanticKeywordTierRules:
+    """Test embedding-based keyword_tier_rules matching."""
+
+    @pytest.mark.asyncio
+    async def test_semantic_match_routes_to_rule_tier(self, basic_config):
+        """A paraphrase (no literal keyword) still routes via embedding similarity."""
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["kubernetes deployment", "container orchestration"], "tier": "REASONING"},
+                {"keywords": ["hello", "thanks"], "tier": "SIMPLE"},
+            ],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "help me roll out my k8s cluster today"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING via semantic match
+        assert fake_router.async_embedding_calls, "expected an embedding call for the prompt"
+
+    @pytest.mark.asyncio
+    async def test_semantic_embedding_call_carries_caller_metadata(self, basic_config):
+        """The query embedding call must carry the caller's metadata/litellm_metadata
+        so embedding spend is attributed and budget-checked against the originating
+        key/team, instead of being logged as an untracked, unattributed cost.
+        """
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        caller_metadata = {"user_api_key_hash": "hash-abc", "user_api_key_team_id": "team-1"}
+        caller_litellm_metadata = {"user_api_key": "hash-abc"}
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": caller_metadata, "litellm_metadata": caller_litellm_metadata},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        assert result is not None
+        assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
+        assert fake_router.async_embedding_kwargs[0]["metadata"] == caller_metadata
+        assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == caller_litellm_metadata
+
+    @pytest.mark.asyncio
+    async def test_semantic_embedding_call_strips_budget_reservation(self, basic_config):
+        """The embedding call must not carry the parent request's budget reservation.
+
+        The reservation belongs to the routed completion this embedding helps select, not
+        to the embedding call. Forwarding it would let the embedding's cost callback
+        finalize the reservation, so the routed completion's callback then skips
+        incrementing the key/team budget - letting a caller run completions while only the
+        embedding cost is enforced. Key/team attribution fields must still be forwarded.
+        """
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        caller_metadata = {
+            "user_api_key_hash": "hash-abc",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_budget_reservation": {"reserved_cost": 1.0},
+            "user_api_key_auth": {"budget_reservation": {"reserved_cost": 1.0}},
+        }
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": caller_metadata, "litellm_metadata": dict(caller_metadata)},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
+        expected = {"user_api_key_hash": "hash-abc", "user_api_key_team_id": "team-1"}
+        assert fake_router.async_embedding_kwargs[0]["metadata"] == expected
+        assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == expected
+
+    @pytest.mark.asyncio
+    async def test_semantic_routelayer_build_runs_off_event_loop(self, basic_config):
+        """Building the SemanticRouter embeds route utterances via a synchronous provider
+        call; it must run in a worker thread, not block the async event loop.
+        """
+        import threading
+
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        loop_thread_id = threading.get_ident()
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        # The route-index build did a synchronous embedding call...
+        assert fake_router.sync_embedding_thread_ids, "expected the route-index build to embed utterances"
+        # ...and none of it ran on the event-loop thread.
+        assert all(tid != loop_thread_id for tid in fake_router.sync_embedding_thread_ids)
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_falls_back_to_scoring(self, basic_config):
+        """When no route clears the threshold, scoring decides the tier."""
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["kubernetes deployment"], "tier": "REASONING"},
+            ],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.9,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        # "hello there friend" embeds orthogonal to the REASONING route (cos 0 < 0.9).
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello there friend"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"  # SIMPLE via scoring fallback
+
+    @pytest.mark.asyncio
+    async def test_route_embeddings_cached_across_requests(self, basic_config):
+        """The route layer is built once and reused on subsequent requests."""
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["kubernetes deployment"], "tier": "REASONING"},
+            ],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        assert router._semantic_routelayer is None
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        first_layer = router._semantic_routelayer
+        assert first_layer is not None
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "scale my container cluster"}],
+        )
+        assert router._semantic_routelayer is first_layer
+
+
+class TestSemanticConfigValidation:
+    """Test config validation for semantic_keyword_matching."""
+
+    def test_semantic_without_embedding_model_raises(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                semantic_keyword_matching=True,
+                keyword_tier_rules=[{"keywords": ["k8s"], "tier": "REASONING"}],
+            )
+
+    def test_semantic_without_rules_raises(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                semantic_keyword_matching=True,
+                embedding_model="fake-embed",
+            )
+
+    def test_semantic_disabled_needs_no_embedding_model(self):
+        config = ComplexityRouterConfig(
+            keyword_tier_rules=[{"keywords": ["k8s"], "tier": "REASONING"}],
+        )
+        assert config.semantic_keyword_matching is False
+        assert config.match_threshold == 0.5
+
+    def test_keyword_tier_rule_rejects_empty_keywords(self):
+        """A rule with no keywords is meaningless (and yields a zero-utterance semantic route)."""
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(keyword_tier_rules=[{"keywords": [], "tier": "SIMPLE"}])
+
+    def test_keyword_tier_rule_rejects_blank_only_keywords(self):
+        """Whitespace-only keywords don't count as content."""
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(keyword_tier_rules=[{"keywords": ["   ", ""], "tier": "SIMPLE"}])
+
+
+class _StubEncoder:
+    """Minimal stand-in for LiteLLMRouterEncoder.aencode_queries, capturing the kwargs it was called with."""
+
+    def __init__(self):
+        self.aencode_queries_calls: List[Dict] = []
+
+    async def aencode_queries(self, docs, **kwargs):
+        self.aencode_queries_calls.append(kwargs)
+        return [[0.0]]
+
+
+class _StubRouteLayer:
+    """Returns a fixed acall result so _semantic_tier_override branches can be exercised."""
+
+    def __init__(self, result):
+        self._result = result
+        self.encoder = _StubEncoder()
+
+    async def acall(self, text=None, vector=None):
+        return self._result
+
+
+class _RaisingEncoder:
+    """Simulates an embedding-provider failure during semantic matching."""
+
+    async def aencode_queries(self, docs, **kwargs):
+        raise RuntimeError("embedding provider unavailable")
+
+
+class _RaisingRouteLayer:
+    def __init__(self):
+        self.encoder = _RaisingEncoder()
+
+    async def acall(self, text=None, vector=None):
+        raise AssertionError("acall should not be reached when the encoder fails")
+
+
+class TestKeywordOverrideEdgeCases:
+    """Cover the defensive branches of the lexical and semantic override helpers."""
+
+    def _semantic_router(self, mock_router_instance, basic_config):
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    def test_lexical_override_none_when_no_rules(self, mock_router_instance, basic_config):
+        """No keyword_tier_rules configured -> lexical override is a no-op."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        assert router._lexical_tier_override("deploy to k8s and reason step by step") is None
+
+    def test_semantic_routelayer_requires_embedding_model(self, mock_router_instance, basic_config):
+        """Building the route layer without an embedding model raises (defensive invariant)."""
+        config = {**basic_config, "keyword_tier_rules": [{"keywords": ["k8s"], "tier": "REASONING"}]}
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        assert router.config.embedding_model is None
+        with pytest.raises(ValueError, match="embedding_model is required"):
+            router._get_or_create_semantic_routelayer()
+
+    @pytest.mark.asyncio
+    async def test_semantic_override_maps_first_of_list(self, mock_router_instance, basic_config):
+        """A list RouteChoice result maps to the first entry's tier."""
+        from semantic_router.schema import RouteChoice
+
+        router = self._semantic_router(mock_router_instance, basic_config)
+        router._semantic_routelayer = _StubRouteLayer([RouteChoice(name="COMPLEX"), RouteChoice(name="SIMPLE")])
+        assert await router._semantic_tier_override("anything", {}) == ComplexityTier.COMPLEX
+
+    @pytest.mark.asyncio
+    async def test_semantic_override_empty_list_returns_none(self, mock_router_instance, basic_config):
+        """An empty list result falls through to scoring."""
+        router = self._semantic_router(mock_router_instance, basic_config)
+        router._semantic_routelayer = _StubRouteLayer([])
+        assert await router._semantic_tier_override("anything", {}) is None
+
+    @pytest.mark.asyncio
+    async def test_semantic_override_unknown_route_name_returns_none(self, mock_router_instance, basic_config):
+        """A matched route whose name is not a ComplexityTier is ignored."""
+        from semantic_router.schema import RouteChoice
+
+        router = self._semantic_router(mock_router_instance, basic_config)
+        router._semantic_routelayer = _StubRouteLayer(RouteChoice(name="NOT_A_TIER"))
+        assert await router._semantic_tier_override("anything", {}) is None
+
+    @pytest.mark.asyncio
+    async def test_semantic_embedding_error_falls_back_to_scoring(self, mock_router_instance, basic_config):
+        """An embedding failure must not fail the request: the override yields None so
+        async_pre_routing_hook falls through to the complexity scorer.
+        """
+        router = self._semantic_router(mock_router_instance, basic_config)
+        router._semantic_routelayer = _RaisingRouteLayer()
+
+        # _resolve_keyword_tier_override swallows the error and returns None (no override).
+        assert await router._resolve_keyword_tier_override("roll out my k8s cluster", {}) is None
+
+        # End-to-end, the hook still returns a routed model (from scoring) rather than raising.
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        assert result is not None
+        assert result.model in {"gpt-4o-mini", "gpt-4o", "claude-sonnet-4-20250514", "o1-preview"}

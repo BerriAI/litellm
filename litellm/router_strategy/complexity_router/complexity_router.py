@@ -7,12 +7,15 @@ to classify requests by complexity and route them to appropriate models.
 By default, scoring is local (regex/keyword-based) with no external API calls and <1ms
 latency. Optionally, classifier_type="llm" routes classification through a configured
 model instead, trading that latency/cost guarantee for potentially better accuracy.
+keyword_tier_rules (lexical or, with semantic_keyword_matching, embedding-based) are
+evaluated before either classification strategy and force a tier outright when matched.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
+import asyncio
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -25,16 +28,20 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,
 )
 
 if TYPE_CHECKING:
+    from semantic_router.routers import SemanticRouter
+
     from litellm.router import Router
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
     PreRoutingHookResponse = Any
+    SemanticRouter = Any
 
 
 class TierClassification(BaseModel):
@@ -140,6 +147,10 @@ class ComplexityRouter(CustomLogger):
             self.config.custom_technical_keywords,
         )
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
+
+        # Lazily built on first semantic request and cached for reuse (route
+        # embeddings are static, only the prompt is embedded per request).
+        self._semantic_routelayer: Optional[SemanticRouter] = None
 
         # Pre-compile regex patterns for efficiency
         # Use non-greedy .*? to prevent ReDoS on pathological inputs
@@ -419,6 +430,125 @@ class ComplexityRouter(CustomLogger):
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
+    def _lexical_tier_override(self, user_message: str) -> Optional[ComplexityTier]:
+        """When keyword_tier_rules match literally, the most-severe matched tier wins.
+
+        Escalating to the highest tier (rather than the first rule in the list) keeps
+        routing independent of the order rules were authored in: a prompt hitting both a
+        SIMPLE and a REASONING keyword routes to REASONING.
+        """
+        rules = self.config.keyword_tier_rules
+        if not rules:
+            return None
+        text = user_message.lower()
+        matched_tiers = [
+            rule.tier for rule in rules if any(self._keyword_matches(text, keyword) for keyword in rule.keywords)
+        ]
+        if not matched_tiers:
+            return None
+        return max(matched_tiers, key=TIER_SEVERITY_ORDER.index)
+
+    def _get_or_create_semantic_routelayer(self) -> "SemanticRouter":
+        """Build (once) a SemanticRouter with one route per tier, utterances = that tier's keywords."""
+        if self._semantic_routelayer is not None:
+            return self._semantic_routelayer
+
+        from semantic_router.routers import SemanticRouter
+        from semantic_router.routers.base import Route
+
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
+
+        embedding_model = self.config.embedding_model
+        if embedding_model is None:
+            raise ValueError("embedding_model is required for semantic keyword matching")
+
+        rules = self.config.keyword_tier_rules or []
+        ordered_tiers = tuple(dict.fromkeys(rule.tier.value for rule in rules))
+        routes = [
+            Route(
+                name=tier,
+                utterances=[keyword for rule in rules if rule.tier.value == tier for keyword in rule.keywords],
+                score_threshold=self.config.match_threshold,
+            )
+            for tier in ordered_tiers
+        ]
+        routelayer = SemanticRouter(
+            routes=routes,
+            encoder=LiteLLMRouterEncoder(
+                litellm_router_instance=self.litellm_router_instance,
+                model_name=embedding_model,
+                score_threshold=self.config.match_threshold,
+            ),
+            auto_sync="local",
+        )
+        self._semantic_routelayer = routelayer
+        return routelayer
+
+    async def _semantic_tier_override(self, user_message: str, request_kwargs: Dict) -> Optional[ComplexityTier]:
+        """Match the prompt against keyword_tier_rules by embedding similarity.
+
+        Embeds the query ourselves (instead of letting SemanticRouter.acall embed it
+        internally) so the caller's metadata/litellm_metadata flows into aembedding()
+        and this spend is attributed and budget-checked against the originating key/team,
+        the same as any other litellm call. SemanticRouter.acall() has no parameter to
+        pass such kwargs through to the encoder, so it's bypassed for the query embedding;
+        the route index itself (static utterances, embedded once at build time with no
+        caller context) is unaffected and still reused via the precomputed `vector=` path.
+        """
+        from semantic_router.schema import RouteChoice
+
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
+
+        # Building the SemanticRouter embeds the (static) route utterances via the
+        # encoder's *synchronous* path; run it in a worker thread so that one-time,
+        # per-router-instance provider I/O never blocks the async event loop and stalls
+        # other requests. Once cached, subsequent calls return immediately (no I/O).
+        routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
+        encoder = cast(LiteLLMRouterEncoder, routelayer.encoder)  # cast-ok: always the encoder we built above
+        # Strip the parent request's budget reservation before forwarding: the reservation
+        # belongs to the routed completion this embedding is helping select, not to the
+        # embedding call. Forwarding it would let the embedding's cost callback finalize the
+        # reservation, so the routed completion's own callback then skips incrementing the
+        # key/team budget. Key/team attribution fields are preserved for spend logging.
+        metadata = _classifier_call_metadata(request_kwargs.get("metadata")) or {}
+        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata")) or {}
+        query_vector = (
+            await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
+        )[0]
+        route_choice = await routelayer.acall(vector=query_vector)
+
+        if isinstance(route_choice, list):
+            route_choice = route_choice[0] if route_choice else None
+        if not isinstance(route_choice, RouteChoice) or not route_choice.name:
+            return None
+        try:
+            return ComplexityTier(route_choice.name)
+        except ValueError:
+            return None
+
+    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: Dict) -> Optional[ComplexityTier]:
+        """Resolve a keyword_tier_rule override, semantically or lexically per config.
+
+        Returns None (no override -> fall through to the scorer) not only when no rule
+        matches, but also when the semantic path fails: the embedding call can error or
+        time out, and a routing helper must never turn that into a failed user request.
+        """
+        if not self.config.keyword_tier_rules:
+            return None
+        if not self.config.semantic_keyword_matching:
+            return self._lexical_tier_override(user_message)
+        try:
+            return await self._semantic_tier_override(user_message, request_kwargs)
+        except Exception as e:  # noqa: BLE001 -- embedding call can fail many ways (timeout, provider/network/parse error); any failure must fall back to scoring, never fail the request
+            verbose_router_logger.warning(
+                f"ComplexityRouter: semantic keyword matching failed ({e}), falling back to complexity scoring"
+            )
+            return None
+
     def _resolve_messages(
         self,
         messages: Optional[List[Dict[str, Any]]],
@@ -536,6 +666,17 @@ class ComplexityRouter(CustomLogger):
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
             return PreRoutingHookResponse(
                 model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
+                messages=messages if has_original_messages else None,
+            )
+
+        override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
+        if override_tier is not None:
+            routed_model = self.get_model_for_tier(override_tier)
+            verbose_router_logger.info(
+                f"ComplexityRouter: keyword rule fired, tier={override_tier.value}, routed_model={routed_model}"
+            )
+            return PreRoutingHookResponse(
+                model=routed_model,
                 messages=messages if has_original_messages else None,
             )
 
