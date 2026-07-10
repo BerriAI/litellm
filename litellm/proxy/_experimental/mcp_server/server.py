@@ -3700,6 +3700,17 @@ if MCP_AVAILABLE:
                 and not _scope_has_authorization_header(scope)
                 and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
             ):
+                if server.is_dcr_bridge:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={
+                            "www-authenticate": _get_passthrough_www_authenticate(
+                                scope=scope,
+                                server_name=server_name,
+                            )
+                        },
+                    )
                 upstream_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", "")
                 if upstream_status == 401 and upstream_www_authenticate:
                     raise HTTPException(
