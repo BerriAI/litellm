@@ -26,8 +26,11 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.sse_output_recovery import (
+    record_output_item_chunk,
+    record_output_text_chunk,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
@@ -72,7 +75,8 @@ class BaseResponsesAPIStreamingIterator:
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[Any] = None
-        self._streamed_output_items: Dict[int, BaseLiteLLMOpenAIResponseObject] = {}
+        self._streamed_output_items: dict[int, dict[str, Any]] = {}
+        self._streamed_text_only_items: dict[int, dict[str, Any]] = {}
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._completed_response_cached = False
@@ -223,10 +227,13 @@ class BaseResponsesAPIStreamingIterator:
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type = getattr(openai_responses_api_chunk, "type", None)
                 if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                    output_item = getattr(openai_responses_api_chunk, "item", None)
-                    output_index = getattr(openai_responses_api_chunk, "output_index", None)
-                    if output_item is not None and isinstance(output_index, int):
-                        self._streamed_output_items[output_index] = output_item
+                    record_output_item_chunk(parsed_chunk, self._streamed_output_items)
+                elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+                    record_output_text_chunk(
+                        parsed_chunk,
+                        self._streamed_output_items,
+                        self._streamed_text_only_items,
+                    )
 
                 openai_types = _get_openai_response_types()
                 if openai_responses_api_chunk and _chunk_type in (
@@ -235,16 +242,25 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     response_obj = getattr(openai_responses_api_chunk, "response", None)
+                    response_output = (
+                        response_obj.get("output")
+                        if isinstance(response_obj, dict)
+                        else getattr(response_obj, "output", None)
+                    )
+                    recovered_output = [
+                        item
+                        for _, item in sorted({**self._streamed_text_only_items, **self._streamed_output_items}.items())
+                    ]
                     if (
                         _chunk_type != openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED
                         and response_obj is not None
-                        and not getattr(response_obj, "output", None)
-                        and self._streamed_output_items
+                        and not response_output
+                        and recovered_output
                     ):
-                        response_obj.output = [
-                            item.model_dump() if hasattr(item, "model_dump") else item
-                            for _, item in sorted(self._streamed_output_items.items())
-                        ]
+                        if isinstance(response_obj, dict):
+                            response_obj["output"] = recovered_output
+                        else:
+                            response_obj.output = recovered_output
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
