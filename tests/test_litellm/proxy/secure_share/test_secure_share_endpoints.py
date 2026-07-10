@@ -93,6 +93,20 @@ def test_create_request_rejects_unknown_expiry():
         SecureShareCreateRequest(ciphertext=_b64(b"c"), salt=_b64(b"s"), iv=_b64(b"i"), expiry="30d")
 
 
+def test_create_request_rejects_empty_ciphertext():
+    with pytest.raises(ValidationError):
+        SecureShareCreateRequest(ciphertext="", salt=_b64(b"s"), iv=_b64(b"i"), expiry="1h")
+
+
+@pytest.mark.asyncio
+async def test_create_returns_500_when_db_not_connected():
+    with patch.multiple("litellm.proxy.proxy_server", prisma_client=None, litellm_proxy_admin_name="default_admin"):
+        with pytest.raises(HTTPException) as exc:
+            await create_secure_share(request=_valid_request(), user_api_key_dict=_admin())
+
+    assert exc.value.status_code == 500
+
+
 @pytest.mark.asyncio
 async def test_create_stores_ciphertext_and_computes_expiry():
     request = _valid_request(SecureShareExpiry.ONE_DAY)
