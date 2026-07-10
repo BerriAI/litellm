@@ -7258,6 +7258,10 @@ async def test_cli_poll_key_tolerates_missing_user_row():
             "litellm.proxy.auth.auth_checks.get_user_object",
             new=AsyncMock(side_effect=ValueError("User doesn't exist in db. 'user_id'=just-created-user")),
         ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
+            new=AsyncMock(return_value="cli-refresh-test-token"),
+        ),
     ):
         result = await cli_poll_key(
             key_id=session_key,
