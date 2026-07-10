@@ -27,6 +27,8 @@ from litellm.proxy.common_request_processing import (
     _override_openai_response_model,
     _parse_event_data_for_error,
     _UpstreamClosingStreamingResponse,
+    _wrap_sse_keepalive,
+    SSE_KEEPALIVE_COMMENT,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -4871,3 +4873,79 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     },
                     call_type="acompletion",
                 )
+
+
+class TestSSEKeepalive:
+    @pytest.mark.asyncio
+    async def test_keepalive_emitted_during_silence(self):
+        """A silent gap longer than the interval produces keepalive comments."""
+
+        async def slow_gen() -> AsyncGenerator[str, None]:
+            yield "data: first\n\n"
+            await asyncio.sleep(0.3)
+            yield "data: second\n\n"
+
+        chunks = [c async for c in _wrap_sse_keepalive(slow_gen(), 0.05)]
+
+        assert chunks[0] == "data: first\n\n"
+        assert chunks[-1] == "data: second\n\n"
+        assert SSE_KEEPALIVE_COMMENT in chunks[1:-1]
+
+    @pytest.mark.asyncio
+    async def test_fast_stream_passes_through_unchanged(self):
+        """Chunks arriving within the interval are passed through untouched."""
+
+        async def fast_gen() -> AsyncGenerator[str, None]:
+            for i in range(5):
+                yield f"data: {i}\n\n"
+
+        chunks = [c async for c in _wrap_sse_keepalive(fast_gen(), 5.0)]
+
+        assert chunks == [f"data: {i}\n\n" for i in range(5)]
+
+    @pytest.mark.asyncio
+    async def test_upstream_exception_propagates(self):
+        async def failing_gen() -> AsyncGenerator[str, None]:
+            yield "data: ok\n\n"
+            raise ValueError("upstream broke")
+
+        with pytest.raises(ValueError, match="upstream broke"):
+            async for _ in _wrap_sse_keepalive(failing_gen(), 5.0):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_disabled_by_default_via_create_response(self, monkeypatch):
+        """With no env var set, create_response output is byte-identical."""
+        monkeypatch.delenv("LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS", raising=False)
+
+        async def slow_gen() -> AsyncGenerator[str, None]:
+            yield "data: first\n\n"
+            await asyncio.sleep(0.2)
+            yield "data: second\n\n"
+
+        response = await create_response(
+            generator=slow_gen(), media_type="text/event-stream", headers={}
+        )
+        chunks = [c async for c in response.body_iterator]
+
+        assert chunks == ["data: first\n\n", "data: second\n\n"]
+
+    @pytest.mark.asyncio
+    async def test_enabled_via_env_through_create_response(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS", "0.05")
+
+        async def slow_gen() -> AsyncGenerator[str, None]:
+            yield "data: first\n\n"
+            await asyncio.sleep(0.3)
+            yield "data: second\n\n"
+
+        response = await create_response(
+            generator=slow_gen(), media_type="text/event-stream", headers={}
+        )
+        chunks = [c async for c in response.body_iterator]
+
+        assert SSE_KEEPALIVE_COMMENT in chunks
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: second\n\n",
+        ]

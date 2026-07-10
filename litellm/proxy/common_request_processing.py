@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 import traceback
 from datetime import datetime
@@ -426,6 +427,55 @@ async def _buffer_first_chunk_honoring_disconnect(
     raise _ClientDisconnectedBeforeFirstChunk()
 
 
+SSE_KEEPALIVE_COMMENT = ": keepalive\n\n"
+
+
+def _get_sse_keepalive_interval_seconds() -> float:
+    """SSE keepalive interval from LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS.
+
+    0 (the default) disables keepalives entirely.
+    """
+    try:
+        return float(os.getenv("LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS", "0") or "0")
+    except ValueError:
+        verbose_proxy_logger.warning(
+            "Invalid LITELLM_SSE_KEEPALIVE_INTERVAL_SECONDS value; disabling SSE keepalives"
+        )
+        return 0.0
+
+
+async def _wrap_sse_keepalive(
+    generator: AsyncGenerator[str, None], interval_seconds: float
+) -> AsyncGenerator[str, None]:
+    """Yield SSE comment keepalives whenever ``generator`` is silent for longer
+    than ``interval_seconds``.
+
+    Reasoning models (e.g. gpt-5.x on /v1/responses) can stream nothing for
+    minutes while thinking; idle-timeout middleboxes between the client and
+    the proxy (nginx: 60s default, Envoy/Cilium: 300s, cloud load balancers)
+    then kill the connection mid-turn. SSE comment lines (leading ``:``) are
+    ignored by conforming SSE parsers (https://html.spec.whatwg.org/multipage/server-sent-events.html)
+    so they keep the connection visibly alive without altering the event stream.
+    """
+    ait = generator.__aiter__()
+    next_chunk_task = asyncio.ensure_future(ait.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({next_chunk_task}, timeout=interval_seconds)
+            if not done:
+                yield SSE_KEEPALIVE_COMMENT
+                continue
+            try:
+                chunk = next_chunk_task.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
+            next_chunk_task = asyncio.ensure_future(ait.__anext__())
+    finally:
+        if not next_chunk_task.done():
+            next_chunk_task.cancel()
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
@@ -564,8 +614,13 @@ async def create_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
+    content_generator: AsyncGenerator[str, None] = combined_generator()
+    keepalive_interval = _get_sse_keepalive_interval_seconds()
+    if keepalive_interval > 0 and media_type == "text/event-stream":
+        content_generator = _wrap_sse_keepalive(content_generator, keepalive_interval)
+
     return _UpstreamClosingStreamingResponse(
-        combined_generator(),
+        content_generator,
         media_type=media_type,
         headers=streaming_headers,
         status_code=final_status_code,
