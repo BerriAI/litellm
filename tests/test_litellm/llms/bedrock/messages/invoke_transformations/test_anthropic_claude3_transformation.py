@@ -2090,9 +2090,9 @@ def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claud
 
 
 def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_model_cost_map):
-    """A model with no cost-map entry gets the hoist-everything behavior: the
-    safe default is a mutated cache prefix, never a provider 400 from forwarding
-    a role the model may not accept."""
+    """A model with no cost-map entry and no fallback-generalization rule gets
+    the hoist-everything behavior: the safe default is a mutated cache prefix,
+    never a provider 400 from forwarding a role the model may not accept."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2104,7 +2104,7 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
     ]
 
     result = cfg.transform_anthropic_messages_request(
-        model="us.anthropic.claude-opus-9-9",
+        model="us.anthropic.claude-opus-3-9",
         messages=copy.deepcopy(messages),
         anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
         litellm_params=GenericLiteLLMParams(),
@@ -2117,6 +2117,33 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
         {"role": "user", "content": "continue"},
     ]
     assert result["system"] == [{"type": "text", "text": "mid-conversation reminder"}]
+
+
+def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
+    """An unmapped Bedrock Claude at 4.8 or higher resolves through the
+    ``bedrock-anthropic-claude-mid-conversation-system`` fallback rule, so a
+    future model that has not landed in the cost map yet keeps the
+    cache-preserving in-place behavior instead of falling back to hoist-all."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "mid-conversation reminder"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-9",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == messages
+    assert "system" not in result
 
 
 def test_as_system_content_blocks_handles_each_shape():

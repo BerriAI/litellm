@@ -45004,6 +45004,17 @@
     "fallback_generalizations": {
         "rules": [
             {
+                "name": "bedrock-anthropic-claude-mid-conversation-system",
+                "pattern": "anthropic\\.claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "description": "Bedrock Invoke ids for Claude 4.8 or higher: anthropic.claude-<family> with minor 4.8 through 4.99, any 5.x or later major-minor, or a bare 5+ major, which also admits new families such as fable. These models accept mid-conversation role system messages in place (verified live on Opus 4.8, Sonnet 5 and Fable 5), so unmapped future Bedrock Claudes keep the cache-preserving in-place handling instead of the hoist-all default. Listed first so bare-id provider inference, which takes the first pattern hit, resolves these Bedrock ids to bedrock; model-info resolution skips provider-mismatched rules either way.",
+                "extends": "anthropic-claude",
+                "model_info": {
+                    "litellm_provider": "bedrock",
+                    "supports_adaptive_thinking": true,
+                    "supports_mid_conversation_system": true
+                }
+            },
+            {
                 "name": "anthropic-claude-adaptive-thinking",
                 "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
                 "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new families with no code change.",
