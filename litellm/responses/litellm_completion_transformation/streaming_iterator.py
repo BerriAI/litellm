@@ -72,6 +72,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False
         self.sent_output_item_added_event: bool = False
+        self.sent_message_output_item_added_event: bool = False
         self.sent_content_part_added_event: bool = False
         self.sent_output_text_done_event: bool = False
         self.sent_output_content_part_done_event: bool = False
@@ -86,10 +87,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_args_by_call_id: dict[str, str] = {}
         self._tool_call_id_by_index: dict[int, str] = {}
         self._ambiguous_tool_call_indexes: set[int] = set()
-        self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
+        self._next_output_index: int = 0
+        self._message_output_index: Optional[int] = None
+        self._reasoning_output_index: Optional[int] = None
+        self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item by default
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
         self._cached_reasoning_item_id: Optional[str] = None
+        self._sent_reasoning_summary_part_added_event: bool = False
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
@@ -101,12 +106,28 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._accumulated_reasoning_content_parts: List[str] = []
         self._accumulated_provider_specific_fields: Dict[str, Any] = {}
 
+    def _allocate_output_index(self) -> int:
+        idx = getattr(self, "_next_output_index", 0)
+        self._next_output_index = idx + 1
+        return idx
+
+    def _get_reasoning_output_index(self) -> int:
+        if getattr(self, "_reasoning_output_index", None) is None:
+            self._reasoning_output_index = self._allocate_output_index()
+        return self._reasoning_output_index
+
+    def _get_message_output_index(self) -> int:
+        if getattr(self, "_message_output_index", None) is None:
+            self._message_output_index = self._allocate_output_index()
+        return self._message_output_index
+
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:
             return existing
-        idx = self._next_tool_output_index
-        self._next_tool_output_index += 1
+        idx = max(self._next_tool_output_index, getattr(self, "_next_output_index", 0))
+        self._next_tool_output_index = idx + 1
+        self._next_output_index = max(getattr(self, "_next_output_index", 0), idx + 1)
         self._tool_output_index_by_call_id[call_id] = idx
         return idx
 
@@ -408,7 +429,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sequence_number += 1
         event = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-            output_index=0,
+            output_index=self._get_message_output_index(),
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": self._cached_item_id,
@@ -430,7 +451,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         event = ContentPartAddedEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
             item_id=self._cached_item_id,
-            output_index=0,
+            output_index=self._get_message_output_index(),
             content_index=0,
             part=BaseLiteLLMOpenAIResponseObject(**{"type": "output_text", "text": "", "annotations": []}),
         )
@@ -501,7 +522,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return ReasoningSummaryTextDoneEvent(
             type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
             item_id=reasoning_item_id,
-            output_index=0,
+            output_index=self._get_reasoning_output_index(),
             sequence_number=sequence_number,
             summary_index=0,
             text=reasoning_content,
@@ -532,7 +553,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return ReasoningSummaryPartDoneEvent(
             type=ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
             item_id=reasoning_item_id,
-            output_index=0,
+            output_index=self._get_reasoning_output_index(),
             sequence_number=sequence_number,
             summary_index=0,
             part=BaseLiteLLMOpenAIResponseObject(
@@ -550,7 +571,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return OutputTextDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
             item_id=self._cached_item_id,
-            output_index=0,
+            output_index=self._get_message_output_index(),
             content_index=0,
             text=getattr(litellm_complete_object.choices[0].message, "content", "")  # type: ignore
             or "",
@@ -587,7 +608,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return ContentPartDoneEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
             item_id=self._cached_item_id,
-            output_index=0,
+            output_index=self._get_message_output_index(),
             content_index=0,
             part=part,
         )
@@ -606,7 +627,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-            output_index=0,
+            output_index=self._get_message_output_index(),
             sequence_number=1,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
@@ -653,7 +674,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         """
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-            output_index=0,
+            output_index=self._get_reasoning_output_index(),
             sequence_number=sequence_number,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
@@ -734,12 +755,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
         # Change: Never return a value, just enqueue output item events
-        if self.sent_output_item_added_event:
+        if not chunk.choices:
             return
         delta = chunk.choices[0].delta
-
-        self._sequence_number += 1
-        self.sent_output_item_added_event = True
 
         # Reasoning-first
         if hasattr(delta, "reasoning_content") and delta.reasoning_content:
@@ -747,10 +765,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
             self._reasoning_item_id = self._cached_reasoning_item_id
+            if self.sent_output_item_added_event:
+                return
+            self._sequence_number += 1
+            self.sent_output_item_added_event = True
 
             event = OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                output_index=0,
+                output_index=self._get_reasoning_output_index(),
                 item=BaseLiteLLMOpenAIResponseObject(
                     **{
                         "id": self._cached_reasoning_item_id,
@@ -762,6 +784,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             event.__dict__["sequence_number"] = self._sequence_number
             self._pending_response_events.append(event)
+            if not self._sent_reasoning_summary_part_added_event:
+                self._sent_reasoning_summary_part_added_event = True
+                self._pending_response_events.append(
+                    BaseLiteLLMOpenAIResponseObject(
+                        type="response.reasoning_summary_part.added",
+                        item_id=self._cached_reasoning_item_id,
+                        output_index=self._get_reasoning_output_index(),
+                        summary_index=0,
+                    )
+                )
             return
 
         # Tool-first
@@ -771,10 +803,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         # Default: message
+        if self.sent_message_output_item_added_event:
+            return
+        self._sequence_number += 1
+        self.sent_message_output_item_added_event = True
         self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
         event = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-            output_index=0,
+            output_index=self._get_message_output_index(),
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": self._cached_item_id,
@@ -992,7 +1028,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         event = OutputTextAnnotationAddedEvent(
                             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
                             item_id=item_id,
-                            output_index=0,
+                            output_index=self._get_message_output_index(),
                             content_index=0,
                             annotation_index=idx,
                             annotation=annotation_dict,
@@ -1008,8 +1044,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"rs_{hash(str(reasoning_content))}",
-                output_index=0,
+                item_id=self._reasoning_item_id or self._cached_reasoning_item_id or item_id,
+                output_index=self._get_reasoning_output_index(),
+                summary_index=0,
                 delta=reasoning_content,
             )
 
@@ -1020,7 +1057,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             text_delta_event = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
                 item_id=item_id,
-                output_index=0,
+                output_index=self._get_message_output_index(),
                 content_index=0,
                 delta=delta_content,
             )
