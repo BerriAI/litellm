@@ -18,13 +18,13 @@
     "limit": 59
   },
   "reportDeprecated": {
-    "limit": 326
+    "limit": 323
   },
   "reportDuplicateImport": {
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10397
+    "limit": 10395
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -111,7 +111,7 @@
     "limit": 20418
   },
   "reportUnknownVariableType": {
-    "limit": 32151
+    "limit": 32150
   },
   "reportUnnecessaryCast": {
     "limit": 177
@@ -123,7 +123,7 @@
     "limit": 7
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 1212
+    "limit": 1211
   },
   "reportUntypedBaseClass": {
     "limit": 165

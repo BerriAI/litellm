@@ -694,15 +694,12 @@ async def _delete_draft_mcp_server(
     prisma_client: PrismaClient,
     server_id: str,
 ) -> None:
-    try:
-        await MCPServerRepository(prisma_client).table.delete_many(
-            where={
-                "server_id": server_id,
-                "approval_status": MCPApprovalStatus.draft,
-            }
-        )
-    except Exception:
-        pass
+    await MCPServerRepository(prisma_client).table.delete_many(
+        where={
+            "server_id": server_id,
+            "approval_status": MCPApprovalStatus.draft,
+        }
+    )
 
 
 async def delete_expired_draft_mcp_servers(

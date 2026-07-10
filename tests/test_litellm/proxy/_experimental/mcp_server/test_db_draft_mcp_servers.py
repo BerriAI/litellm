@@ -255,13 +255,16 @@ class TestDeleteDraftMcpServer:
         assert where["approval_status"] == MCPApprovalStatus.draft
 
     @pytest.mark.asyncio
-    async def test_swallows_exceptions(self):
+    async def test_propagates_delete_errors(self):
         repo_instance, mock_table = _mock_repo()
         mock_table.delete_many = AsyncMock(side_effect=Exception("db error"))
         prisma = MagicMock()
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
-            return_value=repo_instance,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            pytest.raises(Exception, match="db error"),
         ):
             await _delete_draft_mcp_server(prisma, "target-id")
