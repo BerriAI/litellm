@@ -63,6 +63,28 @@ class TestRouterGetMessagesForPreCallCheck:
         router._get_messages_for_pre_call_check(model="gpt-5-mini", kwargs=kwargs)
         assert "_responses_api_pre_call_check" not in kwargs
 
+    def test_ignores_caller_supplied_messages_for_responses_api_call(self):
+        """
+        A Responses API call can smuggle in a `messages` kwarg alongside `input`
+        via **kwargs passthrough (litellm.aresponses accepts **kwargs). If we used
+        that `messages` for the pre-call check instead of converting the actual
+        `input`, a small/benign `messages` could mask an oversized `input` that
+        still gets forwarded to the LLM - the check would validate the wrong field.
+        """
+        router = _make_router(max_input_tokens=100)
+        small_messages = [{"role": "user", "content": "hi"}]
+        result = router._get_messages_for_pre_call_check(
+            model="gpt-5-mini",
+            kwargs={
+                "input": "hello there",
+                "messages": small_messages,
+                "_responses_api_pre_call_check": True,
+            },
+        )
+        assert result is not small_messages
+        assert result is not None
+        assert any("hello there" in str(m.get("content", "")) for m in result)
+
     def test_returns_none_when_not_a_responses_api_call(self):
         router = _make_router(max_input_tokens=100)
         result = router._get_messages_for_pre_call_check(

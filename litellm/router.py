@@ -4383,7 +4383,7 @@ class Router:
         """
         messages = kwargs.get("messages")
         is_responses_api_call = kwargs.pop("_responses_api_pre_call_check", False)
-        if messages is not None:
+        if messages is not None and not is_responses_api_call:
             return messages
 
         if (
