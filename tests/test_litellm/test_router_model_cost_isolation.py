@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -462,7 +463,10 @@ def test_openai_compatible_glm_partial_pricing_inherits_cache_rate():
     }
 
     try:
-        with open("model_prices_and_context_window.json", "r") as model_prices_file:
+        model_prices_path = (
+            Path(__file__).parents[2] / "model_prices_and_context_window.json"
+        )
+        with model_prices_path.open(encoding="utf-8") as model_prices_file:
             model_cost = json.load(model_prices_file)
         litellm.register_model({backend_model: model_cost[backend_model]})
 
