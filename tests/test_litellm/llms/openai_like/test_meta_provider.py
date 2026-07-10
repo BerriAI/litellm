@@ -93,6 +93,36 @@ class TestMetaProviderConfig:
         assert router.model_list[0]["model_name"] == "muse-spark"
 
 
+class TestMetaReasoningParams:
+    def test_muse_spark_supports_reasoning_effort(self):
+        params = litellm.get_supported_openai_params(
+            model="muse-spark-1.1", custom_llm_provider="meta"
+        )
+        assert params is not None
+        assert "reasoning_effort" in params
+
+    def test_reasoning_effort_mapped_through(self):
+        cfg = litellm.ProviderConfigManager.get_provider_chat_config(
+            model="muse-spark-1.1", provider=litellm.LlmProviders.META
+        )
+        assert cfg is not None
+        mapped = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model="muse-spark-1.1",
+            drop_params=False,
+        )
+        assert mapped["reasoning_effort"] == "xhigh"
+
+    def test_reasoning_effort_gated_on_capability(self):
+        """A meta model without reasoning metadata must not advertise reasoning_effort."""
+        params = litellm.get_supported_openai_params(
+            model="some-non-reasoning-model", custom_llm_provider="meta"
+        )
+        assert params is not None
+        assert "reasoning_effort" not in params
+
+
 class TestMuseSparkModelInfo:
     def test_muse_spark_pricing_and_capabilities(self):
         info = litellm.get_model_info("meta/muse-spark-1.1")
