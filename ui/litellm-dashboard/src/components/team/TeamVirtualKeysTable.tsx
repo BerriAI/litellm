@@ -27,10 +27,12 @@ interface TeamVirtualKeysTableProps {
  * TeamVirtualKeysTable – variant of VirtualKeysTable scoped to a single team.
  * Displays all virtual keys belonging to the team with same format and styling.
  */
+const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
   const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
@@ -39,8 +41,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     "Organization ID": "",
     "Key Alias": "",
     "User ID": "",
-    "Sort By": "created_at",
-    "Sort Order": "desc",
   });
 
   const sortBy = sorting.length > 0 ? sorting[0].id : "created_at";
@@ -116,18 +116,14 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [handleStorageChange]);
 
-  const handleFilterChange = useCallback((newFilters: Record<string, string>, skipDebounce = false) => {
+  const handleFilterChange = useCallback((newFilters: Record<string, string>) => {
     setFilters((prev) => ({
       ...prev,
       "Organization ID": newFilters["Organization ID"] ?? prev["Organization ID"],
       "Key Alias": newFilters["Key Alias"] ?? prev["Key Alias"],
       "User ID": newFilters["User ID"] ?? prev["User ID"],
-      "Sort By": newFilters["Sort By"] ?? prev["Sort By"] ?? "created_at",
-      "Sort Order": newFilters["Sort Order"] ?? prev["Sort Order"] ?? "desc",
     }));
-    if (!skipDebounce) {
-      setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-    }
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
 
   const handleFilterReset = useCallback(() => {
@@ -135,9 +131,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
     });
+    setSorting(DEFAULT_SORTING);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
 
@@ -492,23 +487,10 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     [expandedAccordions],
   );
 
-  const handleSortingChange = useCallback(
-    (updaterOrValue: React.SetStateAction<SortingState>) => {
-      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
-      setSorting(newSorting);
-      if (newSorting?.length > 0) {
-        const sortState = newSorting[0];
-        handleFilterChange(
-          {
-            "Sort By": sortState.id,
-            "Sort Order": sortState.desc ? "desc" : "asc",
-          },
-          true,
-        );
-      }
-    },
-    [sorting, handleFilterChange],
-  );
+  const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
+    setSorting(updaterOrValue);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
 
   return (
     <div className="w-full h-full overflow-hidden">
