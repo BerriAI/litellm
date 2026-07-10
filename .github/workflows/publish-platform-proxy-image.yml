@@ -1,5 +1,14 @@
 name: Publish platform proxy image
 
+# Platform releases only: build + ECR push + claude-usage-proxy deploy PR.
+# Branch pushes and PRs run .github/workflows/test.yml instead.
+# Triggers on v* tags (local git tag push, GitHub Release, or UI tag creation).
+#
+# Role ARN and ECR URI are platform conventions (same style as
+# bitovi-platform-services/.github/workflows/publish-chart.yml), not secrets.
+# Auth is GitHub OIDC; trust is iam.oidcSubjects in claude-usage-proxy
+# deploy/values.yaml (repo:bitovi/litellm:ref:refs/tags/v*).
+
 on:
   push:
     tags:
@@ -13,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  AWS_ACCOUNT_ID: "486491621059"
   AWS_REGION: us-east-1
   PLATFORM_ECR_PUSH_ROLE_ARN: arn:aws:iam::486491621059:role/platform-managed/claude-usage-proxy-github-ecr-push
   ECR_REPOSITORY: 486491621059.dkr.ecr.us-east-1.amazonaws.com/claude-usage-proxy
