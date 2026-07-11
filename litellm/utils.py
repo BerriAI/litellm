@@ -2651,6 +2651,26 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> Optional[Dict[
     return None
 
 
+def _get_builtin_model_info_for_registration(model: str) -> Optional[ModelInfo]:
+    """Resolve ``model`` to its built-in cost-map entry for registration merging.
+
+    Returns ``None`` when the lookup raises or when it resolved via a
+    fallback-generalization capability rule, detected as the resolved key missing
+    ``litellm.model_cost`` while matching a capability rule. A rule-derived entry
+    carries no pricing, so treating it as a hit would skip the built-in
+    cache-pricing inheritance for prefix-mangled keys.
+    """
+    try:
+        info = get_model_info(model=model)
+    except Exception:
+        return None
+    if info["key"] in litellm.model_cost:
+        return info
+    if match_capability_generalizations(info["key"]) is None:
+        return info
+    return None
+
+
 def register_model(model_cost: Union[str, dict]):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -2691,10 +2711,11 @@ def register_model(model_cost: Union[str, dict]):
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
         else:
-            try:
-                existing_model = cast(dict, get_model_info(model=key))
+            builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
+            if builtin_model_info is not None:
+                existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
-            except Exception:
+            else:
                 existing_model = {}
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)

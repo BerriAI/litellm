@@ -147,24 +147,86 @@ def test_reinstalling_rules_replaces_compiled_rules(restore_generalizations):
 
 
 # --------------------------------------------------------------------------- #
-# Engine: install-time validation
+# Engine: install-time validation and legacy-schema shim
 # --------------------------------------------------------------------------- #
 
 
-def test_mixed_kind_rule_warns_and_is_skipped(restore_generalizations, warning_messages):
+def test_legacy_mixed_rule_acts_as_both_kinds(restore_generalizations):
+    """A legacy rule mixing ``litellm_provider`` with capability keys routes AND
+    contributes its full model_info (provider included) to the capability union."""
     restore_generalizations(
         [
             {
-                "name": "mixed-kind",
+                "name": "legacy-mixed",
                 "pattern": r"^acme-",
                 "model_info": {"litellm_provider": "anthropic", "supports_vision": True},
             },
-            {"name": "good-caps", "pattern": r"^acme-pro-", "model_info": {"supports_reasoning": True}},
+            {"name": "new-caps", "pattern": r"^acme-pro-", "model_info": {"supports_reasoning": True}},
         ]
     )
-    assert any("mixed-kind" in message and "litellm_provider" in message for message in warning_messages)
-    assert match_routing_generalization("acme-pro-1") is None
-    assert match_capability_generalizations("acme-pro-1") == {"supports_reasoning": True}
+    assert match_routing_generalization("acme-pro-1") == "anthropic"
+    assert match_capability_generalizations("acme-pro-1") == {
+        "litellm_provider": "anthropic",
+        "supports_vision": True,
+        "supports_reasoning": True,
+    }
+
+
+LEGACY_MAIN_RULES = [
+    {
+        "name": "anthropic-claude-adaptive-thinking",
+        "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
+        "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new families with no code change.",
+        "extends": "anthropic-claude",
+        "model_info": {"supports_adaptive_thinking": True},
+    },
+    {
+        "name": "anthropic-claude",
+        "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
+        "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that gives an unmapped Claude provider routing and baseline capabilities; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
+        "model_info": {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "max_input_tokens": 200000,
+            "max_output_tokens": 64000,
+            "max_tokens": 64000,
+            "supports_function_calling": True,
+            "supports_parallel_function_calling": True,
+            "supports_vision": True,
+            "supports_tool_choice": True,
+            "supports_assistant_prefill": True,
+            "supports_prompt_caching": True,
+            "supports_response_schema": True,
+            "supports_reasoning": True,
+            "supports_pdf_input": True,
+            "supports_system_messages": True,
+        },
+    },
+]
+
+
+def test_legacy_main_schema_keeps_unmapped_claude_working(restore_generalizations):
+    """Pins the remote-map transition window: a released proxy running this engine
+    against main's old-schema block (mixed provider+capability rule plus ``extends``,
+    copied verbatim above) must keep unmapped-Claude inference and info resolution
+    working until the new-schema JSON reaches main."""
+    restore_generalizations([dict(rule) for rule in LEGACY_MAIN_RULES])
+    litellm.get_model_info.cache_clear()
+
+    _, provider, _, _ = litellm.get_llm_provider(model="claude-opus-9-9")
+    assert provider == "anthropic"
+
+    info = litellm.get_model_info("claude-opus-9-9")
+    assert info["litellm_provider"] == "anthropic"
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+    assert info["max_input_tokens"] == 200000
+    assert not info.get("input_cost_per_token")
+
+    low = litellm.get_model_info("claude-opus-4-0")
+    assert low["litellm_provider"] == "anthropic"
+    assert low["supports_function_calling"] is True
+    assert low.get("supports_adaptive_thinking") is None
 
 
 def test_non_string_provider_rule_warns_and_is_skipped(restore_generalizations, warning_messages):
