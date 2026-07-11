@@ -7,11 +7,11 @@ vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
     ...actual,
-    testConnectionRequest: vi.fn(),
+    testModelGroupConnection: vi.fn(),
   };
 });
 
-const getMock = async () => vi.mocked((await import("../networking")).testConnectionRequest);
+const getMock = async () => vi.mocked((await import("../networking")).testModelGroupConnection);
 
 const targets: AutoRouterTestTarget[] = [
   { labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" },
@@ -32,12 +32,12 @@ describe("AutoRouterConnectionTest", () => {
 
     await waitFor(() => expect(mock).toHaveBeenCalledTimes(3));
 
-    expect(mock).toHaveBeenCalledWith("sk-test", { model: "gpt-4o-mini" }, {}, "chat");
-    expect(mock).toHaveBeenCalledWith("sk-test", { model: "claude-sonnet-4" }, {}, "chat");
-    expect(mock).toHaveBeenCalledWith("sk-test", { model: "voyage-3-5" }, {}, "embedding");
+    expect(mock).toHaveBeenCalledWith("sk-test", "gpt-4o-mini", "chat");
+    expect(mock).toHaveBeenCalledWith("sk-test", "claude-sonnet-4", "chat");
+    expect(mock).toHaveBeenCalledWith("sk-test", "voyage-3-5", "embedding");
   });
 
-  it("shows a success indicator per target when the health check passes", async () => {
+  it("shows a success indicator per target when the routing probe passes", async () => {
     const mock = await getMock();
     mock.mockResolvedValue({ status: "success" });
 
@@ -48,12 +48,14 @@ describe("AutoRouterConnectionTest", () => {
     expect(screen.getByText("MEDIUM, COMPLEX")).toBeInTheDocument();
   });
 
-  it("renders the provider error message for a failing target while others pass", async () => {
+  it("renders the provider error message (litellm prefix stripped) for a failing target while others pass", async () => {
     const mock = await getMock();
-    mock.mockImplementation((_token, litellmParams) =>
-      litellmParams.model === "claude-sonnet-4"
-        ? Promise.resolve({ status: "error", result: { error: "litellm.AuthenticationError: invalid api key" } })
-        : Promise.resolve({ status: "success" }),
+    mock.mockImplementation((_token, modelGroup) =>
+      Promise.resolve(
+        modelGroup === "claude-sonnet-4"
+          ? { status: "error", error: "litellm.AuthenticationError: invalid api key" }
+          : { status: "success" },
+      ),
     );
 
     renderWithProviders(<AutoRouterConnectionTest accessToken="sk-test" targets={targets} />);
@@ -64,9 +66,9 @@ describe("AutoRouterConnectionTest", () => {
     expect(screen.getAllByTestId("test-status-success")).toHaveLength(2);
   });
 
-  it("surfaces a thrown network error as a failing row", async () => {
+  it("renders a non-litellm error string verbatim", async () => {
     const mock = await getMock();
-    mock.mockRejectedValue(new Error("Network request failed"));
+    mock.mockResolvedValue({ status: "error", error: "Connection test failed: 404 Not Found" });
 
     renderWithProviders(
       <AutoRouterConnectionTest
@@ -75,6 +77,8 @@ describe("AutoRouterConnectionTest", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByTestId("test-error-message")).toHaveTextContent("Network request failed"));
+    await waitFor(() =>
+      expect(screen.getByTestId("test-error-message")).toHaveTextContent("Connection test failed: 404 Not Found"),
+    );
   });
 });

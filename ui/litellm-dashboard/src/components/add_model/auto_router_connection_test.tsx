@@ -1,7 +1,7 @@
 import React from "react";
 import { Typography } from "antd";
 import { CheckCircleTwoTone, CloseCircleTwoTone, LoadingOutlined } from "@ant-design/icons";
-import { testConnectionRequest } from "../networking";
+import { testModelGroupConnection, ModelGroupConnectionResult } from "../networking";
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
 
 const { Text } = Typography;
@@ -12,43 +12,11 @@ interface AutoRouterConnectionTestProps {
   onTestComplete?: () => void;
 }
 
-type TargetResult = { status: "pending" } | { status: "success" } | { status: "error"; error: string };
-
-interface NormalizedResponse {
-  ok: boolean;
-  error?: string;
-}
-
-const normalizeTestConnectionResponse = (response: unknown): NormalizedResponse => {
-  if (typeof response !== "object" || response === null) {
-    return { ok: false, error: "Unexpected response from connection test" };
-  }
-  const record = response as Record<string, unknown>;
-  if (record.status === "success") {
-    return { ok: true };
-  }
-  const result =
-    typeof record.result === "object" && record.result !== null ? (record.result as Record<string, unknown>) : {};
-  const resultError = typeof result.error === "string" ? result.error : undefined;
-  const recordMessage = typeof record.message === "string" ? record.message : undefined;
-  return { ok: false, error: resultError ?? recordMessage ?? "Unknown error" };
-};
+type TargetResult = { status: "pending" } | ModelGroupConnectionResult;
 
 const cleanErrorMessage = (error: string): string => {
   const mainError = error.split("stack trace:")[0].trim();
   return mainError.replace(/^litellm\.(.*?)Error: /, "");
-};
-
-const runTarget = async (accessToken: string, target: AutoRouterTestTarget): Promise<TargetResult> => {
-  try {
-    const response = await testConnectionRequest(accessToken, { model: target.modelGroup }, {}, target.mode);
-    const normalized = normalizeTestConnectionResponse(response);
-    return normalized.ok
-      ? { status: "success" }
-      : { status: "error", error: cleanErrorMessage(normalized.error ?? "Unknown error") };
-  } catch (error) {
-    return { status: "error", error: cleanErrorMessage(error instanceof Error ? error.message : String(error)) };
-  }
 };
 
 const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
@@ -61,16 +29,22 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   React.useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      const settled = await Promise.all(targets.map((target) => runTarget(accessToken, target)));
-      if (cancelled) return;
-      setResults(settled);
-      if (onTestComplete) onTestComplete();
+      await Promise.all(
+        targets.map(async (target, index) => {
+          const result = await testModelGroupConnection(accessToken, target.modelGroup, target.mode);
+          if (cancelled) return;
+          const cleaned: TargetResult =
+            result.status === "error" ? { status: "error", error: cleanErrorMessage(result.error) } : result;
+          setResults((prev) => prev.map((r, i) => (i === index ? cleaned : r)));
+        }),
+      );
+      if (!cancelled && onTestComplete) onTestComplete();
     };
     run();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- probes run once per mount; the parent remounts via `key` to start a fresh test, and re-running on prop identity changes would refire paid health checks
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- probes run once per mount; the parent remounts via `key` to start a fresh test, and re-running on prop identity changes would refire paid requests
   }, []);
 
   if (targets.length === 0) {
@@ -80,7 +54,8 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   return (
     <div className="space-y-3">
       <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-        Each configured tier routes to a saved model group. Test Connection runs a live health check against each one.
+        Each configured tier routes to a saved model group. Test Connection sends a minimal request through the proxy to
+        each one, exactly as the auto router would.
       </Text>
       {targets.map((target, index) => {
         const result = results[index] ?? { status: "pending" };

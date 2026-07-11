@@ -14,7 +14,14 @@ export interface BuildAutoRouterTestTargetsParams {
   embeddingModel: string | undefined;
 }
 
-const TIER_ORDER: (keyof ComplexityTiers)[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+// Keys drive iteration order; `satisfies Record<keyof ComplexityTiers, null>` makes it a
+// compile error to add a tier to ComplexityTiers without listing it here (and vice versa).
+const TIER_ORDER = Object.keys({
+  SIMPLE: null,
+  MEDIUM: null,
+  COMPLEX: null,
+  REASONING: null,
+} satisfies Record<keyof ComplexityTiers, null>) as (keyof ComplexityTiers)[];
 
 export const buildAutoRouterTestTargets = ({
   tiers,
