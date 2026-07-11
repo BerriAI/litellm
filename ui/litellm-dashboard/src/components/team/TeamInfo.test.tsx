@@ -536,7 +536,7 @@ describe("TeamInfoView", () => {
       await user.click(virtualKeysTab);
 
       await waitFor(() => {
-        expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+        expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-5 of 5");
       });
     });
 
@@ -584,9 +584,9 @@ describe("TeamInfoView", () => {
         expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
       });
       expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
-      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Previous" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-1 of 1");
+      expect(screen.getByTestId("pagination-prev")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-next")).toBeInTheDocument();
     });
   });
 

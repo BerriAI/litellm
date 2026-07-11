@@ -3017,6 +3017,7 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
         return_value=[
             {
                 "session_id": session_id,
+                "session_total_spend": 15.0,
                 "mcp_tool_call_count": 1,
                 "mcp_tool_call_spend": 10.0,
             }
@@ -3044,6 +3045,10 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     assert rows[1]["mcp_tool_call_count"] == 1
     assert rows[1]["mcp_tool_call_spend"] == 10.0
 
+    # Every row in the session carries the full session spend, not just its own
+    assert rows[0]["session_total_spend"] == 15.0
+    assert rows[1]["session_total_spend"] == 15.0
+
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
 
@@ -3053,6 +3058,64 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
         where={"session_id": {"in": [session_id]}},
         count={"session_id": True},
     )
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
+    """
+    Regression test for LIT-4342: for a multi-round session the UI must show the
+    summed cost of every round, not just the first call.  _build_ui_spend_logs_response
+    enriches each row of a session with session_total_spend aggregated across the
+    whole session, scoped to the authorized api_keys of the page.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-multi-round"
+    api_key = "hashed-key-xyz"
+    # Three rounds of the same chat session with different per-call spend.
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key, "spend": 0.01},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "completion", "api_key": api_key, "spend": 0.02},
+        {"request_id": "req-3", "session_id": session_id, "call_type": "completion", "api_key": api_key, "spend": 0.03},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"session_id": session_id, "_count": {"session_id": 3}}]
+    )
+    # The raw aggregate query returns the full session spend (0.01 + 0.02 + 0.03).
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "session_total_spend": 0.06,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert [row["session_total_spend"] for row in rows] == [0.06, 0.06, 0.06]
+    # No MCP calls in this session, so MCP fields must not be attached.
+    assert all("mcp_tool_call_count" not in row for row in rows)
+
+    # The aggregate must be scoped to the authorized api_keys of the page.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert call_args[1] == [session_id]
+    assert call_args[2] == [api_key]
 
 
 # ---------------------------------------------------------------------------
