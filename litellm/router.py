@@ -8212,6 +8212,7 @@ class Router:
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        self._deregister_strategy_router(model_name=deployment.model_name)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -8224,6 +8225,18 @@ class Router:
                 return None
             else:
                 raise e
+
+    def _deregister_strategy_router(self, model_name: Optional[str]) -> None:
+        """Drop any per-strategy router (auto/complexity/quality/adaptive) registered under
+        model_name. Called whenever a deployment is removed so the same model_name can be
+        cleanly re-added; otherwise re-adding raises "<name> already exists" (silently
+        swallowed when ignore_invalid_deployments=True), dropping it from model_list."""
+        if model_name is None:
+            return
+        self.auto_routers.pop(model_name, None)
+        self.complexity_routers.pop(model_name, None)
+        self.quality_routers.pop(model_name, None)
+        self.adaptive_routers.pop(model_name, None)
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
         """
@@ -8245,6 +8258,7 @@ class Router:
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
+                self._deregister_strategy_router(model_name=item.get("model_name"))
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)

@@ -1854,6 +1854,78 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
         router.init_auto_router_deployment(deployment)
 
 
+def _auto_router_deployment(config="/path/to/config", model_id="ar-id"):
+    return Deployment(
+        model_name="my-auto-router",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/my-auto-router",
+            auto_router_config_path=config,
+            auto_router_default_model="gpt-5-mini",
+            auto_router_embedding_model="text-embedding-3-small",
+        ),
+        model_info=ModelInfo(id=model_id, db_model=True),
+    )
+
+
+def test_deregister_strategy_router_removes_all_registries(model_list):
+    """_deregister_strategy_router must drop the model_name from every per-strategy registry,
+    and tolerate a missing name or None."""
+    router = Router(model_list=model_list)
+    sentinel = MagicMock()
+    router.auto_routers["x"] = sentinel
+    router.complexity_routers["x"] = sentinel
+    router.quality_routers["x"] = sentinel
+    router.adaptive_routers["x"] = sentinel
+
+    router._deregister_strategy_router(model_name="x")
+
+    assert "x" not in router.auto_routers
+    assert "x" not in router.complexity_routers
+    assert "x" not in router.quality_routers
+    assert "x" not in router.adaptive_routers
+
+    router._deregister_strategy_router(model_name="not-present")
+    router._deregister_strategy_router(model_name=None)
+
+
+@patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
+def test_delete_deployment_deregisters_auto_router(mock_auto_router, model_list):
+    """Regression: deleting an auto-router deployment must drop it from ``auto_routers`` so the
+    same model_name can be re-added. Previously the stale entry made the re-add raise
+    'already exists', which (with ignore_invalid_deployments) silently dropped the deployment."""
+    mock_auto_router.return_value = MagicMock()
+    router = Router(model_list=model_list, ignore_invalid_deployments=True)
+
+    router.add_deployment(deployment=_auto_router_deployment())
+    assert "my-auto-router" in router.auto_routers
+    assert router.has_model_id("ar-id")
+
+    router.delete_deployment(id="ar-id")
+    assert "my-auto-router" not in router.auto_routers
+
+    router.add_deployment(deployment=_auto_router_deployment())
+    assert router.has_model_id("ar-id")
+    assert "my-auto-router" in router.auto_routers
+    assert any(m.get("model_name") == "my-auto-router" for m in router.model_list)
+
+
+@patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
+def test_upsert_auto_router_deployment_update_keeps_it_registered(mock_auto_router, model_list):
+    """Regression for the semantic router 'keeps disappearing' bug: upserting an auto-router
+    deployment with changed params (as the periodic DB sync does) must keep it in ``model_list``
+    and ``auto_routers`` instead of silently dropping it via an 'already exists' error."""
+    mock_auto_router.return_value = MagicMock()
+    router = Router(model_list=model_list, ignore_invalid_deployments=True)
+
+    router.upsert_deployment(deployment=_auto_router_deployment(config="/path/v1"))
+    assert router.has_model_id("ar-id")
+
+    router.upsert_deployment(deployment=_auto_router_deployment(config="/path/v2"))
+    assert router.has_model_id("ar-id")
+    assert "my-auto-router" in router.auto_routers
+    assert any(m.get("model_name") == "my-auto-router" for m in router.model_list)
+
+
 def test_generate_model_id_with_deployment_model_name(model_list):
     """Test that _generate_model_id works correctly with deployment model_name and handles None values properly"""
     router = Router(model_list=model_list)
