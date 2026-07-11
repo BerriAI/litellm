@@ -355,14 +355,14 @@ def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
     return True
 
 
-def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> str | None:
     """The active key's ``user_id``, or ``None`` when the key is blocked/expired or simply has no
     ``user_id`` (a team-scoped or service-account key). Used only by the per-user token store, which
     needs a user to key the stored credential; the bridge mint uses the key hash and does not."""
     return key_obj.user_id if _key_is_active(key_obj) else None
 
 
-async def _resolve_active_litellm_key(request: Request) -> Optional[Tuple[str, "UserAPIKeyAuth"]]:
+async def _resolve_active_litellm_key(request: Request) -> Tuple[str, "UserAPIKeyAuth"] | None:
     """Resolve the presented litellm key to ``(its hash, the live active key record)``, or ``None``
     when the key is absent, unresolvable, or blocked/expired.
 
@@ -410,7 +410,7 @@ async def _resolve_active_litellm_key(request: Request) -> Optional[Tuple[str, "
     return key_hash, key_obj
 
 
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
+async def _extract_user_id_from_request(request: Request) -> str | None:
     """The LiteLLM ``user_id`` for the token request, so a per-user token is stored under the same
     identity the egress later reads it by (``user_api_key_auth.user_id``). ``None`` when no active
     key is present. See :func:`_resolve_active_litellm_key` for the resolution and active-key gate.
@@ -419,7 +419,7 @@ async def _extract_user_id_from_request(request: Request) -> Optional[str]:
     return _active_key_user_id(resolved[1]) if resolved else None
 
 
-async def _extract_active_key_hash_from_request(request: Request) -> Optional[str]:
+async def _extract_active_key_hash_from_request(request: Request) -> str | None:
     """The hash of the litellm key that authorized the token request, when it maps to an active key.
 
     A DCR-bridge envelope seals this hash so admission can reload the live ``UserAPIKeyAuth`` record
