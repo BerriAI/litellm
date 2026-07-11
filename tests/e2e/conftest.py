@@ -95,7 +95,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     path."""
     if not session.stash.get(_E2E_TEST_RAN, False):
         return
-    spend_dir = str(Path(__file__).parent / "spend_tracking")
+    spend_dir = str(Path(__file__).parent / "quota_management" / "spend_tracking")
     sys.path.insert(0, spend_dir)
     try:
         from spend_e2e_client import reset_spend_logs  # pyright: ignore
