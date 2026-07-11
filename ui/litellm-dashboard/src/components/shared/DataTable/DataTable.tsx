@@ -333,26 +333,42 @@ function DefaultEmptyState() {
   );
 }
 
-function SkeletonRows({
+const SKELETON_WIDTHS = ["w-[58%]", "w-[44%]", "w-[70%]", "w-[50%]", "w-[64%]", "w-[48%]"] as const;
+
+function SkeletonCell<TData>({ column, index }: { column: Column<TData, unknown> | undefined; index: number }) {
+  const meta = column?.columnDef.meta;
+  const width = SKELETON_WIDTHS[index % SKELETON_WIDTHS.length];
+  if (meta?.skeleton === "twoLine") {
+    return (
+      <div className="flex flex-col gap-2">
+        <Skeleton className={cn("h-3.5", width)} />
+        <Skeleton className="h-2.5 w-2/5 opacity-65" />
+      </div>
+    );
+  }
+  return <Skeleton className={cn("h-3.5", width, meta?.numeric ? "ml-auto" : "")} />;
+}
+
+function SkeletonRows<TData>({
   rowCount,
-  columnCount,
+  columns,
   size,
   message,
 }: {
   rowCount: number;
-  columnCount: number;
+  columns: readonly Column<TData, unknown>[];
   size: DataTableSize;
   message?: string;
 }) {
   const rowKeys = Array.from({ length: Math.max(rowCount, 1) }, (_, index) => index);
-  const columnKeys = Array.from({ length: Math.max(columnCount, 1) }, (_, index) => index);
+  const cells = columns.length > 0 ? columns : [undefined];
   return (
     <Fragment>
       {rowKeys.map((rowKey) => (
         <TableRow key={`skeleton-${rowKey}`} className="hover:bg-transparent" data-testid="skeleton-row">
-          {columnKeys.map((columnKey) => (
-            <TableCell key={columnKey} className={size === "compact" ? "px-2 py-1" : ""}>
-              <Skeleton className="h-4 w-3/5" />
+          {cells.map((column, columnKey) => (
+            <TableCell key={column?.id ?? columnKey} className={size === "compact" ? "px-2 py-1" : ""}>
+              <SkeletonCell column={column} index={columnKey} />
               {rowKey === 0 && columnKey === 0 && message !== undefined ? (
                 <span className="sr-only">{message}</span>
               ) : null}
@@ -521,7 +537,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
       return (
         <SkeletonRows
           rowCount={skeletonRowCount}
-          columnCount={visibleColumnCount}
+          columns={table.getVisibleLeafColumns()}
           size={size}
           message={loadingMessage}
         />

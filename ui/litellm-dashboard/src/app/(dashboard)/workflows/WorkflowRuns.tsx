@@ -67,7 +67,13 @@ const STATUS_DOT: Record<RunStatus, string> = {
 };
 
 const RUN_STATUS_OPTIONS: RunStatus[] = ["pending", "running", "paused", "completed", "failed"];
-const FILTER_ALL = "__all__";
+const STATUS_LABELS: Record<RunStatus, string> = {
+  pending: "Pending",
+  running: "Running",
+  paused: "Paused",
+  completed: "Completed",
+  failed: "Failed",
+};
 
 const EVENT_COLOR: Record<string, { bar: string; border: string; text: string }> = {
   "step.started": { bar: "#f0fdf4", border: "#86efac", text: "#16a34a" },
@@ -562,7 +568,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         id: "run",
         accessorFn: (row) => `${runTitle(row)} ${row.run_id}`,
         header: "Run",
-        meta: { title: "Run" },
+        meta: { title: "Run", skeleton: "twoLine" },
         cell: ({ row }) => {
           const run = row.original;
           return (
@@ -674,17 +680,18 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                 <>
                   <DataTableFilterField label="Status">
                     <Select
-                      value={(get("status") as string) || FILTER_ALL}
-                      onValueChange={(value) => set("status", value === FILTER_ALL ? "" : value)}
+                      items={STATUS_LABELS}
+                      value={(get("status") as string) || null}
+                      onValueChange={(value: string | null) => set("status", value ?? "")}
                     >
                       <SelectTrigger className="w-full">
-                        <SelectValue />
+                        <SelectValue placeholder="All statuses" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={FILTER_ALL}>All statuses</SelectItem>
+                        <SelectItem value={null}>All statuses</SelectItem>
                         {RUN_STATUS_OPTIONS.map((status) => (
-                          <SelectItem key={status} value={status} className="capitalize">
-                            {status}
+                          <SelectItem key={status} value={status}>
+                            {STATUS_LABELS[status]}
                           </SelectItem>
                         ))}
                       </SelectContent>
