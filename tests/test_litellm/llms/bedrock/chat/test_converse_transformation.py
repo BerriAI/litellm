@@ -696,17 +696,24 @@ def test_parallel_tool_calls_tool_choice_includes_type(model: str):
 
 
 @pytest.mark.parametrize(
-    "tool_choice, expected_type",
+    "tool_choice, expected_type, expected_name",
     [
         # An explicit tool_choice must drive the parallel-config type rather than
         # being silently overridden with "auto" (mirrors the native Anthropic
         # transform, which sets disable_parallel_tool_use on the existing choice).
-        ("required", "any"),
-        ("auto", "auto"),
-        ({"type": "function", "function": {"name": "get_current_weather"}}, "tool"),
+        ("required", "any", None),
+        ("auto", "auto", None),
+        # A named-function choice must forward the function name alongside
+        # type="tool" — else _apply_parallel_tool_use_config drops the native
+        # toolChoice carrying it and Bedrock gets a nameless "tool" choice.
+        (
+            {"type": "function", "function": {"name": "get_current_weather"}},
+            "tool",
+            "get_current_weather",
+        ),
     ],
 )
-def test_parallel_tool_calls_preserves_explicit_tool_choice_type(tool_choice, expected_type):
+def test_parallel_tool_calls_preserves_explicit_tool_choice_type(tool_choice, expected_type, expected_name):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -726,6 +733,53 @@ def test_parallel_tool_calls_preserves_explicit_tool_choice_type(tool_choice, ex
         tc = optional_params["_parallel_tool_use_config"]["tool_choice"]
         assert tc["type"] == expected_type, f"expected {expected_type}, got {tc}"
         assert tc["disable_parallel_tool_use"] is True
+        assert tc.get("name") == expected_name, f"name mismatch: {tc}"
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_parallel_tool_calls_named_function_survives_to_request():
+    """End-to-end: a named-function tool_choice with parallel_tool_calls=False
+    must reach Bedrock as a single, complete tool_choice — type="tool" WITH the
+    function name — in additionalModelRequestFields, and the native toolChoice
+    must be dropped so the two don't conflict."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "get_current_weather"},
+                },
+                "parallel_tool_calls": False,
+                "tools": _TOOL_PARAM,
+            },
+            optional_params={},
+            drop_params=False,
+        )
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+        tool_choice = data["additionalModelRequestFields"]["tool_choice"]
+        assert tool_choice == {
+            "type": "tool",
+            "name": "get_current_weather",
+            "disable_parallel_tool_use": True,
+        }
+        # Native toolChoice dropped to avoid the conflicting-field 400.
+        assert "toolChoice" not in data.get("toolConfig", {})
     finally:
         litellm.model_cost = old_cost
         if old_env is None:

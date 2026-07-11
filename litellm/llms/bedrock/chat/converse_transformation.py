@@ -115,6 +115,30 @@ def _bedrock_tool_choice_type(tool_choice: Any) -> str:
     return "auto"
 
 
+def _bedrock_parallel_tool_choice(tool_choice: Any, disable_parallel: bool) -> dict:
+    """Build the Anthropic-on-Bedrock ``tool_choice`` payload for the
+    parallel-tool-use config.
+
+    Derives ``type`` from an explicit tool_choice (see
+    ``_bedrock_tool_choice_type``) and carries the ``disable_parallel_tool_use``
+    flag this config exists to set. For a named-function choice (``type ==
+    "tool"``) it also forwards the function ``name`` — mirroring the native
+    Anthropic transform (``_tool_choice["name"] = _tool_name``). Without the
+    name, ``_apply_parallel_tool_use_config`` drops the native ``toolChoice``
+    that carried it, so Bedrock would receive ``type="tool"`` with no tool named
+    and reject the request.
+    """
+    payload: dict = {
+        "type": _bedrock_tool_choice_type(tool_choice),
+        "disable_parallel_tool_use": disable_parallel,
+    }
+    if payload["type"] == "tool" and isinstance(tool_choice, dict):
+        name = tool_choice.get("function", {}).get("name")
+        if name:
+            payload["name"] = name
+    return payload
+
+
 def _apply_parallel_tool_use_config(
     parallel_tool_use_config: dict,
     additional_request_params: dict,
@@ -945,10 +969,7 @@ class AmazonConverseConfig(BaseConfig):
                 # defaults to ``type="auto"`` only when none was given). Without a
                 # ``type`` Bedrock Converse returns 400 "missing field `type`".
                 optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {
-                        "type": _bedrock_tool_choice_type(non_default_params.get("tool_choice")),
-                        "disable_parallel_tool_use": not value,
-                    }
+                    "tool_choice": _bedrock_parallel_tool_choice(non_default_params.get("tool_choice"), not value)
                 }
             if param == "thinking":
                 optional_params["thinking"] = value
