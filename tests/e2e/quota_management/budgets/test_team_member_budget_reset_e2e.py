@@ -16,6 +16,7 @@ def _as_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+@pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
 def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resources: ResourceManager) -> None:
     team_id = client.create_team(alias=f"e2e-member-reset-{unique_marker()}", max_budget=100.0)
     resources.defer(lambda: client.delete_team(team_id))
