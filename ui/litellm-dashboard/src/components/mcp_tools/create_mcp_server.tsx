@@ -14,8 +14,16 @@ import {
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
+  isClientForwardedTokenMode,
+  getOAuthAuthorizationIdentity,
+  CLEARED_ON_INVALIDATION,
+  isHeldOAuthTokenStale,
+  preservedDeclaredAppCredentials,
+  withoutMintedTokenCredentials,
 } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
+import TruePassthroughWarning from "./TruePassthroughWarning";
+import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -54,6 +62,8 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
   AUTH_TYPE.AWS_SIGV4,
+  AUTH_TYPE.TRUE_PASSTHROUGH,
+  AUTH_TYPE.OAUTH_DELEGATE,
 ];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
@@ -96,7 +106,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
-  const [authorizedUrl, setAuthorizedUrl] = useState<string | undefined>(undefined);
+  // The OAuth authorization identity (see getOAuthAuthorizationIdentity) captured at the moment a token
+  // was fetched; undefined when no valid token is held. If any mint-relevant field diverges from this,
+  // the held token is stale and is discarded so the admin must re-authorize.
+  const [authorizedIdentity, setAuthorizedIdentity] = useState<string | undefined>(undefined);
+  // The DCR-minted OAuth client from an interactive (oauth2) Authorize. Held OUT of form.credentials so
+  // it can never be collected as a client-forwarded server's declared app; injected into the payload
+  // only on an oauth2 submit (where persisting the registered client is correct), and cleared on any
+  // invalidation or modal close. An abandoned authorize leaves it null, which is the desired asymmetry.
+  const dcrClientRef = React.useRef<{ client_id: string; client_secret?: string } | null>(null);
+  // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
+  // section can warn that the saved app may not match the new upstream (the app is kept, not wiped).
+  const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const {
@@ -122,32 +143,27 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
-  const getOAuthAuthorizationTarget = (values: Record<string, unknown>): string | undefined => {
-    const transport = values.transport || transportType;
-    const target = transport === TRANSPORT.OPENAPI ? values.spec_path : values.url;
-    return typeof target === "string" ? target : undefined;
-  };
-
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
       return;
     }
     try {
       const values = form.getFieldsValue(true);
-      setSecureItem(
-        CREATE_OAUTH_UI_STATE_KEY,
-        JSON.stringify({
-          modalVisible: isModalVisible,
-          formValues: values,
-          transportType,
-          costConfig,
-          allowedTools,
-          hasToolAllowlistInteraction,
-          searchValue,
-          aliasManuallyEdited,
-          logoUrl,
-        }),
-      );
+      const uiState = {
+        modalVisible: isModalVisible,
+        formValues: values,
+        transportType,
+        costConfig,
+        allowedTools,
+        hasToolAllowlistInteraction,
+        searchValue,
+        aliasManuallyEdited,
+        logoUrl,
+        // Persist the identity so invalidation stays armed across the OAuth redirect round trip: a
+        // post-restore url/mode edit must still discard the held token instead of silently keeping it.
+        authorizedIdentity,
+      };
+      setSecureItem(CREATE_OAUTH_UI_STATE_KEY, JSON.stringify(uiState));
     } catch (err) {
       console.warn("Failed to persist MCP create state", err);
     }
@@ -161,7 +177,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     reset: resetOAuthFlow,
   } = useMcpOAuthFlow({
     accessToken,
-    getCredentials: () => form.getFieldValue("credentials"),
+    // Merge the ref-held DCR client so a re-authorize reuses the registered client instead of
+    // re-registering; the form store itself never holds the DCR client (see onTokenReceived).
+    getCredentials: () => ({
+      ...((form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {}),
+      ...(dcrClientRef.current ?? {}),
+    }),
     getTemporaryPayload: () => {
       const values = form.getFieldsValue(true);
       const transport = values.transport || transportType;
@@ -182,8 +203,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         description: values.description,
         url,
         transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
-        auth_type: AUTH_TYPE.OAUTH2,
-        credentials: values.credentials,
+        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
+        // Mirror getCredentials: merge the ref-held DCR client for oauth2 so a re-authorize reuses the
+        // registered client (useMcpOAuthFlow keys reuse off credentials.client_id) instead of re-DCRing;
+        // the client-forwarded modes carry only the declared app.
+        credentials: isClientForwardedTokenMode(values.auth_type)
+          ? preservedDeclaredAppCredentials(values.credentials)
+          : { ...((values.credentials as Record<string, unknown> | undefined) ?? {}), ...(dcrClientRef.current ?? {}) },
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,
@@ -197,35 +223,84 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
-      if (token?.access_token) {
-        const credentials = {
-          access_token: token.access_token,
-          ...(token.refresh_token && { refresh_token: token.refresh_token }),
-          ...(token.expires_in && { expires_in: token.expires_in }),
-          ...(token.scope && { scope: token.scope }),
-          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
-          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
-        };
-
-        form.setFieldsValue({ credentials });
-        setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
-
-        NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
-        );
+      if (!token?.access_token) {
+        return;
       }
+
+      if (isClientForwardedTokenMode(form.getFieldValue("auth_type"))) {
+        // Browser-only modes: the token is held in local state (oauthAccessToken) for tool preview
+        // and committed to sessionStorage on submit; it must never be written into form.credentials,
+        // which would persist it as server-level credentials on the created server row. Mirrors the
+        // edit form's onTokenReceived early return.
+        setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
+        NotificationsManager.success(
+          "Token held for this browser session. Tools can now be previewed and configured; the token is not saved to LiteLLM.",
+        );
+        return;
+      }
+
+      // The DCR-minted client is held in a ref, NOT written into form.credentials, so it can never be
+      // collected as a client-forwarded server's declared app; it is injected into the payload only on
+      // an oauth2 submit. An admin-typed client already lives in form.credentials and is left untouched.
+      dcrClientRef.current = registeredClient?.clientId
+        ? {
+            client_id: registeredClient.clientId,
+            ...(registeredClient.clientSecret && { client_secret: registeredClient.clientSecret }),
+          }
+        : null;
+
+      const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
+      const nextCredentials = {
+        ...(preservedDeclaredAppCredentials(current) ?? {}),
+        ...(current.scopes !== undefined && { scopes: current.scopes }),
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+      };
+      // Path-replace (not deep-merge) so a re-authorize with fewer token fields does not leave stale
+      // siblings from the previous token behind; the admin-typed client keys and scopes are carried
+      // explicitly above.
+      form.setFieldValue("credentials", nextCredentials);
+      // Capture the identity AFTER writing the token so the held token is not spuriously invalidated by
+      // its own credential write.
+      setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
+
+      NotificationsManager.success(
+        "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
+      );
     },
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
   });
 
-  const clearAuthorizedOAuthState = (values: Record<string, unknown>) => {
-    form.resetFields(["credentials", "authorization_url", "token_url", "registration_url"]);
-    form.setFieldsValue(values);
+  // Discard the held browser-authorized token and its tool preview when the authorization identity
+  // changes (or the modal closes). The CLEARED_ON_INVALIDATION form fields (shared with the edit form
+  // via types.tsx) are reset too; whatever the admin just changed (passed via changedValues) is
+  // re-applied so the invalidation never wipes their in-flight edit. Admin-typed endpoint fields are
+  // left alone (see CLEARED_ON_INVALIDATION).
+  const clearHeldOAuthToken = (changedValues: Record<string, unknown> = {}) => {
     setOauthAccessToken(null);
     clearTools();
     resetOAuthFlow();
-    setAuthorizedUrl(undefined);
+    setAuthorizedIdentity(undefined);
+    dcrClientRef.current = null;
+    // Capture the admin-typed app before resetFields destroys it, then re-apply it: the app is
+    // upstream-scoped config, not minted material, so it survives every invalidation (the token is
+    // what gets discarded). Token-shaped keys are excluded by the helper's key filter.
+    const keptAppCredentials = preservedDeclaredAppCredentials(form.getFieldValue("credentials"));
+    form.resetFields([...CLEARED_ON_INVALIDATION]);
+    if (keptAppCredentials) {
+      form.setFieldsValue({ credentials: keptAppCredentials });
+    }
+    // Re-apply the in-flight edit last; rc-field-form deep-merges nested objects, so a changed
+    // credentials sub-field composes with the preserved sibling instead of replacing the object.
+    const preserved = Object.fromEntries(
+      CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
+    );
+    if (Object.keys(preserved).length > 0) {
+      form.setFieldsValue(preserved);
+    }
   };
 
   React.useEffect(() => {
@@ -247,7 +322,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setTransportType(restoredTransport);
       }
       if (parsed.formValues) {
-        setPendingRestoredValues({ values: parsed.formValues, transport: restoredTransport });
+        // Assign the cleaned credentials (strip minted token material so a stale token never rehydrates);
+        // the declared app the admin typed is kept. Create has no server-side stored app to merge.
+        const restoredValues = {
+          ...parsed.formValues,
+          credentials: withoutMintedTokenCredentials(parsed.formValues.credentials),
+        };
+        setPendingRestoredValues({ values: restoredValues, transport: restoredTransport });
+      }
+      if (typeof parsed.authorizedIdentity === "string") {
+        // Re-arm invalidation: without this the remounted form has authorizedIdentity=undefined, so a
+        // post-restore mode/url edit would never fire the stale-token discard.
+        setAuthorizedIdentity(parsed.authorizedIdentity);
       }
       if (parsed.costConfig) {
         setCostConfig(parsed.costConfig);
@@ -473,8 +559,20 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
-      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
-        payload.credentials = credentialsPayload;
+      // Client-forwarded rows persist ONLY the declared app; strip any token material that lingered in
+      // the form (e.g. from a prior oauth2 authorize on the same session) so it can never reach the row.
+      const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
+        ? preservedDeclaredAppCredentials(credentialsPayload)
+        : credentialsPayload;
+
+      if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
+        payload.credentials = submitCredentials;
+      }
+
+      // An interactive (oauth2) create persists its DCR-minted client from the ref (kept out of the
+      // form store); reuse a re-authorize's registered client instead of re-registering.
+      if (restValues.auth_type === AUTH_TYPE.OAUTH2 && dcrClientRef.current) {
+        payload.credentials = { ...(payload.credentials ?? {}), ...dcrClientRef.current };
       }
 
       if (accessToken != null) {
@@ -494,23 +592,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           });
           if (oauthMode === "authorization_code") {
             const scope = oauthTokenResponse.scope;
-            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
+            const oauthCredentialPayload = {
               access_token: oauthTokenResponse.access_token,
               refresh_token: oauthTokenResponse.refresh_token,
               expires_in: oauthTokenResponse.expires_in,
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
-            });
+            };
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, oauthCredentialPayload);
           } else {
-            setToken(
-              response.server_id,
-              {
-                access_token: oauthTokenResponse.access_token,
-                expires_in: oauthTokenResponse.expires_in,
-                refresh_token: oauthTokenResponse.refresh_token,
-                token_type: oauthTokenResponse.token_type,
-              },
-              userID,
-            );
+            const browserHeldToken = {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            };
+            setToken(response.server_id, browserHeldToken, userID);
           }
         }
 
@@ -551,6 +647,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
+    setAuthorizedIdentity(undefined);
+    dcrClientRef.current = null;
+    setAppMayNotMatchUpstream(false);
     setModalVisible(false);
   };
 
@@ -564,22 +663,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? { url: undefined, command: undefined, args: undefined, env: undefined }
           : { spec_path: undefined, command: undefined, args: undefined, env: undefined };
 
-    const nextValues =
-      authorizedUrl === undefined
-        ? transportValues
-        : {
-            ...transportValues,
-            credentials: undefined,
-            authorization_url: undefined,
-            token_url: undefined,
-            registration_url: undefined,
-          };
-
-    if (authorizedUrl !== undefined) {
-      clearAuthorizedOAuthState(nextValues);
-    } else {
-      form.setFieldsValue(nextValues);
+    form.setFieldsValue(transportValues);
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
+      clearHeldOAuthToken();
     }
+    setFormValues(form.getFieldsValue(true));
   };
 
   // Generate options with existing groups and potential new group
@@ -640,27 +728,42 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setOauthAccessToken(null);
       clearTools();
       resetOAuthFlow();
-      setAuthorizedUrl(undefined);
+      setAuthorizedIdentity(undefined);
+      dcrClientRef.current = null;
+      setAppMayNotMatchUpstream(false);
     }
   }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
 
   const handleFormValuesChange = (changedValues: Record<string, unknown>, allValues: Record<string, unknown>) => {
-    const changedAuthorizationTarget = "url" in changedValues || "spec_path" in changedValues;
-    if (
-      changedAuthorizationTarget &&
-      authorizedUrl !== undefined &&
-      getOAuthAuthorizationTarget(allValues) !== authorizedUrl
-    ) {
-      const invalidated = {
-        credentials: undefined,
-        authorization_url: changedValues.authorization_url,
-        token_url: changedValues.token_url,
-        registration_url: changedValues.registration_url,
-      };
-      clearAuthorizedOAuthState(invalidated);
-      setFormValues({ ...allValues, ...invalidated });
+    // Any change to a mint-relevant field (url, auth_type, oauth_flow_type, client creds/scopes, or the
+    // authorization/token/registration endpoints — see getOAuthAuthorizationIdentity) makes a held token
+    // stale, so discard it and force a fresh authorize. The stale check reads getFieldsValue(true): the
+    // onValuesChange allValues argument holds only MOUNTED paths, so an unmounted identity field (e.g.
+    // an oauth_flow_type initialValue while in a client-forwarded mode) would compare as changed on
+    // every keystroke and churn the held token. When a clear happens, formValues is rebuilt from the
+    // form's post-reset state (not the pre-reset snapshot, which still holds the discarded token).
+    // Editing the client fields is the admin managing/acknowledging the app, so it always dismisses
+    // the "may not match upstream" warning regardless of the stale-token branch below.
+    // Editing the client fields is the admin managing/acknowledging the app, so it dismisses the "may
+    // not match upstream" warning. Otherwise a url/endpoint change while a declared app is present keeps
+    // the app but flags that it may not match the new upstream (the "keep + warn" behavior). This is
+    // independent of the held-token stale check below so it fires even without an authorize this session.
+    if ("credentials" in changedValues) {
+      setAppMayNotMatchUpstream(false);
+    } else {
+      const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
+        (key) => key in changedValues,
+      );
+      const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
+      if (upstreamChanged && hasDeclaredApp) {
+        setAppMayNotMatchUpstream(true);
+      }
+    }
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
+      clearHeldOAuthToken(changedValues);
+      setFormValues(form.getFieldsValue(true));
       return;
     }
     setFormValues(allValues);
@@ -970,8 +1073,25 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                            <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
+                            <Select.Option value="oauth_delegate">
+                              OAuth Delegate (client-supplied upstream token)
+                            </Select.Option>
                           </Select>
                         </Form.Item>
+
+                        <TruePassthroughWarning authType={authType} />
+
+                        <PassthroughAuthorizeSection
+                          authType={authType}
+                          oauthFlow={{
+                            startOAuthFlow,
+                            status: oauthStatus,
+                            error: oauthError,
+                            tokenResponse: oauthTokenResponse,
+                          }}
+                          appMayNotMatchUpstream={appMayNotMatchUpstream}
+                        />
 
                         {shouldShowAuthValueField && (
                           <Form.Item

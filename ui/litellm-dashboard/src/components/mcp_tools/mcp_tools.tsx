@@ -2,7 +2,14 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
+import {
+  isClientForwardedTokenMode,
+  MCPTool,
+  MCPToolsViewerProps,
+  MCPContent,
+  CallMCPToolResponse,
+  getMcpOAuthMode,
+} from "./types";
 import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
@@ -42,19 +49,23 @@ const MCPToolsViewer = ({
   // service token and needs no gate.
   const oauthMode = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream });
   const isPassthrough = oauthMode === "passthrough";
+  // The client-forwarded token modes gate the same way as PKCE passthrough: the
+  // browser session token (established via the browser-only Authorize in the
+  // create/edit forms, or right here) is the upstream credential.
+  const usesBrowserHeldToken = isPassthrough || isClientForwardedTokenMode(auth_type);
   const isAuthorizationCode = oauthMode === "authorization_code";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
-    isPassthrough && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
+    usesBrowserHeldToken && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
 
   // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
   useEffect(() => {
-    if (!isPassthrough) {
+    if (!usesBrowserHeldToken) {
       setOauthToken(null);
       return;
     }
     setOauthToken(isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null);
-  }, [serverId, userID, isPassthrough]);
+  }, [serverId, userID, usesBrowserHeldToken]);
 
   const {
     startOAuthFlow,
@@ -109,7 +120,7 @@ const MCPToolsViewer = ({
     // x-mcp-{alias}-{header} pattern and forwards it to the upstream MCP server.
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
     // Passthrough only: authorization_code/token_exchange/M2M tokens are attached server-side, not from the browser.
-    if (isPassthrough && oauthToken) {
+    if (usesBrowserHeldToken && oauthToken) {
       Object.assign(customHeaders, buildMcpPassthroughAuthHeader(serverAlias, oauthToken));
     }
 
@@ -164,7 +175,8 @@ const MCPToolsViewer = ({
     // Passthrough blocks until a browser session token exists; authorization_code blocks until
     // the user has a valid DB credential (else the backend returns no tools).
     enabled:
-      !!accessToken && (isPassthrough ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true),
+      !!accessToken &&
+      (usesBrowserHeldToken ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true),
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
@@ -253,7 +265,8 @@ const MCPToolsViewer = ({
   // passthrough needs a browser token; authorization_code needs a stored DB credential or a
   // still-valid one — a 401 from the list call means the backend has none even
   // after attempting a refresh, so re-authorization is required.
-  const authGateActive = (isPassthrough && !oauthToken) || authorizationCodeNeedsAuth || authorizationCodeTokenRejected;
+  const authGateActive =
+    (usesBrowserHeldToken && !oauthToken) || authorizationCodeNeedsAuth || authorizationCodeTokenRejected;
   // Treat authorization_code credential-status loading as "tools loading" so the empty state
   // doesn't flash before we know whether the user needs to authorize.
   const toolsAreaLoading = isLoadingTools || authorizationCodeStatusLoading;
@@ -359,7 +372,7 @@ const MCPToolsViewer = ({
                 </Text>
 
                 {/* Passthrough auth gate — browser session token absent */}
-                {isPassthrough && !oauthToken && (
+                {usesBrowserHeldToken && !oauthToken && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
                     <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>

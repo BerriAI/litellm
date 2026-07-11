@@ -2,9 +2,7 @@
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
-import Onboarding from "../app/onboarding/page";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import {
@@ -76,12 +74,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
-  // Assuming useSearchParams() hook exists and works in your setup
-  const searchParams = useSearchParams()!;
-
   const token = getCookie("token");
-
-  const invitation_id = searchParams.get("invitation_id");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
@@ -231,10 +224,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       setTeamSpend(sum);
     }
   }, [selectedTeam]);
-
-  if (invitation_id != null) {
-    return <Onboarding></Onboarding>;
-  }
 
   function gotoLogin() {
     // Clear token cookies using the utility function

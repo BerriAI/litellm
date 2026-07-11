@@ -91,7 +91,7 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm.utils import supports_function_calling
+            from litellm.utils import supports_function_calling, supports_reasoning
 
             supported_params = super().get_supported_openai_params(model=model)
 
@@ -112,6 +112,10 @@ def create_config_class(provider: SimpleProviderConfig):
                     f"Model {model} on provider {provider.slug} does not support "
                     f"function calling — removed tool-related params from supported params."
                 )
+
+            _supports_reasoning = supports_reasoning(model=model, custom_llm_provider=provider.slug)
+            if _supports_reasoning and "reasoning_effort" not in supported_params:
+                supported_params.append("reasoning_effort")
 
             return supported_params
 
