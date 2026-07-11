@@ -7638,6 +7638,24 @@ class Router:
             )
             self.init_adaptive_router_deployment(deployment=deployment)
 
+        # Re-attach exactly one post-call hook per live AdaptiveRouter. Standalone
+        # `auto_router/adaptive_router` inits above register a hook, but hybrid
+        # complexity routers register during `init_complexity_router_deployment`
+        # *before* this finalize pass wiped every AdaptiveRouterPostCallHook.
+        # Without this, adaptive=true complexity routers never receive bandit updates.
+        for _cb_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            litellm.logging_callback_manager.remove_callbacks_by_type(_cb_list, AdaptiveRouterPostCallHook)
+        for adaptive_router in self.adaptive_routers.values():
+            litellm.logging_callback_manager.add_litellm_callback(
+                AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
+            )
+
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
         Build an AdaptiveRouter instance for this deployment and register its
