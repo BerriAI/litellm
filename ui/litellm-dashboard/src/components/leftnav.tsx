@@ -574,7 +574,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   return (
     <Sidebar collapsed={collapsed}>
-      <SidebarHeader>
+      <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
             <Link href={baseUrl || "/"} className="flex min-w-0 items-center" aria-label="LiteLLM home">
