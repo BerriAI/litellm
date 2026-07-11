@@ -1685,8 +1685,8 @@ class TestClaudeOpus48AdaptiveThinking:
         self, local_model_cost_map, model
     ):
         """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
-        still resolve to adaptive when their opus/sonnet/haiku family version is >= 4.6
-        or any family's major version is >= 5. The version gate is the declarative
+        still resolve to adaptive when the id carries claude-<family>- at version 4.6
+        or higher, bare 5+ majors included. The version gate is the declarative
         ``claude-adaptive-thinking`` rule, so 5.x, 6.x and any later family are covered
         with no code change."""
         import litellm

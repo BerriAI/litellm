@@ -427,15 +427,51 @@ def test_shipped_rules_flag_bare_5_plus_majors_of_any_family(shipped_cost_map):
     assert matched["supports_mid_conversation_system"] is True
 
 
-def test_shipped_adaptive_rule_keeps_4x_coverage_to_core_families(shipped_cost_map):
-    """The family-agnostic adaptive branch starts at major 5; a non-core family at
-    4.x gets the 4.8+ mid-conversation flag and baseline caps but never adaptive."""
-    model = "claude-newfam-4-9"
+def test_shipped_version_gates_are_family_agnostic_at_4x(shipped_cost_map):
+    """Both version gates apply to any claude-<family>- id, 4.x included: a non-core
+    family at 4.9 gets adaptive and mid-conversation, while the same family at 4.5
+    gets baseline only. Only opus/sonnet/haiku ever shipped 4.x ids, so the
+    family-agnostic 4.6+ gate changes nothing for real models."""
+    high = litellm.get_model_info("claude-newfam-4-9", custom_llm_provider="anthropic")
+    assert high["supports_adaptive_thinking"] is True
+    assert high["supports_mid_conversation_system"] is True
+    assert high["supports_function_calling"] is True
+
+    low = litellm.get_model_info("claude-newfam-4-5", custom_llm_provider="anthropic")
+    assert low.get("supports_adaptive_thinking") is None
+    assert low.get("supports_mid_conversation_system") is None
+    assert low["supports_function_calling"] is True
+
+
+def test_shipped_rules_give_bare_majors_the_full_baseline_union(shipped_cost_map):
+    """A bare-major unmapped id (no minor) resolves the same baseline union as its
+    major-minor sibling: the baseline pattern's minor is optional, so claude-newt-5
+    is not left with version flags but no mode, token limits, or capability facts."""
+    model = "anthropic/claude-newt-5"
     assert model not in litellm.model_cost
-    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
-    assert info["supports_mid_conversation_system"] is True
-    assert info.get("supports_adaptive_thinking") is None
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "anthropic"
+    assert info["mode"] == "chat"
+    assert info["max_tokens"] == 64000
     assert info["supports_function_calling"] is True
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_mid_conversation_system"] is True
+
+
+def test_shipped_routing_rule_covers_bare_majors(shipped_cost_map):
+    _, provider, _, _ = litellm.get_llm_provider(model="claude-newt-5")
+    assert provider == "anthropic"
+
+
+def test_shipped_adaptive_rule_requires_claude_prefix(shipped_cost_map):
+    """A non-Claude name embedding a core-family 4.6+/5.x version substring must not
+    resolve from the rules; serving it a zero-priced rule entry would silently
+    swallow cost tracking for arbitrary custom deployment names."""
+    model = "openai/team-sonnet-5-1-alias"
+    assert model not in litellm.model_cost
+    assert match_capability_generalizations("team-sonnet-5-1-alias") is None
+    with pytest.raises(Exception):
+        litellm.get_model_info(model)
 
 
 def test_shipped_exact_entry_beats_rules(shipped_cost_map):

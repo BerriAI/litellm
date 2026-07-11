@@ -45292,16 +45292,16 @@
             },
             {
                 "name": "anthropic-claude-ids",
-                "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
-                "description": "A bare Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Routes an unmapped Claude id that carries no provider namespace to the Anthropic API.",
+                "pattern": "^claude-[a-z]+-\\d+(?:[-.]\\d+)?(?:-\\d{8})?$",
+                "description": "A bare Claude family-major id with an optional minor and an optional 8-digit date suffix, anchored to the whole name, so claude-newfamily-5 routes like claude-newfamily-5-1 does. Routes an unmapped Claude id that carries no provider namespace to the Anthropic API.",
                 "model_info": {
                     "litellm_provider": "anthropic"
                 }
             },
             {
                 "name": "claude-family-baseline",
-                "pattern": "claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?",
-                "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, under any provider namespace (bare, bedrock-dotted, vertex, databricks, ...). Carries the model-family facts every Claude shares; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
+                "pattern": "claude-[a-z]+-\\d+(?:[-.]\\d+)?(?:-\\d{8})?",
+                "description": "Any Claude family-major id with an optional minor and an optional 8-digit date suffix, under any provider namespace (bare, bedrock-dotted, vertex, databricks, ...), so bare majors like claude-newfamily-5 get the same baseline as claude-newfamily-5-1. Carries the model-family facts every Claude shares; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
                 "model_info": {
                     "mode": "chat",
                     "max_input_tokens": 200000,
@@ -45321,8 +45321,8 @@
             },
             {
                 "name": "claude-adaptive-thinking",
-                "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))|claude-[a-z]+-(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?",
-                "description": "Claude opus/sonnet/haiku at version 4.6 or higher (4.6 through 4.99, then any later major-minor), plus any claude-<family>- id at major version 5 or higher, bare major or major-minor, so a new family shaped like claude-fable-5 is covered by the same gate as the core families. 4.x coverage stays limited to opus/sonnet/haiku. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions and new families with no code change.",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "description": "Claude at version 4.6 or higher, in any id shape that contains claude-<family>-: minors 4.6 through 4.99, any later major-minor, and bare 5+ majors so a new family shaped like claude-fable-5 matches. Requiring the claude- prefix keeps non-Claude names such as team-sonnet-5-1 out. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions and new families with no code change.",
                 "model_info": {
                     "supports_adaptive_thinking": true
                 }
