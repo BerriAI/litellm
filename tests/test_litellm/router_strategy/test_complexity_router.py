@@ -1547,6 +1547,40 @@ class TestSemanticKeywordTierRules:
         assert fake_router.async_embedding_calls, "expected an embedding call for the prompt"
 
     @pytest.mark.asyncio
+    async def test_tier_matches_on_best_utterance_not_diluted_by_others(self, basic_config):
+        """A tier with several keywords must match if the query is close to ANY of them,
+        not the average across all of them. A tier's route holds one utterance per keyword;
+        mean aggregation (the semantic_router library default) scores the query against the
+        *average* similarity across every utterance in the route, so a real match on one
+        keyword gets dragged below threshold by the tier's other, unrelated keywords.
+        """
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [
+                {"keywords": ["kubernetes deployment", "thanks", "goodbye"], "tier": "REASONING"},
+            ],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        # Only "kubernetes deployment" is close to this query (cos 1.0); "thanks" and
+        # "goodbye" are orthogonal (cos 0.0). Mean over the three would be ~0.33, below the
+        # 0.5 threshold; the best (max) utterance alone clears it.
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "help me roll out my k8s cluster today"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING via best-utterance semantic match
+
+    @pytest.mark.asyncio
     async def test_semantic_embedding_call_carries_caller_metadata(self, basic_config):
         """The query embedding call must carry the caller's metadata/litellm_metadata
         so embedding spend is attributed and budget-checked against the originating
