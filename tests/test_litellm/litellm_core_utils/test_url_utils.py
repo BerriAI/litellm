@@ -577,8 +577,9 @@ class TestAsyncSafeRequest:
 
     @pytest.mark.asyncio
     async def test_validates_each_redirect_hop(self, monkeypatch):
-        # First hostname resolves public; the redirect target resolves to a
-        # private IP and must be blocked before the second request is issued.
+        """A public host that redirects to a private target must be blocked at the
+        redirect hop before a second request is issued."""
+
         def fake(host, port, *a, **kw):
             ip = "93.184.216.34" if host == "public.example" else "127.0.0.1"
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
@@ -602,9 +603,6 @@ class TestAsyncSafeRequest:
             await url_utils.async_safe_request(
                 FakeClient(), "DELETE", "http://public.example/start"
             )
-        # Only the first (public) hop is issued; the private redirect target is
-        # rejected by validate_url before a second request goes out, and the
-        # method is preserved across the safe redirect loop.
         assert len(hops) == 1
         assert hops[0]["method"] == "DELETE"
         assert hops[0]["host"] == "public.example"

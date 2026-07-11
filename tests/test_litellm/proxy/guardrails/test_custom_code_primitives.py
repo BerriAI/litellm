@@ -102,8 +102,6 @@ async def test_http_request_does_not_follow_redirect_to_private(monkeypatch):
 
     assert result["success"] is False
     assert "SSRF" in result["error"]
-    # Only the first (public) hop was attempted; the private redirect target was
-    # rejected before a second request went out.
     assert len(raw_client.calls) == 1
 
 
@@ -132,7 +130,5 @@ async def test_http_request_allows_public_host(monkeypatch):
     assert len(raw_client.calls) == 1
     call = raw_client.calls[0]
     assert call["method"] == "POST"
-    # HTTP target is rewritten to the validated IP; the original hostname rides
-    # in the Host header to defeat DNS rebinding.
     assert "93.184.216.34" in call["url"]
     assert call["headers"].get("Host") == "api.example.com"

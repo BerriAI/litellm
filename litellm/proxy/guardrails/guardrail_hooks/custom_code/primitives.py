@@ -472,10 +472,6 @@ async def http_request(
     json_body, data_body = _prepare_http_body(body)
 
     try:
-        # async_safe_request applies full SSRF protection (DNS resolution,
-        # private/cloud-metadata IP blocklist, anti-rebinding, per-hop redirect
-        # validation) and never follows redirects on its own, so it needs the
-        # raw httpx client rather than the AsyncHTTPHandler wrapper.
         response = await async_safe_request(
             client.client,
             method,
