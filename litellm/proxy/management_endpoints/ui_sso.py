@@ -2349,7 +2349,9 @@ async def cli_refresh_token(
             team_alias = team_obj.team_alias
             team_budget = team_obj.max_budget
             team_budget_resolved = True
-        except Exception:
+        except HTTPException:
+            # Team no longer exists (get_team_object raises 404) -- fall
+            # through with no team context rather than failing the refresh.
             pass
 
     # Budget is always recomputed from live DB state, mirroring the exact
