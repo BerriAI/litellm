@@ -146,6 +146,25 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
     """
     visited = 0
 
+    def _rewrite_summary(summary: List[Any]) -> List[Any]:
+        nonlocal visited
+        new_parts: List[Any] = []
+        for summary_part in summary:
+            if isinstance(summary_part, str) and summary_part:
+                visited += 1
+                new_parts.append(visit(summary_part))
+            elif (
+                isinstance(summary_part, dict)
+                and summary_part.get("type") in TEXT_PART_TYPES
+                and isinstance(summary_part.get("text"), str)
+                and summary_part["text"]
+            ):
+                visited += 1
+                new_parts.append({**summary_part, "text": visit(summary_part["text"])})
+            else:
+                new_parts.append(summary_part)
+        return new_parts
+
     def _rewrite_content(content: Any) -> Any:
         nonlocal visited
         if isinstance(content, str):
@@ -167,6 +186,10 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                 ):
                     visited += 1
                     new_parts.append({**part, "text": visit(part["text"])})
+                elif (
+                    isinstance(part, dict) and part.get("type") == "reasoning" and isinstance(part.get("summary"), list)
+                ):
+                    new_parts.append({**part, "summary": _rewrite_summary(part["summary"])})
                 else:
                     new_parts.append(part)
             return new_parts
