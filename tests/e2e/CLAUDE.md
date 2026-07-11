@@ -57,7 +57,7 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 ## Typing
 
-The harness is fully typed and new code must not add `Any` or widen the basedpyright budgets. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
+The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
 
 ## Coverage registry
 

@@ -4,7 +4,6 @@ blocking the caller with a `budget_exceeded` error. Coverage for the
 budget_fallbacks feature in litellm/proxy/hooks/model_max_budget_limiter.py.
 """
 
-import json
 import time
 
 import pytest
@@ -12,6 +11,7 @@ import pytest
 from budget_client import BudgetClient, model_budget
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
+from models import AnthropicMessagesResponse
 
 pytestmark = pytest.mark.e2e
 
@@ -42,8 +42,8 @@ def test_budget_fallback_reroutes_anthropic_messages_to_openai(
                 "budget_fallbacks must reroute transparently, never surface a "
                 f"block; status={result.status_code} body={result.body[:300]}"
             )
-        served_by = json.loads(result.body)["model"]
-        if FALLBACK_MODEL in served_by:
+        served_by = AnthropicMessagesResponse.model_validate_json(result.body).model
+        if served_by is not None and FALLBACK_MODEL in served_by:
             break
         time.sleep(1)
     assert served_by is not None and FALLBACK_MODEL in served_by, (
