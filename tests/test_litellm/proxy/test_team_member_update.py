@@ -86,9 +86,7 @@ def happy_path_upsert(monkeypatch):
         AsyncMock(
             return_value={
                 "team_info": team_row,
-                "team_memberships": [
-                    types.SimpleNamespace(user_id="user-1", budget_id="bud-1")
-                ],
+                "team_memberships": [types.SimpleNamespace(user_id="user-1", budget_id="bud-1")],
             }
         ),
     )
@@ -98,9 +96,7 @@ def happy_path_upsert(monkeypatch):
 
 
 def _member_update_request(**overrides):
-    data = TeamMemberUpdateRequest(
-        team_id="team-1234", user_id="user-1", role="user", **overrides
-    )
+    data = TeamMemberUpdateRequest(team_id="team-1234", user_id="user-1", role="user", **overrides)
     request = Request({"type": "http", "method": "POST", "path": "/team/member_update"})
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
     return data, request, auth
@@ -110,9 +106,7 @@ def _member_update_request(**overrides):
 async def test_team_member_update_sends_provided_fields_as_patch(happy_path_upsert):
     """Fields the request sets must reach _upsert_budget_and_membership as a
     budget patch, otherwise the member budget is never written/reset."""
-    data, request, auth = _member_update_request(
-        max_budget_in_team=10.0, budget_duration="30d"
-    )
+    data, request, auth = _member_update_request(max_budget_in_team=10.0, budget_duration="30d")
 
     response = await team_member_update(data, request, auth)
 
@@ -132,9 +126,7 @@ async def test_team_member_update_explicit_null_clears_field(happy_path_upsert):
 
     await team_member_update(data, request, auth)
 
-    assert happy_path_upsert.await_args.kwargs["budget_patch"] == {
-        "budget_duration": None
-    }
+    assert happy_path_upsert.await_args.kwargs["budget_patch"] == {"budget_duration": None}
 
 
 @pytest.mark.asyncio
@@ -158,9 +150,7 @@ async def test_team_member_update_omits_unset_fields_from_patch(happy_path_upser
     ],
 )
 @pytest.mark.asyncio
-async def test_team_member_update_rejects_invalid_budget_duration(
-    monkeypatch, bad_duration
-):
+async def test_team_member_update_rejects_invalid_budget_duration(monkeypatch, bad_duration):
     """An invalid budget_duration must be rejected with a 400 before any DB
     write, so it can never be persisted and later break the budget reset job."""
     monkeypatch.setattr(proxy_server, "prisma_client", object())
@@ -221,6 +211,35 @@ async def test_bulk_team_member_update_applies_patch_and_returns_member_failures
         "user_id": "user-1",
         "tpm_limit": 42,
     }
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_update_returns_unexpected_member_failure(monkeypatch):
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[Member(user_id="user-1", role="user")],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(
+        team_endpoints, "team_member_update", AsyncMock(side_effect=RuntimeError("database unavailable"))
+    )
+
+    response = await bulk_update_team_members(
+        data=BulkTeamMemberUpdateRequest(
+            team_id="team-1234",
+            user_ids=["user-1"],
+            update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+        ),
+        http_request=Request({"type": "http", "method": "POST", "path": "/team/member/bulk_update"}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin"),
+    )
+
+    assert response.successful_updates == []
+    assert response.failed_updates == [
+        team_endpoints.FailedTeamMemberUpdate(user_id="user-1", failed_reason="database unavailable")
+    ]
 
 
 def test_bulk_team_member_update_requires_exactly_one_member_selector():

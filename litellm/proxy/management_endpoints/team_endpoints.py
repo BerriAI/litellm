@@ -3072,6 +3072,9 @@ async def bulk_update_team_members(
             successful_updates.append(response)
         except HTTPException as exc:
             failed_updates.append(FailedTeamMemberUpdate(user_id=user_id, failed_reason=str(exc.detail)))
+        except Exception as exc:
+            verbose_proxy_logger.exception("Failed to bulk update team member %s in team %s", user_id, data.team_id)
+            failed_updates.append(FailedTeamMemberUpdate(user_id=user_id, failed_reason=str(exc)))
 
     return BulkTeamMemberUpdateResponse(
         team_id=data.team_id,
