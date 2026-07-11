@@ -1,7 +1,8 @@
 import React from "react";
 import { usePathname } from "next/navigation";
 import { Dropdown } from "antd";
-import { AppstoreOutlined, CheckOutlined, DownOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, CheckOutlined } from "@ant-design/icons";
+import { ChevronsUpDown } from "lucide-react";
 import type { MenuProps } from "antd";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -9,6 +10,12 @@ import { migratedHref } from "@/utils/migratedPages";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
+
+export function useViewSwitcherVisible(): boolean {
+  const { plugins } = usePluginMode();
+  const { data: uiSettings } = useUISettings();
+  return plugins.length > 0 || Boolean(uiSettings?.values?.enable_chat_ui);
+}
 
 export default function ViewSwitcher() {
   const { mode, setMode, plugins } = usePluginMode();
@@ -72,11 +79,13 @@ export default function ViewSwitcher() {
     <Dropdown menu={{ items, onClick, selectedKeys: [isChatRoute ? CHAT : mode] }} trigger={["click"]}>
       <button
         type="button"
-        className="flex items-center gap-2 rounded-md border border-gray-200 px-2.5 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        className="flex h-8 max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-background pl-1.5 pr-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
       >
-        <AppstoreOutlined className="text-gray-500" />
-        <span>{activeLabel}</span>
-        <DownOutlined className="text-[10px] text-gray-400" />
+        <span className="flex size-5 flex-none items-center justify-center rounded bg-muted text-muted-foreground">
+          <AppstoreOutlined className="text-[13px]" />
+        </span>
+        <span className="truncate">{activeLabel}</span>
+        <ChevronsUpDown className="size-3.5 flex-none text-muted-foreground" />
       </button>
     </Dropdown>
   );
