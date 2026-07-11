@@ -146,16 +146,14 @@ def _normalize_ttl_to_seconds(ttl: object) -> Optional[str]:
 
     Accepts Gemini-native seconds (e.g. "3600s", "1.5s") and Anthropic-style
     minute/hour units (e.g. "5m", "1h") that Claude Code and the Anthropic
-    /v1/messages spec use. Returns None for missing or unparseable values so
-    Gemini falls back to its own default TTL.
+    /v1/messages spec use. Caps the requested TTL at 24 hours (86400s) to
+    prevent unbounded persistent storage costs. Returns None for missing or
+    unparseable values so Gemini falls back to its own default TTL.
     """
     if not isinstance(ttl, str):
         return None
 
-    if _is_valid_ttl_format(ttl):
-        return ttl
-
-    match = re.match(r"^([0-9]*\.?[0-9]+)(m|h)$", ttl)
+    match = re.match(r"^([0-9]*\.?[0-9]+)(s|m|h)$", ttl)
     if not match:
         return None
 
@@ -164,7 +162,12 @@ def _normalize_ttl_to_seconds(ttl: object) -> Optional[str]:
     if value <= 0:
         return None
 
-    seconds = value * (60 if match.group(2) == "m" else 3600)
+    multiplier = {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+    seconds = value * multiplier
+
+    # Cap explicit caches to 24 hours to prevent unbounded billing costs
+    seconds = min(seconds, 86400.0)
+
     return f"{int(seconds)}s" if seconds.is_integer() else f"{seconds}s"
 
 
