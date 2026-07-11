@@ -1549,6 +1549,103 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
   });
 
+  it("warns after a URL change when the stored app is redacted (has_configured_client, blank fields)", async () => {
+    // The real GET redacts credentials to null, so the form holds no client even though the server
+    // has a saved app. has_configured_client is the backend's non-secret "a client exists" bit; the
+    // warning must fire from it, otherwise keep-existing silently keeps an app registered for the
+    // old upstream and the admin is never told.
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "true_passthrough",
+          credentials: null,
+          has_configured_client: true,
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    expect(screen.queryByText(/registered for the previous upstream/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://different.example.com/mcp" },
+      });
+    });
+
+    expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+  });
+
+  it("hides the stored-app warning while the remove checkbox is checked and restores it on uncheck", async () => {
+    // Removal writes an explicit-null credential on save, so nothing kept can mismatch; unchecking
+    // returns to keep-existing, where the mismatch concern is live again.
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "true_passthrough",
+          credentials: null,
+          has_configured_client: true,
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://different.example.com/mcp" },
+      });
+    });
+    expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+
+    const removeCheckbox = screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ });
+    fireEvent.click(removeCheckbox);
+    expect(screen.queryByText(/registered for the previous upstream/)).not.toBeInTheDocument();
+
+    fireEvent.click(removeCheckbox);
+    expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+  });
+
+  it("does not warn from has_configured_client after a cross-class auth switch", async () => {
+    // Saved oauth2 server with a stored client (e.g. a persisted DCR app). Switching to
+    // true_passthrough is a cross-class change: blanks mean "no app" and the stored app is replaced
+    // on save, so a URL change has nothing kept to warn about.
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "oauth2",
+          credentials: null,
+          has_configured_client: true,
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://different.example.com/mcp" },
+      });
+    });
+
+    expect(screen.queryByText(/registered for the previous upstream/)).not.toBeInTheDocument();
+  });
+
   it("preserves a stored client_id on OAuth-resume restore even when the saved snapshot is token-only", async () => {
     // Post-redirect restore: the sessionStorage snapshot carries only a minted token (no client keys),
     // while the loaded server has a stored client_id. The restore must merge the server's declared app

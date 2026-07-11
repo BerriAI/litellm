@@ -5376,3 +5376,118 @@ async def test_edit_mcp_server_snapshot_failure_skips_purge_but_edit_succeeds():
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+def test_redact_stamps_has_configured_client_from_stored_blob():
+    """The GET redacts credentials to null, so the edit form cannot see a stored OAuth
+    app; has_configured_client is the non-secret existence bit the URL-change "app may
+    not match upstream" warning keys on. Redaction must stamp it from the blob it is
+    about to remove, and must not leak or mutate the blob itself."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _redact_mcp_credentials,
+    )
+
+    server = generate_mock_mcp_server_db_record()
+    server.credentials = {"client_id": "encrypted-client", "client_secret": "encrypted-secret"}
+
+    redacted = _redact_mcp_credentials(server)
+
+    assert redacted.has_configured_client is True
+    assert redacted.credentials is None
+    assert server.credentials == {"client_id": "encrypted-client", "client_secret": "encrypted-secret"}
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [None, {"auth_value": "top-secret"}, {"client_id": ""}],
+    ids=["no-blob", "no-client-in-blob", "empty-client-id"],
+)
+def test_redact_stamps_has_configured_client_false_without_stored_client(credentials):
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _redact_mcp_credentials,
+    )
+
+    server = generate_mock_mcp_server_db_record()
+    server.credentials = credentials
+
+    redacted = _redact_mcp_credentials(server)
+
+    assert redacted.has_configured_client is False
+    assert redacted.credentials is None
+
+
+def test_redact_preserves_build_time_has_configured_client():
+    """The list endpoint serves registry servers whose table objects never carry the
+    credentials blob; _build_mcp_server_table stamps the flag instead. Redaction must
+    preserve that stamp rather than resetting it to False for lack of a blob."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _redact_mcp_credentials,
+    )
+
+    server = generate_mock_mcp_server_db_record()
+    server.credentials = None
+    server.has_configured_client = True
+
+    redacted = _redact_mcp_credentials(server)
+
+    assert redacted.has_configured_client is True
+
+
+def test_sanitized_views_drop_has_configured_client():
+    """Only the admin edit form needs the stored-app indicator; the non-admin and
+    virtual-key discovery views must not reveal whether an OAuth app is configured."""
+    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
+
+    server = generate_mock_mcp_server_db_record()
+    server.credentials = {"client_id": "encrypted-client"}
+
+    assert mgmt._sanitize_mcp_server_for_non_admin(server).has_configured_client is None
+    assert mgmt._sanitize_mcp_server_for_virtual_key(server).has_configured_client is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_single_mcp_server_returns_has_configured_client():
+    """End to end through GET /v1/mcp/server/{id}: a stored client surfaces only as
+    has_configured_client=True while the credentials stay redacted."""
+    mock_server = generate_mock_mcp_server_db_record(server_id="server-1", alias="Server 1")
+    mock_server.credentials = {"client_id": "encrypted-client", "client_secret": "encrypted-secret"}
+
+    mock_prisma_client = MagicMock()
+
+    mock_health_result = generate_mock_mcp_server_db_record(server_id="server-1", alias="Server 1")
+    mock_health_result.status = "healthy"
+    mock_health_result.last_health_check = datetime.now()
+    mock_health_result.health_check_error = None
+
+    mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=mock_prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            AsyncMock(return_value=mock_server),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+            AsyncMock(return_value=mock_health_result),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+            return_value=True,
+        ),
+    ):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            fetch_mcp_server,
+        )
+
+        result = await fetch_mcp_server(
+            request=_make_mock_request(),
+            server_id="server-1",
+            user_api_key_dict=mock_user_auth,
+        )
+
+        assert result.has_configured_client is True
+        assert result.credentials is None

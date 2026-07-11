@@ -4988,6 +4988,7 @@ class MCPServerManager:
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
+            has_configured_client=bool(server.client_id),
             source_url=server.source_url,
             instructions=server.instructions,
             timeout=server.timeout,

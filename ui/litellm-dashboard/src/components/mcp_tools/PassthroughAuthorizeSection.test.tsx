@@ -51,4 +51,21 @@ describe("PassthroughAuthorizeSection credential-class-aware copy", () => {
     );
     expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
   });
+
+  it("hides the keep+warn banner while the remove-stored-app checkbox is checked", () => {
+    render(
+      <WithForm>
+        <PassthroughAuthorizeSection
+          authType="true_passthrough"
+          oauthFlow={noopFlow}
+          isEditing
+          savedAuthType="true_passthrough"
+          appMayNotMatchUpstream
+          removeStoredApp
+          onRemoveStoredAppChange={() => {}}
+        />
+      </WithForm>,
+    );
+    expect(screen.queryByText(/registered for the previous upstream/)).not.toBeInTheDocument();
+  });
 });
