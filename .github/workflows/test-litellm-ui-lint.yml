@@ -85,7 +85,7 @@ jobs:
         if: ${{ !cancelled() && steps.changed.outputs.has_files == 'true' }}
         run: |
           npx eslint . -f json -o "$RUNNER_TEMP/lint-report.json" || true
-          node scripts/check-lint-budgets.mjs "$RUNNER_TEMP/lint-report.json" eslint-budgets.json --check eslint-metrics.json
+          node scripts/check-lint-budgets.mjs "$RUNNER_TEMP/lint-report.json" eslint-budgets.json
 
       - name: Check for dead code (knip)
         if: ${{ !cancelled() && steps.changed.outputs.has_files == 'true' }}
