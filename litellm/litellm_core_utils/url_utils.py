@@ -428,6 +428,9 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     raise SSRFError("Too many redirects")
 
 
+_ALLOWED_HTTP_METHODS = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
+
+
 async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) -> Any:
     """
     Multi-method version of async_safe_get with SSRF protection.
@@ -435,8 +438,8 @@ async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) 
     Validates every hop via ``validate_url`` (DNS resolution, IP blocklist,
     URL rewrite) and follows redirects manually so each target is checked.
 
-    On 301/302 the method is downgraded to GET and the body is stripped per
-    RFC 7231 §6.4.2-3.  307/308 preserve the original method and body.
+    On 301/302/303 the method is downgraded to GET and the body is stripped
+    per RFC 7231 §6.4.2-4.  307/308 preserve the original method and body.
 
     Note: only ``AsyncHTTPHandler.get()`` accepts ``follow_redirects``.
     POST/PUT/DELETE/PATCH use ``build_request`` + ``client.send`` internally,
@@ -444,6 +447,8 @@ async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) 
     to those methods.
     """
     method = method.upper()
+    if method not in _ALLOWED_HTTP_METHODS:
+        raise ValueError(f"Unsupported HTTP method: {method}")
 
     # Always strip follow_redirects from caller kwargs — we manage it ourselves
     kwargs.pop("follow_redirects", None)
@@ -455,10 +460,7 @@ async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) 
                 kwargs.pop(k, None)
             kwargs["follow_redirects"] = True
             
-        func = getattr(client, method.lower(), None)
-        if not func:
-            raise ValueError(f"Unsupported HTTP method: {method}")
-        return await func(url, **kwargs)
+        return await getattr(client, method.lower())(url, **kwargs)
 
     caller_headers = kwargs.pop("headers", {}) or {}
 
@@ -472,17 +474,13 @@ async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) 
                 method_kwargs.pop(k, None)
             method_kwargs["follow_redirects"] = False
 
-        func = getattr(client, method.lower(), None)
-        if not func:
-            raise ValueError(f"Unsupported HTTP method: {method}")
-            
-        response = await func(validated_url, headers=call_headers, **method_kwargs)
+        response = await getattr(client, method.lower())(validated_url, headers=call_headers, **method_kwargs)
 
         if not response.is_redirect:
             return response
 
-        # RFC 7231 §6.4.2-3: 301/302 redirects SHOULD downgrade to GET
-        if response.status_code in (301, 302) and method not in ("GET", "HEAD"):
+        # RFC 7231 §6.4.2-4: 301/302/303 redirects SHOULD downgrade to GET
+        if response.status_code in (301, 302, 303) and method not in ("GET", "HEAD"):
             method = "GET"
             # Strip body arguments for the downgraded GET request
             kwargs.pop("data", None)
