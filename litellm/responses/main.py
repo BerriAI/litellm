@@ -127,7 +127,7 @@ def mock_responses_api_response(
                 "input_tokens": 36,
                 "input_tokens_details": {"cached_tokens": 0},
                 "output_tokens": 87,
-                "output_tokens_details": {"reasoning_tokens": 0},
+                "output_tokens_details": {},
                 "total_tokens": 123,
             },
             "user": None,
