@@ -449,6 +449,31 @@ def test_shipped_exact_entry_beats_rules(shipped_cost_map):
     assert info.get("supports_mid_conversation_system") is None
 
 
+def test_shipped_rules_lose_to_exact_entries_across_cost_ladder_variants(shipped_cost_map):
+    """A route-mangled variant of an exactly-mapped model must never resolve from
+    rules. The cost calculator tries model-name variants in order; a rule-derived
+    unpriced entry served for an early variant (here bedrock/claude-haiku-4-5-20251001,
+    whose bare form is exactly mapped under anthropic) would zero out the bill even
+    though the exact priced bedrock entry is one variant later. An exactly-mapped id
+    under a mismatched provider raises instead of resolving from rules."""
+    from litellm import completion_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    assert "claude-haiku-4-5-20251001" in litellm.model_cost
+    with pytest.raises(Exception):
+        litellm.get_model_info("claude-haiku-4-5-20251001", custom_llm_provider="bedrock")
+
+    entry = litellm.model_cost["us.anthropic.claude-haiku-4-5-20251001-v1:0"]
+    response = ModelResponse(model="claude-haiku-4-5-20251001", usage=Usage(prompt_tokens=100, completion_tokens=50))
+    cost = completion_cost(
+        completion_response=response,
+        model="bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        custom_llm_provider="bedrock",
+    )
+    assert cost == 100 * entry["input_cost_per_token"] + 50 * entry["output_cost_per_token"]
+    assert cost > 0
+
+
 def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):
     """The version-gated adaptive-thinking capability rule marks an unmapped Claude
     adaptive only from >= 4.6, including provider-prefixed ids the anchored routing
