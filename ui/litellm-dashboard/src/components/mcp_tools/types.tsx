@@ -368,6 +368,8 @@ export interface MCPServer {
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
   max_concurrent_requests?: number | null;
+  /** Redacted to null in server responses; present when constructing a server locally. */
+  credentials?: Record<string, unknown> | null;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;

@@ -322,13 +322,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setTransportType(restoredTransport);
       }
       if (parsed.formValues) {
-        // Strip minted token material from the restored credentials so a stale token never rehydrates
-        // into the form store (defense in depth for pre-fix snapshots); the declared app is kept.
+        // Assign the cleaned credentials (strip minted token material so a stale token never rehydrates);
+        // the declared app the admin typed is kept. Create has no server-side stored app to merge.
         const restoredValues = {
           ...parsed.formValues,
-          ...(parsed.formValues.credentials
-            ? { credentials: withoutMintedTokenCredentials(parsed.formValues.credentials) }
-            : {}),
+          credentials: withoutMintedTokenCredentials(parsed.formValues.credentials),
         };
         setPendingRestoredValues({ values: restoredValues, transport: restoredTransport });
       }

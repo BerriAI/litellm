@@ -2,7 +2,8 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import MCPServerEdit from "./mcp_server_edit";
+import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { selectAntOption } from "./testUtils";
@@ -1546,6 +1547,39 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
     // Keep + warn parity with the create form: the stored app is kept, and the banner appears.
     expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+  });
+
+  it("preserves a stored client_id on OAuth-resume restore even when the saved snapshot is token-only", async () => {
+    // Post-redirect restore: the sessionStorage snapshot carries only a minted token (no client keys),
+    // while the loaded server has a stored client_id. The restore must merge the server's declared app
+    // under the snapshot before stripping tokens, so the stored client_id is never cleared to blank.
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: "oauth_server_1",
+        formValues: { auth_type: "true_passthrough", credentials: { access_token: "leftover-token" } },
+      }),
+    );
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "true_passthrough",
+          credentials: { client_id: "stored-client" },
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const clientIdField = await screen.findByPlaceholderText("Leave blank to keep the currently saved app (if any)");
+    await waitFor(() => expect((clientIdField as HTMLInputElement).value).toBe("stored-client"));
+    // The leftover minted token must not have rehydrated anywhere.
+    expect(document.body.innerHTML).not.toContain("leftover-token");
   });
 
   it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {

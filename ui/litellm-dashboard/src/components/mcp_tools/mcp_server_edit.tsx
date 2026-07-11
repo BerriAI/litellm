@@ -309,6 +309,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     syncedServerIdRef.current = mcpServer.server_id;
     form.setFieldsValue(initialValues);
+    setAppMayNotMatchUpstream(false);
   }, [mcpServer.server_id, initialValues, form]);
 
   // Initialize cost config from existing server data
@@ -346,14 +347,19 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
       if (parsed.formValues) {
-        // Strip minted token material from restored credentials so a stale token never rehydrates into
-        // the form store (defense in depth for pre-fix snapshots); the declared app is kept.
+        // Rebuild credentials from the declared app in EITHER the loaded server or the saved snapshot,
+        // then strip minted token material. Merging the two (server under snapshot) before stripping is
+        // what guarantees a token-only snapshot never clears a stored client_id/client_secret: the
+        // server's declared app survives and only the token keys drop. Assigning the cleaned result (not
+        // spreading the raw snapshot) also ensures a stale token can never rehydrate into the form.
+        const restoredCredentials = withoutMintedTokenCredentials({
+          ...(mcpServer.credentials ?? {}),
+          ...((parsed.formValues.credentials as Record<string, unknown> | undefined) ?? {}),
+        });
         const restoredValues = {
           ...mcpServer,
           ...parsed.formValues,
-          ...(parsed.formValues.credentials
-            ? { credentials: withoutMintedTokenCredentials(parsed.formValues.credentials) }
-            : {}),
+          credentials: restoredCredentials,
         };
         setPendingRestoredValues(restoredValues);
       }
@@ -955,6 +961,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       NotificationsManager.success("MCP Server updated successfully");
+      setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
       NotificationsManager.fromBackend("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
