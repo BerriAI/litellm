@@ -2318,67 +2318,87 @@ async def cli_refresh_token(
     if consumed.count == 0:
         raise HTTPException(status_code=401, detail="CLI refresh token already used or revoked")
 
-    user_db_obj = await get_user_object(
-        user_id=user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-    )
-    if user_db_obj is None:
-        raise HTTPException(status_code=401, detail="User no longer exists")
+    # Everything below runs after the token was already irreversibly
+    # consumed above. Without a compensating action, a single transient
+    # failure here (DB hiccup, etc.) would permanently strand the user with
+    # a dead refresh token and no replacement -- since the whole point of
+    # this endpoint is fully unattended apiKeyHelper operation, that forces
+    # a full interactive browser re-login to recover from what should be a
+    # retryable blip. On any failure, best-effort un-consume the presented
+    # token so a retry can succeed, then propagate the original error.
+    try:
+        user_db_obj = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+        if user_db_obj is None:
+            raise HTTPException(status_code=401, detail="User no longer exists")
 
-    # team_id is a preference hint from the presented token's metadata --
-    # NOT trusted for authorization. Only honor it if the user is a CURRENT
-    # member of that team per live DB state; a removed member (or a
-    # self-forged key claiming a team the caller never belonged to) silently
-    # falls back to no team rather than being granted team-scoped access.
-    requested_team_id = (user_api_key_dict.metadata or {}).get("team_id")
-    current_teams = user_db_obj.teams or []
-    team_id = requested_team_id if requested_team_id in current_teams else None
+        # team_id is a preference hint from the presented token's metadata --
+        # NOT trusted for authorization. Only honor it if the user is a
+        # CURRENT member of that team per live DB state; a removed member
+        # (or a self-forged key claiming a team the caller never belonged
+        # to) silently falls back to no team rather than being granted
+        # team-scoped access.
+        requested_team_id = (user_api_key_dict.metadata or {}).get("team_id")
+        current_teams = user_db_obj.teams or []
+        team_id = requested_team_id if requested_team_id in current_teams else None
 
-    team_alias: Optional[str] = None
-    team_budget: Optional[float] = None
-    team_budget_resolved = False
-    if team_id is not None:
-        try:
-            team_obj = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            team_alias = team_obj.team_alias
-            team_budget = team_obj.max_budget
-            team_budget_resolved = True
-        except HTTPException:
-            # Team no longer exists (get_team_object raises 404) -- fall
-            # through with no team context rather than failing the refresh.
-            pass
+        team_alias: Optional[str] = None
+        team_budget: Optional[float] = None
+        team_budget_resolved = False
+        if team_id is not None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                team_alias = team_obj.team_alias
+                team_budget = team_obj.max_budget
+                team_budget_resolved = True
+            except HTTPException:
+                # Team no longer exists (get_team_object raises 404) -- fall
+                # through with no team context rather than failing the refresh.
+                pass
 
-    # Budget is always recomputed from live DB state, mirroring the exact
-    # capping logic the initial SSO login poll uses -- never read back from
-    # the presented token's metadata, which is attacker-influenceable.
-    user_budget = user_db_obj.max_budget
-    session_max_budget = (
-        litellm.max_ui_session_budget
-        if user_budget is None and (team_id is None or (team_budget_resolved and team_budget is None))
-        else None
-    )
+        # Budget is always recomputed from live DB state, mirroring the
+        # exact capping logic the initial SSO login poll uses -- never read
+        # back from the presented token's metadata, which is
+        # attacker-influenceable.
+        user_budget = user_db_obj.max_budget
+        session_max_budget = (
+            litellm.max_ui_session_budget
+            if user_budget is None and (team_id is None or (team_budget_resolved and team_budget is None))
+            else None
+        )
 
-    user_info = LiteLLM_UserTable(
-        user_id=user_id,
-        user_role=user_db_obj.user_role,
-        models=user_db_obj.models or [],
-    )
-    new_jwt = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-        user_info=user_info,
-        team_id=team_id,
-        team_alias=team_alias,
-        max_budget=session_max_budget,
-    )
-    new_refresh_token = await _mint_cli_refresh_token(
-        user_id=user_id,
-        team_id=team_id,
-    )
+        user_info = LiteLLM_UserTable(
+            user_id=user_id,
+            user_role=user_db_obj.user_role,
+            models=user_db_obj.models or [],
+        )
+        new_jwt = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+            user_info=user_info,
+            team_id=team_id,
+            team_alias=team_alias,
+            max_budget=session_max_budget,
+        )
+        new_refresh_token = await _mint_cli_refresh_token(
+            user_id=user_id,
+            team_id=team_id,
+        )
+    except Exception:  # noqa: BLE001  # deliberately broad -- any failure here must trigger
+        # the un-consume compensating action below, not just the HTTPExceptions raised
+        # explicitly in this block.
+        await repo.table.update_many(
+            where={"token": presented_token, "blocked": True},
+            data={"blocked": False},
+        )
+        user_api_key_cache.delete_cache(key=presented_token)
+        raise
 
     return {"key": new_jwt, "refresh_token": new_refresh_token}
 

@@ -7680,6 +7680,66 @@ class TestCLIRefreshTokenFlow:
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_cli_refresh_token_un_consumes_on_mint_failure(self):
+        """Reliability regression: if minting fails AFTER the presented token
+        was already atomically consumed (e.g. a transient DB error), the
+        token must be un-blocked so a retry can succeed -- otherwise a single
+        transient failure permanently strands the user, since this endpoint
+        exists specifically for fully unattended apiKeyHelper operation and
+        has no other recovery path short of a full browser re-login."""
+        from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
+
+        refresh_key = UserAPIKeyAuth(
+            token="hashed-refresh",
+            user_id="user-1",
+            metadata={"cli_refresh": True},
+        )
+        mock_user = LiteLLM_UserTable(
+            user_id="user-1", user_role="internal_user", models=["gpt-4"], teams=[]
+        )
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.table.update_many = AsyncMock(
+            return_value=MagicMock(count=1)
+        )
+        mock_cache = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch(
+                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
+                return_value=mock_repo_instance,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(return_value=mock_user),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value="new-jwt-token",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
+                new=AsyncMock(side_effect=RuntimeError("transient DB error")),
+            ),
+        ):
+            with pytest.raises(RuntimeError):
+                await cli_refresh_token(user_api_key_dict=refresh_key)
+
+        # Consume (blocked=True) then compensating un-consume (blocked=False).
+        assert mock_repo_instance.table.update_many.call_count == 2
+        consume_call, revert_call = mock_repo_instance.table.update_many.call_args_list
+        assert consume_call.kwargs["data"] == {"blocked": True}
+        assert revert_call.kwargs == {
+            "where": {"token": "hashed-refresh", "blocked": True},
+            "data": {"blocked": False},
+        }
+        # Cache invalidated both times so a subsequent auth check re-reads
+        # the reverted (now-usable-again) DB state.
+        assert mock_cache.delete_cache.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_cli_logout_rejects_non_refresh_key(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.ui_sso import cli_logout
