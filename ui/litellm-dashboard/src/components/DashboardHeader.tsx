@@ -13,7 +13,7 @@ import { getBreadcrumb } from "@/components/leftnav";
 import { BlogDropdown } from "@/components/Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
-import ViewSwitcher, { useViewSwitcherVisible } from "@/components/Navbar/ViewSwitcher";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
@@ -27,8 +27,7 @@ interface DashboardHeaderProps {
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
 export function DashboardHeader({ page }: DashboardHeaderProps) {
-  const { section, title } = getBreadcrumb(page);
-  const showSwitcher = useViewSwitcherVisible();
+  const { title } = getBreadcrumb(page);
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
@@ -45,14 +44,10 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
     <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4">
       <Breadcrumb className="min-w-0">
         <BreadcrumbList className="flex-nowrap">
-          {showSwitcher ? (
-            <BreadcrumbItem className="flex-none">
-              <ViewSwitcher />
-            </BreadcrumbItem>
-          ) : (
-            section && <BreadcrumbItem className="whitespace-nowrap">{section}</BreadcrumbItem>
-          )}
-          {(showSwitcher || section) && <BreadcrumbSeparator />}
+          <BreadcrumbItem className="flex-none">
+            <ViewSwitcher />
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
             <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
           </BreadcrumbItem>

@@ -11,20 +11,12 @@ import { migratedHref } from "@/utils/migratedPages";
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
 
-export function useViewSwitcherVisible(): boolean {
-  const { plugins } = usePluginMode();
-  const { data: uiSettings } = useUISettings();
-  return plugins.length > 0 || Boolean(uiSettings?.values?.enable_chat_ui);
-}
-
 export default function ViewSwitcher() {
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
-
-  if (plugins.length === 0 && !chatEnabled) return null;
 
   const chatHref = migratedHref(CHAT);
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
@@ -37,6 +29,29 @@ export default function ViewSwitcher() {
     ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
   ];
 
+  const chatItem = chatEnabled
+    ? {
+        key: CHAT,
+        label: (
+          <div className="flex items-center justify-between gap-6 py-0.5">
+            <span className="font-medium">Chat</span>
+            {isChatRoute && <CheckOutlined className="text-blue-600" />}
+          </div>
+        ),
+      }
+    : {
+        key: CHAT,
+        disabled: true,
+        label: (
+          <div className="flex max-w-[220px] flex-col py-0.5">
+            <span className="font-medium">Chat</span>
+            <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
+              Admins can enable in Settings
+            </span>
+          </div>
+        ),
+      };
+
   const items: MenuProps["items"] = [
     ...modeEntries.map((e) => ({
       key: e.key,
@@ -47,19 +62,7 @@ export default function ViewSwitcher() {
         </div>
       ),
     })),
-    ...(chatEnabled
-      ? [
-          {
-            key: CHAT,
-            label: (
-              <div className="flex items-center justify-between gap-6 py-0.5">
-                <span className="font-medium">Chat</span>
-                {isChatRoute && <CheckOutlined className="text-blue-600" />}
-              </div>
-            ),
-          },
-        ]
-      : []),
+    chatItem,
   ];
 
   const onClick: MenuProps["onClick"] = ({ key }) => {
