@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
@@ -7,6 +8,17 @@ if TYPE_CHECKING:
 
 from litellm.types.router import CredentialLiteLLMParams
 from litellm._logging import verbose_logger
+
+
+def _is_proxy_admin_request(request_kwargs: Optional[Mapping[str, object]]) -> bool:
+    if request_kwargs is None:
+        return False
+    metadata_value = request_kwargs.get("metadata")
+    litellm_metadata_value = request_kwargs.get("litellm_metadata")
+    metadata = metadata_value if isinstance(metadata_value, Mapping) else {}
+    litellm_metadata = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
+    user_api_key_auth = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
+    return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -59,6 +71,23 @@ def filter_team_based_models(
     metadata = request_kwargs.get("metadata") or {}
     litellm_metadata = request_kwargs.get("litellm_metadata") or {}
     request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+    if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
+        requested_model = (
+            request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
+        )
+        candidate_model_info = tuple(
+            model_info for deployment in healthy_deployments for model_info in [deployment.get("model_info") or {}]
+        )
+        if (
+            isinstance(requested_model, str)
+            and candidate_model_info
+            and all(
+                model_info.get("team_id") is not None and model_info.get("team_public_model_name") == requested_model
+                for model_info in candidate_model_info
+            )
+        ):
+            return healthy_deployments
+
     ids_to_remove = set()
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
