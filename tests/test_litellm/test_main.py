@@ -2084,8 +2084,24 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "aws_credential_kwargs",
+    [
+        {
+            "aws_session_name": "litellm-gcp",
+            "aws_role_name": "arn:aws:iam::123456789012:role/litellm-bedrock-role",
+            "aws_web_identity_token": "oidc/google/108963886734710037768",
+        },
+        {
+            "aws_access_key_id": "AKIASTATICKEYFORTEST",
+            "aws_secret_access_key": "static-secret-key",
+            "aws_session_token": "static-session-token",
+        },
+    ],
+    ids=["web_identity", "static_keys"],
+)
 async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
-    respx_mock: respx.MockRouter, monkeypatch
+    respx_mock: respx.MockRouter, monkeypatch, aws_credential_kwargs: dict
 ):
     from botocore.credentials import Credentials
 
@@ -2126,17 +2142,15 @@ async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
             messages=[{"role": "user", "content": "hi"}],
             api_base="https://bedrock-mantle.us-east-2.api.aws/v1",
             aws_region_name="us-east-2",
-            aws_session_name="litellm-gcp",
-            aws_role_name="arn:aws:iam::123456789012:role/litellm-bedrock-role",
-            aws_web_identity_token="oidc/google/108963886734710037768",
             num_retries=0,
+            **aws_credential_kwargs,
         )
 
         assert response.choices[0].message.content == "ok"
         credential_kwargs = get_credentials_mock.call_args.kwargs
-        assert credential_kwargs["aws_role_name"] == "arn:aws:iam::123456789012:role/litellm-bedrock-role"
-        assert credential_kwargs["aws_web_identity_token"] == "oidc/google/108963886734710037768"
-        assert credential_kwargs["aws_session_name"] == "litellm-gcp"
+        assert credential_kwargs["aws_region_name"] == "us-east-2"
+        for key, value in aws_credential_kwargs.items():
+            assert credential_kwargs[key] == value
         authorization = respx_mock.calls.last.request.headers["Authorization"]
         assert authorization.startswith("AWS4-HMAC-SHA256")
         assert "fake-key" in authorization
