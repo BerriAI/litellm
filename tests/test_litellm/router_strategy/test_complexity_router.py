@@ -1234,6 +1234,36 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == request_metadata
 
     @pytest.mark.asyncio
+    async def test_aclassify_strips_budget_reservation_from_classifier_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """The classifier call must not receive the parent request's budget reservation.
+
+        The reservation belongs to the routed completion the classifier is deciding
+        on, not to this internal classifier call. Forwarding it would let the
+        classifier's own cost-tracking reconcile against a reservation it has no
+        business touching, so it must be stripped while the rest of the attribution
+        metadata (key/team) is preserved.
+        """
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "SIMPLE"}')
+        )
+        request_metadata = {
+            "user_api_key": "sk-abc",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_budget_reservation": {"reserved_cost": 1.0},
+            "user_api_key_auth": {"budget_reservation": {"reserved_cost": 1.0}},
+        }
+        await llm_complexity_router.aclassify(
+            "hi", request_kwargs={"litellm_metadata": request_metadata}
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == {
+            "user_api_key": "sk-abc",
+            "user_api_key_team_id": "team-1",
+        }
+
+    @pytest.mark.asyncio
     async def test_aclassify_falls_back_to_heuristic_on_llm_exception(
         self, llm_complexity_router, mock_router_instance
     ):

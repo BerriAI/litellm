@@ -63,6 +63,20 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: Optional[
     return [*base_keywords, *deduped_custom.values()]
 
 
+# Metadata keys that carry the parent request's budget reservation. These must not
+# reach the classifier's internal acompletion call: the reservation belongs to the
+# routed completion that the classifier is deciding on, not to the classifier call
+# itself, and forwarding it would let the classifier's cost-tracking reconcile
+# against a reservation it isn't responsible for.
+_BUDGET_RESERVATION_METADATA_KEYS = frozenset({"user_api_key_budget_reservation", "user_api_key_auth"})
+
+
+def _classifier_call_metadata(metadata: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not metadata:
+        return metadata
+    return {k: v for k, v in metadata.items() if k not in _BUDGET_RESERVATION_METADATA_KEYS}
+
+
 class DimensionScore:
     """Represents a score for a single dimension with optional signal."""
 
@@ -358,9 +372,11 @@ class ComplexityRouter(CustomLogger):
         system_context = f"Context: {system_prompt}\n\n" if system_prompt else ""
         classification_prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(system_context=system_context, prompt=prompt)
 
-        # Forward the original request's metadata so the classifier call's spend and
-        # budget usage are attributed to the calling key/team instead of being dropped.
-        metadata = (request_kwargs or {}).get("litellm_metadata")
+        # Forward the original request's metadata so the classifier call's spend is
+        # attributed to the calling key/team instead of being dropped. Excludes the
+        # parent request's budget reservation, which the routed completion (not this
+        # internal classifier call) is responsible for reconciling.
+        metadata = _classifier_call_metadata((request_kwargs or {}).get("litellm_metadata"))
 
         response: ModelResponse = await self.litellm_router_instance.acompletion(
             model=llm_config.model,
