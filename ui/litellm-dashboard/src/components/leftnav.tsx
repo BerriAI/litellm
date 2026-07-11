@@ -74,8 +74,8 @@ import {
 } from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
+import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
-import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
 
 const ICON = { strokeWidth: 1.75 } as const;
@@ -626,7 +626,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
             onExpandRail={() => onToggleCollapsed?.()}
           />
         )}
-        <UserDropdown onLogout={logout} variant="sidebar" collapsed={collapsed} />
+        <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
       </SidebarFooter>
     </Sidebar>
   );
