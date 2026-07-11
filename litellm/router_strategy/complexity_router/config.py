@@ -29,8 +29,6 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
     ComplexityTier.REASONING,
 )
 
-# Soft-floor distance penalty applied per tier step away from the classified tier
-# when adaptive=True. Keeps higher shelves reachable without making them free.
 DEFAULT_TIER_DISTANCE_PENALTY: float = 0.15
 
 
@@ -226,8 +224,7 @@ class ClassifierLLMConfig(BaseModel):
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
-    # Tier to model mapping. A string pins the tier; a list declares a soft-floor
-    # home pool used when adaptive=True (union of all pools = eligible set).
+    # Tier to model mapping (string = pin; list = soft-floor home pool when adaptive)
     tiers: Dict[str, Union[str, List[str]]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description="Mapping of complexity tiers to a model or model pool",
@@ -294,9 +291,6 @@ class ComplexityRouterConfig(BaseModel):
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
     )
 
-    # When true, Thompson-sample across the union of all tier pools with a soft
-    # tier-distance penalty (complexity is a bias, not a hard gate), and enable
-    # adaptive post-call bandit learning.
     adaptive: bool = Field(
         default=False,
         description="Enable adaptive bandit selection with soft complexity floors",

@@ -7576,8 +7576,6 @@ class Router:
             )
         self.complexity_routers[deployment.model_name] = complexity_router
 
-        # When adaptive soft-floors are enabled, eagerly build the embedded
-        # AdaptiveRouter and register its post-call hook so bandit learning runs.
         if getattr(complexity_router.config, "adaptive", False):
             adaptive = complexity_router._ensure_adaptive_router()
             if adaptive is not None:
@@ -7638,11 +7636,8 @@ class Router:
             )
             self.init_adaptive_router_deployment(deployment=deployment)
 
-        # Re-attach exactly one post-call hook per live AdaptiveRouter. Standalone
-        # `auto_router/adaptive_router` inits above register a hook, but hybrid
-        # complexity routers register during `init_complexity_router_deployment`
-        # *before* this finalize pass wiped every AdaptiveRouterPostCallHook.
-        # Without this, adaptive=true complexity routers never receive bandit updates.
+        # Hybrid complexity registers hooks before this finalize wipe; re-attach
+        # exactly one hook per live AdaptiveRouter afterward.
         for _cb_list in (
             litellm.callbacks,
             litellm.success_callback,

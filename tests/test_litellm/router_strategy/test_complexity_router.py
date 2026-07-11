@@ -1238,8 +1238,6 @@ class TestLLMClassifier:
 
 
 class TestAdaptiveSoftFloors:
-    """Complexity + adaptive soft floors: complexity biases, does not hard-gate."""
-
     @pytest.fixture
     def adaptive_router_instance(self):
         router = MagicMock()

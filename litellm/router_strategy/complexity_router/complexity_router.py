@@ -151,8 +151,6 @@ class ComplexityRouter(CustomLogger):
             re.compile(r"[a-z]\)\s", re.IGNORECASE),
         ]
 
-        # Optional adaptive soft-floor selector. Built lazily on first use so the
-        # parent Router can finish registering underlying deployments first.
         self.adaptive_router: Optional[Any] = None
         self._model_home_tier: Dict[str, ComplexityTier] = {}
         self._adaptive_init_attempted = False
@@ -438,7 +436,6 @@ class ComplexityRouter(CustomLogger):
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
     def _ensure_adaptive_router(self) -> Optional[Any]:
-        """Lazily construct the embedded AdaptiveRouter used for soft-floor picks."""
         if not self.config.adaptive:
             return None
         if self.adaptive_router is not None:
@@ -501,12 +498,10 @@ class ComplexityRouter(CustomLogger):
             model_to_prefs=model_to_prefs,
             model_to_cost=model_to_cost,
         )
-        # Stash key helper for pre-routing metadata writes.
         self._adaptive_chosen_model_key = ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY
         return self.adaptive_router
 
     def _soft_floor_pick(self, classified_tier: ComplexityTier, user_message: str) -> str:
-        """Thompson-sample across all tier pools with a tier-distance penalty."""
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
             thompson_sample,
