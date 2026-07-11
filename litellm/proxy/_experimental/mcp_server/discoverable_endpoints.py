@@ -1,6 +1,7 @@
 import asyncio
 import html as _html
 import json
+import math
 import secrets
 import time
 from datetime import datetime, timezone
@@ -820,7 +821,10 @@ async def _mint_bridge_delegate_token_response(
             status_code=502, detail="Upstream token is too large to seal into a gateway-bound credential"
         )
 
-    expires_in = max(1, int((sealed.expires_at - now).total_seconds()))
+    # The JWT exp is int(expires_at.timestamp()) (second-truncated), and admission expires the envelope
+    # against that exp. Report expires_in from the same truncated exp, rounding the elapsed portion up,
+    # so the client is never told the bearer lives past the point admission already rejects it.
+    expires_in = max(1, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
     body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
     return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
 
@@ -898,15 +902,19 @@ async def exchange_token_with_server(
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
-        # For a bridge oauth_delegate mint, resolve the litellm identity BEFORE exchanging the
-        # single-use upstream code. A missing or transiently-unresolvable identity then fails closed
-        # with invalid_request without consuming the code, so the client can retry the same code
-        # instead of being forced back through the full interactive authorize. The mint below
-        # re-resolves authoritatively; get_key_object is cache-first, so that second call is a cache
-        # hit and this adds no extra database round-trip.
-        if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
-            if not await _extract_active_key_hash_from_request(request):
-                return _bridge_invalid_request_response()
+    # A bridge oauth_delegate mint must fail closed BEFORE the upstream exchange consumes or rotates the
+    # single-use code (or refresh token): confirm the gateway can mint at all (master_key set) and that
+    # the request carries a resolvable litellm identity. Applies to both grant types, so an invalid key
+    # or a misconfigured gateway never burns the upstream credential. The mint below re-checks
+    # authoritatively; get_key_object is cache-first, so the identity re-resolution is a cache hit and
+    # adds no extra database round-trip.
+    if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
+        from litellm.proxy.proxy_server import master_key as _bridge_master_key  # noqa: PLC0415
+
+        if not _bridge_master_key:
+            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+        if not await _extract_active_key_hash_from_request(request):
+            return _bridge_invalid_request_response()
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
