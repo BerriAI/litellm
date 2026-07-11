@@ -868,6 +868,87 @@ def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length
     assert estimated > graduated_under_reserve
 
 
+def test_tiered_reservation_uses_higher_reasoning_output_rate():
+    """Some tiered models price reasoning output above standard output. The
+    reasoning-token share is unknown before the request runs, so reservation must
+    charge every output token at the higher of the two rates to avoid under-reserving
+    reasoning-heavy requests."""
+    tiered_pricing = [
+        {
+            "range": [0, 32000],
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1.2e-06,
+            "output_cost_per_reasoning_token": 4e-06,
+        }
+    ]
+    input_tokens = 1000
+    output_tokens = 500
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
+    assert estimated == pytest.approx(expected)
+
+    # Reserving output at the plain rate would under-reserve reasoning-heavy calls.
+    under_reserve = (input_tokens * 1e-06) + (output_tokens * 1.2e-06)
+    assert estimated > under_reserve
+
+
+def test_flat_reservation_uses_higher_reasoning_output_rate():
+    """The same reasoning under-reservation gap exists for flat-rate models that
+    declare output_cost_per_reasoning_token above output_cost_per_token."""
+    input_tokens = 1000
+    output_tokens = 500
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 1.2e-06,
+                "output_cost_per_reasoning_token": 4e-06,
+                "max_output_tokens": 200000,
+            },
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
+    assert estimated == pytest.approx(expected)
+    under_reserve = (input_tokens * 1e-06) + (output_tokens * 1.2e-06)
+    assert estimated > under_reserve
+
+
 def test_reservation_uses_most_expensive_deployment_in_group():
     """When a model group mixes deployments with different tiered rates, reservation
     must estimate against the most expensive one. Reserving the cheaper sibling would

@@ -1014,20 +1014,29 @@ def _max_cost_for_cost_info(
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
         if tier is not None:
+            output_rate = max(
+                tier_rate(tier, "output_cost_per_token"),
+                tier_rate(tier, "output_cost_per_reasoning_token"),
+            )
             return (input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * tier_rate(tier, "output_cost_per_token")
+                output_tokens * output_multiplier * output_rate
             )
 
     input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
     output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
+    output_cost_per_reasoning_token = _to_float(model_info.get("output_cost_per_reasoning_token"))
     cost = 0.0
     if input_cost_per_token is not None:
         cost += input_tokens * input_cost_per_token
     elif input_tokens > 0:
         return None
 
-    if output_cost_per_token is not None:
-        cost += output_tokens * output_multiplier * output_cost_per_token
+    # The reasoning-token share is unknown before the request runs, so reserve every
+    # output token at the higher of the standard and reasoning rates to avoid
+    # under-reserving reasoning-heavy requests.
+    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
+    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
+        cost += output_tokens * output_multiplier * output_rate
     elif output_tokens > 0:
         return None
 
