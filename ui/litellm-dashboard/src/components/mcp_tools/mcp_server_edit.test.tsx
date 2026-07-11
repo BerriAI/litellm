@@ -1582,6 +1582,55 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(document.body.innerHTML).not.toContain("leftover-token");
   });
 
+  it("resets the remove-app checkbox on a server switch so it never deletes the next server's stored app", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+    });
+
+    const { rerender } = render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, server_id: "server-A", auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // Check "remove saved app" on server A.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }));
+    expect(
+      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+
+    // Switch the panel to server B without unmounting.
+    rerender(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, server_id: "server-B", auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // The checkbox must have reset, so saving server B does not send the explicit-null delete write.
+    expect(
+      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
+    ).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials).not.toEqual({ client_id: null, client_secret: null });
+  });
+
   it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
     // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
     // after switching the form to true_passthrough and authorizing, the fresh token was not sent as
