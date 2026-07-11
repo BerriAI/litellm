@@ -54,17 +54,25 @@ export const buildComplexityRouterConfig = ({
   semanticMatchingEnabled,
   embeddingModel,
   matchThreshold,
-}: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => ({
-  tiers,
-  classifier_type: classifierType,
-  ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
-  ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
-  ...(keywordTierRules.length > 0 && {
-    keyword_tier_rules: keywordTierRules.map((rule) => ({ keywords: rule.keywords, tier: rule.tier })),
-  }),
-  ...(semanticMatchingEnabled && {
-    semantic_keyword_matching: true,
-    embedding_model: embeddingModel,
-    match_threshold: matchThreshold,
-  }),
-});
+}: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
+  // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
+  // "Add keyword rule" seeds a rule with an empty keywords list, so without this an
+  // unfilled row (common in the heuristic flow, where getSemanticConfigError doesn't run)
+  // would ship keyword_tier_rules the backend validator rejects with a 400.
+  const cleanedKeywordTierRules = keywordTierRules
+    .map((rule) => ({ keywords: rule.keywords.map((k) => k.trim()).filter(Boolean), tier: rule.tier }))
+    .filter((rule) => rule.keywords.length > 0);
+
+  return {
+    tiers,
+    classifier_type: classifierType,
+    ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
+    ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
+    ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
+    ...(semanticMatchingEnabled && {
+      semantic_keyword_matching: true,
+      embedding_model: embeddingModel,
+      match_threshold: matchThreshold,
+    }),
+  };
+};

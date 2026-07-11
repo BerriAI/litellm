@@ -40,9 +40,15 @@ class KeywordTierRule(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_non_empty_keywords(self) -> "KeywordTierRule":
-        if not any(keyword.strip() for keyword in self.keywords):
+    def _normalize_keywords(self) -> "KeywordTierRule":
+        # Strip and drop blank keywords. An empty/whitespace keyword is a routing foot-gun:
+        # _keyword_matches treats "" / " " as a substring that matches essentially every
+        # prompt, so a single stray blank would silently force this rule's tier for all
+        # traffic. Require at least one real keyword to remain.
+        cleaned = [stripped for keyword in self.keywords if (stripped := keyword.strip())]
+        if not cleaned:
             raise ValueError("keyword_tier_rules entries must contain at least one non-empty keyword")
+        self.keywords = cleaned
         return self
 
 

@@ -99,6 +99,29 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.custom_technical_keywords).toBeUndefined();
     expect(config.keyword_tier_rules).toBeUndefined();
   });
+
+  it("trims keywords and drops rules left empty, so unfilled rows never 400 the backend", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      keywordTierRules: [
+        { id: "r1", keywords: [" deploy to k8s ", "", "  "], tier: "REASONING" },
+        { id: "r2", keywords: [], tier: "COMPLEX" }, // seeded by "Add keyword rule", never filled
+        { id: "r3", keywords: ["   "], tier: "SIMPLE" }, // whitespace only
+      ],
+    };
+    const config = buildComplexityRouterConfig(params);
+    // r1 keeps only its real keyword (trimmed); r2 and r3 are dropped entirely.
+    expect(config.keyword_tier_rules).toEqual([{ keywords: ["deploy to k8s"], tier: "REASONING" }]);
+  });
+
+  it("omits keyword_tier_rules entirely when every rule is empty", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      keywordTierRules: [{ id: "r1", keywords: ["", "  "], tier: "COMPLEX" }],
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.keyword_tier_rules).toBeUndefined();
+  });
 });
 
 describe("getSemanticConfigError", () => {
