@@ -75,12 +75,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id_field: str = "user_id",
         **kwargs: Any,
     ):
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
-        ]
-
         super().__init__(
             tenant_id=tenant_id,
             client_id=client_id,
@@ -88,7 +82,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             purview_app_name=purview_app_name,
             user_id_field=user_id_field,
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
         self.guardrail_provider = "microsoft_purview"
@@ -100,6 +94,14 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         return None  # Config model can be added later for UI support
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
+        ]
 
     # ------------------------------------------------------------------
     # Core DLP check

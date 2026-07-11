@@ -1296,21 +1296,27 @@ async def get_guardrail_ui_settings():
         get_available_content_categories,
         get_pattern_metadata,
     )
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
-    category_maps = []
-    for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append(
-            {
-                "category": category.value,
-                "entities": [entity.value for entity in entities],
-            }
-        )
+    category_maps = [
+        {
+            "category": category.value,
+            "entities": [entity.value for entity in entities],
+        }
+        for category, entities in PII_ENTITY_CATEGORIES_MAP.items()
+    ]
+
+    supported_modes_by_provider = {
+        provider: [hook.value for hook in hooks]
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if (hooks := guardrail_class.get_supported_event_hooks()) is not None
+    }
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
+        supported_modes_by_provider=supported_modes_by_provider,
         pii_entity_categories=category_maps,
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),

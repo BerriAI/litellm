@@ -5,6 +5,8 @@ import {
   guardrail_provider_map,
   guardrailLogoMap,
   getGuardrailProviders,
+  getSupportedModesForProvider,
+  toModeArray,
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
 } from "./guardrail_info_helpers";
@@ -23,7 +25,7 @@ interface EditGuardrailFormProps {
   onSuccess: () => void;
   guardrailId: string;
   /** Full stored params merged into PUT so optional fields (e.g. content filter) are preserved. */
-  fullLitellmParams?: Record<string, any> | null;
+  fullLitellmParams?: Record<string, unknown> | null;
   initialValues: {
     guardrail_name: string;
     provider: string;
@@ -32,7 +34,7 @@ interface EditGuardrailFormProps {
     pii_entities_config?: { [key: string]: string };
     skip_system_message_choice?: SkipSystemMessageChoice;
     skip_tool_message_choice?: SkipToolMessageChoice;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 
@@ -40,6 +42,7 @@ interface GuardrailSettings {
   supported_entities: string[];
   supported_actions: string[];
   supported_modes: string[];
+  supported_modes_by_provider?: Record<string, string[]>;
   pii_entity_categories: Array<{
     category: string;
     entities: string[];
@@ -125,7 +128,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
 
-      const litellm_params: Record<string, any> =
+      const litellm_params: Record<string, unknown> =
         fullLitellmParams && typeof fullLitellmParams === "object" ? { ...fullLitellmParams } : {};
 
       litellm_params.guardrail = guardrailProvider;
@@ -150,7 +153,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         delete litellm_params.skip_tool_message_in_guardrail;
       }
 
-      let guardrail_info: any = {};
+      let guardrail_info: Record<string, unknown> = {};
 
       // For Presidio PII, add the entity and action configurations
       if (values.provider === "PresidioPII" && selectedEntities.length > 0) {
@@ -189,8 +192,8 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         guardrail_id: string;
         guardrail: {
           guardrail_name: string;
-          litellm_params: Record<string, any>;
-          guardrail_info: any;
+          litellm_params: Record<string, unknown>;
+          guardrail_info: Record<string, unknown>;
         };
       } = {
         guardrail_id: guardrailId,
@@ -419,16 +422,21 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           rules={[{ required: true, message: "Please select a mode" }]}
         >
           <Select>
-            {guardrailSettings?.supported_modes?.map((mode) => (
-              <Option key={mode} value={mode}>
-                {mode}
-              </Option>
-            )) || (
-              <>
-                <Option value="pre_call">pre_call</Option>
-                <Option value="post_call">post_call</Option>
-              </>
-            )}
+            {(() => {
+              const modes = getSupportedModesForProvider(guardrailSettings, selectedProvider) ?? [
+                "pre_call",
+                "post_call",
+              ];
+              const currentModes = toModeArray(initialValues?.mode);
+              const unsupportedCurrent = currentModes.filter((m) => !modes.includes(m));
+              return [...unsupportedCurrent, ...modes].map((mode) => (
+                <Option key={mode} value={mode}>
+                  {unsupportedCurrent.includes(mode)
+                    ? `${mode} (not supported by ${selectedProvider}, pick another)`
+                    : mode}
+                </Option>
+              ));
+            })()}
           </Select>
         </Form.Item>
 
