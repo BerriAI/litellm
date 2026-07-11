@@ -2620,6 +2620,33 @@ class TestContentFilterMCPPreCall:
         assert "non-rewritable" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_arguments_exceeding_max_depth_block(self):
+        """
+        Arguments nested beyond DEFAULT_MAX_RECURSE_DEPTH block fail-closed instead of passing unscanned
+        """
+        from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-depth-cap",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        deep: dict = {"leaf": "confidential data"}
+        for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+            deep = {"level": deep}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "save_note", "mcp_arguments": deep},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "nesting depth" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_mixed_mode_chat_call_not_scanned(self):
         """
         A mixed pre_call + pre_mcp_call guardrail must not run the MCP scan on a chat invocation,

@@ -29,6 +29,7 @@ from fastapi import HTTPException
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
@@ -1695,10 +1696,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         if self._filter_single_text(text, detections=detections) != text:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Content blocked: MCP tool call argument matched a masking rule on a non-rewritable field"},
+                detail={
+                    "error": "Content blocked: MCP tool call argument matched a masking rule on a non-rewritable field"
+                },
             )
 
-    def _filter_mcp_argument_value(self, value: object, detections: List[ContentFilterDetection]) -> object:
+    def _filter_mcp_argument_value(
+        self, value: object, detections: List[ContentFilterDetection], depth: int = 0
+    ) -> object:
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Content blocked: MCP tool call arguments exceed the maximum nesting depth"},
+            )
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -1708,9 +1718,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             for key in value:
                 if isinstance(key, str):
                     self._assert_mcp_argument_label_clean(key, detections)
-            return {key: self._filter_mcp_argument_value(item, detections) for key, item in value.items()}
+            return {key: self._filter_mcp_argument_value(item, detections, depth + 1) for key, item in value.items()}
         if isinstance(value, list):
-            return [self._filter_mcp_argument_value(item, detections) for item in value]
+            return [self._filter_mcp_argument_value(item, detections, depth + 1) for item in value]
         return value
 
     def _scan_mcp_tool_call_arguments(
