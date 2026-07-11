@@ -1720,7 +1720,7 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: Optional[str] = None
+    param: Optional[Union[str, Dict[str, Any]]] = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
