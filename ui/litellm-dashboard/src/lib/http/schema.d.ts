@@ -42428,6 +42428,8 @@ export interface operations {
                 agent_id?: string | null;
                 /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
                 substring_matching?: boolean;
+                /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
+                expires?: string | null;
             };
             header?: never;
             path?: never;
