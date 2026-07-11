@@ -386,22 +386,20 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
             teams=normalized_teams,
         )
 
-        # Use the team-specific JWT if selection succeeded
+        # Use the team-specific key if selection succeeded
         if team_selection_result:
             return {
-                "api_key": team_selection_result["api_key"],
-                "refresh_token": team_selection_result.get("refresh_token"),
+                "api_key": team_selection_result,
                 "user_id": user_id,
                 "teams": teams,
-                "team_id": None,  # Set by server in JWT
+                "team_id": None,  # Set by server in the key
             }
 
-        click.echo("❌ Team selection cancelled or JWT generation failed.")
+        click.echo("❌ Team selection cancelled or key generation failed.")
         return None
 
-    # JWT is ready (single team or team already selected)
+    # Key is ready (single team or team already selected)
     api_key = data.get("key")
-    refresh_token = data.get("refresh_token")
     user_id = data.get("user_id")
     teams = data.get("teams", [])
     team_id = data.get("team_id")
@@ -413,7 +411,6 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
     if api_key:
         return {
             "api_key": api_key,
-            "refresh_token": refresh_token,
             "user_id": user_id,
             "teams": teams,
             "team_id": team_id,
@@ -424,7 +421,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
 
 def _handle_team_selection_during_polling(
     base_url: str, key_id: str, poll_secret: str, teams: List[Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
+) -> Optional[str]:
     """
     Handle team selection and re-poll with selected team_id.
 
@@ -432,8 +429,8 @@ def _handle_team_selection_during_polling(
         teams: List of team IDs (strings)
 
     Returns:
-        Dict with "api_key" (JWT) and "refresh_token" for the selected team,
-        or None if selection was skipped
+        The session key for the selected team, or None if selection was
+        skipped
     """
     if not teams:
         click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
@@ -448,7 +445,7 @@ def _handle_team_selection_during_polling(
         click.echo("ℹ️ No team selected.")
         return None
 
-    click.echo(f"\n🔄 Generating JWT for team: {team_id}")
+    click.echo(f"\n🔄 Generating key for team: {team_id}")
 
     poll_url = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
     data = _poll_for_ready_data(
@@ -460,10 +457,10 @@ def _handle_team_selection_during_polling(
     )
     if not data:
         return None
-    jwt_token = data.get("key")
-    if jwt_token:
-        click.echo(f"✅ Successfully generated JWT for team: {team_id}")
-        return {"api_key": jwt_token, "refresh_token": data.get("refresh_token")}
+    session_key = data.get("key")
+    if session_key:
+        click.echo(f"✅ Successfully generated key for team: {team_id}")
+        return session_key
 
     return None
 
@@ -553,7 +550,6 @@ def login(ctx: click.Context):
 
         if auth_result:
             api_key = auth_result["api_key"]
-            refresh_token = auth_result.get("refresh_token")
             user_id = auth_result["user_id"]
 
             # Save token data. base_url is stored so we can verify origin
@@ -562,7 +558,6 @@ def login(ctx: click.Context):
                 {
                     "base_url": base_url.rstrip("/"),
                     "key": api_key,
-                    "refresh_token": refresh_token,
                     "user_id": user_id or "cli-user",
                     "user_email": "unknown",
                     "user_role": "cli",
@@ -573,7 +568,7 @@ def login(ctx: click.Context):
             )
 
             click.echo("\n✅ Login successful!")
-            click.echo(f"JWT Token: {api_key[:20]}...")
+            click.echo(f"Token: {api_key[:20]}...")
             click.echo("You can now use the CLI without specifying --api-key")
 
             # Show available commands after successful login
@@ -597,8 +592,8 @@ def login(ctx: click.Context):
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
     token_data = load_token()
-    refresh_token = token_data.get("refresh_token") if token_data else None
-    if refresh_token:
+    session_key = token_data.get("key") if token_data else None
+    if session_key:
         # Revoke against the server the token was actually issued for,
         # unless the caller explicitly overrode --base-url -- otherwise this
         # silently targets the CLI's localhost:4000 default for anyone not
@@ -609,7 +604,7 @@ def logout(ctx: click.Context):
         try:
             requests.post(
                 f"{base_url}/sso/cli/logout",
-                headers={"Authorization": f"Bearer {refresh_token}"},
+                headers={"Authorization": f"Bearer {session_key}"},
                 timeout=5,
             )
         except requests.RequestException:
@@ -620,9 +615,9 @@ def logout(ctx: click.Context):
     click.echo("✅ Logged out successfully. Authentication token cleared.")
 
 
-def _cached_jwt_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.1) -> bool:
+def _cached_key_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.1) -> bool:
     """Best-effort local freshness check so print-token can skip the network
-    round trip when the cached JWT still has meaningful life left. Mirrors
+    round trip when the cached key still has meaningful life left. Mirrors
     the age heuristic already used by `whoami`."""
     timestamp = token_data.get("timestamp")
     if not isinstance(timestamp, (int, float)):
@@ -631,14 +626,14 @@ def _cached_jwt_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.
     return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)
 
 
-def _refresh_cli_token(base_url: str, refresh_token: str) -> Optional[Dict[str, Any]]:
-    """Exchange a CLI refresh token for a fresh JWT + refresh token pair,
-    persisting the result. Returns the updated token data, or None on any
-    failure (network error, expired/revoked refresh token)."""
+def _refresh_cli_token(base_url: str, session_key: str) -> Optional[Dict[str, Any]]:
+    """Exchange the CLI session key for a freshly-rotated one, persisting
+    the result. Returns the updated token data, or None on any failure
+    (network error, expired/revoked key)."""
     try:
         response = requests.post(
             f"{base_url}/sso/cli/refresh",
-            headers={"Authorization": f"Bearer {refresh_token}"},
+            headers={"Authorization": f"Bearer {session_key}"},
             timeout=10,
         )
         response.raise_for_status()
@@ -647,8 +642,7 @@ def _refresh_cli_token(base_url: str, refresh_token: str) -> Optional[Dict[str, 
 
     data = response.json()
     new_key = data.get("key")
-    new_refresh_token = data.get("refresh_token")
-    if not new_key or not new_refresh_token:
+    if not new_key:
         return None
 
     token_data = load_token() or {}
@@ -656,7 +650,6 @@ def _refresh_cli_token(base_url: str, refresh_token: str) -> Optional[Dict[str, 
         {
             "base_url": base_url.rstrip("/"),
             "key": new_key,
-            "refresh_token": new_refresh_token,
             "timestamp": time.time(),
         }
     )
@@ -693,9 +686,9 @@ def print_token(ctx: click.Context):
             click.echo("Not authenticated. Run 'lite login'.", err=True)
             sys.exit(1)
 
-    refresh_token = token_data.get("refresh_token")
-    if refresh_token and not _cached_jwt_still_fresh(token_data):
-        refreshed = _refresh_cli_token(base_url=base_url, refresh_token=refresh_token)
+    session_key = token_data.get("key")
+    if session_key and not _cached_key_still_fresh(token_data):
+        refreshed = _refresh_cli_token(base_url=base_url, session_key=session_key)
         if refreshed is None:
             click.echo("Token refresh failed. Run 'lite login' again.", err=True)
             sys.exit(1)

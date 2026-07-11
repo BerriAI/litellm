@@ -429,7 +429,7 @@ class TestLogoutCommand:
         self.runner = CliRunner()
 
     def test_logout_success(self):
-        """Test successful logout with no stored refresh token (nothing to revoke server-side)"""
+        """Test successful logout with no stored key (nothing to revoke server-side)"""
         with (
             patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
             patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
@@ -442,14 +442,14 @@ class TestLogoutCommand:
             mock_clear.assert_called_once()
             mock_post.assert_not_called()
 
-    def test_logout_revokes_refresh_token_server_side(self):
-        """logout must revoke the stored refresh token, not just delete the local file --
-        otherwise a copied-then-deleted token.json could still be used to mint new JWTs."""
+    def test_logout_revokes_key_server_side(self):
+        """logout must revoke the stored key, not just delete the local file --
+        otherwise a copied-then-deleted token.json could still be used to make requests."""
         with (
             patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
             patch(
                 "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={"base_url": "http://localhost:4000", "refresh_token": "sk-refresh-abc"},
+                return_value={"base_url": "http://localhost:4000", "key": "sk-session-key"},
             ),
             patch("requests.post") as mock_post,
         ):
@@ -458,7 +458,7 @@ class TestLogoutCommand:
             assert result.exit_code == 0
             mock_post.assert_called_once_with(
                 "http://localhost:4000/sso/cli/logout",
-                headers={"Authorization": "Bearer sk-refresh-abc"},
+                headers={"Authorization": "Bearer sk-session-key"},
                 timeout=5,
             )
             mock_clear.assert_called_once()
@@ -474,7 +474,7 @@ class TestLogoutCommand:
                 "litellm.proxy.client.cli.commands.auth.load_token",
                 return_value={
                     "base_url": "https://litellm-proxy.corp.com",
-                    "refresh_token": "sk-refresh-abc",
+                    "key": "sk-session-key",
                 },
             ),
             patch("requests.post") as mock_post,
@@ -484,7 +484,7 @@ class TestLogoutCommand:
             assert result.exit_code == 0
             mock_post.assert_called_once_with(
                 "https://litellm-proxy.corp.com/sso/cli/logout",
-                headers={"Authorization": "Bearer sk-refresh-abc"},
+                headers={"Authorization": "Bearer sk-session-key"},
                 timeout=5,
             )
             mock_clear.assert_called_once()
@@ -497,7 +497,7 @@ class TestLogoutCommand:
             patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
             patch(
                 "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={"base_url": "http://localhost:4000", "refresh_token": "sk-refresh-abc"},
+                return_value={"base_url": "http://localhost:4000", "key": "sk-session-key"},
             ),
             patch("requests.post", side_effect=requests.RequestException("connection refused")),
         ):
@@ -762,7 +762,6 @@ class TestPrintTokenCommand:
                 return_value={
                     "base_url": "https://litellm-proxy.corp.com",
                     "key": "sk-prod-fresh",
-                    "refresh_token": "sk-refresh-abc",
                     "timestamp": time.time(),
                 },
             ),
@@ -793,8 +792,8 @@ class TestPrintTokenCommand:
         assert result.exit_code != 0
         assert "sk-should-not-print" not in result.output
 
-    def test_fresh_cached_jwt_printed_without_network_call(self):
-        """A recently-issued JWT should be printed straight from cache -- no
+    def test_fresh_cached_key_printed_without_network_call(self):
+        """A recently-issued key should be printed straight from cache -- no
         refresh call on every single invocation (apiKeyHelper gets called
         frequently)."""
         with (
@@ -803,7 +802,6 @@ class TestPrintTokenCommand:
                 return_value={
                     "base_url": "http://localhost:4000",
                     "key": "sk-cached-fresh",
-                    "refresh_token": "sk-refresh-abc",
                     "timestamp": time.time(),
                 },
             ),
@@ -815,26 +813,22 @@ class TestPrintTokenCommand:
         assert result.output.strip() == "sk-cached-fresh"
         mock_post.assert_not_called()
 
-    def test_stale_jwt_triggers_silent_refresh(self):
-        """Core apiKeyHelper contract: an expired cached JWT must be silently
-        refreshed and the *new* token printed, not the stale one. Also
+    def test_stale_key_triggers_silent_refresh(self):
+        """Core apiKeyHelper contract: an expired cached key must be silently
+        refreshed and the *new* key printed, not the stale one. Also
         proves the refresh call itself targets the server from token.json,
         not a CLI default -- there's no --base-url anywhere in this test."""
         old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
         mock_response = Mock()
         mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "key": "sk-refreshed-jwt",
-            "refresh_token": "sk-refresh-rotated",
-        }
+        mock_response.json.return_value = {"key": "sk-refreshed-key"}
 
         with (
             patch(
                 "litellm.proxy.client.cli.commands.auth.load_token",
                 return_value={
                     "base_url": "https://litellm-proxy.corp.com",
-                    "key": "sk-stale-jwt",
-                    "refresh_token": "sk-refresh-old",
+                    "key": "sk-stale-key",
                     "timestamp": old_timestamp,
                 },
             ),
@@ -844,22 +838,21 @@ class TestPrintTokenCommand:
             result = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code == 0
-        assert result.output.strip() == "sk-refreshed-jwt"
+        assert result.output.strip() == "sk-refreshed-key"
         mock_post.assert_called_once_with(
             "https://litellm-proxy.corp.com/sso/cli/refresh",
-            headers={"Authorization": "Bearer sk-refresh-old"},
+            headers={"Authorization": "Bearer sk-stale-key"},
             timeout=10,
         )
-        # The rotated refresh token must be persisted, or the *next*
-        # refresh would replay an already-consumed (blocked) token.
+        # The rotated key must be persisted, or the *next* refresh would
+        # replay an already-rotated (stale) key.
         saved = mock_save.call_args[0][0]
-        assert saved["key"] == "sk-refreshed-jwt"
-        assert saved["refresh_token"] == "sk-refresh-rotated"
+        assert saved["key"] == "sk-refreshed-key"
 
     def test_refresh_failure_does_not_print_stale_token(self):
-        """If the refresh token was revoked/expired server-side, print-token
-        must fail loudly (stderr, nonzero exit) rather than silently handing
-        Claude Code a dead JWT that will just 401 again."""
+        """If the key was revoked/expired server-side, print-token must fail
+        loudly (stderr, nonzero exit) rather than silently handing Claude
+        Code a dead key that will just 401 again."""
         old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
         import requests
 
@@ -868,8 +861,7 @@ class TestPrintTokenCommand:
                 "litellm.proxy.client.cli.commands.auth.load_token",
                 return_value={
                     "base_url": "http://localhost:4000",
-                    "key": "sk-stale-jwt",
-                    "refresh_token": "sk-refresh-revoked",
+                    "key": "sk-stale-key",
                     "timestamp": old_timestamp,
                 },
             ),
@@ -878,21 +870,4 @@ class TestPrintTokenCommand:
             result = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code != 0
-        assert "sk-stale-jwt" not in result.output
-
-    def test_no_refresh_token_falls_back_to_cached_key(self):
-        """Backward compatibility: a token.json from before this feature
-        existed has no refresh_token -- print-token must still work as a
-        plain cached-key printer rather than erroring out."""
-        with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token",
-            return_value={
-                "base_url": "http://localhost:4000",
-                "key": "sk-legacy-key",
-                "timestamp": time.time() - 999999,  # long stale, but no refresh_token to use
-            },
-        ):
-            result = self.runner.invoke(print_token, obj={})
-
-        assert result.exit_code == 0
-        assert result.output.strip() == "sk-legacy-key"
+        assert "sk-stale-key" not in result.output

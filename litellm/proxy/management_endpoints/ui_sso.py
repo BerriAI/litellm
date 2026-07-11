@@ -2071,11 +2071,7 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import (
-        ExperimentalUIJWTToken,
-        get_team_object,
-        get_user_object,
-    )
+    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
@@ -2133,13 +2129,6 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            team_alias = None
-            if team_id and isinstance(user_team_details, list):
-                team_alias = next(
-                    (team.get("team_alias") for team in user_team_details if team.get("team_id") == team_id),
-                    None,
-                )
-
             user_info = LiteLLM_UserTable(
                 user_id=user_id,
                 user_role=session_data["user_role"],
@@ -2178,25 +2167,20 @@ async def cli_poll_key(
                 else None
             )
 
-            jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-                user_info=user_info,
-                team_id=team_id,
-                team_alias=team_alias,
-                max_budget=session_max_budget,
-            )
-            refresh_token = await _mint_cli_refresh_token(
+            session_key = await _mint_cli_session_key(
                 user_id=user_id,
                 team_id=team_id,
+                models=user_info.models,
+                max_budget=session_max_budget,
             )
 
             # Delete cache entry (single-use)
             user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
-            verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
+            verbose_proxy_logger.info(f"CLI session key generated for user: {user_id}, team: {team_id}")
             poll_response = {
                 "status": "ready",
-                "key": jwt_token,
-                "refresh_token": refresh_token,
+                "key": session_key,
                 "user_id": user_id,
                 "team_id": team_id,
                 "teams": user_teams,
@@ -2218,44 +2202,20 @@ async def cli_poll_key(
         raise HTTPException(status_code=500, detail=f"Error checking session status: {str(e)}")
 
 
-CLI_REFRESH_TOKEN_DURATION = "90d"
-
-
-# `models=[]` on a virtual key does NOT mean "no models allowed" -- per
-# _resolve_key_models_for_auth_check / _check_model_access_helper in
-# auth_checks.py, an empty models list (with no team_id on the key) is
-# treated as "no restriction configured", i.e. UNRESTRICTED access to every
-# model. A CLI refresh token must never be usable to call an LLM, so it
-# needs a real, unmatchable model entry -- not an empty list.
-CLI_REFRESH_TOKEN_SENTINEL_MODEL = "litellm-cli-refresh-token-no-model-access"
-# The actual enforced boundary: allowed_routes is a hard, deny-by-default
-# allowlist checked in the shared user_api_key_auth dependency for every
-# route, including LLM calls -- unlike the models field, an empty/absent
-# allowed_routes is NOT a footgun (it just means "no route restriction"),
-# so this is the primary defense; the sentinel model above is belt-and-
-# suspenders in case any code path only consults the models field.
-CLI_REFRESH_TOKEN_ALLOWED_ROUTES = ["/sso/cli/refresh", "/sso/cli/logout"]
-
-
-async def _mint_cli_refresh_token(
+async def _mint_cli_session_key(
     user_id: str,
     team_id: Optional[str],
+    models: List[str],
+    max_budget: Optional[float],
 ) -> str:
-    """Mint a long-lived virtual key that can never call an LLM or reach any
-    route other than the CLI refresh/logout endpoints, used solely to
-    silently refresh a CLI JWT via ``/sso/cli/refresh``.
-
-    Deliberately kept separate from the actual (short-lived) call credential:
-    the call credential flows through subprocess env vars and every LLM
-    request, so leaking it must not also grant indefinite self-renewal.
-
-    ``team_id`` is stored purely as a UX preference hint (which team the user
-    last selected) -- NOT an authorization grant. Anyone can self-mint a
-    virtual key with arbitrary metadata via the ordinary /key/generate
-    endpoint, so cli_refresh_token must always re-verify current team
-    membership and recompute budget from live DB state before trusting this
-    hint; it must never read team_alias or max_budget back out of metadata.
-    """
+    """Mint the CLI's single working credential: a real virtual key used
+    directly as the bearer token for LLM calls AND presented back to
+    ``/sso/cli/refresh`` to rotate its own secret. Bypasses the
+    ``/key/regenerate`` enterprise gate for this INITIAL mint the same way
+    ``generate_key_helper_fn`` always has for internal server-side callers;
+    only the rotation call (which goes through ``regenerate_key_fn``) is
+    enterprise-gated, matching regular key regeneration."""
+    from litellm.constants import CLI_JWT_EXPIRATION_HOURS
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         GenerateKeyResponse,
         generate_key_helper_fn,
@@ -2263,28 +2223,26 @@ async def _mint_cli_refresh_token(
 
     response = await generate_key_helper_fn(
         request_type="key",
-        models=[CLI_REFRESH_TOKEN_SENTINEL_MODEL],
-        allowed_routes=CLI_REFRESH_TOKEN_ALLOWED_ROUTES,
+        models=models,
         user_id=user_id,
-        duration=CLI_REFRESH_TOKEN_DURATION,
-        key_alias=f"cli-refresh-{user_id}",
-        metadata={
-            "cli_refresh": True,
-            "team_id": team_id,
-        },
+        team_id=team_id,
+        key_max_budget=max_budget,
+        duration=f"{CLI_JWT_EXPIRATION_HOURS}h",
+        key_alias=f"cli-{user_id}",
+        metadata={"cli_session": True},
         table_name="key",
     )
     return GenerateKeyResponse(**response).key
 
 
-def _require_cli_refresh_token(user_api_key_dict: UserAPIKeyAuth) -> str:
-    """Validate the authenticated key is a CLI refresh token and return its
+def _require_cli_session_key(user_api_key_dict: UserAPIKeyAuth) -> str:
+    """Validate the authenticated key is a CLI session key and return its
     hashed value (the DB primary key), or raise 401."""
     metadata = user_api_key_dict.metadata or {}
-    if metadata.get("cli_refresh") is not True:
-        raise HTTPException(status_code=401, detail="Not a CLI refresh token")
+    if metadata.get("cli_session") is not True:
+        raise HTTPException(status_code=401, detail="Not a CLI session key")
     if not user_api_key_dict.token:
-        raise HTTPException(status_code=401, detail="Invalid CLI refresh token")
+        raise HTTPException(status_code=401, detail="Invalid CLI session key")
     return user_api_key_dict.token
 
 
@@ -2293,101 +2251,24 @@ async def cli_refresh_token(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Silently mint a fresh CLI JWT + refresh token, given a previously-issued
-    CLI refresh token.
-
-    Rotation delegates to /key/regenerate's underlying logic: a single
-    atomic DB update swaps the refresh key's secret in place (same row, so
-    models/allowed_routes/metadata are preserved untouched), keyed by the
-    old token hash. A concurrent replay of the same presented token loses
-    the race at the DB level -- its UPDATE matches zero rows once the
-    winner's commit has landed -- so no separate consume/rollback dance is
-    needed here. This intentionally makes silent CLI refresh an Enterprise
+    Silently rotate the CLI session key's secret, given the previously-issued
+    key itself. The session key is a real virtual key used directly for LLM
+    calls, so rotation is a single atomic DB update swapping the secret in
+    place (same row, same models/team_id/max_budget), delegated to
+    /key/regenerate's underlying logic -- the same primitive /key/regenerate
+    itself uses. This intentionally makes silent CLI refresh an Enterprise
     feature, same as regular key regeneration.
-
-    The presented token's own metadata is only ever treated as an untrusted
-    UX hint (which team the user last selected), never as an authorization
-    grant -- anyone can self-mint a virtual key with arbitrary metadata via
-    the ordinary /key/generate endpoint, so team membership and budget are
-    always re-derived from live DB state, exactly like the initial SSO login
-    poll does.
     """
-    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         regenerate_key_fn,
     )
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client
 
-    presented_token = _require_cli_refresh_token(user_api_key_dict)
+    presented_token = _require_cli_session_key(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="DB not connected, cannot refresh CLI token")
 
-    user_id = user_api_key_dict.user_id
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid CLI refresh token")
-
-    user_db_obj = await get_user_object(
-        user_id=user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-    )
-    if user_db_obj is None:
-        raise HTTPException(status_code=401, detail="User no longer exists")
-
-    # team_id is a preference hint from the presented token's metadata --
-    # NOT trusted for authorization. Only honor it if the user is a CURRENT
-    # member of that team per live DB state; a removed member (or a
-    # self-forged key claiming a team the caller never belonged to) silently
-    # falls back to no team rather than being granted team-scoped access.
-    requested_team_id = (user_api_key_dict.metadata or {}).get("team_id")
-    current_teams = user_db_obj.teams or []
-    team_id = requested_team_id if requested_team_id in current_teams else None
-
-    team_alias: Optional[str] = None
-    team_budget: Optional[float] = None
-    team_budget_resolved = False
-    if team_id is not None:
-        try:
-            team_obj = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            team_alias = team_obj.team_alias
-            team_budget = team_obj.max_budget
-            team_budget_resolved = True
-        except HTTPException:
-            # Team no longer exists (get_team_object raises 404) -- fall
-            # through with no team context rather than failing the refresh.
-            pass
-
-    # Budget is always recomputed from live DB state, mirroring the exact
-    # capping logic the initial SSO login poll uses -- never read back from
-    # the presented token's metadata, which is attacker-influenceable.
-    user_budget = user_db_obj.max_budget
-    session_max_budget = (
-        litellm.max_ui_session_budget
-        if user_budget is None and (team_id is None or (team_budget_resolved and team_budget is None))
-        else None
-    )
-
-    user_info = LiteLLM_UserTable(
-        user_id=user_id,
-        user_role=user_db_obj.user_role,
-        models=user_db_obj.models or [],
-    )
-    new_jwt = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-        user_info=user_info,
-        team_id=team_id,
-        team_alias=team_alias,
-        max_budget=session_max_budget,
-    )
-
-    # The only mutating step. Nothing above touched the DB, so a failure at
-    # any prior point simply leaves the presented token untouched and
-    # retryable -- no compensating rollback needed.
     regenerated = await regenerate_key_fn(
         key=presented_token,
         data=None,
@@ -2395,9 +2276,9 @@ async def cli_refresh_token(
         litellm_changed_by=None,
     )
     if regenerated is None or regenerated.key is None:
-        raise HTTPException(status_code=500, detail="Failed to rotate CLI refresh token")
+        raise HTTPException(status_code=500, detail="Failed to rotate CLI session key")
 
-    return {"key": new_jwt, "refresh_token": regenerated.key}
+    return {"key": regenerated.key}
 
 
 @router.post("/sso/cli/logout", tags=["experimental"], include_in_schema=False)
@@ -2411,7 +2292,7 @@ async def cli_logout(
         VerificationTokenRepository,
     )
 
-    presented_token = _require_cli_refresh_token(user_api_key_dict)
+    presented_token = _require_cli_session_key(user_api_key_dict)
 
     if prisma_client is not None:
         await VerificationTokenRepository(prisma_client).table.update(

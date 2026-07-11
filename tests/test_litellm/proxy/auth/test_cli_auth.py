@@ -243,7 +243,7 @@ async def test_poll_for_authentication_no_teams(click_mock, poll_mock, handle_mo
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.client.cli.commands.auth._handle_team_selection_during_polling",
-    return_value={"api_key": "jwt-123", "refresh_token": "refresh-123"},
+    return_value="sk-team-123",
 )
 @patch(
     "litellm.proxy.client.cli.commands.auth._poll_for_ready_data",
@@ -260,8 +260,7 @@ async def test_poll_for_authentication_team_selection_success(
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual == {
-        "api_key": "jwt-123",
-        "refresh_token": "refresh-123",
+        "api_key": "sk-team-123",
         "user_id": "user-123",
         "teams": [1, 2],
         "team_id": None,
@@ -337,7 +336,6 @@ async def test_poll_for_authentication_auto_assigned_team(
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual == {
         "api_key": "jwt-456",
-        "refresh_token": None,
         "user_id": "user-456",
         "teams": ["team-1"],
         "team_id": "team-1",
