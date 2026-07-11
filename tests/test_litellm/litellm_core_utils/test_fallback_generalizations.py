@@ -520,8 +520,8 @@ def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):
     non_adaptive = "us.anthropic.claude-opus-4-20250514"
     assert adaptive not in litellm.model_cost
     assert non_adaptive not in litellm.model_cost
-    assert AnthropicModelInfo._is_adaptive_thinking_model(adaptive) is True
-    assert AnthropicModelInfo._is_adaptive_thinking_model(non_adaptive) is False
+    assert AnthropicModelInfo._is_adaptive_thinking_model(adaptive, "anthropic") is True
+    assert AnthropicModelInfo._is_adaptive_thinking_model(non_adaptive, "anthropic") is False
 
 
 def test_shipped_rules_resolve_unmapped_future_bedrock_claude_with_both_flags(shipped_cost_map):
