@@ -78,16 +78,30 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: Optional[
 #
 # Note: user_api_key_auth itself is intentionally kept; it is required by
 # _filter_deployments_by_model_access_groups to scope embedding/classifier model
-# selection to the caller's authorized access groups. Only the budget reservation
-# sub-field inside it is the problem -- stripping the whole object would allow
-# an access-group-scoped caller to reach embedding deployments outside their group.
+# selection to the caller's authorized access groups. It is forwarded as a sanitized
+# copy with its budget_reservation sub-field removed, because the proxy cost callback
+# (_get_budget_reservation_from_metadata) falls back to reading the reservation from
+# inside the auth object when the top-level key is absent; forwarding it unsanitized
+# would re-create the exact double-finalization this stripping exists to prevent.
 _BUDGET_RESERVATION_METADATA_KEYS = frozenset({"user_api_key_budget_reservation"})
+
+
+def _sanitize_user_api_key_auth(auth: Any) -> Any:
+    if isinstance(auth, dict):
+        return {k: v for k, v in auth.items() if k != "budget_reservation"}
+    if getattr(auth, "budget_reservation", None) is not None and hasattr(auth, "model_copy"):
+        return auth.model_copy(update={"budget_reservation": None})
+    return auth
 
 
 def _classifier_call_metadata(metadata: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     if not metadata:
         return metadata
-    return {k: v for k, v in metadata.items() if k not in _BUDGET_RESERVATION_METADATA_KEYS}
+    return {
+        k: _sanitize_user_api_key_auth(v) if k == "user_api_key_auth" else v
+        for k, v in metadata.items()
+        if k not in _BUDGET_RESERVATION_METADATA_KEYS
+    }
 
 
 class DimensionScore:
