@@ -19,12 +19,46 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ModelResponseStream
 
 from ..common_utils import mantle_base_segment
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+
+class BedrockMantleStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """Ensures all chunks in a single streaming response share the same ID.
+
+    Bedrock Mantle's OpenAI-compatible endpoint returns a unique ID per SSE
+    chunk instead of reusing one ID for the entire stream (violating the
+    OpenAI spec). The openai-go SDK's ChatCompletionAccumulator checks
+    cc.ID != chunk.ID and silently drops every chunk after the first when
+    IDs don't match. See https://github.com/BerriAI/litellm/issues/32854
+    """
+
+    def __init__(
+        self,
+        streaming_response: Any,
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        super().__init__(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+        self._consistent_id: Optional[str] = None
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        if self._consistent_id is None:
+            self._consistent_id = chunk.get("id")
+        chunk["id"] = self._consistent_id
+        return super().chunk_parser(chunk)
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -110,11 +144,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:
-        from litellm.llms.openai.chat.gpt_transformation import (
-            OpenAIChatCompletionStreamingHandler,
-        )
-
-        return OpenAIChatCompletionStreamingHandler(
+        return BedrockMantleStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
