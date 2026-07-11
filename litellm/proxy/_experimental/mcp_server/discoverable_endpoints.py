@@ -342,12 +342,23 @@ def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
     team-scoped or service-account key has no ``user_id`` yet is a legitimate credential, so gating
     on ``user_id`` presence would wrongly reject it. Callers that need the user (the per-user token
     store) derive it separately via :func:`_active_key_user_id`.
+
+    Total by design: ``expires`` is typed ``str | datetime``, and an unparseable string would make
+    ``datetime.fromisoformat`` raise. Since the callers run this outside their key-resolution
+    ``try``, an uncaught parse error would surface as a 500 instead of the endpoint's fail-closed
+    behavior, so a malformed expiry is treated as inactive (return ``False``) rather than raising.
     """
     if key_obj.blocked is True:
         return False
     expires = key_obj.expires
     if expires is not None:
-        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if isinstance(expires, datetime):
+            expiry = expires
+        else:
+            try:
+                expiry = datetime.fromisoformat(expires)
+            except (ValueError, TypeError):
+                return False
         if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if expiry < datetime.now(timezone.utc):
@@ -698,10 +709,31 @@ async def authorize_with_server(
     return response
 
 
+def _coerce_positive_expires_in(value: object) -> int | None:
+    """Coerce an upstream ``expires_in`` to a positive int, or ``None`` when it is absent or not a
+    usable number. IdPs return it as an int, a float (``3600.0``), or a numeric string (``"3600"``);
+    accepting only ``int`` would drop the float/string cases to ``None`` and fall back to the
+    envelope's 1h cap, which can outlive a shorter-lived upstream token and forward a stale bearer.
+    ``bool`` is excluded (it is an ``int`` subclass but never a real lifetime)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = int(value)
+        return seconds if seconds > 0 else None
+    if isinstance(value, str):
+        try:
+            seconds = int(float(value.strip()))
+        except (ValueError, TypeError):
+            return None
+        return seconds if seconds > 0 else None
+    return None
+
+
 def _bridge_grant_from_token_response(token_response: object) -> Optional["UpstreamTokenGrant"]:
     """Validate an upstream OAuth token response into a typed grant, or None when it lacks a usable
     access token. Each field is isinstance-checked so nothing untyped from ``response.json()`` flows
-    into the grant."""
+    into the grant; ``expires_in`` is numerically coerced so a float/string lifetime is honored
+    rather than dropped to the envelope's default cap."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         UpstreamTokenGrant,
     )
@@ -714,13 +746,12 @@ def _bridge_grant_from_token_response(token_response: object) -> Optional["Upstr
     token_type = token_response.get("token_type")
     refresh = token_response.get("refresh_token")
     scope = token_response.get("scope")
-    expires_in = token_response.get("expires_in")
     return UpstreamTokenGrant(
         access_token=SecretStr(access),
         token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
         refresh_token=SecretStr(refresh) if isinstance(refresh, str) and refresh else None,
         scope=scope if isinstance(scope, str) and scope else None,
-        expires_in=expires_in if isinstance(expires_in, int) and expires_in > 0 else None,
+        expires_in=_coerce_positive_expires_in(token_response.get("expires_in")),
     )
 
 

@@ -4449,6 +4449,43 @@ async def test_oauth_delegate_bridge_token_exchange_fails_closed_without_litellm
     assert exc.value.detail["error"] == "invalid_request"
 
 
+def test_bridge_grant_coerces_numeric_expires_in():
+    """expires_in from an IdP may be an int, a float (3600.0), or a numeric string ("3600"); coerce
+    it to a positive int so the envelope TTL honors the real lifetime instead of dropping a non-int
+    value and defaulting to the 1h cap (which can outlive a shorter-lived upstream token). bool and
+    non-numeric values become None."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _bridge_grant_from_token_response,
+    )
+
+    def ei(v):
+        return _bridge_grant_from_token_response({"access_token": "x", "expires_in": v}).expires_in
+
+    assert ei(300) == 300
+    assert ei(300.0) == 300
+    assert ei("300") == 300
+    assert ei("  300  ") == 300
+    assert ei(True) is None
+    assert ei("nope") is None
+    assert ei(0) is None
+    assert ei(-5) is None
+    assert ei(None) is None
+
+
+@pytest.mark.asyncio
+async def test_bridge_token_exchange_honors_short_float_expires_in_ttl():
+    """A short float expires_in from the upstream caps the envelope TTL, so the client-held envelope
+    does not outlive the upstream token. Before coercion a float was dropped and the envelope
+    defaulted to the 1h cap (3600), which would forward a stale bearer after the upstream token
+    expired."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": 120.0}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    assert json.loads(response.body)["expires_in"] <= 120
+
+
 @pytest.mark.asyncio
 async def test_oauth_delegate_bridge_token_exchange_missing_access_token_is_502_not_keyerror():
     """When the upstream token response has no access_token, a dcr_bridge oauth_delegate exchange
@@ -4912,6 +4949,29 @@ async def test_extract_active_key_hash_rejects_blocked_key(proxy_globals):
     proxy_globals.prisma_client = _FakePrisma()
 
     request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
+    assert await _extract_active_key_hash_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_active_key_hash_fails_closed_on_malformed_expiry(proxy_globals):
+    """A key whose stored expires string does not parse must fail closed to no-hash (the mint then
+    returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
+    resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
+    raise. Before the fix this raised a ValueError instead of returning None."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_active_key_hash_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="u", expires="not-a-parseable-date")
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-bad-expiry-key"})
     assert await _extract_active_key_hash_from_request(request) is None
 
 
