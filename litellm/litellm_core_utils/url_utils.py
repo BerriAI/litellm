@@ -426,3 +426,35 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         # relative Location headers keep the original hostname.
         url = _extract_redirect_url(response, url)
     raise SSRFError("Too many redirects")
+
+
+async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) -> Any:
+    """Method-generic async version of ``safe_get`` with SSRF protection.
+
+    ``client`` must be an ``httpx.AsyncClient`` (exposing ``request``), not a
+    LiteLLM handler, because per-hop redirect control requires disabling the
+    client's default redirect following on every method. Each redirect hop is
+    validated, the connection is made to the validated IP with the original
+    Host header, and redirects are never auto-followed.
+
+    When ``litellm.user_url_validation`` is False, validation is bypassed and
+    this delegates to ``client.request(method, url, follow_redirects=True)``.
+    """
+    if not getattr(litellm, "user_url_validation", True):
+        kwargs.setdefault("follow_redirects", True)
+        return await client.request(method, url, **kwargs)
+    kwargs.pop("follow_redirects", None)
+    caller_headers = kwargs.pop("headers", None) or {}
+    for _ in range(_MAX_REDIRECTS):
+        validated_url, original_host = validate_url(url)
+        response = await client.request(
+            method,
+            validated_url,
+            headers={**caller_headers, "Host": original_host},
+            follow_redirects=False,
+            **kwargs,
+        )
+        if not response.is_redirect:
+            return response
+        url = _extract_redirect_url(response, url)
+    raise SSRFError("Too many redirects")

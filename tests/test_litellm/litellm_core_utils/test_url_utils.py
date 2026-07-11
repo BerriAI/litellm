@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.url_utils import (
     SSRFError,
     _is_blocked_ip,
     assert_same_origin,
+    async_safe_request,
     encode_url_path_segment,
     encode_url_path_segments,
     validate_url,
@@ -535,3 +536,109 @@ def test_assert_same_origin_error_message_does_not_leak_hostnames():
     detail = str(exc.value)
     assert "attacker.example.com" not in detail
     assert "api.internal-corp.example" not in detail
+
+
+class _FakeResponse:
+    def __init__(self, status, location=None):
+        self.status_code = status
+        self.headers = {"location": location} if location else {}
+        self.is_redirect = 300 <= status < 400
+
+
+class TestAsyncSafeRequest:
+    """async_safe_request must apply the same SSRF protection as safe_get to
+    every HTTP method, not just GET, and validate every redirect hop."""
+
+    async def test_blocks_private_ip_for_post(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        class FakeClient:
+            async def request(self, *a, **kw):
+                raise AssertionError("request must not be issued for a blocked IP")
+
+        with pytest.raises(SSRFError):
+            await async_safe_request(FakeClient(), "POST", "http://internal.example.com/x")
+
+    async def test_metadata_ip_blocked_for_post(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        class FakeClient:
+            async def request(self, *a, **kw):
+                raise AssertionError("request must not be issued for metadata IP")
+
+        with pytest.raises(SSRFError):
+            await async_safe_request(FakeClient(), "PUT", "http://metadata.example.com/token")
+
+    async def test_public_post_rewrites_to_ip_and_preserves_method_and_host(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        calls = []
+
+        class FakeClient:
+            async def request(self, method, url, headers=None, follow_redirects=False, **kw):
+                calls.append(
+                    {
+                        "method": method,
+                        "url": url,
+                        "host": (headers or {}).get("Host"),
+                        "follow_redirects": follow_redirects,
+                        "kw": kw,
+                    }
+                )
+                return _FakeResponse(200)
+
+        await async_safe_request(
+            FakeClient(),
+            "POST",
+            "http://example.com/api",
+            json={"a": 1},
+        )
+        assert len(calls) == 1
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["host"] == "example.com"
+        assert "93.184.216.34" in calls[0]["url"]
+        assert calls[0]["follow_redirects"] is False
+        assert calls[0]["kw"]["json"] == {"a": 1}
+
+    async def test_redirect_hop_is_revalidated_and_blocked(self, monkeypatch):
+        resolved = {"example.com": "93.184.216.34", "evil.example.com": "127.0.0.1"}
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (resolved[host], port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        class FakeClient:
+            async def request(self, method, url, headers=None, follow_redirects=False, **kw):
+                return _FakeResponse(302, "http://evil.example.com/internal")
+
+        with pytest.raises(SSRFError):
+            await async_safe_request(FakeClient(), "POST", "http://example.com/start")
+
+    async def test_master_switch_disabled_bypasses_validation(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_validation", False)
+
+        calls = []
+
+        class FakeClient:
+            async def request(self, method, url, **kwargs):
+                calls.append((method, url, kwargs))
+                return _FakeResponse(200)
+
+        await async_safe_request(FakeClient(), "DELETE", "http://127.0.0.1/internal")
+        assert calls and calls[0][0] == "DELETE"
+        assert calls[0][1] == "http://127.0.0.1/internal"
+        assert calls[0][2].get("follow_redirects") is True
