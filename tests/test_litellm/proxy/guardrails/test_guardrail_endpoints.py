@@ -2095,9 +2095,11 @@ async def test_get_guardrail_ui_settings_returns_per_provider_supported_modes():
 
     modes_by_provider = result.supported_modes_by_provider
 
-    # Guardrails from the bug report: neither accepts pre_mcp_call, and the
-    # settings endpoint must reflect that so the UI can hide it.
-    assert "pre_mcp_call" not in modes_by_provider["litellm_content_filter"]
+    # Content Filter now supports pre_mcp_call (LIT-4226 feature half) but not
+    # during_mcp_call; Tool Permission still supports neither, and the settings
+    # endpoint must reflect both so the UI shows exactly the savable modes.
+    assert "pre_mcp_call" in modes_by_provider["litellm_content_filter"]
+    assert "during_mcp_call" not in modes_by_provider["litellm_content_filter"]
     assert modes_by_provider["tool_permission"] == ["pre_call", "post_call"]
 
     # MCP-capable guardrails must still advertise the MCP hooks so users who
@@ -2139,10 +2141,12 @@ async def test_ui_settings_map_matches_runtime_supported_event_hooks():
         ], provider
 
 
-def test_content_filter_runtime_rejects_pre_mcp_call():
+def test_content_filter_runtime_rejects_unsupported_mcp_hook():
     """
     Locks the runtime side of the LIT-4226 contract: the ContentFilterGuardrail
-    validator must reject pre_mcp_call at construction. If someone widens the
+    validator must reject a hook missing from its supported list at
+    construction. pre_mcp_call is supported since the LIT-4226 feature half, so
+    during_mcp_call is the unsupported example now. If someone widens the
     UI classmethod but forgets to widen the runtime supported_event_hooks (or
     vice versa), the two-lists-must-agree test above catches the drift and this
     test catches the specific bug the ticket reported.
@@ -2155,7 +2159,7 @@ def test_content_filter_runtime_rejects_pre_mcp_call():
     with pytest.raises(ValueError, match="not in the supported event hooks"):
         ContentFilterGuardrail(
             guardrail_name="lit4226-runtime-check",
-            event_hook=GuardrailEventHooks.pre_mcp_call,
+            event_hook=GuardrailEventHooks.during_mcp_call,
         )
 
 
@@ -2197,14 +2201,14 @@ def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog)
     with pytest.raises(ValueError, match="not in the supported event hooks"):
         ContentFilterGuardrail(
             guardrail_name="lit4226-strict-default",
-            event_hook=GuardrailEventHooks.pre_mcp_call,
+            event_hook=GuardrailEventHooks.during_mcp_call,
         )
 
     monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "false")
     with caplog.at_level(logging.WARNING):
         instance = ContentFilterGuardrail(
             guardrail_name="lit4226-strict-off",
-            event_hook=GuardrailEventHooks.pre_mcp_call,
+            event_hook=GuardrailEventHooks.during_mcp_call,
         )
     assert instance is not None
     assert any("not in the supported event hooks" in rec.message for rec in caplog.records)
