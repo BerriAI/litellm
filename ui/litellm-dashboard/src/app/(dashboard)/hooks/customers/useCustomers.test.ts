@@ -1,12 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
-import React, { ReactNode } from "react";
+import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCustomers, type EndUser } from "./useCustomers";
 
-const mockGet = vi.fn();
+const useQueryMock = vi.fn();
 vi.mock("@/lib/http/api", () => ({
-  fetchClient: { GET: (...args: unknown[]) => mockGet(...args) },
+  $api: { useQuery: (...args: unknown[]) => useQueryMock(...args) },
 }));
 
 const mockUseAuthorized = vi.fn();
@@ -14,91 +12,52 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => mockUseAuthorized(),
 }));
 
-const mockCustomers: EndUser[] = [
-  { user_id: "customer-1", alias: "Test Customer 1", spend: 150.5, blocked: false },
-  { user_id: "customer-2", alias: null, spend: 0, blocked: true },
-];
+const authorized = { accessToken: "test-access-token", userRole: "Admin" };
 
-const authorized = {
-  accessToken: "test-access-token",
-  userRole: "Admin",
-  userId: "test-user-id",
-  token: "test-token",
-  userEmail: "test@example.com",
-  premiumUser: false,
-  disabledPersonalKeyCreation: null,
-  showSSOBanner: false,
-};
+type QueryOptions = { enabled: boolean; select: (data: EndUser[] | undefined) => EndUser[] };
+
+const lastCallOptions = (): QueryOptions => useQueryMock.mock.calls[0][3] as QueryOptions;
 
 describe("useCustomers", () => {
-  let queryClient: QueryClient;
-
   beforeEach(() => {
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.clearAllMocks();
+    useQueryMock.mockReturnValue({ data: [] });
     mockUseAuthorized.mockReturnValue(authorized);
   });
 
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
-
-  it("fetches /customer/list and returns the typed list on success", async () => {
-    mockGet.mockResolvedValue({ data: mockCustomers });
-
-    const { result } = renderHook(() => useCustomers(), { wrapper });
-
-    expect(result.current.isLoading).toBe(true);
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(result.current.data).toEqual(mockCustomers);
-    expect(mockGet).toHaveBeenCalledWith("/customer/list");
-    expect(mockGet).toHaveBeenCalledTimes(1);
+  it("queries GET /customer/list with a derived key (no hand-written queryKey)", () => {
+    renderHook(() => useCustomers());
+    expect(useQueryMock).toHaveBeenCalledWith("get", "/customer/list", {}, expect.any(Object));
   });
 
-  it("surfaces an error when the request rejects", async () => {
-    const testError = new Error("Failed to fetch customers");
-    mockGet.mockRejectedValue(testError);
-
-    const { result } = renderHook(() => useCustomers(), { wrapper });
-
-    await waitFor(() => {
-      expect(result.current.isError).toBe(true);
-    });
-
-    expect(result.current.error).toEqual(testError);
-    expect(result.current.data).toBeUndefined();
+  it("enables the query only for an admin holding an access token", () => {
+    renderHook(() => useCustomers());
+    expect(lastCallOptions().enabled).toBe(true);
   });
 
-  it("falls back to an empty list when the response has no body", async () => {
-    mockGet.mockResolvedValue({ data: undefined });
-
-    const { result } = renderHook(() => useCustomers(), { wrapper });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(result.current.data).toEqual([]);
+  it("disables the query when the access token is missing", () => {
+    mockUseAuthorized.mockReturnValue({ ...authorized, accessToken: null });
+    renderHook(() => useCustomers());
+    expect(lastCallOptions().enabled).toBe(false);
   });
 
-  it("does not fetch when the access token is missing", () => {
-    mockUseAuthorized.mockReturnValue({ ...authorized, accessToken: null, token: null });
-
-    const { result } = renderHook(() => useCustomers(), { wrapper });
-
-    expect(result.current.isFetched).toBe(false);
-    expect(mockGet).not.toHaveBeenCalled();
-  });
-
-  it("does not fetch when the user is not an admin", () => {
+  it("disables the query for a non-admin role", () => {
     mockUseAuthorized.mockReturnValue({ ...authorized, userRole: "member" });
+    renderHook(() => useCustomers());
+    expect(lastCallOptions().enabled).toBe(false);
+  });
 
-    const { result } = renderHook(() => useCustomers(), { wrapper });
+  it("selects an empty list when the response body is missing", () => {
+    renderHook(() => useCustomers());
+    expect(lastCallOptions().select(undefined)).toEqual([]);
+  });
 
-    expect(result.current.isFetched).toBe(false);
-    expect(mockGet).not.toHaveBeenCalled();
+  it("selects the customer list through unchanged", () => {
+    const customers: EndUser[] = [
+      { user_id: "customer-1", alias: "Test Customer 1", spend: 150.5, blocked: false },
+      { user_id: "customer-2", alias: null, spend: 0, blocked: true },
+    ];
+    renderHook(() => useCustomers());
+    expect(lastCallOptions().select(customers)).toEqual(customers);
   });
 });
