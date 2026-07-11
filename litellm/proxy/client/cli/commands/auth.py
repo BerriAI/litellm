@@ -603,9 +603,9 @@ def logout(ctx: click.Context):
         # unless the caller explicitly overrode --base-url -- otherwise this
         # silently targets the CLI's localhost:4000 default for anyone not
         # running against a local proxy, and revocation does nothing.
-        base_url = (
-            ctx.obj["base_url"] if ctx.obj.get("base_url_explicit") else token_data.get("base_url")
-        ) or ctx.obj["base_url"]
+        base_url = ctx.obj["base_url"]
+        if not ctx.obj.get("base_url_explicit") and token_data:
+            base_url = token_data.get("base_url") or base_url
         try:
             requests.post(
                 f"{base_url}/sso/cli/logout",
