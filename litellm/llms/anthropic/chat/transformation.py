@@ -447,6 +447,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "speed",
             "context_management",
             "cache_control",
+            "max_retries",
         ]
 
         if (
@@ -1509,6 +1510,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
+            elif param == "max_retries" and isinstance(value, int):
+                # Consumed by LiteLLM's httpx transport layer (see
+                # AsyncHTTPHandler/HTTPHandler). Kept off the request body below
+                # in transform_request so it is never sent to the Anthropic API.
+                optional_params["max_retries"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -1870,6 +1876,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
+        # max_retries is consumed by LiteLLM's httpx transport, not the Anthropic API.
+        optional_params.pop("max_retries", None)
 
         # ``top_k`` is a provider-specific kwarg that bypasses
         # ``map_openai_params``; gate it here, the single boundary shared by
