@@ -10,7 +10,7 @@ as explicit parameters.
 
 Wire shape: ``llm_env_`` + an HS256 JWT (same signing approach as the BYOK session
 bearer in ``byok_oauth_endpoints.py``). Registered claims are ``iss``/``iat``/``exp``;
-custom claims are ``user_id``, ``server_id``, and ``grant``, where ``grant`` is the
+custom claims are ``server_id``, ``key_hash``, and ``grant``, where ``grant`` is the
 upstream token grant serialized to JSON, encrypted with the repo's symmetric
 encryption helpers (``encrypt_value``/``decrypt_value`` from
 ``encrypt_decrypt_utils`` — the same family ``encrypt_value_helper`` applies to
@@ -68,11 +68,19 @@ _ENVELOPE_JWT_ALGORITHM = "HS256"
 
 
 class EnvelopeIdentity(BaseModel):
-    """The litellm identity the envelope binds the inner grant to."""
+    """The litellm identity the envelope binds the inner grant to.
+
+    ``key_hash`` is the hashed litellm key that authorized the mint, never a raw
+    credential (and the edge rejects a bare hash presented as a bearer). Admission
+    reloads the live key record by it, so the key's current team/org/object-permission
+    restrictions and its revocation state are enforced at use time rather than frozen at
+    mint time. ``server_id`` binds the envelope to one MCP server so it cannot be replayed
+    across a server boundary.
+    """
 
     model_config = ConfigDict(frozen=True)
-    user_id: str = Field(min_length=1)
     server_id: str = Field(min_length=1)
+    key_hash: str = Field(min_length=1)
 
 
 class UpstreamTokenGrant(BaseModel):
@@ -174,7 +182,7 @@ EnvelopeOpenError: TypeAlias = NotAnEnvelope | BadSignature | Expired | Malforme
 class _EnvelopeClaims(BaseModel):
     """Decoded-claims boundary that pins the exact shape :func:`mint_envelope` emits.
 
-    ``user_id``/``server_id`` mirror the ``min_length`` constraints of
+    ``server_id``/``key_hash`` mirror the ``min_length`` constraints of
     :class:`EnvelopeIdentity` so any claim set that validates here also constructs an
     identity, keeping :func:`open_envelope` raise-free: a correctly signed JWT with an
     empty identity claim fails here and maps to ``MalformedPayload``.
@@ -191,8 +199,8 @@ class _EnvelopeClaims(BaseModel):
     iss: str
     iat: int
     exp: int
-    user_id: str = Field(min_length=1)
     server_id: str = Field(min_length=1)
+    key_hash: str = Field(min_length=1)
     grant: str = Field(min_length=1)
 
 
@@ -227,8 +235,8 @@ def mint_envelope(
         iss=ENVELOPE_ISSUER,
         iat=int(now.timestamp()),
         exp=int(expires_at.timestamp()),
-        user_id=identity.user_id,
         server_id=identity.server_id,
+        key_hash=identity.key_hash,
         grant=_encrypt_grant_blob(_grant_plaintext(grant), keys.encryption_key),
     )
     token = ENVELOPE_PREFIX + jwt.encode(
@@ -273,7 +281,7 @@ def open_envelope(
     if not isinstance(grant, UpstreamTokenGrant):
         return grant
     return OpenedEnvelope(
-        identity=EnvelopeIdentity(user_id=claims.user_id, server_id=claims.server_id),
+        identity=EnvelopeIdentity(server_id=claims.server_id, key_hash=claims.key_hash),
         grant=grant,
     )
 
