@@ -256,22 +256,33 @@ _LITELLM_STASH_KEYS: Tuple[str, ...] = (
 )
 
 
-# Block types that carry binary payloads (base64 or URLs) — skip to avoid
-# counting raw blob bytes as text characters.
+# Block types whose binary payload (base64 or URL) should not be counted as
+# text characters.  audio/video/file have no meaningful text representation;
+# image blocks get a conservative floor below instead of 0.
 _BINARY_CONTENT_BLOCK_TYPES = frozenset(
-    ("input_image", "input_audio", "input_video", "input_file")
+    ("input_audio", "input_video", "input_file")
 )
+
+# Conservative per-image char floor used for token pre-reservation.
+# Accurate counting requires image dimensions + detail level (provider-specific);
+# this floor (~250 tokens at 4 chars/token) avoids both the base64-blob
+# inflation this PR fixes and zero-cost image batching that bypasses TPM limits.
+_IMAGE_BLOCK_CHAR_FLOOR = 1000
 
 
 def _chars_from_content_block(block: dict) -> int:
     """Return estimated text char count for one Responses API content block.
 
-    Skips binary-payload types (image/audio/video/file).  Counts the ``text``
-    field for all other block types — known ones (``input_text``, ``output_text``,
-    ``refusal``) and unrecognised future ones — so tool results and other
-    text-bearing blocks still contribute to the estimate.
+    - ``input_image``: returns a conservative per-image floor so image-heavy
+      requests are not zero-cost for TPM reservation purposes.
+    - ``input_audio``/``input_video``/``input_file``: returns 0 (no text).
+    - All other types: counts the ``text`` field so tool results, refusals,
+      and future text-bearing blocks still contribute to the estimate.
     """
-    if block.get("type", "") in _BINARY_CONTENT_BLOCK_TYPES:
+    block_type = block.get("type", "")
+    if block_type == "input_image":
+        return _IMAGE_BLOCK_CHAR_FLOOR
+    if block_type in _BINARY_CONTENT_BLOCK_TYPES:
         return 0
     text = block.get("text", "")
     return len(text) if isinstance(text, str) else 0
