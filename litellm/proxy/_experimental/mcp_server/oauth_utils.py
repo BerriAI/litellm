@@ -129,7 +129,7 @@ def get_request_base_url(request: Request) -> str:
         if x_forwarded_port and ":" not in netloc:
             netloc = f"{netloc}:{x_forwarded_port}"
 
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
+    return urlunparse((scheme, _strip_default_port(scheme, netloc), parsed.path, "", "", ""))
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
