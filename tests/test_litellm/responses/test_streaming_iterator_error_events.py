@@ -185,15 +185,19 @@ async def test_async_iterator_raises_mid_stream_fallback_on_rate_limit_error_eve
             pass
     assert exc_info.value.status_code == 429
     assert exc_info.value.is_pre_first_chunk is True
+    assert exc_info.value.generated_content == ""
     assert isinstance(exc_info.value.original_exception, litellm.APIError)
     assert exc_info.value.original_exception.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_async_iterator_error_after_first_chunk_is_not_pre_first_chunk():
+async def test_async_iterator_error_after_first_chunk_carries_generated_content():
+    """An error after streamed output must expose the accumulated text so the router's
+    fallback can build a continuation input instead of restarting from scratch."""
     iterator = _make_async_iterator_with_events(
         [
-            {"type": "response.output_text.delta", "delta": "hello"},
+            {"type": "response.output_text.delta", "delta": "hello "},
+            {"type": "response.output_text.delta", "delta": "world"},
             {
                 "type": "error",
                 "error": {"type": "server_error", "code": "internal_error", "message": "boom"},
@@ -205,10 +209,10 @@ async def test_async_iterator_error_after_first_chunk_is_not_pre_first_chunk():
     with pytest.raises(MidStreamFallbackError) as exc_info:
         async for chunk in iterator:
             chunks.append(chunk)
-    assert len(chunks) == 1
+    assert len(chunks) == 2
     assert exc_info.value.status_code == 500
     assert exc_info.value.is_pre_first_chunk is False
-    assert exc_info.value.generated_content == ""
+    assert exc_info.value.generated_content == "hello world"
 
 
 def test_maybe_raise_for_response_failed_event_with_dict_error():

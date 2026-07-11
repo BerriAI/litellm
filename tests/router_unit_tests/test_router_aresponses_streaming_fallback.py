@@ -337,7 +337,7 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     ) as mock_fallback:
         wrapped = await router._aresponses_streaming_iterator(
             response=source,
-            initial_kwargs={"model": "primary"},
+            initial_kwargs={"model": "primary", "input": "original question"},
         )
         collected = [ev async for ev in wrapped]
 
@@ -348,6 +348,101 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     assert raised.status_code == 429
     assert isinstance(raised.original_exception, litellm.APIError)
     assert raised.original_exception.status_code == 429
+    assert mock_fallback.await_args.kwargs["kwargs"]["input"] == "original question"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_uses_continuation_input_after_partial_content():
+    """When output text was already streamed before the error, the fallback re-entry
+    must carry a continuation input with the partial assistant text instead of
+    retrying the original input from scratch (which would duplicate streamed content)."""
+    import json
+    from unittest.mock import Mock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+    from litellm.types.llms.openai import ErrorEvent, ErrorEventError
+
+    router = _make_router()
+
+    events = [
+        {"type": "response.output_text.delta", "delta": "partial answer"},
+        {"type": "error", "error": {"type": "server_error", "code": "internal_error", "message": "boom"}},
+    ]
+    sse_payload = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
+
+    async def mock_aiter_bytes():
+        yield sse_payload
+
+    mock_response = Mock()
+    mock_response.headers = {}
+    mock_response.aiter_bytes = mock_aiter_bytes
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+    mock_logging_obj.completion_start_time = None
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+    def transform(model, parsed_chunk, logging_obj):
+        if parsed_chunk.get("type") == "error":
+            return ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=0,
+                error=ErrorEventError(**parsed_chunk["error"]),
+            )
+        delta_event = Mock()
+        delta_event.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        delta_event.delta = parsed_chunk["delta"]
+        return delta_event
+
+    mock_config.transform_streaming_response.side_effect = transform
+
+    source = ResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-5",
+        responses_api_provider_config=mock_config,
+        logging_obj=mock_logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    fallback_event = _make_completed_event(1, 1, 2)
+
+    class _FallbackStream:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._done:
+                raise StopAsyncIteration
+            self._done = True
+            return fallback_event
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_FallbackStream()),
+    ) as mock_fallback:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary", "input": "original question"},
+        )
+        collected = [ev async for ev in wrapped]
+
+    assert collected[-1] == fallback_event
+    raised = mock_fallback.await_args.kwargs["e"]
+    assert isinstance(raised, MidStreamFallbackError)
+    assert raised.is_pre_first_chunk is False
+    assert raised.generated_content == "partial answer"
+    continuation = mock_fallback.await_args.kwargs["kwargs"]["input"]
+    assert isinstance(continuation, list)
+    assert continuation[0]["content"][0]["text"] == "original question"
+    assert continuation[-2]["role"] == "developer"
+    assert continuation[-1]["role"] == "assistant"
+    assert continuation[-1]["content"][0]["text"] == "partial answer"
 
 
 @pytest.mark.asyncio

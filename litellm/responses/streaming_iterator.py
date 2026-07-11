@@ -113,6 +113,7 @@ class BaseResponsesAPIStreamingIterator:
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
+        self._generated_content = ""
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: Optional[bool] = None
@@ -200,6 +201,10 @@ class BaseResponsesAPIStreamingIterator:
 
                 # Encode container_id on streaming events so proxy/UI follow-ups route correctly
                 _event_type = getattr(openai_responses_api_chunk, "type", None)
+                if _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                    _delta = getattr(openai_responses_api_chunk, "delta", None)
+                    if isinstance(_delta, str):
+                        self._generated_content += _delta
                 _stream_model_id = (
                     self.litellm_metadata.get("model_info", {}).get("id") if self.litellm_metadata else None
                 )
@@ -423,7 +428,7 @@ class BaseResponsesAPIStreamingIterator:
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
-            generated_content="",
+            generated_content=self._generated_content,
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
