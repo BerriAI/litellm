@@ -27,6 +27,7 @@ import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Alert, Button } from "antd";
 import React, { useMemo, useState } from "react";
 import TeamMultiSelect from "../../../common_components/team_multi_select";
+import UserSingleSelect from "../../../common_components/user_single_select";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
@@ -480,11 +481,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
         </div>
       )}
+      {entityType === "user" && (
+        <div className="mb-4">
+          <Text className="mb-2">Filter by user</Text>
+          <UserSingleSelect
+            value={selectedTags[0] ?? null}
+            onChange={(value) => setSelectedTags(value ? [value] : [])}
+          />
+        </div>
+      )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
+        showFilters={entityType !== "team" && entityType !== "user" && entityList !== null && entityList.length > 0}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
