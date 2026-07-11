@@ -1848,6 +1848,41 @@ async def test_token_endpoint_respects_x_forwarded_host():
             None,
             "https://external.com",
         ),
+        (
+            "http://localhost:4000/",
+            "https",
+            "proxy.example.com",
+            "443",
+            "https://proxy.example.com",
+        ),
+        (
+            "http://localhost:4000/",
+            "http",
+            "proxy.example.com",
+            "80",
+            "http://proxy.example.com",
+        ),
+        (
+            "http://internal.local/",
+            "https",
+            None,
+            "443",
+            "https://internal.local",
+        ),
+        (
+            "http://localhost:4000/",
+            "https",
+            "proxy.example.com",
+            "8443",
+            "https://proxy.example.com:8443",
+        ),
+        (
+            "http://localhost:4000/",
+            "https",
+            "proxy.example.com:443",
+            None,
+            "https://proxy.example.com",
+        ),
     ],
 )
 def test_get_request_base_url_comprehensive(
