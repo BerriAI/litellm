@@ -604,6 +604,75 @@ def test_create_model_info_response_no_router_keeps_base_fields():
         "created": response["created"],
         "owned_by": "openai",
     }
+
+
+def test_create_model_info_response_uses_created_when_given():
+    # Regression: `created` must come from the caller's resolved timestamp when
+    # provided, not always fall back to the fixed DEFAULT_MODEL_CREATED_AT_TIME.
+    response = create_model_info_response(
+        model_id="some-model", provider="openai", llm_router=None, created=12345
+    )
+    assert response["created"] == 12345
+
+
+def test_create_model_info_response_defaults_created_when_none():
+    from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
+
+    response = create_model_info_response(
+        model_id="some-model", provider="openai", llm_router=None, created=None
+    )
+    assert response["created"] == DEFAULT_MODEL_CREATED_AT_TIME
+
+
+from litellm.proxy.utils import resolve_model_provider_and_created_at
+
+
+def test_resolve_model_provider_and_created_at_reads_deployment():
+    # Regression: /v1/models previously hardcoded owned_by="openai" for every
+    # model regardless of the deployment's real provider.
+    deployment = MagicMock()
+    deployment.litellm_params.model = "anthropic/claude-3-5-sonnet-latest"
+    deployment.model_info.created_at = real_datetime.datetime(2024, 1, 1, tzinfo=real_datetime.timezone.utc)
+    router = MagicMock()
+    router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
+
+    provider, created = resolve_model_provider_and_created_at(router, "claude-sonnet")
+
+    router.get_deployment_by_model_group_name.assert_called_once_with("claude-sonnet")
+    assert provider == "anthropic"
+    assert created == int(deployment.model_info.created_at.timestamp())
+
+
+def test_resolve_model_provider_and_created_at_no_deployment_defaults_openai():
+    # Wildcard routes / access groups have no backing deployment.
+    router = MagicMock()
+    router.get_deployment_by_model_group_name = MagicMock(return_value=None)
+
+    provider, created = resolve_model_provider_and_created_at(router, "openai/*")
+
+    assert provider == "openai"
+    assert created is None
+
+
+def test_resolve_model_provider_and_created_at_no_router_defaults_openai():
+    provider, created = resolve_model_provider_and_created_at(None, "some-model")
+    assert provider == "openai"
+    assert created is None
+
+
+def test_resolve_model_provider_and_created_at_no_created_at_returns_none():
+    deployment = MagicMock()
+    deployment.litellm_params.model = "gpt-4"
+    deployment.model_info.created_at = None
+    router = MagicMock()
+    router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
+
+    provider, created = resolve_model_provider_and_created_at(router, "gpt-4")
+
+    assert provider == "openai"
+    assert created is None
+
+
 class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized

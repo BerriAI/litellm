@@ -8203,6 +8203,7 @@ async def model_list(
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+        resolve_model_provider_and_created_at,
     )
 
     # Validate scope parameter if provided
@@ -8277,12 +8278,14 @@ async def model_list(
         # public name is what the client sees as the model id.
         model_data = []
         for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+            provider, created = resolve_model_provider_and_created_at(llm_router, lookup_id)
             model_info = create_model_info_response(
                 model_id=lookup_id,
-                provider="openai",
+                provider=provider,
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
+                created=created,
             )
             model_info["id"] = response_id
             model_data.append(model_info)
@@ -8317,12 +8320,14 @@ async def model_list(
     # public name is what the client sees as the model id.
     model_data = []
     for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+        provider, created = resolve_model_provider_and_created_at(llm_router, lookup_id)
         model_info = create_model_info_response(
             model_id=lookup_id,
-            provider="openai",
+            provider=provider,
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
+            created=created,
         )
         model_info["id"] = response_id
         model_data.append(model_info)
@@ -8420,6 +8425,8 @@ async def model_info(
 
     # Use the actual litellm model from the deployment to get provider info
     _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
+    created_at = deployment.model_info.created_at
+    created = int(created_at.timestamp()) if created_at is not None else None
 
     response_id = internal_to_public.get(resolved_model_id, model_id)
     return create_model_info_response(
@@ -8428,6 +8435,7 @@ async def model_info(
         include_metadata=False,
         fallback_type=None,
         llm_router=llm_router,
+        created=created,
     )
 
 
