@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.llms.dashscope.cost_calculator import _calculate_tiered_cost
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -927,9 +928,6 @@ def _estimate_request_input_cost_for_model(
     model_info = _get_model_cost_info(model=model, llm_router=llm_router)
     if model_info is None:
         return None
-    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
-    if input_cost_per_token is None:
-        return None
     input_tokens = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -937,6 +935,16 @@ def _estimate_request_input_cost_for_model(
         model_info=model_info,
     )
     if input_tokens is None:
+        return None
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        return _calculate_tiered_cost(
+            tokens=input_tokens,
+            tiered_pricing=tiered_pricing,
+            cost_key="input_cost_per_token",
+        )
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    if input_cost_per_token is None:
         return None
     return input_tokens * input_cost_per_token
 
@@ -974,13 +982,25 @@ def _estimate_request_max_cost_for_model(
     if input_tokens is None or output_tokens is None:
         return None
 
+    output_multiplier = _get_output_multiplier(request_body=request_body)
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        return _calculate_tiered_cost(
+            tokens=input_tokens,
+            tiered_pricing=tiered_pricing,
+            cost_key="input_cost_per_token",
+        ) + _calculate_tiered_cost(
+            tokens=output_tokens * output_multiplier,
+            tiered_pricing=tiered_pricing,
+            cost_key="output_cost_per_token",
+        )
+
     cost = 0.0
     if input_cost_per_token is not None:
         cost += input_tokens * input_cost_per_token
     elif input_tokens > 0:
         return None
 
-    output_multiplier = _get_output_multiplier(request_body=request_body)
     if output_cost_per_token is not None:
         cost += output_tokens * output_multiplier * output_cost_per_token
     elif output_tokens > 0:
@@ -1035,7 +1055,26 @@ def _get_model_cost_info(
         try:
             model_group_info = llm_router.get_model_group_info(model_group=model)
             if model_group_info is not None:
-                return model_group_info.model_dump()
+                model_group_cost_info = model_group_info.model_dump()
+                deployments = llm_router.get_model_list(model_name=model) or []
+                for deployment in deployments:
+                    model_id = deployment.get("model_info", {}).get("id")
+                    backend_model = deployment.get("litellm_params", {}).get("model")
+                    if not isinstance(model_id, str) or not isinstance(backend_model, str):
+                        continue
+                    deployment_model_info = llm_router.get_deployment_model_info(
+                        model_id=model_id,
+                        model_name=backend_model,
+                    )
+                    if deployment_model_info is None:
+                        continue
+                    tiered_pricing = deployment_model_info.get("tiered_pricing")
+                    if isinstance(tiered_pricing, list) and tiered_pricing:
+                        return {
+                            **model_group_cost_info,
+                            "tiered_pricing": tiered_pricing,
+                        }
+                return model_group_cost_info
         except Exception:
             verbose_proxy_logger.debug(
                 "Unable to load router model group info for budget reservation",

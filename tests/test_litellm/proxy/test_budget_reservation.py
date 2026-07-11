@@ -26,6 +26,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.router import Router
 
 
 @pytest.fixture()
@@ -741,6 +742,85 @@ async def test_should_clamp_reservation_to_default_when_output_cap_missing(
 
     assert reservation is not None
     assert reservation["reserved_cost"] == pytest.approx(expected_cost)
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_reserve_tiered_pricing_cost(spend_counter_state):
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dashscope/qwen3-max",
+                "litellm_params": {
+                    "model": "dashscope/qwen3-max",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "max_input_tokens": 258048,
+                    "max_output_tokens": 65536,
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 1.2e-06,
+                            "output_cost_per_token": 6e-06,
+                            "range": [0, 32000],
+                        },
+                        {
+                            "input_cost_per_token": 2.4e-06,
+                            "output_cost_per_token": 1.2e-05,
+                            "range": [32000, 128000],
+                        },
+                    ],
+                },
+            }
+        ]
+    )
+    request_body = {
+        "model": "dashscope/qwen3-max",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    estimated_cost = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+    )
+    assert estimated_cost is not None
+    assert estimated_cost > 0
+
+    valid_token = UserAPIKeyAuth(
+        token="key-tiered-pricing",
+        spend=0.0,
+        max_budget=estimated_cost,
+    )
+    reservation = await reserve_budget_for_request(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+        valid_token=valid_token,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(estimated_cost)
+    with pytest.raises(litellm.BudgetExceededError):
+        await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     await release_budget_reservation(reservation)
 
 
