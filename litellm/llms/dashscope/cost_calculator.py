@@ -2,6 +2,25 @@
 Cost calculator for Dashscope Chat models.
 
 Handles tiered pricing and prompt caching scenarios.
+
+Tiered pricing semantics
+------------------------
+Dashscope (Alibaba Bailian) uses **all-or-nothing** tiered pricing. The unit
+price of a single request is determined by its total input-token count, and
+*all* tokens of the request (input, cache hits, and output) are billed at that
+tier's rate. This is documented in the official help center:
+
+    https://help.aliyun.com/zh/model-studio/billing-for-model-studio
+
+    "百炼部分模型实行阶梯计费。单价取决于单次请求的输入 Token 总量。
+     该请求的所有 Token 均按对应阶梯的单价结算。
+     例如，某模型设有两档计费区间：0 < Token ≤ 32K 和 32K < Token ≤ 128K。
+     若输入 100K Token，因数值落在第二区间（32K < 100K ≤ 128K），
+     所有 Token 均按第二档单价结算。"
+
+i.e. a 100K input request priced under [0, 32K]=A, (32K, 128K]=B is billed at
+B for the entire request — *not* at A for the first 32K plus B for the next
+68K (which would be income-tax / graduated bracket logic).
 """
 
 from dataclasses import dataclass
@@ -42,78 +61,50 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
 
 
-def _calculate_tiered_cost(
-    tokens: int,
+def _select_tier_for_input(
+    total_input_tokens: int,
     tiered_pricing: List[dict],
-    cost_key: str,
-    fallback_cost_key: Optional[str] = None,
-) -> float:
+) -> Optional[dict]:
     """
-    Calculate cost for a given number of tokens based on a true tiered pricing structure.
+    Return the single tier whose range contains ``total_input_tokens``.
 
-    This function iterates through sorted pricing tiers, calculates the cost for the
-    number of tokens that fall into each tier's range, and sums them up to get the total cost.
+    Per Dashscope rules the tier is selected by total input tokens of the
+    request, and that tier's rates apply uniformly to text, cached and output
+    tokens. If the request exceeds the highest declared range, the last tier
+    is used.
 
-    Args:
-        tokens (int): The total number of tokens to calculate the cost for.
-        tiered_pricing (List[dict]): A list of dictionaries, where each dictionary
-            represents a pricing tier.
-        cost_key (str): The key in the tier dictionary that holds the per-token cost
-            (e.g., 'input_cost_per_token').
-        fallback_cost_key (Optional[str], optional): A fallback key to use if the
-            primary `cost_key` is not found in a tier. Defaults to None.
-
-    Returns:
-        float: The total calculated cost for the given tokens.
-
-    Example:
-        >>> tiered_pricing = [
-        ...     {"range": [0, 100000], "input_cost_per_token": 0.0001},
-        ...     {"range": [100000, 500000], "input_cost_per_token": 0.00005},
-        ... ]
-
-        Calculating cost for 150,000 tokens:
-        (100,000 * 0.0001) + (50,000 * 0.00005) = $12.5
+    A tier matches when ``range_start < total_input_tokens <= range_end``, so
+    a request of exactly ``range_end`` tokens falls into the lower tier — matching
+    the official example ``0 < Token ≤ 32K``. A request with no input tokens
+    returns ``None`` so the caller can fall back to flat pricing (the tier
+    concept does not apply to an empty request).
     """
-    if not tiered_pricing or tokens <= 0:
-        return 0.0
-
-    total_cost = 0.0
-    tokens_processed = 0
+    if not tiered_pricing or total_input_tokens <= 0:
+        return None
 
     sorted_tiers = sorted(tiered_pricing, key=lambda x: x.get("range", [0, 0])[0])
 
     for tier in sorted_tiers:
-        if tokens_processed >= tokens:
-            break
-
         tier_range = tier.get("range", [])
         if len(tier_range) != 2:
             continue
-
         range_start, range_end = tier_range
+        if range_start < total_input_tokens <= range_end:
+            return tier
 
-        if tokens <= range_start:
-            continue
+    return sorted_tiers[-1]
 
-        tier_start = max(range_start, tokens_processed)
-        tier_end = min(range_end, tokens)
 
-        if tier_end > tier_start:
-            tokens_in_tier = tier_end - tier_start
-            cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-            total_cost += tokens_in_tier * cost_per_token
-            tokens_processed = tier_end
-
-    # After loop, check if any tokens remain (i.e., tokens > highest tier's end range)
-    # and charge them at the last tier's rate.
-    if tokens_processed < tokens and sorted_tiers:
-        last_tier = sorted_tiers[-1]
-        remaining_tokens = tokens - tokens_processed
-        cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
-        total_cost += remaining_tokens * cost_per_token
-
-    return total_cost
+def _tier_rate(
+    tier: dict,
+    cost_key: str,
+    fallback_cost_key: Optional[str] = None,
+) -> float:
+    """Read ``cost_key`` from ``tier``, falling back to ``fallback_cost_key`` if absent."""
+    rate = tier.get(cost_key)
+    if rate is None and fallback_cost_key is not None:
+        rate = tier.get(fallback_cost_key)
+    return float(rate or 0.0)
 
 
 def _calculate_prompt_cost(
@@ -123,18 +114,17 @@ def _calculate_prompt_cost(
 ) -> float:
     """Calculate total prompt cost including cached tokens."""
     if tiered_pricing:
-        text_cost = _calculate_tiered_cost(
-            tokens=breakdown.text_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="input_cost_per_token",
-        )
-        cache_cost = _calculate_tiered_cost(
-            tokens=breakdown.cached_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="cache_read_input_token_cost",
-            fallback_cost_key="input_cost_per_token",
-        )
-        return text_cost + cache_cost
+        total_input = breakdown.text_tokens + breakdown.cached_tokens
+        tier = _select_tier_for_input(total_input, tiered_pricing)
+        if tier is not None:
+            input_rate = _tier_rate(tier, "input_cost_per_token")
+            cache_rate = _tier_rate(
+                tier, "cache_read_input_token_cost", "input_cost_per_token"
+            )
+            return (
+                breakdown.text_tokens * input_rate
+                + breakdown.cached_tokens * cache_rate
+            )
 
     input_cost = float(model_info.get("input_cost_per_token") or 0.0)
 
@@ -153,20 +143,26 @@ def _calculate_completion_cost(
     model_info: ModelInfo,
     tiered_pricing: Optional[List[dict]],
 ) -> float:
-    """Calculate total completion cost including reasoning tokens."""
+    """
+    Calculate total completion cost including reasoning tokens.
+
+    Tier selection is based on *input* tokens, per Dashscope rules — output
+    tokens do not affect which tier is used. This is consistent with the
+    examples in the official documentation, which only ever reference input
+    Token counts when choosing a tier.
+    """
     if tiered_pricing:
-        completion_cost = _calculate_tiered_cost(
-            tokens=breakdown.completion_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_token",
-        )
-        reasoning_cost = _calculate_tiered_cost(
-            tokens=breakdown.reasoning_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_reasoning_token",
-            fallback_cost_key="output_cost_per_token",
-        )
-        return completion_cost + reasoning_cost
+        total_input = breakdown.text_tokens + breakdown.cached_tokens
+        tier = _select_tier_for_input(total_input, tiered_pricing)
+        if tier is not None:
+            output_rate = _tier_rate(tier, "output_cost_per_token")
+            reasoning_rate = _tier_rate(
+                tier, "output_cost_per_reasoning_token", "output_cost_per_token"
+            )
+            return (
+                breakdown.completion_tokens * output_rate
+                + breakdown.reasoning_tokens * reasoning_rate
+            )
 
     output_cost = float(model_info.get("output_cost_per_token") or 0.0)
 
