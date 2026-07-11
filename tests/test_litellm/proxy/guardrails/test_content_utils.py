@@ -524,3 +524,87 @@ def test_apply_redacted_messages_back_skips_input_when_not_string():
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
     assert data["input"] == [{"type": "text", "text": "leak"}]
+
+
+# -------------------------------------------------------------------
+# LIT-4303: reasoning.summary_text walking
+# -------------------------------------------------------------------
+
+def test_iter_message_text_walks_reasoning_summary_text():
+    """Reasoning items with summary_text parts should yield their text."""
+    data = {
+        "input": [
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "secret-in-cot"},
+            ]},
+        ]
+    }
+    from litellm.proxy.guardrails._content_utils import iter_message_text
+    texts = list(iter_message_text(data))
+    assert "secret-in-cot" in texts
+
+
+def test_walk_user_text_redacts_reasoning_summary_text():
+    """walk_user_text should rewrite text inside reasoning.summary."""
+    data = {
+        "input": [
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "SSN-123"},
+            ]},
+        ]
+    }
+    count = walk_user_text(data, lambda t: t.replace("SSN-123", "[REDACTED]"))
+    assert count >= 1
+    assert data["input"][0]["summary"][0]["text"] == "[REDACTED]"
+
+
+def test_build_inspection_messages_reasoning_summary():
+    """build_inspection_messages should include reasoning summary text."""
+    data = {
+        "input": [
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "chain-of-thought leak"},
+            ]},
+        ]
+    }
+    msgs = build_inspection_messages(data)
+    assert any("chain-of-thought leak" in m["content"] for m in msgs)
+
+
+# -------------------------------------------------------------------
+# LIT-4302: custom_tool_call_output walking
+# -------------------------------------------------------------------
+
+def test_iter_message_text_walks_custom_tool_call_output():
+    """custom_tool_call_output items should yield their output text."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "tool-secret"},
+        ]
+    }
+    from litellm.proxy.guardrails._content_utils import iter_message_text
+    texts = list(iter_message_text(data))
+    assert "tool-secret" in texts
+
+
+def test_walk_user_text_redacts_custom_tool_call_output():
+    """walk_user_text should rewrite text inside custom_tool_call_output."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "PII-data"},
+        ]
+    }
+    count = walk_user_text(data, lambda t: t.replace("PII-data", "[MASKED]"))
+    assert count >= 1
+    assert data["input"][0]["output"] == "[MASKED]"
+
+
+def test_build_inspection_messages_custom_tool_call_output():
+    """build_inspection_messages should include custom_tool_call_output text."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "custom-tool-leak"},
+        ]
+    }
+    msgs = build_inspection_messages(data)
+    assert any("custom-tool-leak" in m["content"] for m in msgs)
