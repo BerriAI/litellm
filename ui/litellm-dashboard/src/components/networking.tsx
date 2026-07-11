@@ -2324,17 +2324,29 @@ export type ModelGroupConnectionResult = { status: "success" } | { status: "erro
  * resolves the group, credentials, and provider. Used by the auto-router Test
  * Connection to probe each tier's model group and the embedding model.
  */
+/**
+ * Build the minimal request that probes a model group by public name. No
+ * max_tokens: reasoning models (o1/o3/...) reject a tiny cap with "max_tokens
+ * reached" because reasoning tokens count against it, which would show a false
+ * failure for a reachable tier.
+ */
+export const buildModelGroupTestRequest = (
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): { path: string; body: Record<string, unknown> } =>
+  mode === "embedding"
+    ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
+    : {
+        path: "/v1/chat/completions",
+        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+      };
+
 export const testModelGroupConnection = async (
   accessToken: string,
   modelGroup: string,
   mode: "chat" | "embedding",
 ): Promise<ModelGroupConnectionResult> => {
-  const path = mode === "embedding" ? "/v1/embeddings" : "/v1/chat/completions";
-  const body =
-    mode === "embedding"
-      ? { model: modelGroup, input: "test from litellm" }
-      : { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }], max_tokens: 1 };
-
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
   try {
     await apiClient.post(path, { accessToken, body });
     return { status: "success" };
