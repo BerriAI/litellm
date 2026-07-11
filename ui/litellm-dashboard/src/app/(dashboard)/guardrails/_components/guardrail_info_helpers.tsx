@@ -76,6 +76,26 @@ export const populateGuardrailProviderMap = (providerParamsResponse: Record<stri
   });
 };
 
+// Normalizes a form "mode" value (string, string[], or empty) into a string array
+export const toModeArray = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw.filter((m): m is string => typeof m === "string");
+  if (typeof raw === "string") return [raw];
+  return [];
+};
+
+// Resolves the supported modes for the selected provider, falling back to the global list
+export const getSupportedModesForProvider = (
+  settings: { supported_modes?: string[]; supported_modes_by_provider?: Record<string, string[]> } | null,
+  selectedProvider: string | null,
+): string[] | undefined => {
+  const providerKey = selectedProvider ? guardrail_provider_map[selectedProvider]?.toLowerCase() : null;
+  const perProvider =
+    providerKey && settings?.supported_modes_by_provider
+      ? settings.supported_modes_by_provider[providerKey]
+      : undefined;
+  return perProvider ?? settings?.supported_modes;
+};
+
 // Decides if we should render the PII config settings for a given provider
 // For now we only support PII config settings for Presidio PII
 export const shouldRenderPIIConfigSettings = (provider: string | null) => {

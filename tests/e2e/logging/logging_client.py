@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
 from e2e_gateway import Gateway, build_gateway
@@ -200,15 +200,16 @@ def costs_agree(expected: float, actual: float, *, rel_tol: float = 0.05) -> boo
     return abs(expected - actual) <= max(1e-9, abs(expected) * rel_tol)
 
 
+_COMPLETION_BODY_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+
+
 def completion_response_id(body: str) -> str | None:
     """SpendLogs.request_id is the chat completion body id, not x-litellm-call-id."""
     if not body or body == "<streamed>":
         return None
     try:
-        parsed = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
+        parsed = _COMPLETION_BODY_ADAPTER.validate_json(body)
+    except ValidationError:
         return None
     raw = parsed.get("id")
     return raw if isinstance(raw, str) and raw else None
@@ -499,9 +500,9 @@ class LoggingClient:
             headers=creds.auth_headers,
             params=LangfuseListParams(
                 limit=100,
-                trace_id=trace_id,
+                traceId=trace_id,
                 name=name,
-                from_start_time=from_start_time,
+                fromStartTime=from_start_time,
             ),
             response_type=LangfuseObservationList,
             timeout=30.0,
