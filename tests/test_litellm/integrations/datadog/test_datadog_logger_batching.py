@@ -213,7 +213,7 @@ async def test_oversized_payload_splits_before_any_send(datadog_env):
     await logger.async_send_batch()
 
     assert delivered == events
-    assert len(sent_batches) >= 2
+    assert len(sent_batches) == 3
     assert all(
         len(safe_dumps(batch).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES
         for batch in sent_batches

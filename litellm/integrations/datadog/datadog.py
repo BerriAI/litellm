@@ -456,7 +456,7 @@ class DataDogLogger(
 
         if len(chunk) > DD_MAX_BATCH_SIZE:
             return True
-        payload_size_bytes = sum(len(safe_dumps(event).encode("utf-8")) + 2 for event in chunk) + 2
+        payload_size_bytes = len(safe_dumps(chunk).encode("utf-8"))
         return payload_size_bytes > DD_MAX_PAYLOAD_SIZE_BYTES
 
     async def flush_queue(self):
