@@ -1,16 +1,10 @@
 import { CopyOutlined } from "@ant-design/icons";
-import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon, TrashIcon } from "@heroicons/react/outline";
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
-import { Badge, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
+import { TrashIcon } from "@heroicons/react/outline";
+import { ColumnDef, PaginationState, SortingState } from "@tanstack/react-table";
+import { Badge, Button } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
+import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { getCategoryBadgeColor } from "@/components/claude_code_plugins/helpers";
@@ -25,15 +19,9 @@ interface PluginTableProps {
   onPluginClick: (pluginId: string) => void;
 }
 
-const PluginTable: React.FC<PluginTableProps> = ({
-  pluginsList,
-  isLoading,
-  onDeleteClick,
-  accessToken,
-  isAdmin,
-  onPluginClick,
-}) => {
+const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDeleteClick, isAdmin, onPluginClick }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -42,7 +30,8 @@ const PluginTable: React.FC<PluginTableProps> = ({
 
   const columns: ColumnDef<Plugin>[] = [
     {
-      header: "Skill Name",
+      id: "name",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Skill Name" />,
       accessorKey: "name",
       cell: ({ row }) => {
         const plugin = row.original;
@@ -63,16 +52,20 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
+      id: "version",
       header: "Version",
       accessorKey: "version",
+      enableSorting: false,
       cell: ({ row }) => {
         const version = row.original.version || "N/A";
         return <span className="text-xs text-gray-600">{version}</span>;
       },
     },
     {
+      id: "description",
       header: "Description",
       accessorKey: "description",
+      enableSorting: false,
       cell: ({ row }) => {
         const description = row.original.description || "No description";
         return (
@@ -83,7 +76,8 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Category",
+      id: "category",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Category" />,
       accessorKey: "category",
       cell: ({ row }) => {
         const category = row.original.category;
@@ -103,7 +97,8 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Public",
+      id: "enabled",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Public" />,
       accessorKey: "enabled",
       cell: ({ row }) => {
         const plugin = row.original;
@@ -117,17 +112,19 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Created At",
+      id: "created_at",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Created At" />,
       accessorKey: "created_at",
       cell: ({ row }) => <DateCell value={row.original.created_at} />,
     },
     ...(isAdmin
       ? [
           {
-            header: "Actions",
             id: "actions",
+            header: "Actions",
             enableSorting: false,
-            cell: ({ row }: any) => {
+            meta: { pinned: "right" as const },
+            cell: ({ row }: { row: { original: Plugin } }) => {
               const plugin = row.original;
 
               return (
@@ -153,98 +150,22 @@ const PluginTable: React.FC<PluginTableProps> = ({
       : []),
   ];
 
-  const table = useReactTable({
-    data: pluginsList,
-    columns,
-    state: {
-      sorting,
-    },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    enableSorting: true,
-  });
-
   return (
-    <div className="rounded-lg custom-border relative">
-      <div className="overflow-x-auto">
-        <Table className="[&_td]:py-0.5 [&_th]:py-1">
-          <TableHead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHeaderCell
-                    key={header.id}
-                    className={`py-1 h-8 ${
-                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
-                    }`}
-                    onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center">
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </div>
-                      {header.column.getCanSort() && (
-                        <div className="w-4">
-                          {header.column.getIsSorted() ? (
-                            {
-                              asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
-                            }[header.column.getIsSorted() as string]
-                          ) : (
-                            <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </TableHeaderCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableHead>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
-                    <p>Loading...</p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : pluginsList && pluginsList.length > 0 ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className="h-8 cursor-pointer hover:bg-gray-50"
-                  onClick={() => onPluginClick(row.original.id)}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell
-                      key={cell.id}
-                      className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                        cell.column.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
-                          : ""
-                      }`}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
-                    <p>No skills found. Add one to get started.</p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
+    <DataTable
+      data={pluginsList}
+      columns={columns}
+      sortingMode="client"
+      sorting={sorting}
+      onSortingChange={setSorting}
+      paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={setPagination}
+      onRowClick={(plugin) => onPluginClick(plugin.id)}
+      isLoading={isLoading}
+      loadingMessage="Loading skills..."
+      noDataMessage="No skills found. Add one to get started."
+      size="compact"
+    />
   );
 };
 
