@@ -80,6 +80,29 @@ def test_disabled_keeps_caller_override():
     assert _merged(deployment, kwargs)["aws_role_name"] == CALLER_ROLE
 
 
+def test_missing_model_is_noop():
+    litellm.pin_deployment_credentials = True
+    deployment = {"model_name": "claude", "litellm_params": {"aws_role_name": CONFIG_ROLE}}
+    kwargs = {"aws_role_name": CALLER_ROLE}
+
+    Router._pin_deployment_aws_credentials(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["aws_role_name"] == CALLER_ROLE
+
+
+def test_sagemaker_provider_is_pinned():
+    litellm.pin_deployment_credentials = True
+    deployment = {
+        "model_name": "sm",
+        "litellm_params": {"model": "sagemaker_chat/my-endpoint", "aws_role_name": CONFIG_ROLE},
+    }
+    kwargs = {"aws_role_name": CALLER_ROLE}
+
+    Router._pin_deployment_aws_credentials(deployment=deployment, kwargs=kwargs)
+
+    assert "aws_role_name" not in kwargs
+
+
 def test_non_aws_provider_untouched():
     litellm.pin_deployment_credentials = True
     deployment = {
