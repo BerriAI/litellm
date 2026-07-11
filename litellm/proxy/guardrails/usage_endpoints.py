@@ -20,7 +20,6 @@ from litellm.repositories.table_repositories import (
     SpendLogGuardrailIndexRepository,
     SpendLogsRepository,
 )
-from litellm.types.guardrails import LitellmParams
 
 router = APIRouter()
 
@@ -146,8 +145,8 @@ def _get_guardrail_field(g: Any, field: str) -> Any:
 
 
 def _to_dict(value: Any) -> Dict[str, Any]:
-    """Coerce a LitellmParams / guardrail_info value into a plain dict."""
-    if isinstance(value, LitellmParams):
+    """Coerce a pydantic model (e.g. LitellmParams) / dict value into a plain dict."""
+    if isinstance(value, BaseModel):
         return value.model_dump(exclude_none=True)
     if isinstance(value, dict):
         return value
