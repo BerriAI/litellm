@@ -181,6 +181,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "databricks"
+
     @classmethod
     def get_config(cls):
         return super().get_config()

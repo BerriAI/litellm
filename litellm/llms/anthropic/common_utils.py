@@ -360,15 +360,39 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return value if isinstance(value, bool) else None
 
     @staticmethod
+    def _get_provider_resolved_capability(model: str, key: str, custom_llm_provider: str) -> Optional[bool]:
+        """Resolve boolean capability ``key`` for ``model`` under the caller's provider.
+
+        Returns the flag when the provider-aware lookup resolves ``model`` to an
+        entry (or fallback rule) that sets it explicitly, and ``None`` when the
+        model does not resolve under that provider or the resolved entry has no
+        opinion on ``key``.
+        """
+        from litellm.utils import _get_model_info_helper
+
+        try:
+            resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            value = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+        except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
+            return None
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
     def _supports_model_capability(model: str, key: str, custom_llm_provider: str) -> bool:
         """Check a boolean capability ``key`` in the model map under the caller's provider.
 
-        The provider-aware lookup makes exact provider-namespaced entries (e.g. the
-        Bedrock ``global.anthropic.*`` ids) authoritative; the raw model-map walk
-        remains as a provider-less backstop for alias forms the lookup misses.
+        The provider-aware lookup is authoritative when it resolves an explicit flag,
+        so ``key: false`` on the provider-namespaced entry wins over every fallback.
+        Otherwise ``_supports_factory``'s provider-level fallbacks and the raw
+        model-map walk remain as backstops for alias forms the lookup misses.
         """
         from litellm.utils import _supports_factory
 
+        resolved = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
+        if resolved is not None:
+            return resolved
         try:
             if _supports_factory(
                 model=model,
