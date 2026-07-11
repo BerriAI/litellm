@@ -47,6 +47,15 @@ from litellm.types.proxy.claude_code_endpoints import (
 
 DEFAULT_SYNC_TIMEOUT_SECONDS = 10.0
 
+# validate_url() (litellm_core_utils/url_utils.py) does a blocking
+# socket.getaddrinfo() per request; discovery fans out one fetch per skill
+# folder via asyncio.gather, and unbounded concurrency there serializes enough
+# DNS lookups on the event loop to blow through DEFAULT_SYNC_TIMEOUT_SECONDS
+# for repos with more than a handful of skills. Bounding concurrency here
+# keeps each individual fetch fast without touching the shared SSRF utility.
+_MAX_CONCURRENT_GITHUB_FETCHES = 6
+_github_fetch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_GITHUB_FETCHES)
+
 SourceHost = Literal["github", "gitlab", "bitbucket", "url"]
 SyncErrorReason = Literal["unreachable", "http_error", "invalid_json", "invalid_schema"]
 
@@ -163,7 +172,9 @@ async def _http_get(client: AsyncHTTPHandler, url: str, *, timeout: float) -> ht
     try:
         # async_safe_get is SSRF-guarded (resolves + validates every redirect
         # hop) - required here because the target URL is admin-supplied.
-        return await async_safe_get(client, url, headers={}, timeout=timeout)
+        # Bounded by _github_fetch_semaphore: see its module-level comment.
+        async with _github_fetch_semaphore:
+            return await async_safe_get(client, url, headers={}, timeout=timeout)
     except SSRFError as exc:
         raise MarketplaceSyncError(reason="unreachable", detail=str(exc)) from exc
     except httpx.HTTPError as exc:
