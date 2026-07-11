@@ -93,31 +93,48 @@ class AmazonAnthropicClaudeMessagesConfig(
             return [{"type": "text", "text": value}]
         return [value]
 
-    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict) -> None:
-        """Bedrock Invoke rejects a conversation that opens with ``role: "system"``
-        entries inside ``messages`` ("messages.0: use the top-level 'system'
-        parameter for the initial system prompt"); Anthropic Messages carries that
-        content in the top-level ``system`` field, so hoist the leading run of
-        system entries there. Mid-conversation system entries (e.g. Claude Code's
-        ``mid-conversation-system-2026-04-07`` reminders) are accepted by Invoke in
-        place and MUST stay in place: hoisting one mutates the ``system`` prefix
-        and invalidates the prompt cache for the entire message history.
+    @staticmethod
+    def _is_system_role_message(message: Any) -> bool:
+        return isinstance(message, dict) and message.get("role") == "system"
+
+    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict, model: str) -> None:
+        """Bedrock Invoke validates ``role: "system"`` entries inside ``messages``
+        per model. Models carrying ``supports_mid_conversation_system`` in the
+        cost map (the Opus 4.8 family) only reject a leading run ("messages.0:
+        use the top-level 'system' parameter for the initial system prompt") and
+        accept mid-conversation entries (e.g. Claude Code's
+        ``mid-conversation-system-2026-04-07`` reminders) in place, where they
+        MUST stay: hoisting one mutates the ``system`` prefix and invalidates the
+        prompt cache for the entire message history. Older Claude models (Opus
+        4.7, Sonnet 4.6, Haiku 4.5, ...) reject the role in every position
+        ("role 'system' is not supported on this model"), so without the flag
+        every system entry is hoisted into the top-level ``system`` field.
         Billing-header system blocks are stripped from the top-level ``system``
         field regardless of whether anything was hoisted."""
         messages = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        leading_count = next(
-            (i for i, m in enumerate(messages) if not (isinstance(m, dict) and m.get("role") == "system")),
-            len(messages),
-        )
-        if leading_count:
-            anthropic_messages_request["messages"] = messages[leading_count:]
+        if _supports_factory(
+            model=model,
+            custom_llm_provider="bedrock",
+            key="supports_mid_conversation_system",
+        ):
+            leading_count = next(
+                (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+                len(messages),
+            )
+            hoisted = messages[:leading_count]
+            remaining = messages[leading_count:]
+        else:
+            hoisted = [m for m in messages if self._is_system_role_message(m)]
+            remaining = [m for m in messages if not self._is_system_role_message(m)]
+        if hoisted:
+            anthropic_messages_request["messages"] = remaining
         system_content = [
             block
             for source in (
                 anthropic_messages_request.get("system"),
-                *(m.get("content") for m in messages[:leading_count]),
+                *(m.get("content") for m in hoisted),
             )
             for block in self._as_system_content_blocks(source)
         ]
@@ -653,7 +670,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request)
+        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
