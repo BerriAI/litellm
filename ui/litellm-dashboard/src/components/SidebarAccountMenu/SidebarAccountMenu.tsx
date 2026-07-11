@@ -7,6 +7,7 @@ import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPro
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { emitLocalStorageChange, removeLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
+import CopyButton from "@/components/shared/CopyButton";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,8 +15,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cva.config";
-import { Check, ChevronsUpDown, Copy, Crown, IdCard, LogOut, Mail, ShieldCheck } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import { ChevronsUpDown, Crown, IdCard, LogOut, Mail, ShieldCheck } from "lucide-react";
+import React from "react";
 
 const RELEASE_NOTES_URL = "https://docs.litellm.ai/release_notes";
 
@@ -51,40 +52,6 @@ function initialsFromIdentity(email: string | null, userId: string | null): stri
   }
   return "?";
 }
-
-const CopyButton: React.FC<{ value: string | null; label: string }> = ({ value, label }) => {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1200);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  if (!value) return null;
-
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-xs"
-      onClick={async () => {
-        if (!navigator.clipboard) return;
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-        } catch {
-          setCopied(false);
-        }
-      }}
-      aria-label={label}
-      title={label}
-      className="text-muted-foreground hover:text-primary"
-    >
-      {copied ? <Check className="size-[15px]" /> : <Copy className="size-[15px]" />}
-    </Button>
-  );
-};
 
 const InfoRow: React.FC<{ icon: React.ReactNode; label: string; children: React.ReactNode }> = ({
   icon,

@@ -179,7 +179,7 @@ describe("SidebarAccountMenu", () => {
     expect(screen.queryByTitle("Thanks for using LiteLLM!")).not.toBeInTheDocument();
   });
 
-  it("should copy the email and show the confirmation checkmark on success", async () => {
+  it("wires the email row to the shared copy button", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -188,42 +188,10 @@ describe("SidebarAccountMenu", () => {
     await openMenu(user);
 
     const copyButton = screen.getByRole("button", { name: "Copy email" });
-    expect(copyButton.querySelector(".lucide-copy")).toBeInTheDocument();
-
     await user.click(copyButton);
 
     expect(writeText).toHaveBeenCalledWith("test@example.com");
     await waitFor(() => expect(copyButton.querySelector(".lucide-check")).toBeInTheDocument());
-  });
-
-  it("should not show the checkmark when the clipboard write is rejected", async () => {
-    const user = userEvent.setup();
-    const writeText = vi.fn().mockRejectedValue(new Error("permission denied"));
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-
-    renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
-    await openMenu(user);
-
-    const copyButton = screen.getByRole("button", { name: "Copy email" });
-    await user.click(copyButton);
-
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("test@example.com"));
-    expect(copyButton.querySelector(".lucide-check")).not.toBeInTheDocument();
-    expect(copyButton.querySelector(".lucide-copy")).toBeInTheDocument();
-  });
-
-  it("should not show the checkmark when the clipboard API is unavailable", async () => {
-    const user = userEvent.setup();
-    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
-
-    renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
-    await openMenu(user);
-
-    const copyButton = screen.getByRole("button", { name: "Copy email" });
-    await user.click(copyButton);
-
-    expect(copyButton.querySelector(".lucide-check")).not.toBeInTheDocument();
-    expect(copyButton.querySelector(".lucide-copy")).toBeInTheDocument();
   });
 
   it("should call onLogout when logout is clicked", async () => {
