@@ -225,11 +225,14 @@ async def test_resolve_and_sync_falls_back_to_skills_directory_scan(monkeypatch)
     marketplace = await _create_marketplace(client, name="vercel-skills", source_ref="vercel-labs/skills")
 
     manifest_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/.claude-plugin/marketplace.json"
+    plugin_json_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/.claude-plugin/plugin.json"
     contents_url = "https://api.github.com/repos/vercel-labs/skills/contents/skills?ref=main"
     skill_md_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/skills/find-skills/SKILL.md"
 
     async def _get(http_client, url, **kwargs):
         if url == manifest_url:
+            return httpx.Response(404)
+        if url == plugin_json_url:
             return httpx.Response(404)
         if url == contents_url:
             return httpx.Response(
@@ -257,6 +260,108 @@ async def test_resolve_and_sync_falls_back_to_skills_directory_scan(monkeypatch)
         "source": "git-subdir",
         "url": "https://github.com/vercel-labs/skills.git",
         "path": "skills/find-skills",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_reads_plugin_json_explicit_skill_list(monkeypatch):
+    """Regression test: a repo with no marketplace.json but a single-plugin
+    ``.claude-plugin/plugin.json`` (explicit ``skills: [...]`` path list, e.g.
+    inference-sh/skills) must resolve every listed SKILL.md - not fall through
+    to the skills/ directory-scan convention, which this repo doesn't use."""
+    client = _make_fake_prisma_client()
+    marketplace = await _create_marketplace(client, name="inference-sh", source_ref="inference-sh/skills")
+
+    manifest_url = "https://raw.githubusercontent.com/inference-sh/skills/main/.claude-plugin/marketplace.json"
+    plugin_json_url = "https://raw.githubusercontent.com/inference-sh/skills/main/.claude-plugin/plugin.json"
+    skill_md_url = "https://raw.githubusercontent.com/inference-sh/skills/main/guides/prompt-engineering/SKILL.md"
+
+    async def _get(http_client, url, **kwargs):
+        if url == manifest_url:
+            return httpx.Response(404)
+        if url == plugin_json_url:
+            return httpx.Response(
+                200,
+                json={
+                    "name": "inference-sh",
+                    "description": "AI agent skills via inference.sh",
+                    "skills": ["./guides/prompt-engineering/SKILL.md"],
+                },
+            )
+        if url == skill_md_url:
+            return httpx.Response(
+                200,
+                text="---\nname: prompt-engineering\ndescription: Write better prompts.\n---\nBody.",
+            )
+        raise AssertionError(f"unexpected url requested: {url}")
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+
+    result = await resolve_and_sync(client, marketplace)
+
+    assert result.status == "success"
+    assert result.plugin_count == 1
+
+    plugins = await client.db.litellm_claudecodeplugintable.find_many(where={"marketplace_id": marketplace.id})
+    assert len(plugins) == 1
+    assert plugins[0].name == "inference-sh--prompt-engineering"
+    source = json.loads(plugins[0].manifest_json)["source"]
+    assert source == {
+        "source": "git-subdir",
+        "url": "https://github.com/inference-sh/skills.git",
+        "path": "guides/prompt-engineering",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_falls_back_to_root_directory_scan(monkeypatch):
+    """Regression test: a repo with no marketplace.json, no plugin.json, and no
+    skills/ folder at all (e.g. gstack, whose skills sit directly at repo root
+    as <name>/SKILL.md) must still be discovered via a root-level scan."""
+    client = _make_fake_prisma_client()
+    marketplace = await _create_marketplace(client, name="gstack", source_ref="garrytan/gstack")
+
+    manifest_url = "https://raw.githubusercontent.com/garrytan/gstack/main/.claude-plugin/marketplace.json"
+    plugin_json_url = "https://raw.githubusercontent.com/garrytan/gstack/main/.claude-plugin/plugin.json"
+    skills_contents_url = "https://api.github.com/repos/garrytan/gstack/contents/skills?ref=main"
+    root_contents_url = "https://api.github.com/repos/garrytan/gstack/contents/?ref=main"
+    investigate_skill_md_url = "https://raw.githubusercontent.com/garrytan/gstack/main/investigate/SKILL.md"
+    bin_skill_md_url = "https://raw.githubusercontent.com/garrytan/gstack/main/bin/SKILL.md"
+
+    async def _get(http_client, url, **kwargs):
+        if url in (manifest_url, plugin_json_url, skills_contents_url, bin_skill_md_url):
+            return httpx.Response(404)
+        if url == root_contents_url:
+            return httpx.Response(
+                200,
+                json=[
+                    {"name": "investigate", "path": "investigate", "type": "dir"},
+                    {"name": "bin", "path": "bin", "type": "dir"},
+                    {"name": "README.md", "path": "README.md", "type": "file"},
+                ],
+            )
+        if url == investigate_skill_md_url:
+            return httpx.Response(
+                200,
+                text="---\nname: investigate\ndescription: Systematic debugging.\n---\nBody.",
+            )
+        raise AssertionError(f"unexpected url requested: {url}")
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+
+    result = await resolve_and_sync(client, marketplace)
+
+    assert result.status == "success"
+    assert result.plugin_count == 1
+
+    plugins = await client.db.litellm_claudecodeplugintable.find_many(where={"marketplace_id": marketplace.id})
+    assert len(plugins) == 1
+    assert plugins[0].name == "gstack--investigate"
+    source = json.loads(plugins[0].manifest_json)["source"]
+    assert source == {
+        "source": "git-subdir",
+        "url": "https://github.com/garrytan/gstack.git",
+        "path": "investigate",
     }
 
 

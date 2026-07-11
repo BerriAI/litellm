@@ -127,7 +127,7 @@ class MarketplaceResponse(BaseModel):
 
 # --- Multi-marketplace import (LiteLLM_SkillMarketplaceTable) ---
 
-MarketplaceSourceType = Literal["claude_marketplace_json", "skills_dir", "managed"]
+MarketplaceSourceType = Literal["claude_marketplace_json", "claude_plugin_json", "skills_dir", "managed"]
 
 
 class GithubSource(BaseModel):

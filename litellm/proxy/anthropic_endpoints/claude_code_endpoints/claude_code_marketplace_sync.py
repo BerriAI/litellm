@@ -141,16 +141,24 @@ def _parse_source_ref(raw: str) -> ResolvedSource:
     return ResolvedSource(host="url", repo_or_url=stripped)
 
 
-def _build_manifest_url(resolved: ResolvedSource, branch: str) -> str:
+def _build_raw_file_url(resolved: ResolvedSource, branch: str, path: str) -> str:
     match resolved.host:
         case "github":
-            return f"https://raw.githubusercontent.com/{resolved.repo_or_url}/{branch}/.claude-plugin/marketplace.json"
+            return f"https://raw.githubusercontent.com/{resolved.repo_or_url}/{branch}/{path}"
         case "gitlab":
-            return f"https://gitlab.com/{resolved.repo_or_url}/-/raw/{branch}/.claude-plugin/marketplace.json"
+            return f"https://gitlab.com/{resolved.repo_or_url}/-/raw/{branch}/{path}"
         case "bitbucket":
-            return f"https://bitbucket.org/{resolved.repo_or_url}/raw/{branch}/.claude-plugin/marketplace.json"
+            return f"https://bitbucket.org/{resolved.repo_or_url}/raw/{branch}/{path}"
         case "url":
             return resolved.repo_or_url
+
+
+def _build_manifest_url(resolved: ResolvedSource, branch: str) -> str:
+    return _build_raw_file_url(resolved, branch, ".claude-plugin/marketplace.json")
+
+
+def _build_plugin_json_url(resolved: ResolvedSource, branch: str) -> str:
+    return _build_raw_file_url(resolved, branch, ".claude-plugin/plugin.json")
 
 
 def _git_clone_url(resolved: ResolvedSource) -> str:
@@ -213,6 +221,24 @@ def _parse_marketplace_manifest(response: httpx.Response) -> _ExternalMarketplac
     body = _parse_json_body(response)
     try:
         return _ExternalMarketplaceManifest.model_validate(body)
+    except ValidationError as exc:
+        raise MarketplaceSyncError(reason="invalid_schema", detail=str(exc)) from exc
+
+
+class _ExternalPluginManifest(BaseModel):
+    """Shape of a single-plugin ``.claude-plugin/plugin.json`` (as opposed to
+    a multi-plugin ``.claude-plugin/marketplace.json``): one plugin's own
+    metadata, with an explicit list of its skills' SKILL.md paths."""
+
+    name: str
+    description: str | None = None
+    skills: list[str] = Field(default_factory=list)
+
+
+def _parse_plugin_manifest(response: httpx.Response) -> _ExternalPluginManifest:
+    body = _parse_json_body(response)
+    try:
+        return _ExternalPluginManifest.model_validate(body)
     except ValidationError as exc:
         raise MarketplaceSyncError(reason="invalid_schema", detail=str(exc)) from exc
 
@@ -416,6 +442,52 @@ async def _discover_github_skill_docs(
     return tuple(doc for docs in grouped for doc in docs)
 
 
+async def _check_root_skill_doc(
+    client: AsyncHTTPHandler, repo: str, branch: str, entry: _GithubContentsEntry, *, timeout: float
+) -> _DiscoveredSkillDoc | None:
+    if await _skill_md_exists(client, repo, branch, entry.name, timeout=timeout):
+        return _DiscoveredSkillDoc(skill_md_path=f"{entry.name}/SKILL.md", plugin_source_path=entry.name)
+    return None
+
+
+async def _discover_root_skill_docs(
+    client: AsyncHTTPHandler, repo: str, branch: str, *, timeout: float
+) -> tuple[_DiscoveredSkillDoc, ...]:
+    """Fallback for repos with no ``skills/`` wrapper folder: each top-level
+    directory that itself contains a ``SKILL.md`` is one skill (e.g.
+    ``investigate/SKILL.md`` sitting directly at repo root). No further
+    nesting - unlike the ``skills/`` convention, most top-level directories
+    in a repo like this are NOT skills at all, so this only checks one level
+    deep rather than also recursing into non-matching directories."""
+    top_level = await _list_github_contents(client, repo, "", branch, timeout=timeout)
+    docs = await asyncio.gather(
+        *(
+            _check_root_skill_doc(client, repo, branch, entry, timeout=timeout)
+            for entry in top_level
+            if entry.type == "dir"
+        )
+    )
+    return tuple(doc for doc in docs if doc is not None)
+
+
+def _plugin_manifest_skill_doc(raw_path: str) -> _DiscoveredSkillDoc | None:
+    normalized = _normalize_relative_path(raw_path)
+    if not normalized or not normalized.endswith("/SKILL.md"):
+        return None
+    return _DiscoveredSkillDoc(
+        skill_md_path=normalized,
+        plugin_source_path=normalized.removesuffix("/SKILL.md"),
+    )
+
+
+def _plugin_manifest_skill_docs(manifest: _ExternalPluginManifest) -> tuple[_DiscoveredSkillDoc, ...]:
+    """Turn a plugin.json's explicit ``skills: ["./guides/x/SKILL.md", ...]``
+    path list into discovered docs, reusing the same traversal-safe path
+    normalization as marketplace.json's relative ``source`` field."""
+    resolved = (_plugin_manifest_skill_doc(raw_path) for raw_path in manifest.skills)
+    return tuple(doc for doc in resolved if doc is not None)
+
+
 async def _fetch_skill_entry(
     client: AsyncHTTPHandler,
     repo: str,
@@ -444,6 +516,54 @@ async def _fetch_skill_entry(
 # --- top-level fetch orchestration -----------------------------------------
 
 
+async def _fetch_entries_for_docs(
+    client: AsyncHTTPHandler,
+    repo: str,
+    branch: str,
+    marketplace_name: str,
+    docs: tuple[_DiscoveredSkillDoc, ...],
+    *,
+    timeout: float,
+) -> tuple[ResolvedPluginEntry, ...]:
+    fetched = await asyncio.gather(
+        *(
+            _fetch_skill_entry(client, repo, branch, marketplace_name, doc, timeout=timeout)
+            for doc in docs
+        )
+    )
+    return tuple(entry for entry in fetched if entry is not None)
+
+
+async def _fetch_github_fallback_entries(
+    client: AsyncHTTPHandler, resolved: ResolvedSource, branch: str, marketplace_name: str
+) -> tuple[tuple[ResolvedPluginEntry, ...], MarketplaceSourceType]:
+    """Called once the repo has no ``.claude-plugin/marketplace.json``. Tries,
+    in order: an explicit single-plugin ``.claude-plugin/plugin.json`` skill
+    list, the ``skills/*/SKILL.md`` (or one level of category nesting)
+    convention, then a last-resort scan of top-level repo directories for a
+    directly-nested ``SKILL.md`` (e.g. ``investigate/SKILL.md`` with no
+    ``skills/`` wrapper at all)."""
+    repo, timeout = resolved.repo_or_url, DEFAULT_SYNC_TIMEOUT_SECONDS
+
+    plugin_json_url = _build_plugin_json_url(resolved, branch)
+    plugin_json_response = await _http_get(client, plugin_json_url, timeout=timeout)
+    if plugin_json_response.status_code == 200:
+        plugin_manifest = _parse_plugin_manifest(plugin_json_response)
+        plugin_docs = _plugin_manifest_skill_docs(plugin_manifest)
+        if plugin_docs:
+            entries = await _fetch_entries_for_docs(
+                client, repo, branch, marketplace_name, plugin_docs, timeout=timeout
+            )
+            if entries:
+                return entries, "claude_plugin_json"
+
+    skills_dir_docs = await _discover_github_skill_docs(client, repo, branch, timeout=timeout)
+    if not skills_dir_docs:
+        skills_dir_docs = await _discover_root_skill_docs(client, repo, branch, timeout=timeout)
+    entries = await _fetch_entries_for_docs(client, repo, branch, marketplace_name, skills_dir_docs, timeout=timeout)
+    return entries, "skills_dir"
+
+
 async def _fetch_marketplace_entries(
     marketplace_row: MarketplaceRow,
 ) -> tuple[tuple[ResolvedPluginEntry, ...], MarketplaceSourceType]:
@@ -466,24 +586,7 @@ async def _fetch_marketplace_entries(
         return entries, "claude_marketplace_json"
 
     if manifest_response.status_code == 404 and resolved.host == "github":
-        docs = await _discover_github_skill_docs(
-            client, resolved.repo_or_url, branch, timeout=DEFAULT_SYNC_TIMEOUT_SECONDS
-        )
-        fetched = await asyncio.gather(
-            *(
-                _fetch_skill_entry(
-                    client,
-                    resolved.repo_or_url,
-                    branch,
-                    marketplace_row.name,
-                    doc,
-                    timeout=DEFAULT_SYNC_TIMEOUT_SECONDS,
-                )
-                for doc in docs
-            )
-        )
-        entries = tuple(entry for entry in fetched if entry is not None)
-        return entries, "skills_dir"
+        return await _fetch_github_fallback_entries(client, resolved, branch, marketplace_row.name)
 
     if manifest_response.status_code == 404:
         raise MarketplaceSyncError(
