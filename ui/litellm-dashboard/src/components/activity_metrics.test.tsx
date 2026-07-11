@@ -503,6 +503,19 @@ describe("ActivityMetrics charts", () => {
   const tickTexts = (chart: Element) =>
     Array.from(chart.querySelectorAll("text.recharts-cartesian-axis-tick-value")).map((tick) => tick.textContent ?? "");
 
+  const chartTitled = (title: string): Element => {
+    for (const titleElement of screen.getAllByText(title)) {
+      let node = titleElement.parentElement;
+      while (node) {
+        const charts = node.querySelectorAll('[data-slot="chart"]');
+        if (charts.length === 1) return charts[0];
+        if (charts.length > 1) break;
+        node = node.parentElement;
+      }
+    }
+    throw new Error(`No chart card titled "${title}"`);
+  };
+
   it("renders all seven chart sites as real recharts charts indexed by date", () => {
     const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
 
@@ -528,24 +541,32 @@ describe("ActivityMetrics charts", () => {
   });
 
   it("maps the configured colors onto every series", () => {
-    const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
-    const charts = chartsOf(container);
+    render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
 
-    expect(areaStrokes(charts[0])).toEqual([
+    expect(areaStrokes(chartTitled("Total Tokens Over Time"))).toEqual([
       "var(--color-blue-500, #3b82f6)",
       "var(--color-cyan-500, #06b6d4)",
       "var(--color-indigo-500, #6366f1)",
     ]);
-    expect(areaStrokes(charts[1])).toEqual(["var(--color-emerald-500, #10b981)", "var(--color-red-500, #ef4444)"]);
-    expect(barFills(charts[2])).toEqual(["var(--color-green-500, #22c55e)"]);
-    expect(areaStrokes(charts[3])).toEqual([
+    expect(areaStrokes(chartTitled("Total Requests Over Time"))).toEqual([
+      "var(--color-emerald-500, #10b981)",
+      "var(--color-red-500, #ef4444)",
+    ]);
+    expect(barFills(chartTitled("Spend per day"))).toEqual(["var(--color-green-500, #22c55e)"]);
+    expect(areaStrokes(chartTitled("Total Tokens"))).toEqual([
       "var(--color-blue-500, #3b82f6)",
       "var(--color-cyan-500, #06b6d4)",
       "var(--color-indigo-500, #6366f1)",
     ]);
-    expect(barFills(charts[4])).toEqual(["var(--color-blue-500, #3b82f6)"]);
-    expect(areaStrokes(charts[5])).toEqual(["var(--color-green-500, #22c55e)", "var(--color-red-500, #ef4444)"]);
-    expect(areaStrokes(charts[6])).toEqual(["var(--color-cyan-500, #06b6d4)", "var(--color-purple-500, #a855f7)"]);
+    expect(barFills(chartTitled("Requests per day"))).toEqual(["var(--color-blue-500, #3b82f6)"]);
+    expect(areaStrokes(chartTitled("Success vs Failed Requests"))).toEqual([
+      "var(--color-green-500, #22c55e)",
+      "var(--color-red-500, #ef4444)",
+    ]);
+    expect(areaStrokes(chartTitled("Prompt Caching Metrics"))).toEqual([
+      "var(--color-cyan-500, #06b6d4)",
+      "var(--color-purple-500, #a855f7)",
+    ]);
   });
 
   it("shows the built-in chart legend only on the spend per day chart", () => {
@@ -565,17 +586,16 @@ describe("ActivityMetrics charts", () => {
   });
 
   it("formats axis ticks as currency on the spend chart and compact numbers on token charts", () => {
-    const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
-    const charts = chartsOf(container);
+    render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
 
-    const spendTicks = tickTexts(charts[2]);
+    const spendTicks = tickTexts(chartTitled("Spend per day"));
     expect(spendTicks.some((text) => text.startsWith("$"))).toBe(true);
 
-    const tokenTicks = tickTexts(charts[3]);
+    const tokenTicks = tickTexts(chartTitled("Total Tokens"));
     expect(tokenTicks.some((text) => text.endsWith("k"))).toBe(true);
     expect(tokenTicks.some((text) => text.startsWith("$"))).toBe(false);
 
-    const requestTicks = tickTexts(charts[4]);
+    const requestTicks = tickTexts(chartTitled("Requests per day"));
     expect(requestTicks.some((text) => text.startsWith("$"))).toBe(false);
   });
 });
