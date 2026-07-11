@@ -167,7 +167,7 @@ describe("SpendByProvider", () => {
       },
     ];
     render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithNull} />);
-    expect(screen.getByText("$100.00")).toBeInTheDocument();
+    expect(screen.getAllByText("$100.00").length).toBeGreaterThan(0);
   });
 
   it("should handle provider with empty string provider name", () => {
@@ -182,7 +182,7 @@ describe("SpendByProvider", () => {
       },
     ];
     render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithEmpty} />);
-    expect(screen.getByText("$100.00")).toBeInTheDocument();
+    expect(screen.getAllByText("$100.00").length).toBeGreaterThan(0);
   });
 
   it("should display large token numbers with comma formatting", () => {
@@ -214,6 +214,52 @@ describe("SpendByProvider", () => {
     expect(screen.getAllByText("anthropic").length).toBeGreaterThan(0);
     expect(screen.queryByText("google")).not.toBeInTheDocument();
     expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+  });
+
+  it("renders one cyan donut sector per visible provider with the $ total as center label", () => {
+    const { container } = render(
+      <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
+    );
+
+    const sectors = container.querySelectorAll(".recharts-pie-sector path");
+    expect(sectors).toHaveLength(2);
+    const fills = new Set(Array.from(sectors).map((sector) => sector.getAttribute("fill")));
+    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+
+    const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
+    expect(centerLabels).toContain("$351.25");
+  });
+
+  it("adds the unknown provider slice and updates the center total when Show Unknown is on", () => {
+    const providerSpendWithUnknown = [
+      {
+        provider: "openai",
+        spend: 150.5,
+        requests: 100,
+        successful_requests: 95,
+        failed_requests: 5,
+        tokens: 50000,
+      },
+      {
+        provider: "unknown",
+        spend: 50,
+        requests: 10,
+        successful_requests: 5,
+        failed_requests: 5,
+        tokens: 1000,
+      },
+    ];
+    const { container } = render(
+      <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithUnknown} />,
+    );
+
+    expect(container.querySelectorAll(".recharts-pie-sector path")).toHaveLength(1);
+    expect(container.querySelector("text.fill-foreground")?.textContent).toBe("$150.50");
+
+    fireEvent.click(screen.getAllByRole("switch")[1]);
+
+    expect(container.querySelectorAll(".recharts-pie-sector path")).toHaveLength(2);
+    expect(container.querySelector("text.fill-foreground")?.textContent).toBe("$200.50");
   });
 
   it("should include all providers with spend greater than zero by default", () => {
