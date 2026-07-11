@@ -534,6 +534,8 @@ class MCPRequestHandler:
         if not master_key:
             raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
 
+        await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
+
         keys = envelope_keys_from_master_key(master_key)
         result = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
         match result:
@@ -550,6 +552,25 @@ class MCPRequestHandler:
                 raise HTTPException(status_code=401, detail="Invalid or expired credential")
             case _:
                 assert_never(result)
+
+    @staticmethod
+    async def _run_pre_db_read_auth_checks(request: Request, route: str) -> None:
+        """Run the proxy-wide gates ``user_api_key_auth`` applies before any key lookup: the
+        request-size and body-safety limits, the IP allowlist, and the ``general_settings``
+        route allowlist. The envelope arm bypasses ``user_api_key_auth`` (it opens the envelope
+        and reloads the identity itself), so without this a caller blocked by IP or hitting a
+        proxy route the allowlist forbids would be admitted through an envelope where the same
+        principal presented on the normal MCP admission path would be rejected. Runs before the
+        envelope crypto so a disallowed caller is turned away before any work, mirroring the
+        standard pipeline's pre-DB ordering. Violations raise the gate's own status (an IP or
+        route block is a 403, an oversized body its own limit error)."""
+        from litellm.proxy.auth.auth_utils import pre_db_read_auth_checks
+
+        await pre_db_read_auth_checks(
+            request=request,
+            request_data=await _read_request_body(request=request),
+            route=route,
+        )
 
     @staticmethod
     async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:

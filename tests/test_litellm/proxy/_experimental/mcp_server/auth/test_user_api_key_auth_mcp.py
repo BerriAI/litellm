@@ -5243,9 +5243,7 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
 
-    _POLICY_GATE = (
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._run_centralized_common_checks"
-    )
+    _POLICY_GATE = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._run_centralized_common_checks"
 
     async def _enforce_with_gate_error(self, error):
         """Drive _enforce_admitted_live_policy with the centralized gate raising ``error`` and return
@@ -5315,6 +5313,30 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             self._patch_key_reload(return_value=self._reloaded_key(allowed_routes=["/chat/completions"])),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 403
+
+    async def test_envelope_rejected_by_proxy_wide_pre_db_gates_403(self):
+        """The envelope arm runs the same proxy-wide pre-DB gates user_api_key_auth applies before any
+        key lookup (request size, body safety, IP allowlist, general_settings route allowlist). Here
+        the proxy route allowlist forbids MCP, so the envelope is turned away with a 403 before the
+        identity is even reloaded, closing the gap where an envelope bypassed the IP/route allowlists
+        the normal MCP admission path enforces."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.proxy_server.general_settings", {"allowed_routes": ["/chat/completions"]}),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
