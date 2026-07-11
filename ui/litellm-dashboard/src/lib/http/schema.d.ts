@@ -12649,29 +12649,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sso/cli/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cli Refresh Token
-         * @description Silently mint a fresh CLI JWT + refresh token, given a previously-issued
-         *     CLI refresh token. Single-use: the presented refresh token is blocked
-         *     immediately after a successful exchange, so a replay (stolen-file race,
-         *     client retry) can't mint a second pair from it.
-         */
-        post: operations["cli_refresh_token_sso_cli_refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/sso/cli/start": {
         parameters: {
             query?: never;
@@ -49029,26 +49006,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cli_refresh_token_sso_cli_refresh_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
