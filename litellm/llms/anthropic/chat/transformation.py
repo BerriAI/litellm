@@ -1498,6 +1498,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     legacy_thinking = AnthropicConfig._map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
+                        custom_llm_provider=self.custom_llm_provider or "anthropic",
                         llm_provider=self.custom_llm_provider or "anthropic",
                     )
                     capped_thinking = (

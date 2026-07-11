@@ -5767,3 +5767,52 @@ def test_message_level_cache_control_drops_ttl_for_unsupported_model(ttl_target)
     cache_points = _collect_cache_points(result)
     assert len(cache_points) == 1
     assert "ttl" not in cache_points[0]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-haiku-4-5",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-5",
+    ],
+)
+def test_adaptive_thinking_translated_to_legacy_on_pre_46_converse(model):
+    """Raw thinking={type: adaptive} from callers like Claude Code must be
+    translated to legacy thinking={type: enabled, budget_tokens} for pre-4.6
+    models on Bedrock Converse rather than forwarded as-is and rejected."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    thinking = optional_params.get("thinking")
+    assert thinking is not None
+    assert thinking["type"] == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert thinking["budget_tokens"] < 8192
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_adaptive_thinking_passes_through_on_46_plus_converse(model):
+    """thinking={type: adaptive} must be forwarded unchanged for 4.6+ models
+    that natively support adaptive thinking."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params.get("thinking") == {"type": "adaptive"}
