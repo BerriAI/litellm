@@ -464,26 +464,27 @@ class LoggingClient:
         response_id: str | None = None,
         require_positive_spend: bool = True,
     ) -> SpendLogRow | None:
-        """Poll /spend/logs by virtual key. Match SpendLogs.request_id to the
-        completion body id when known; otherwise the first positive-spend row."""
+        """Poll /spend/logs by virtual key.
 
-        def _ready(rows: list[SpendLogRow]) -> bool:
-            for row in rows:
-                if response_id is not None and row.request_id != response_id:
-                    continue
-                if require_positive_spend and not (row.spend is not None and row.spend > 0):
-                    continue
-                return True
-            return False
+        When ``response_id`` is set, only that SpendLogs.request_id may match.
+        When unset, any positive-spend row for the key is accepted. Never falls
+        back to an unmatched row; missing match returns None.
+        """
 
-        rows = self.gateway.poll_logs_for_key(key, min_rows=1, predicate=_ready)
-        for row in rows:
+        def _matches(row: SpendLogRow) -> bool:
             if response_id is not None and row.request_id != response_id:
-                continue
+                return False
             if require_positive_spend and not (row.spend is not None and row.spend > 0):
-                continue
-            return row
-        return rows[0] if rows else None
+                return False
+            return True
+
+        rows = self.gateway.poll_logs_for_key(
+            key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs)
+        )
+        for row in rows:
+            if _matches(row):
+                return row
+        return None
 
     def list_langfuse_observations(
         self,
