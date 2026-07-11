@@ -726,7 +726,7 @@ async def common_checks(
         route=route,
         request_body=request_body,
         fetch_team_org_id=_fetch_team_org_id,
-        path_team_id=request.path_params.get("team_id"),
+        path_team_id=(getattr(request, "path_params", None) or {}).get("team_id"),
     )
 
     _is_route_allowed = _is_api_route_allowed(
