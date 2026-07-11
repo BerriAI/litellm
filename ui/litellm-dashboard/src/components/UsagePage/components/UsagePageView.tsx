@@ -9,7 +9,6 @@
 import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import {
-  BarChart,
   Card,
   Col,
   DateRangePickerValue,
@@ -24,6 +23,9 @@ import {
 } from "@tremor/react";
 import { Alert, Button, Segmented, Select, Tooltip, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
+
+import { BarChart } from "@/components/shared/charts";
+import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -680,38 +682,42 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
                       {/* Daily Spend Chart */}
                       <Col numColSpan={2}>
-                        <Card>
-                          <Title>Daily Spend</Title>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <BarChart
-                              data={sortedDailyResults}
-                              index="date"
-                              categories={["metrics.spend"]}
-                              colors={["cyan"]}
-                              valueFormatter={valueFormatterSpend}
-                              yAxisWidth={100}
-                              showLegend={false}
-                              customTooltip={({ payload, active }) => {
-                                if (!active || !payload?.[0]) return null;
-                                const data = payload[0].payload;
-                                return (
-                                  <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                    <p className="font-bold">{data.date}</p>
-                                    <p className="text-cyan-500">
-                                      Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                    </p>
-                                    <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                    <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                  </div>
-                                );
-                              }}
-                            />
-                          )}
-                        </Card>
+                        <ShadcnCard>
+                          <CardHeader>
+                            <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            {loading ? (
+                              <ChartLoader isDateChanging={isDateChanging} />
+                            ) : (
+                              <BarChart
+                                data={sortedDailyResults}
+                                index="date"
+                                categories={["metrics.spend"]}
+                                colors={["cyan"]}
+                                valueFormatter={valueFormatterSpend}
+                                yAxisWidth={100}
+                                showLegend={false}
+                                customTooltip={({ payload, active }) => {
+                                  if (!active || !payload?.[0]) return null;
+                                  const data = payload[0].payload;
+                                  return (
+                                    <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                      <p className="font-bold">{data.date}</p>
+                                      <p className="text-cyan-500">
+                                        Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                      </p>
+                                      <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                                      <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                      <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                      <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                                    </div>
+                                  );
+                                }}
+                              />
+                            )}
+                          </CardContent>
+                        </ShadcnCard>
                       </Col>
                       {/* Top API Keys */}
                       <Col numColSpan={1}>
