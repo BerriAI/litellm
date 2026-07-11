@@ -10,7 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.llms.dashscope.cost_calculator import _calculate_tiered_cost
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import calculate_tiered_cost
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -938,7 +938,7 @@ def _estimate_request_input_cost_for_model(
         return None
     tiered_pricing = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        return _calculate_tiered_cost(
+        return calculate_tiered_cost(
             tokens=input_tokens,
             tiered_pricing=tiered_pricing,
             cost_key="input_cost_per_token",
@@ -985,11 +985,11 @@ def _estimate_request_max_cost_for_model(
     output_multiplier = _get_output_multiplier(request_body=request_body)
     tiered_pricing = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        return _calculate_tiered_cost(
+        return calculate_tiered_cost(
             tokens=input_tokens,
             tiered_pricing=tiered_pricing,
             cost_key="input_cost_per_token",
-        ) + _calculate_tiered_cost(
+        ) + calculate_tiered_cost(
             tokens=output_tokens * output_multiplier,
             tiered_pricing=tiered_pricing,
             cost_key="output_cost_per_token",
@@ -1056,6 +1056,13 @@ def _get_model_cost_info(
             model_group_info = llm_router.get_model_group_info(model_group=model)
             if model_group_info is not None:
                 model_group_cost_info = model_group_info.model_dump()
+                # Reservation runs before routing, so the concrete deployment is
+                # unknown here. We assume deployments in a group share pricing and
+                # use the first tiered table we find as the estimate. This is a
+                # best-effort admission gate; post-request billing is exact against
+                # the deployment that actually served the request. Mixing tiered and
+                # flat deployments in one group can therefore over- or under-estimate
+                # at reservation time only.
                 deployments = llm_router.get_model_list(model_name=model) or []
                 for deployment in deployments:
                     model_id = deployment.get("model_info", {}).get("id")
