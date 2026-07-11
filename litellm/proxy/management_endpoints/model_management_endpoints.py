@@ -1138,6 +1138,8 @@ async def delete_model(
                 if deleted_name is not None and deleted_model.startswith("auto_router/"):
                     llm_router.auto_routers.pop(deleted_name, None)
                     llm_router.complexity_routers.pop(deleted_name, None)
+                    llm_router.adaptive_routers.pop(deleted_name, None)
+                    llm_router.quality_routers.pop(deleted_name, None)
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -1741,12 +1743,15 @@ async def clear_cache():
         for model_id in db_model_ids:
             llm_router.delete_deployment(id=model_id)
 
-        # Clear only DB-backed auto/complexity routers, keyed by model_name, so the reload
-        # below rebuilds them fresh. A blanket .clear() would also drop config-defined
+        # Clear only DB-backed auto-router-family entries, keyed by model_name, so the
+        # reload below rebuilds them fresh. A blanket .clear() would also drop config-defined
         # routers, which are never re-added below (add_deployment only reloads DB models),
         # leaving them permanently unroutable until a full proxy restart for every tenant.
         # Restrict to deployments whose model is actually an auto_router/* so a config
-        # router that merely shares a model_name with a regular DB model isn't evicted.
+        # router that merely shares a model_name with a regular DB model isn't evicted. The
+        # auto_router/ prefix also covers quality_router/ and adaptive_router/, so pop the
+        # name from every router registry (no-op where absent); missing quality/adaptive
+        # entries would otherwise make init raise "already exists" on reload and abort it.
         db_router_names = {
             model.get("model_name")
             for model in current_models
@@ -1756,6 +1761,8 @@ async def clear_cache():
         for model_name in db_router_names:
             llm_router.auto_routers.pop(model_name, None)
             llm_router.complexity_routers.pop(model_name, None)
+            llm_router.adaptive_routers.pop(model_name, None)
+            llm_router.quality_routers.pop(model_name, None)
 
         # Reload only DB models
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)

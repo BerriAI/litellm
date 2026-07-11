@@ -143,6 +143,16 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText("No keyword tier overrides configured")).toBeInTheDocument();
   });
 
+  it("hides the keyword-tier and semantic sections when their change handlers are absent (edit modal)", () => {
+    // The edit-auto-router modal renders ComplexityRouterConfig without these handlers;
+    // the sections must stay hidden rather than render interactive-but-dead controls.
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    expect(screen.queryByText("Keyword Tier Overrides")).not.toBeInTheDocument();
+    expect(screen.queryByText("Semantic keyword matching")).not.toBeInTheDocument();
+    // Core tier config still renders.
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+  });
+
   it("should call onKeywordTierRulesChange with a new rule when 'Add keyword rule' is clicked", async () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();

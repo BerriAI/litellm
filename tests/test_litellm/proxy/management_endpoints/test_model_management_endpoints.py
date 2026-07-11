@@ -588,6 +588,48 @@ class TestClearCachePreservesConfigRouters:
         # The DB model isn't a router, so the same-named config router must be left intact.
         assert "shared-name" in mock_router.complexity_routers
 
+    @pytest.mark.asyncio
+    async def test_db_quality_and_adaptive_routers_are_evicted(self):
+        """The auto_router/ prefix also covers quality_router/ and adaptive_router/. Their
+        registry entries must be popped too, or reload's init raises 'already exists'
+        (quality) or leaves a stale entry (adaptive).
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+
+        mock_router = MagicMock()
+        mock_router.model_list = [
+            {
+                "model_name": "q1",
+                "model_info": {"id": "db-q", "db_model": True},
+                "litellm_params": {"model": "auto_router/quality_router/q1"},
+            },
+            {
+                "model_name": "a1",
+                "model_info": {"id": "db-a", "db_model": True},
+                "litellm_params": {"model": "auto_router/adaptive_router/a1"},
+            },
+        ]
+        mock_router.delete_deployment = MagicMock(return_value=True)
+        mock_router.auto_routers = {}
+        mock_router.complexity_routers = {}
+        mock_router.quality_routers = {"q1": MagicMock()}
+        mock_router.adaptive_routers = {"a1": MagicMock()}
+
+        mock_config = MagicMock()
+        mock_config.add_deployment = AsyncMock(return_value=True)
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
+        ):
+            await clear_cache()
+
+        assert "q1" not in mock_router.quality_routers
+        assert "a1" not in mock_router.adaptive_routers
+
 
 class TestDeleteModelClearsRouterRegistry:
     """delete_model must evict the deleted deployment from the auto/complexity router maps,

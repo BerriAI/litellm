@@ -77,9 +77,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
   keywordTierRules = [],
-  onKeywordTierRulesChange = () => {},
+  onKeywordTierRulesChange,
   semanticMatchingEnabled = false,
-  onSemanticMatchingEnabledChange = () => {},
+  onSemanticMatchingEnabledChange,
   embeddingModel,
   onEmbeddingModelChange = () => {},
   matchThreshold = 0.5,
@@ -302,21 +302,30 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </ul>
       </Card>
 
-      <Divider />
+      {/* Keyword-tier and semantic sections only render when their change handlers are
+          wired (the add-router flow). The edit-auto-router modal doesn't pass them yet, so
+          they stay hidden there rather than rendering interactive-but-dead controls. */}
+      {onKeywordTierRulesChange && (
+        <>
+          <Divider />
+          <KeywordTierRules rules={keywordTierRules} onChange={onKeywordTierRulesChange} />
+        </>
+      )}
 
-      <KeywordTierRules rules={keywordTierRules} onChange={onKeywordTierRulesChange} />
-
-      <Divider />
-
-      <SemanticKeywordMatching
-        enabled={semanticMatchingEnabled}
-        onEnabledChange={onSemanticMatchingEnabledChange}
-        embeddingModel={embeddingModel}
-        onEmbeddingModelChange={onEmbeddingModelChange}
-        matchThreshold={matchThreshold}
-        onMatchThresholdChange={onMatchThresholdChange}
-        modelInfo={modelInfo}
-      />
+      {onSemanticMatchingEnabledChange && (
+        <>
+          <Divider />
+          <SemanticKeywordMatching
+            enabled={semanticMatchingEnabled}
+            onEnabledChange={onSemanticMatchingEnabledChange}
+            embeddingModel={embeddingModel}
+            onEmbeddingModelChange={onEmbeddingModelChange}
+            matchThreshold={matchThreshold}
+            onMatchThresholdChange={onMatchThresholdChange}
+            modelInfo={modelInfo}
+          />
+        </>
+      )}
     </div>
   );
 };

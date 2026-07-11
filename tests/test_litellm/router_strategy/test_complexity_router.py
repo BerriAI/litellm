@@ -1836,6 +1836,18 @@ class TestSemanticConfigValidation:
         with pytest.raises(ValidationError):
             ComplexityRouterConfig(keyword_tier_rules=[{"keywords": ["   ", ""], "tier": "SIMPLE"}])
 
+    def test_keyword_tier_rule_strips_and_drops_blank_keywords(self):
+        """Blank keywords mixed with real ones are dropped (not kept), and survivors trimmed.
+
+        A stray "" would otherwise match-all in _keyword_matches and silently force this
+        tier for every request.
+        """
+        config = ComplexityRouterConfig(
+            keyword_tier_rules=[{"keywords": ["", "  deploy to k8s  ", " ", "kubernetes"], "tier": "REASONING"}]
+        )
+        assert config.keyword_tier_rules is not None
+        assert config.keyword_tier_rules[0].keywords == ["deploy to k8s", "kubernetes"]
+
 
 class _StubEncoder:
     """Minimal stand-in for LiteLLMRouterEncoder.aencode_queries, capturing the kwargs it was called with."""
