@@ -286,6 +286,23 @@ describe("DataTable loading", () => {
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
+
+  it("varies skeleton shape and width per column instead of one fixed bar", () => {
+    const columns: ColumnDef<Person, unknown>[] = [
+      { accessorKey: "name", header: "Name", meta: { skeleton: "twoLine" }, cell: () => null },
+      { accessorKey: "email", header: "Email", cell: () => null },
+    ];
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={columns} isLoading />);
+
+    const firstRow = screen.getAllByTestId("skeleton-row").at(0);
+    expect(firstRow).toBeDefined();
+    const bars = Array.from(firstRow?.querySelectorAll('[data-slot="skeleton"]') ?? []);
+
+    // twoLine column contributes a main + sub bar (2); the text column contributes 1
+    expect(bars).toHaveLength(3);
+    // per-column widths differ instead of every cell sharing one fixed width
+    expect(new Set(bars.map((bar) => bar.className)).size).toBeGreaterThan(1);
+  });
 });
 
 describe("DataTable column visibility", () => {
