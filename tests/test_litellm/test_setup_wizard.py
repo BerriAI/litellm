@@ -341,5 +341,6 @@ def test_run_setup_wizard_enables_debug_when_requested(monkeypatch):
     assert calls == {"debug": 1, "run": 1}
 
     calls["debug"] = 0
+    calls["run"] = 0
     wiz.run_setup_wizard(debug=False)
-    assert calls["debug"] == 0
+    assert calls == {"debug": 0, "run": 1}
