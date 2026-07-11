@@ -47,11 +47,11 @@ describe("DashboardHeader breadcrumb", () => {
     await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
   });
 
-  it("falls back to the static section crumb when the selector has nothing to switch to", () => {
+  it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {
     render(<DashboardHeader page="logs" />);
 
-    expect(screen.getByText("Observability")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /AI Gateway/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Observability")).not.toBeInTheDocument();
   });
 });
