@@ -75,7 +75,7 @@ class ManagementClient:
                 case _:
                     break
         assert last is not None
-        _ = unwrap(last)
+        raise AssertionError(last)
 
     def delete_key_strict(self, key: str) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
@@ -147,7 +147,7 @@ class ManagementClient:
                 case _:
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
         assert last is not None
-        _ = unwrap(last)
+        raise AssertionError(last)
 
     def add_team_member(self, team_id: str, user_id: str) -> None:
         last: Result[NoBody] | None = None
@@ -169,7 +169,7 @@ class ManagementClient:
                 case _:
                     break
         assert last is not None
-        _ = unwrap(last)
+        raise AssertionError(last)
 
     def delete_team_member(self, team_id: str, user_id: str) -> None:
         _ = unwrap(
