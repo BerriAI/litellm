@@ -329,6 +329,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if effort is None and not adaptive_thinking:
             return
 
+        # Models that natively accept `output_config.effort` but are not adaptive (Claude Opus 4.5).
+        # Keep the native effort and only drop the adaptive `thinking` block, which these models
+        # reject. Effort-only requests pass through so provider subclasses (bedrock/vertex) keep
+        # owning level clamping; an adaptive request only stays here when its effort level is one
+        # the model supports, otherwise it falls through to the legacy budget translation below.
         if AnthropicConfig._model_supports_effort_param(model, custom_llm_provider) and (
             not adaptive_thinking
             or AnthropicConfig._validate_effort_for_model(model, effort, custom_llm_provider) is None
