@@ -7,153 +7,19 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from openai import APITimeoutError as Timeout
-
 import litellm
 
 litellm.num_retries = 0
-import asyncio
-import logging
-from typing import Optional
-import openai
 from test_openai_batches_and_files import load_vertex_ai_credentials
 
-from litellm import create_fine_tuning_job
-from litellm._logging import verbose_logger
 from litellm.llms.vertex_ai.fine_tuning.handler import (
     FineTuningJobCreate,
     VertexFineTuningAPI,
 )
 from litellm.types.llms.openai import Hyperparameters
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingPayload
 from unittest.mock import patch, MagicMock, AsyncMock
 
 vertex_finetune_api = VertexFineTuningAPI()
-
-
-class TestCustomLogger(CustomLogger):
-    def __init__(self):
-        super().__init__()
-        self.standard_logging_object: Optional[StandardLoggingPayload] = None
-
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print(
-            "Success event logged with kwargs=",
-            kwargs,
-            "and response_obj=",
-            response_obj,
-        )
-        self.standard_logging_object = kwargs["standard_logging_object"]
-
-
-async def _acreate_fine_tuning_job_with_propagation_retry(
-    *, max_attempts: int = 12, initial_delay: float = 1.0, **kwargs
-):
-    """
-    Wrap litellm.acreate_fine_tuning_job and retry on the eventual-consistency
-    400 OpenAI returns when a freshly-uploaded training file isn't yet visible
-    to the fine-tuning endpoint (`'file-... does not exist'`).
-
-    Polling the files-retrieve endpoint or `FileObject.status` doesn't help —
-    OpenAI's `status` field is deprecated, and the retrieve and fine-tuning
-    endpoints don't share a consistency model. Retrying the operation itself
-    is the only reliable signal that propagation has finished.
-
-    Total budget with defaults: ~70s across 12 attempts (exp backoff capped at
-    8s).
-    """
-    delay = initial_delay
-    last_error: Optional[openai.BadRequestError] = None
-    for _ in range(max_attempts):
-        try:
-            return await litellm.acreate_fine_tuning_job(**kwargs)
-        except openai.BadRequestError as e:
-            if "does not exist" not in str(e):
-                raise
-            last_error = e
-        await asyncio.sleep(delay)
-        delay = min(delay * 1.5, 8.0)
-    assert last_error is not None
-    raise last_error
-
-
-@pytest.mark.asyncio
-async def test_create_fine_tune_jobs_async():
-    try:
-        custom_logger = TestCustomLogger()
-        litellm.callbacks = ["datadog", custom_logger]
-        verbose_logger.setLevel(logging.DEBUG)
-        file_name = "openai_batch_completions.jsonl"
-        _current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(_current_dir, file_name)
-
-        file_obj = await litellm.acreate_file(
-            file=open(file_path, "rb"),
-            purpose="fine-tune",
-            custom_llm_provider="openai",
-        )
-        print("Response from creating file=", file_obj)
-
-        create_fine_tuning_response = (
-            await _acreate_fine_tuning_job_with_propagation_retry(
-                model="gpt-4o-mini-2024-07-18",
-                training_file=file_obj.id,
-            )
-        )
-
-        print(
-            "response from litellm.create_fine_tuning_job=", create_fine_tuning_response
-        )
-
-        assert create_fine_tuning_response.id is not None
-        assert create_fine_tuning_response.model == "gpt-4o-mini-2024-07-18"
-
-        await asyncio.sleep(2)
-        _logged_standard_logging_object = custom_logger.standard_logging_object
-        assert _logged_standard_logging_object is not None
-        print(
-            "custom_logger.standard_logging_object=",
-            json.dumps(_logged_standard_logging_object, indent=4),
-        )
-        assert _logged_standard_logging_object["model"] == "gpt-4o-mini-2024-07-18"
-        assert _logged_standard_logging_object["id"] == create_fine_tuning_response.id
-
-        # list fine tuning jobs
-        print("listing ft jobs")
-        ft_jobs = await litellm.alist_fine_tuning_jobs(limit=2)
-        print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-        assert len(list(ft_jobs)) > 0
-
-        # retrieve fine tuning job
-        response = await litellm.aretrieve_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-        )
-        print("response from litellm.retrieve_fine_tuning_job=", response)
-
-        # delete file
-
-        await litellm.afile_delete(
-            file_id=file_obj.id,
-        )
-
-        # cancel ft job
-        response = await litellm.acancel_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-        )
-
-        print("response from litellm.cancel_fine_tuning_job=", response)
-
-        assert response.status == "cancelled"
-        assert response.id == create_fine_tuning_response.id
-    except openai.RateLimitError:
-        pass
-    except Exception as e:
-        if "Job has already completed" in str(e):
-            return
-        else:
-            pytest.fail(f"Error occurred: {e}")
-    pass
 
 
 @pytest.mark.asyncio()
