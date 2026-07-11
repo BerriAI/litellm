@@ -5297,6 +5297,31 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 503
 
+    async def test_envelope_for_key_barred_from_mcp_routes_is_rejected_403(self):
+        """A key whose allowed_routes exclude MCP must not reach tools via an envelope: the arm runs
+        RouteChecks.should_call_route before admitting, exactly as the standard pipeline does between
+        the builder and common_checks. A route-restricted key can mint an envelope at the token
+        endpoint (not itself an MCP route) and would otherwise replay it against MCP, because the
+        centralized checks treat MCP as an inference route and never re-check allowed_routes; the
+        route gate rejects it with its own 403."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key(allowed_routes=["/chat/completions"])),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 403
+
     async def test_blocked_state_bare_exception_stays_401(self):
         """A blocked team/project raises a bare Exception (no status) in common_checks, which the
         standard pipeline renders as 401; the arm keeps failing those closed as 401, never a 500."""
