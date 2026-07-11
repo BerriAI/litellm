@@ -7552,7 +7552,11 @@ class Router:
         if default_model is None and complexity_router_config:
             tiers = complexity_router_config.get("tiers", {})
             # Use MEDIUM tier as fallback default
-            default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            medium = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            if isinstance(medium, list):
+                default_model = medium[0] if medium else None
+            else:
+                default_model = medium
 
         if default_model is None:
             raise ValueError(
@@ -7571,6 +7575,25 @@ class Router:
                 f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.complexity_routers[deployment.model_name] = complexity_router
+
+        # When adaptive soft-floors are enabled, eagerly build the embedded
+        # AdaptiveRouter and register its post-call hook so bandit learning runs.
+        if getattr(complexity_router.config, "adaptive", False):
+            adaptive = complexity_router._ensure_adaptive_router()
+            if adaptive is not None:
+                if deployment.model_name in self.adaptive_routers:
+                    raise ValueError(
+                        f"Adaptive-router deployment {deployment.model_name} already exists. "
+                        "Please use a different model name for the hybrid complexity router."
+                    )
+                from litellm.router_strategy.adaptive_router.hooks import (
+                    AdaptiveRouterPostCallHook,
+                )
+
+                self.adaptive_routers[deployment.model_name] = adaptive
+                litellm.logging_callback_manager.add_litellm_callback(
+                    AdaptiveRouterPostCallHook(adaptive_router=adaptive)
+                )
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""

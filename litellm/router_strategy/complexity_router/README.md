@@ -148,6 +148,37 @@ Technical code keywords are detected case-insensitively and include:
 - **Memory usage**: Minimal (compiled regex patterns + keyword sets)
 - **No external dependencies**: Works offline with no API calls
 
+## Adaptive soft floors
+
+Set `adaptive: true` to keep complexity as a bias rather than a hard gate. Tier
+values become pools; the router Thompson-samples across the **union** of all
+pools, subtracting a configurable `tier_distance_penalty` for models whose home
+tier is far from the classified tier. Post-call bandit learning reuses the
+existing adaptive router hook.
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        adaptive: true
+        adaptive_weights:
+          quality: 0.7
+          cost: 0.3
+        tier_distance_penalty: 0.15
+        tiers:
+          SIMPLE: [gpt-4o-mini, haiku]
+          MEDIUM: [gpt-4o, sonnet]
+          COMPLEX: [sonnet, opus]
+          REASONING: [o3, opus]
+```
+
+Each pool member should declare `model_info.adaptive_router_preferences` the
+same way standalone `adaptive_router` does. When `adaptive` is false (default),
+behavior is unchanged: a string tier mapping (or the first entry of a list)
+is used as a hard pin.
+
 ## Comparison with auto_router
 
 | Feature | complexity_router | auto_router |

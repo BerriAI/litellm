@@ -25,6 +25,7 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,
 )
@@ -149,6 +150,12 @@ class ComplexityRouter(CustomLogger):
             re.compile(r"\d+\.\s"),
             re.compile(r"[a-z]\)\s", re.IGNORECASE),
         ]
+
+        # Optional adaptive soft-floor selector. Built lazily on first use so the
+        # parent Router can finish registering underlying deployments first.
+        self.adaptive_router: Optional[Any] = None
+        self._model_home_tier: Dict[str, ComplexityTier] = {}
+        self._adaptive_init_attempted = False
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
 
@@ -406,6 +413,10 @@ class ComplexityRouter(CustomLogger):
         # Check config tiers mapping
         model = self.config.tiers.get(tier_key)
         if model:
+            if isinstance(model, list):
+                if not model:
+                    raise ValueError(f"Empty model pool for tier {tier_key}")
+                return model[0]
             return model
 
         # Fallback to default model if configured
@@ -415,9 +426,119 @@ class ComplexityRouter(CustomLogger):
         # Last resort: return MEDIUM tier model or error
         medium_model = self.config.tiers.get(ComplexityTier.MEDIUM.value)
         if medium_model:
+            if isinstance(medium_model, list):
+                if not medium_model:
+                    raise ValueError("Empty model pool for MEDIUM tier")
+                return medium_model[0]
             return medium_model
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
+
+    def _tier_pools(self) -> Dict[str, List[str]]:
+        return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
+
+    def _ensure_adaptive_router(self) -> Optional[Any]:
+        """Lazily construct the embedded AdaptiveRouter used for soft-floor picks."""
+        if not self.config.adaptive:
+            return None
+        if self.adaptive_router is not None:
+            return self.adaptive_router
+        if self._adaptive_init_attempted:
+            return self.adaptive_router
+        self._adaptive_init_attempted = True
+
+        from litellm.router_strategy.adaptive_router.adaptive_router import (
+            AdaptiveRouter,
+        )
+        from litellm.router_strategy.adaptive_router.config import (
+            ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
+        )
+        from litellm.types.router import (
+            AdaptiveRouterConfig,
+            AdaptiveRouterPreferences,
+        )
+
+        pools = self._tier_pools()
+        available_models = list(dict.fromkeys(model for models in pools.values() for model in models))
+        home_tier: Dict[str, ComplexityTier] = {}
+        for tier_name, models in pools.items():
+            tier = ComplexityTier(tier_name)
+            for model in models:
+                if model not in home_tier:
+                    home_tier[model] = tier
+        self._model_home_tier = home_tier
+
+        model_to_prefs: Dict[str, AdaptiveRouterPreferences] = {}
+        model_to_cost: Dict[str, float] = {}
+        model_list = getattr(self.litellm_router_instance, "model_list", None) or []
+        name_to_indices = getattr(self.litellm_router_instance, "model_name_to_deployment_indices", {}) or {}
+        for name in available_models:
+            indices = name_to_indices.get(name, [])
+            if not indices:
+                model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
+                model_to_cost[name] = 0.0
+                continue
+            deployment = model_list[indices[0]]
+            mi = deployment.get("model_info") if isinstance(deployment, dict) else deployment.model_info
+            mi_dict: Dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            prefs_raw = mi_dict.get("adaptive_router_preferences")
+            if prefs_raw is not None:
+                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+            else:
+                model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
+
+            lp = deployment.get("litellm_params") if isinstance(deployment, dict) else deployment.litellm_params
+            lp_dict: Dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
+            cost = lp_dict.get("input_cost_per_token")
+            model_to_cost[name] = float(cost) if cost is not None else 0.0
+
+        self.adaptive_router = AdaptiveRouter(
+            router_name=self.model_name,
+            config=AdaptiveRouterConfig(
+                available_models=available_models,
+                weights=self.config.adaptive_weights,
+            ),
+            model_to_prefs=model_to_prefs,
+            model_to_cost=model_to_cost,
+        )
+        # Stash key helper for pre-routing metadata writes.
+        self._adaptive_chosen_model_key = ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY
+        return self.adaptive_router
+
+    def _soft_floor_pick(self, classified_tier: ComplexityTier, user_message: str) -> str:
+        """Thompson-sample across all tier pools with a tier-distance penalty."""
+        from litellm.router_strategy.adaptive_router.bandit import (
+            normalized_cost,
+            thompson_sample,
+        )
+        from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+
+        adaptive = self._ensure_adaptive_router()
+        if adaptive is None:
+            return self.get_model_for_tier(classified_tier)
+
+        request_type = classify_prompt(user_message)
+        classified_idx = TIER_SEVERITY_ORDER.index(classified_tier)
+        all_costs = [adaptive.model_to_cost.get(m, 0.0) for m in adaptive.config.available_models]
+        quality_weight = self.config.adaptive_weights.quality
+        cost_weight = self.config.adaptive_weights.cost
+        penalty_weight = self.config.tier_distance_penalty
+
+        best_model: Optional[str] = None
+        best_score = float("-inf")
+        for model in adaptive.config.available_models:
+            cell = adaptive._cells[(request_type, model)]
+            quality_sample = thompson_sample(cell)
+            cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
+            home = self._model_home_tier.get(model, classified_tier)
+            distance = abs(TIER_SEVERITY_ORDER.index(home) - classified_idx)
+            score = quality_weight * quality_sample + cost_weight * cost_score - penalty_weight * distance
+            if score > best_score:
+                best_score = score
+                best_model = model
+        if best_model is None:
+            return self.get_model_for_tier(classified_tier)
+        return best_model
 
     def _resolve_messages(
         self,
@@ -540,11 +661,23 @@ class ComplexityRouter(CustomLogger):
             )
 
         tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
-        routed_model = self.get_model_for_tier(tier)
-
-        verbose_router_logger.info(
-            f"ComplexityRouter: tier={tier.value}, score={score:.3f}, signals={signals}, routed_model={routed_model}"
-        )
+        if self.config.adaptive:
+            routed_model = self._soft_floor_pick(tier, user_message)
+            adaptive = self._ensure_adaptive_router()
+            if adaptive is not None:
+                kwargs_metadata = request_kwargs.setdefault("metadata", {})
+                if isinstance(kwargs_metadata, dict):
+                    chosen_key = getattr(self, "_adaptive_chosen_model_key", "adaptive_router_chosen_model")
+                    kwargs_metadata[chosen_key] = routed_model
+            verbose_router_logger.info(
+                f"ComplexityRouter[adaptive]: tier={tier.value}, score={score:.3f}, "
+                f"signals={signals}, routed_model={routed_model}"
+            )
+        else:
+            routed_model = self.get_model_for_tier(tier)
+            verbose_router_logger.info(
+                f"ComplexityRouter: tier={tier.value}, score={score:.3f}, signals={signals}, routed_model={routed_model}"
+            )
 
         return PreRoutingHookResponse(
             model=routed_model,

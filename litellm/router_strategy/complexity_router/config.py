@@ -6,9 +6,11 @@ All values are configurable via proxy config.yaml.
 """
 
 from enum import Enum
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from litellm.types.router import AdaptiveRouterWeights
 
 
 class ComplexityTier(str, Enum):
@@ -18,6 +20,18 @@ class ComplexityTier(str, Enum):
     MEDIUM = "MEDIUM"
     COMPLEX = "COMPLEX"
     REASONING = "REASONING"
+
+
+TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
+    ComplexityTier.SIMPLE,
+    ComplexityTier.MEDIUM,
+    ComplexityTier.COMPLEX,
+    ComplexityTier.REASONING,
+)
+
+# Soft-floor distance penalty applied per tier step away from the classified tier
+# when adaptive=True. Keeps higher shelves reachable without making them free.
+DEFAULT_TIER_DISTANCE_PENALTY: float = 0.15
 
 
 # ─── Default Keyword Lists ───
@@ -212,10 +226,11 @@ class ClassifierLLMConfig(BaseModel):
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
-    # Tier to model mapping
-    tiers: Dict[str, str] = Field(
+    # Tier to model mapping. A string pins the tier; a list declares a soft-floor
+    # home pool used when adaptive=True (union of all pools = eligible set).
+    tiers: Dict[str, Union[str, List[str]]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
-        description="Mapping of complexity tiers to model names",
+        description="Mapping of complexity tiers to a model or model pool",
     )
 
     # Tier boundaries (normalized scores)
@@ -279,12 +294,57 @@ class ComplexityRouterConfig(BaseModel):
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
     )
 
+    # When true, Thompson-sample across the union of all tier pools with a soft
+    # tier-distance penalty (complexity is a bias, not a hard gate), and enable
+    # adaptive post-call bandit learning.
+    adaptive: bool = Field(
+        default=False,
+        description="Enable adaptive bandit selection with soft complexity floors",
+    )
+    adaptive_weights: AdaptiveRouterWeights = Field(
+        default_factory=AdaptiveRouterWeights,
+        description="Quality vs cost weights for adaptive selection (used when adaptive=True)",
+    )
+    tier_distance_penalty: float = Field(
+        default=DEFAULT_TIER_DISTANCE_PENALTY,
+        ge=0.0,
+        description="Score penalty per tier-step away from the classified tier when adaptive=True",
+    )
+
     model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+    @field_validator("tiers", mode="before")
+    @classmethod
+    def _coerce_tier_values(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        coerced: dict[str, object] = {}
+        for key, item in value.items():
+            if isinstance(item, str):
+                coerced[key] = item
+            elif isinstance(item, (list, tuple)):
+                coerced[key] = list(item)
+            else:
+                coerced[key] = item
+        return coerced
 
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":
+        if not self.adaptive:
+            return self
+        normalized = {tier: (models if isinstance(models, list) else [models]) for tier, models in self.tiers.items()}
+        if not any(normalized.values()):
+            raise ValueError("adaptive=True requires at least one non-empty tier pool")
+        empty = [tier for tier, models in normalized.items() if not models]
+        if empty:
+            raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
+        self.tiers = normalized
         return self
 
 

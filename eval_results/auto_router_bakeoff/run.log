@@ -1,0 +1,96 @@
+[92m14:26:52 - LiteLLM:WARNING[0m: utils.py:2730 - register_model: model=aad1a6535833b5e1fe427c52376c57cd170c093aa8673bab182f5bd47fa2a048 not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m14:26:52 - LiteLLM:WARNING[0m: utils.py:2730 - register_model: model=auto_router/complexity_router not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m14:26:52 - LiteLLM:WARNING[0m: utils.py:2730 - register_model: model=07166c337add7f0bb6c2364eb87b4d17ac6f3a73dab63ba4f43b8d0eba5eb31d not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m14:26:52 - LiteLLM:WARNING[0m: utils.py:2730 - register_model: model=auto_router/adaptive_router not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m14:26:52 - LiteLLM:WARNING[0m: utils.py:2730 - register_model: model=2b514731a85947082969851a501c5c7c265cc5171c4dbe326c6449d1f84e0d7d not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.
+
+premium probe failed for anthropic/claude-opus-4-8: litellm.BadRequestError: AnthropicException - {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too 
+NOTE: premium baseline falling back to openai/gpt-5.5 (requested anthropic/claude-opus-4-8 unavailable)
+
+=== has_close_elements ===
+  premium_baseline ... PASS judge=5 cost=$0.009335 lat=4032ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.002055 lat=2906ms model=mid
+  adaptive ... PASS judge=5 cost=$0.000059 lat=1159ms model=cheap
+  hybrid ... PASS judge=5 cost=$0.001145 lat=766ms model=mid
+
+=== separate_paren_groups ===
+  premium_baseline ... PASS judge=5 cost=$0.007420 lat=3487ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.001478 lat=1189ms model=mid
+  adaptive ... PASS judge=5 cost=$0.001528 lat=1217ms model=mid
+  hybrid ... PASS judge=5 cost=$0.001568 lat=1284ms model=mid
+
+=== truncate_number ===
+  premium_baseline ... PASS judge=5 cost=$0.005170 lat=2404ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.001153 lat=2641ms model=mid
+  adaptive ... PASS judge=5 cost=$0.000493 lat=727ms model=mid
+  hybrid ... PASS judge=5 cost=$0.000532 lat=698ms model=mid
+
+=== below_zero ===
+  premium_baseline ... PASS judge=5 cost=$0.002965 lat=1502ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.000885 lat=795ms model=mid
+  adaptive ... PASS judge=5 cost=$0.000935 lat=655ms model=mid
+  hybrid ... PASS judge=5 cost=$0.000885 lat=793ms model=mid
+
+=== mean_absolute_deviation ===
+  premium_baseline ... PASS judge=5 cost=$0.006810 lat=2744ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.001138 lat=725ms model=mid
+  adaptive ... PASS judge=5 cost=$0.004950 lat=2004ms model=premium
+  hybrid ... PASS judge=5 cost=$0.001158 lat=701ms model=mid
+
+=== intersperse ===
+  premium_baseline ... PASS judge=5 cost=$0.005320 lat=2338ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.001063 lat=1562ms model=mid
+  adaptive ... PASS judge=5 cost=$0.000060 lat=1348ms model=cheap
+  hybrid ... PASS judge=5 cost=$0.000057 lat=1615ms model=cheap
+
+=== parse_nested_parens ===
+  premium_baseline ... PASS judge=5 cost=$0.013095 lat=7147ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.001475 lat=1247ms model=mid
+  adaptive ... PASS judge=5 cost=$0.005895 lat=3040ms model=premium
+  hybrid ... PASS judge=5 cost=$0.001585 lat=1264ms model=mid
+
+=== filter_by_substring ===
+  premium_baseline ... PASS judge=5 cost=$0.004585 lat=2035ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.000695 lat=599ms model=mid
+  adaptive ... FAIL:File "/var/folders/gf/5h3fnlwx40sdrycs4y judge=1 cost=$0.000028 lat=609ms model=cheap
+  hybrid ... PASS judge=5 cost=$0.000745 lat=782ms model=mid
+
+=== sum_product ===
+  premium_baseline ... PASS judge=5 cost=$0.003020 lat=1771ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.000978 lat=700ms model=mid
+  adaptive ... PASS judge=5 cost=$0.005750 lat=2352ms model=premium
+  hybrid ... PASS judge=5 cost=$0.000978 lat=684ms model=mid
+
+=== max_element ===
+  premium_baseline ... PASS judge=5 cost=$0.004605 lat=2214ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.000800 lat=632ms model=mid
+  adaptive ... FAIL:File "/var/folders/gf/5h3fnlwx40sdrycs4y judge=1 cost=$0.000023 lat=478ms model=cheap
+  hybrid ... FAIL:File "/var/folders/gf/5h3fnlwx40sdrycs4y judge=1 cost=$0.000044 lat=1261ms model=cheap
+
+=== fizz_buzz ===
+  premium_baseline ... PASS judge=5 cost=$0.007860 lat=3354ms model=openai/gpt-5.5
+  complexity ... PASS judge=5 cost=$0.000867 lat=773ms model=mid
+  adaptive ... PASS judge=5 cost=$0.000057 lat=1179ms model=cheap
+  hybrid ... PASS judge=5 cost=$0.000057 lat=1304ms model=cheap
+
+=== sort_by_binary_len ===
+  premium_baseline ... PASS judge=1 cost=$0.018060 lat=8534ms model=openai/gpt-5.5
+  complexity ... FAIL:Traceback (most recent call last):
+  Fil judge=1 cost=$0.001078 lat=863ms model=mid
+  adaptive ... FAIL:Traceback (most recent call last):
+  Fil judge=1 cost=$0.000050 lat=1098ms model=cheap
+  hybrid ... FAIL:Traceback (most recent call last):
+  Fil judge=1 cost=$0.000928 lat=713ms model=mid
+
+========================================================================================
+arm                  pass%  judge      cost$    avg_lat   overhead
+----------------------------------------------------------------------------------------
+premium_baseline     100.0   4.67   0.088245     3463.5        0.0
+complexity            91.7   4.67   0.013663     1219.4    -2244.1
+adaptive              75.0   4.00   0.019828     1322.1    -2141.4
+hybrid                83.3   4.33   0.009681      988.8    -2474.7
+========================================================================================
+Wrote eval_results/auto_router_bakeoff/20260711T212651Z_summary.json
