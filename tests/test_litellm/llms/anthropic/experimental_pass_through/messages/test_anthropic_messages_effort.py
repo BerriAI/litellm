@@ -132,6 +132,20 @@ def test_opus_4_5_unsupported_effort_level_translated_to_legacy_thinking():
     assert "output_config" not in result
 
 
+def test_opus_4_5_effort_only_unsupported_level_left_for_provider_normalization():
+    """An effort-only request (no adaptive thinking) must pass through untouched even
+    when the level exceeds what the model supports: provider subclasses own their
+    level normalization (bedrock clamps xhigh to the model's ceiling after this base
+    transform runs), so consuming the effort here breaks that contract."""
+    result = _transform(
+        "claude-opus-4-5",
+        {"max_tokens": 4096, "output_config": {"effort": "xhigh"}},
+    )
+
+    assert result["output_config"] == {"effort": "xhigh"}
+    assert "thinking" not in result
+
+
 def test_budget_capped_below_max_tokens():
     """Adaptive thinking carries no budget, so the translated legacy budget must be
     capped below max_tokens (Anthropic requires max_tokens > budget_tokens). A

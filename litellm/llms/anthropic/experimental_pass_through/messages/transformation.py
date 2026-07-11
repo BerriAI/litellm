@@ -283,10 +283,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - Adaptive-thinking models (4.6+): both are native, left untouched.
         - ``supports_output_config`` but non-adaptive (Opus 4.5): keep
           ``output_config.effort`` (native), only drop the unsupported adaptive
-          ``thinking`` block. When the requested effort level itself isn't
-          supported by the model (e.g. ``xhigh``/``max`` on Opus 4.5, which only
-          accepts low/medium/high), fall through to the legacy translation below
-          instead of forwarding a level Anthropic would reject.
+          ``thinking`` block. When adaptive thinking is being dropped and the
+          effort level itself isn't supported by the model (e.g. ``xhigh``/``max``
+          on Opus 4.5, which only accepts low/medium/high, while ``xhigh`` is
+          Claude Code's default), fall through to the legacy translation below
+          instead of forwarding a level Anthropic would reject. Effort-only
+          requests are always left untouched: provider subclasses own their level
+          normalization (bedrock clamps ``xhigh`` to the model's ceiling after
+          this base transform runs).
         - Thinking-capable but neither (``supports_reasoning``, e.g. Haiku/Sonnet
           4.5): map effort to legacy ``thinking={type: enabled, budget_tokens}`` via
           ``AnthropicConfig._map_reasoning_effort``, capped below ``max_tokens``
@@ -312,7 +316,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         if AnthropicConfig._model_supports_effort_param(model) and (
-            AnthropicConfig._validate_effort_for_model(model, effort) is None
+            not adaptive_thinking or AnthropicConfig._validate_effort_for_model(model, effort) is None
         ):
             if adaptive_thinking:
                 optional_params.pop("thinking", None)
