@@ -1893,13 +1893,20 @@ def test_bedrock_invoke_transform_merges_list_content_system_role_into_system():
     ]
 
 
-def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-opus-4-8",
+        "us.anthropic.claude-fable-5",
+    ],
+)
+def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(local_model_cost_map, model):
     """Regression test for the Bedrock prompt-cache collapse: hoisting a
     mid-conversation ``role: "system"`` message (e.g. Claude Code's
     ``mid-conversation-system-2026-04-07`` reminders) into the top-level
     ``system`` field mutates the cache prefix and invalidates the cached message
-    history, so on models flagged ``supports_mid_conversation_system`` (the Opus
-    4.8 family, which Invoke accepts the role on) such entries must be forwarded
+    history, so on models flagged ``supports_mid_conversation_system`` (Claude
+    4.8+, which Invoke accepts the role on) such entries must be forwarded
     in place. Billing-header blocks must still be stripped from the top-level
     ``system`` field even when nothing is hoisted."""
     from litellm.types.router import GenericLiteLLMParams
@@ -1913,7 +1920,7 @@ def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(lo
     ]
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-opus-4-8",
+        model=model,
         messages=copy.deepcopy(messages),
         anthropic_messages_optional_request_params={
             "max_tokens": 256,
