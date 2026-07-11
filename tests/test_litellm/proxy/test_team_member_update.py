@@ -184,13 +184,18 @@ async def test_bulk_team_member_update_applies_patch_and_returns_member_failures
     prisma_client = MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(
+        team_endpoints,
+        "team_info",
+        AsyncMock(return_value={"team_info": team_row, "team_memberships": []}),
+    )
     update_mock = AsyncMock(
         side_effect=[
             team_endpoints.TeamMemberUpdateResponse(team_id="team-1234", user_id="user-1", tpm_limit=42),
             HTTPException(status_code=404, detail={"error": "User is not a team member"}),
         ]
     )
-    monkeypatch.setattr(team_endpoints, "team_member_update", update_mock)
+    monkeypatch.setattr(team_endpoints, "_apply_team_member_update", update_mock)
 
     response = await bulk_update_team_members(
         data=BulkTeamMemberUpdateRequest(
@@ -205,7 +210,9 @@ async def test_bulk_team_member_update_applies_patch_and_returns_member_failures
     assert response.total_requested == 2
     assert [member.user_id for member in response.successful_updates] == ["user-1"]
     assert response.failed_updates[0].user_id == "user-2"
-    assert "not a team member" in response.failed_updates[0].failed_reason
+    # a dict HTTPException detail must surface the nested error string, not a
+    # python dict repr like "{'error': 'User is not a team member'}"
+    assert response.failed_updates[0].failed_reason == "User is not a team member"
     assert update_mock.await_args_list[0].kwargs["data"].model_dump(exclude_unset=True) == {
         "team_id": "team-1234",
         "user_id": "user-1",
@@ -223,7 +230,12 @@ async def test_bulk_team_member_update_returns_unexpected_member_failure(monkeyp
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(
-        team_endpoints, "team_member_update", AsyncMock(side_effect=RuntimeError("database unavailable"))
+        team_endpoints,
+        "team_info",
+        AsyncMock(return_value={"team_info": team_row, "team_memberships": []}),
+    )
+    monkeypatch.setattr(
+        team_endpoints, "_apply_team_member_update", AsyncMock(side_effect=RuntimeError("database unavailable"))
     )
 
     response = await bulk_update_team_members(
@@ -240,6 +252,63 @@ async def test_bulk_team_member_update_returns_unexpected_member_failure(monkeyp
     assert response.failed_updates == [
         team_endpoints.FailedTeamMemberUpdate(user_id="user-1", failed_reason="database unavailable")
     ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_update_resolves_team_info_once(monkeypatch):
+    """The whole batch must resolve team_info a single time and still upsert every
+    member; resolving it per member re-scans the team, its keys, and all
+    memberships on each iteration, which times out large teams."""
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[
+            Member(user_id="user-1", role="user"),
+            Member(user_id="user-2", role="user"),
+            Member(user_id="user-3", role="user"),
+        ],
+        metadata={},
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+
+    class _FakeTx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    prisma_client.db.tx = MagicMock(return_value=_FakeTx())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+
+    team_info_mock = AsyncMock(
+        return_value={
+            "team_info": team_row,
+            "team_memberships": [
+                types.SimpleNamespace(user_id="user-1", budget_id="bud-1"),
+                types.SimpleNamespace(user_id="user-2", budget_id="bud-2"),
+                types.SimpleNamespace(user_id="user-3", budget_id="bud-3"),
+            ],
+        }
+    )
+    monkeypatch.setattr(team_endpoints, "team_info", team_info_mock)
+    upsert_mock = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "_upsert_budget_and_membership", upsert_mock)
+
+    response = await bulk_update_team_members(
+        data=BulkTeamMemberUpdateRequest(
+            team_id="team-1234",
+            all_members_in_team=True,
+            update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+        ),
+        http_request=Request({"type": "http", "method": "POST", "path": "/team/member/bulk_update"}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin"),
+    )
+
+    assert team_info_mock.await_count == 1
+    assert upsert_mock.await_count == 3
+    assert [member.user_id for member in response.successful_updates] == ["user-1", "user-2", "user-3"]
 
 
 def test_bulk_team_member_update_requires_exactly_one_member_selector():

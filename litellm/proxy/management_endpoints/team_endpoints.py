@@ -2924,6 +2924,23 @@ async def team_member_update(
         user_api_key_dict=user_api_key_dict,
     )
 
+    return await _apply_team_member_update(
+        data=data,
+        returned_team_info=returned_team_info,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def _apply_team_member_update(
+    data: TeamMemberUpdateRequest,
+    returned_team_info: TeamInfoResponseObject,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> TeamMemberUpdateResponse:
+    """Apply a single member update against already-fetched team info so a bulk
+    caller can resolve team_info once and reuse it for every member, instead of
+    re-scanning the team, its keys, and all memberships per member."""
     team_table = returned_team_info["team_info"]
 
     ## get user id
@@ -2931,7 +2948,7 @@ async def team_member_update(
     if data.user_id is not None:
         received_user_id = data.user_id
     elif data.user_email is not None:
-        for member in returned_team_info["team_info"].members_with_roles:
+        for member in team_table.members_with_roles:
             if member.user_email is not None and member.user_email == data.user_email:
                 received_user_id = member.user_id
                 break
@@ -3017,10 +3034,18 @@ async def bulk_update_team_members(
     http_request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.update_fields.role == "admin" and not premium_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. Pricing: https://www.litellm.ai/#pricing",
+        )
+
+    _validate_budget_duration(data.update_fields.budget_duration)
 
     existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
     if existing_team_row is None:
@@ -3059,19 +3084,29 @@ async def bulk_update_team_members(
             },
         )
 
+    returned_team_info: TeamInfoResponseObject = await team_info(
+        http_request=http_request,
+        team_id=data.team_id,
+        key_limit=None,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     update_fields = data.update_fields.model_dump(exclude_unset=True)
     successful_updates: list[TeamMemberUpdateResponse] = []
     failed_updates: list[FailedTeamMemberUpdate] = []
     for user_id in user_ids:
         try:
-            response = await team_member_update(
+            response = await _apply_team_member_update(
                 data=TeamMemberUpdateRequest(team_id=data.team_id, user_id=user_id, **update_fields),
-                http_request=http_request,
+                returned_team_info=returned_team_info,
+                prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
             )
             successful_updates.append(response)
         except HTTPException as exc:
-            failed_updates.append(FailedTeamMemberUpdate(user_id=user_id, failed_reason=str(exc.detail)))
+            detail = exc.detail
+            failed_reason = detail.get("error", str(detail)) if isinstance(detail, dict) else str(detail)
+            failed_updates.append(FailedTeamMemberUpdate(user_id=user_id, failed_reason=failed_reason))
         except Exception as exc:
             verbose_proxy_logger.exception("Failed to bulk update team member %s in team %s", user_id, data.team_id)
             failed_updates.append(FailedTeamMemberUpdate(user_id=user_id, failed_reason=str(exc)))
