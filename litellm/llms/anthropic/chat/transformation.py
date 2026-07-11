@@ -1487,7 +1487,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
-                    and not AnthropicConfig._is_adaptive_thinking_model(model)
+                    and not AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider)
                 ):
                     # Callers (e.g. Claude Code) send adaptive thinking
                     # unconditionally; translate it down to the legacy
@@ -1498,8 +1498,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     legacy_thinking = AnthropicConfig._map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
-                        custom_llm_provider=self.custom_llm_provider or "anthropic",
-                        llm_provider=self.custom_llm_provider or "anthropic",
+                        custom_llm_provider=self._resolved_provider,
+                        llm_provider=self._resolved_provider,
                     )
                     capped_thinking = (
                         AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
