@@ -820,6 +820,22 @@ class _PersistedDcrCredentials(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     token_endpoint_auth_method: Optional[str] = None
+    redirect_uris: Optional[list[str]] = None
+
+
+def _redirect_uri_not_registered(credentials: _PersistedDcrCredentials, current_redirect_uri: str) -> bool:
+    """Whether a persisted DCR client is positively known NOT to cover the current callback.
+
+    A DCR client is bound to the redirect_uris it was registered with; if the proxy's
+    resolved public origin has since changed, every authorize built for it will be
+    rejected by the IdP. Clients persisted before ``redirect_uris`` was recorded (and
+    admin-configured clients, which never get a recording) return False so they are
+    grandfathered rather than re-registered, because re-minting a client_id orphans
+    every user's refresh tokens for that server."""
+    recorded = credentials.redirect_uris
+    if not recorded:
+        return False
+    return current_redirect_uri not in recorded
 
 
 def _get_persisted_dcr_credentials(credentials: object) -> Optional[_PersistedDcrCredentials]:
@@ -886,11 +902,23 @@ async def _get_persisted_mcp_server_with_dcr_client_id(
     return persisted_mcp_server, credentials
 
 
-async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> bool:
+async def _reuse_persisted_dcr_client_if_available(
+    mcp_server: MCPServer, current_redirect_uri: Optional[str] = None
+) -> bool:
     persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
     if persisted is None:
         return False
     persisted_mcp_server, credentials = persisted
+    if current_redirect_uri is not None and _redirect_uri_not_registered(credentials, current_redirect_uri):
+        verbose_logger.debug(
+            "register_client_with_server: not reusing persisted DCR client for server_id=%s; its registered "
+            "redirect_uris=%s do not include the current callback %s. The operator-facing warning for this "
+            "re-registration event is emitted once by _persisted_dcr_redirect_uri_is_stale.",
+            mcp_server.server_id,
+            credentials.redirect_uris,
+            current_redirect_uri,
+        )
+        return False
     if not _apply_persisted_dcr_credentials(mcp_server, credentials):
         return False
 
@@ -909,11 +937,36 @@ async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> boo
     return bool(mcp_server.client_id)
 
 
+async def _persisted_dcr_redirect_uri_is_stale(mcp_server: MCPServer, current_redirect_uri: str) -> bool:
+    """Whether the server's persisted DCR client is bound to redirect_uris that no longer
+    cover the current proxy callback, meaning authorize is guaranteed to fail IdP-side.
+
+    Consulted when the in-memory server already carries a hydrated client_id, which
+    otherwise short-circuits registration before any redirect check can run. Servers
+    without a persisted DCR recording (admin-configured client_id, or registered before
+    redirect_uris were recorded) are never reported stale."""
+    persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
+    if persisted is None:
+        return False
+    _, credentials = persisted
+    if not _redirect_uri_not_registered(credentials, current_redirect_uri):
+        return False
+    verbose_logger.warning(
+        "register_client_with_server: persisted DCR client for server_id=%s is registered with redirect_uris=%s "
+        "which do not include the current callback %s (proxy origin changed); registering a replacement client. "
+        "Users previously signed in to this server will need to re-authenticate.",
+        mcp_server.server_id,
+        credentials.redirect_uris,
+        current_redirect_uri,
+    )
+    return True
+
+
 DcrRegistrationPersistenceResult = Literal["persisted", "reused", "skipped", "failed"]
 
 
 async def _persist_dcr_client_registration(
-    mcp_server: MCPServer, registration_response: object
+    mcp_server: MCPServer, registration_response: object, current_redirect_uri: str
 ) -> DcrRegistrationPersistenceResult:
     """Persist the dynamically registered OAuth client (RFC 7591) onto the MCP server row.
 
@@ -929,6 +982,13 @@ async def _persist_dcr_client_registration(
     client identity for these servers. Persisting here would stamp ``oauth2_flow`` and a
     ``client_id`` onto a server whose mode promises the gateway stores nothing, making a
     fresh pass-through server read as gateway-authorized.
+
+    ``redirect_uris`` records what the client is bound to so a later origin change can be
+    detected as a positive mismatch and trigger re-registration instead of stranding the
+    server on IdP-side redirect_uri rejections. ``client_secret`` and
+    ``token_endpoint_auth_method`` are written explicitly (None when absent) because
+    ``update_mcp_server`` merges credential blobs: a re-registered public client must not
+    inherit the previous client's secret or auth method.
     """
     if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
         return "skipped"
@@ -944,17 +1004,16 @@ async def _persist_dcr_client_registration(
         )
         return "failed"
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+    if await _reuse_persisted_dcr_client_if_available(mcp_server, current_redirect_uri=current_redirect_uri):
         return "reused"
 
     credentials: MCPCredentials = {
         "client_id": registration.client_id,
-        **({"client_secret": registration.client_secret} if registration.client_secret is not None else {}),
-        **(
-            {"token_endpoint_auth_method": "client_secret_basic"}
-            if registration.token_endpoint_auth_method == "client_secret_basic"
-            else {}
+        "client_secret": registration.client_secret,
+        "token_endpoint_auth_method": (
+            "client_secret_basic" if registration.token_endpoint_auth_method == "client_secret_basic" else None
         ),
+        "redirect_uris": [current_redirect_uri],
     }
 
     from litellm.proxy._experimental.mcp_server.db import update_mcp_server  # noqa: PLC0415
@@ -1017,16 +1076,24 @@ async def register_client_with_server(
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
+    current_redirect_uri = f"{request_base_url}/callback"
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": [current_redirect_uri],
     }
 
-    if mcp_server.client_id:
+    if mcp_server.client_id and not (
+        persist_credentials
+        and mcp_server.registration_url
+        and await _persisted_dcr_redirect_uri_is_stale(mcp_server, current_redirect_uri)
+    ):
         return dummy_return
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+    if await _reuse_persisted_dcr_client_if_available(
+        mcp_server,
+        current_redirect_uri=current_redirect_uri if persist_credentials else None,
+    ):
         return dummy_return
 
     if mcp_server.authorization_url is None:
@@ -1044,7 +1111,7 @@ async def register_client_with_server(
 
     register_data = {
         "client_name": client_name,
-        "redirect_uris": client_redirect_uris if bridge_relay else [f"{request_base_url}/callback"],
+        "redirect_uris": client_redirect_uris if bridge_relay else [current_redirect_uri],
         "grant_types": grant_types or (["authorization_code", "refresh_token"] if bridge_relay else []),
         "response_types": response_types or (["code"] if bridge_relay else []),
         "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
@@ -1072,7 +1139,7 @@ async def register_client_with_server(
     token_response = response.json()
 
     if persist_credentials and not bridge_relay:
-        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response)
+        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
 
