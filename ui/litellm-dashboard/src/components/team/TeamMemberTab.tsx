@@ -35,6 +35,8 @@ export default function TeamMemberTab({
 }: TeamMemberTabProps) {
   const [isBulkUpdateVisible, setIsBulkUpdateVisible] = useState(false);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMembers, setSelectedMembers] = useState<Member[]>([]);
   const [bulkUpdateForm] = Form.useForm();
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
@@ -193,8 +195,6 @@ export default function TeamMemberTab({
   ];
 
   const handleBulkUpdate = async (values: {
-    all_members_in_team?: boolean;
-    user_ids?: string[];
     apply_role?: boolean;
     role?: "admin" | "user";
     apply_max_budget?: boolean;
@@ -209,6 +209,11 @@ export default function TeamMemberTab({
     allowed_models?: string[];
   }) => {
     if (!accessToken) return;
+    const userIds = selectedMembers.flatMap((member) => (member.user_id ? [member.user_id] : []));
+    if (userIds.length === 0) {
+      NotificationsManager.fromBackend("Select at least one team member");
+      return;
+    }
     const updateFields: TeamMemberBulkUpdateFields = {
       ...(values.apply_role ? { role: values.role } : {}),
       ...(values.apply_max_budget ? { max_budget_in_team: values.max_budget_in_team ?? null } : {}),
@@ -224,15 +229,11 @@ export default function TeamMemberTab({
 
     setIsBulkUpdating(true);
     try {
-      const response = await teamMemberBulkUpdateCall(
-        accessToken,
-        teamData.team_id,
-        values.user_ids ?? [],
-        values.all_members_in_team === true,
-        updateFields,
-      );
+      const response = await teamMemberBulkUpdateCall(accessToken, teamData.team_id, userIds, false, updateFields);
       await onMembersUpdated?.();
       setIsBulkUpdateVisible(false);
+      setSelectedMembers([]);
+      setSelectionMode(false);
       bulkUpdateForm.resetFields();
       NotificationsManager.success(
         `${response.successful_updates.length} team member${response.successful_updates.length === 1 ? "" : "s"} updated`,
@@ -250,9 +251,22 @@ export default function TeamMemberTab({
   return (
     <>
       {canEditTeam && (
-        <Button className="mb-3" onClick={() => setIsBulkUpdateVisible(true)}>
-          Bulk Update Members
-        </Button>
+        <Space className="mb-3">
+          <Button
+            onClick={() => {
+              setSelectionMode((current) => !current);
+              setSelectedMembers([]);
+            }}
+            type={selectionMode ? "primary" : "default"}
+          >
+            {selectionMode ? "Cancel Selection" : "Select Members"}
+          </Button>
+          {selectionMode && (
+            <Button type="primary" disabled={selectedMembers.length === 0} onClick={() => setIsBulkUpdateVisible(true)}>
+              Bulk Edit ({selectedMembers.length} selected)
+            </Button>
+          )}
+        </Space>
       )}
       <MemberTable
         members={teamData.team_info.members_with_roles}
@@ -275,12 +289,21 @@ export default function TeamMemberTab({
         roleColumnTitle="Team Role"
         roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
         extraColumns={extraColumns}
+        rowSelection={
+          selectionMode
+            ? {
+                selectedRowKeys: selectedMembers.flatMap((member) => (member.user_id ? [member.user_id] : [])),
+                onChange: (_selectedRowKeys, selectedRows) => setSelectedMembers(selectedRows),
+                getCheckboxProps: (member) => ({ disabled: member.user_id === null }),
+              }
+            : undefined
+        }
         showDeleteForMember={() =>
           isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
         }
       />
       <Modal
-        title="Bulk Update Team Members"
+        title={`Bulk Edit ${selectedMembers.length} Team Member${selectedMembers.length === 1 ? "" : "s"}`}
         open={isBulkUpdateVisible}
         onCancel={() => setIsBulkUpdateVisible(false)}
         onOk={() => bulkUpdateForm.submit()}
@@ -288,31 +311,6 @@ export default function TeamMemberTab({
         confirmLoading={isBulkUpdating}
       >
         <Form form={bulkUpdateForm} layout="vertical" onFinish={handleBulkUpdate}>
-          <Form.Item name="all_members_in_team" valuePropName="checked">
-            <Checkbox>Update all {teamData.team_info.members_with_roles.length} members</Checkbox>
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate>
-            {({ getFieldValue }) =>
-              !getFieldValue("all_members_in_team") && (
-                <Form.Item
-                  name="user_ids"
-                  label="Members"
-                  rules={[{ required: true, message: "Select at least one member" }]}
-                >
-                  <Select
-                    mode="multiple"
-                    placeholder="Select members"
-                    options={teamData.team_info.members_with_roles
-                      .filter((member) => member.user_id)
-                      .map((member) => ({
-                        label: member.user_email || member.user_id,
-                        value: member.user_id as string,
-                      }))}
-                  />
-                </Form.Item>
-              )
-            }
-          </Form.Item>
           <Typography.Text type="secondary">Choose the fields to apply to every selected member.</Typography.Text>
           <Form.Item name="apply_role" valuePropName="checked" className="mt-3 mb-1">
             <Checkbox>Team role</Checkbox>

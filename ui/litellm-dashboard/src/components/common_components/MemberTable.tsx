@@ -18,6 +18,7 @@ export interface MemberTableProps {
   extraColumns?: ColumnsType<Member>;
   showDeleteForMember?: (member: Member) => boolean;
   emptyText?: string;
+  rowSelection?: React.ComponentProps<typeof Table<Member>>["rowSelection"];
 }
 
 export default function MemberTable({
@@ -31,6 +32,7 @@ export default function MemberTable({
   extraColumns = [],
   showDeleteForMember,
   emptyText,
+  rowSelection,
 }: MemberTableProps) {
   const baseColumns: ColumnsType<Member> = [
     {
@@ -106,6 +108,7 @@ export default function MemberTable({
       <Table
         columns={baseColumns}
         dataSource={members}
+        rowSelection={rowSelection}
         rowKey={(record) => record.user_id ?? record.user_email ?? JSON.stringify(record)}
         pagination={false}
         size="small"
