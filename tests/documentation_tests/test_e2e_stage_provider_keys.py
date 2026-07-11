@@ -1,6 +1,8 @@
 import os
 import re
 
+import yaml
+
 # Mirror of test_env_keys.py for stage e2e:
 #   code keys  = os.environ/KEY refs under tests/e2e
 #   source of truth = ExternalSecret litellm-provider-keys from litellm-ops
@@ -12,6 +14,7 @@ secrets_path = "./litellm-secrets.yaml"
 
 os_environ_ref_pattern = re.compile(r"""['"]os\.environ/([A-Z][A-Z0-9_]*)['"]""")
 env_ref_pattern = re.compile(r"""_env_ref\(\s*['"]([A-Z][A-Z0-9_]*)['"]""")
+secret_key_pattern = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 EXCLUDED_KEYS = {
     "LITELLM_MASTER_KEY",
@@ -61,21 +64,43 @@ if not os.path.isfile(secrets_path):
 with open(secrets_path, encoding="utf-8") as f:
     secrets_content = f.read()
 
-provider_block = re.search(
-    r"(?ms)^kind: ExternalSecret\nmetadata:\n  name: litellm-provider-keys\n.*?^(?:---|\Z)",
-    secrets_content,
-)
-if provider_block is None:
+provider_doc = None
+for doc in yaml.safe_load_all(secrets_content):
+    if not isinstance(doc, dict):
+        continue
+    if doc.get("kind") != "ExternalSecret":
+        continue
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, dict):
+        continue
+    if metadata.get("name") == "litellm-provider-keys":
+        provider_doc = doc
+        break
+
+if provider_doc is None:
     raise Exception(
         f"ExternalSecret litellm-provider-keys not found in {secrets_path}"
     )
 
-mounted_keys = set(
-    re.findall(
-        r"(?m)^\s+- secretKey: ([A-Z][A-Z0-9_]+)\s*$",
-        provider_block.group(0),
+spec = provider_doc.get("spec")
+if not isinstance(spec, dict):
+    raise Exception(
+        f"ExternalSecret litellm-provider-keys has no spec in {secrets_path}"
     )
-)
+
+data = spec.get("data")
+if not isinstance(data, list):
+    raise Exception(
+        f"ExternalSecret litellm-provider-keys has no data list in {secrets_path}"
+    )
+
+mounted_keys = {
+    secret_key
+    for item in data
+    if isinstance(item, dict)
+    for secret_key in [item.get("secretKey")]
+    if isinstance(secret_key, str) and secret_key_pattern.fullmatch(secret_key)
+}
 
 print(f"\nmounted_keys: {mounted_keys}")
 

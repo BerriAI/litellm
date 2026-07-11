@@ -121,17 +121,25 @@ jobs:
       - name: documentation_test_env_keys
         run: uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
 
-      # Private repo: PAT with contents:read on BerriAI/litellm-ops
-      # (LITELLM_OPS_READ_TOKEN, or GH_TOKEN if it can read ops).
+      # Private repo: set LITELLM_OPS_READ_TOKEN (PAT, contents:read on BerriAI/litellm-ops).
+      # github.token cannot read other private org repos; it only keeps GH_TOKEN non-empty for gh.
       - name: Fetch stage litellm-secrets.yaml
+        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
-          GH_TOKEN: ${{ secrets.LITELLM_OPS_READ_TOKEN != '' && secrets.LITELLM_OPS_READ_TOKEN || secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.LITELLM_OPS_READ_TOKEN || secrets.GH_TOKEN || github.token }}
         run: |
-          gh api "repos/BerriAI/litellm-ops/contents/apps/overlays/berrie-litellm-stage/litellm-secrets.yaml?ref=main" \
-            --jq .content | base64 -d > litellm-secrets.yaml
+          set -euo pipefail
+          if ! content="$(gh api "repos/BerriAI/litellm-ops/contents/apps/overlays/berrie-litellm-stage/litellm-secrets.yaml?ref=main" --jq .content)"; then
+            echo "::error::Failed to read BerriAI/litellm-ops apps/overlays/berrie-litellm-stage/litellm-secrets.yaml"
+            echo "Add repo secret LITELLM_OPS_READ_TOKEN (classic or fine-grained PAT with contents:read on BerriAI/litellm-ops)."
+            echo "Default github.token cannot read other private repositories in the org."
+            exit 1
+          fi
+          printf '%s' "$content" | base64 -d > litellm-secrets.yaml
           test -s litellm-secrets.yaml
 
       - name: documentation_test_e2e_stage_provider_keys
+        if: github.event.pull_request.head.repo.full_name == github.repository
         run: uv run --no-sync python ./tests/documentation_tests/test_e2e_stage_provider_keys.py
 
       - name: documentation_test_router_settings
