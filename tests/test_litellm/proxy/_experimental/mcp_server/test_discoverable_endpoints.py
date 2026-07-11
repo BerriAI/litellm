@@ -4365,7 +4365,7 @@ async def test_register_bridge_relay_never_persists():
 _BRIDGE_MASTER_KEY = "sk-bridge-producer-master-key-0123456789abcdef"
 
 
-async def _exchange_for_bridge_server(server, upstream_body, key_hash):
+async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_client_out=None):
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         exchange_token_with_server,
     )
@@ -4375,6 +4375,8 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash):
     fake_http_response.raise_for_status = MagicMock()
     fake_http_client = MagicMock()
     fake_http_client.post = AsyncMock(return_value=fake_http_response)
+    if fake_client_out is not None:
+        fake_client_out["client"] = fake_http_client
 
     with (
         patch(
@@ -4436,17 +4438,69 @@ async def test_oauth_delegate_bridge_token_exchange_mints_envelope_not_raw_token
 @pytest.mark.asyncio
 async def test_oauth_delegate_bridge_token_exchange_fails_closed_without_litellm_identity():
     """Without a resolvable litellm identity on the token request, the exchange must not mint an
-    identity-less envelope; it returns an OAuth invalid_request so the client sends a credential."""
+    identity-less envelope. It returns an RFC 6749 §5.2-shaped invalid_request (error at the top
+    level, not wrapped in detail) BEFORE exchanging the upstream code, so the single-use code is not
+    burned and the client can retry."""
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
     upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
+    captured: dict = {}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash=None, fake_client_out=captured)
 
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    # identity resolution failed first, so the upstream single-use code was never exchanged (not burned)
+    captured["client"].post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_envelope_too_large_upstream_token_is_502():
+    """An upstream token too large to seal into the envelope is an upstream-payload condition, so the
+    mint surfaces a 502 rather than a 500 (build_bridge_token_response returns EnvelopeTooLarge as a
+    value, and the caller maps it to a truthful status)."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "x" * 40000, "token_type": "Bearer", "expires_in": 3600}
     with pytest.raises(HTTPException) as exc:
-        await _exchange_for_bridge_server(server, upstream, key_hash=None)
+        await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    assert exc.value.status_code == 502
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail["error"] == "invalid_request"
+
+@pytest.mark.asyncio
+async def test_bridge_envelope_does_not_seal_upstream_refresh_token():
+    """The upstream refresh_token is never sealed into the client-held envelope: the edge never
+    consumes it and a long-lived upstream credential should not live in the client bearer. The opened
+    envelope's grant carries no refresh token even when the upstream returned one, and neither does
+    the response body."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        OpenedEnvelope,
+        open_envelope,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {
+        "access_token": "UP",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "refresh_token": "UPSTREAM-REFRESH",
+    }
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+
+    body = json.loads(response.body)
+    assert "refresh_token" not in body
+    assert "UPSTREAM-REFRESH" not in body["access_token"]
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = open_envelope(body["access_token"], keys, datetime.now(timezone.utc))
+    assert isinstance(opened, OpenedEnvelope)
+    assert opened.grant.refresh_token is None
 
 
 def test_bridge_grant_coerces_numeric_expires_in():
@@ -4470,6 +4524,13 @@ def test_bridge_grant_coerces_numeric_expires_in():
     assert ei(0) is None
     assert ei(-5) is None
     assert ei(None) is None
+    # hostile numerics must not raise (int(float(...)) can OverflowError) -> None
+    assert ei("inf") is None
+    assert ei("1e999") is None
+    assert ei("-inf") is None
+    assert ei("nan") is None
+    assert ei(float("inf")) is None
+    assert ei(10**400) is None
 
 
 @pytest.mark.asyncio
