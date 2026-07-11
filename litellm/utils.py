@@ -61,7 +61,7 @@ from litellm._lazy_imports import (
 )
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.fallback_generalizations import (
-    match_all_fallback_generalizations,
+    match_capability_generalizations,
 )
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -5043,25 +5043,28 @@ def _get_model_info_from_generalization(
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: Optional[str],
 ) -> Optional[tuple[str, dict]]:
-    """Resolve an unmapped model via a declarative fallback-generalization rule.
+    """Resolve an unmapped model via the declarative capability generalization rules.
 
     Tries the same name candidates as the exact lookups, in the same order, and
-    returns ``(matched_name, model_info)`` for the first matching rule that also
-    satisfies the provider constraint; a rule scoped to another provider is
-    skipped in favor of later rules rather than discarding the candidate.
-    O(number of rules); only call after the exact lookups have missed.
+    returns ``(matched_name, model_info)`` for the first candidate matched by at
+    least one capability rule, with ``litellm_provider`` backfilled from the
+    provider the caller requested. O(number of rules); only call after the exact
+    lookups have missed.
     """
-    candidates = [
+    candidates = (
         potential_model_names["combined_model_name"],
         model,
         potential_model_names["split_model"],
         potential_model_names["combined_stripped_model_name"],
         potential_model_names["stripped_model_name"],
-    ]
+    )
     for candidate in candidates:
-        for generalized_info in match_all_fallback_generalizations(candidate):
-            if _check_provider_match(model_info=generalized_info, custom_llm_provider=custom_llm_provider):
-                return candidate, generalized_info
+        generalized_info = match_capability_generalizations(candidate)
+        if generalized_info is None:
+            continue
+        if custom_llm_provider is None:
+            return candidate, generalized_info
+        return candidate, {**generalized_info, "litellm_provider": custom_llm_provider}
     return None
 
 
