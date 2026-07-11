@@ -128,9 +128,12 @@ export const withoutMintedTokenCredentials = (
   credentials: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> | undefined => {
   if (!credentials) return undefined;
-  return Object.fromEntries(
+  const kept = Object.fromEntries(
     Object.entries(credentials).filter(([key]) => !(MINTED_TOKEN_CREDENTIAL_KEYS as readonly string[]).includes(key)),
   );
+  // Return undefined (not {}) when only minted keys were present, so a restore spreads `credentials:
+  // undefined` (the fields keep their placeholder / keep-existing state) rather than blanking them.
+  return Object.keys(kept).length > 0 ? kept : undefined;
 };
 
 // The client-forwarded modes share one credential class (same declared app, same authorize relay), so

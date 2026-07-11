@@ -215,6 +215,12 @@ describe("withoutMintedTokenCredentials", () => {
     };
     expect(withoutMintedTokenCredentials(mixed)).toEqual({ client_id: "a", client_secret: "b", scopes: ["read"] });
   });
+
+  it("returns undefined (not {}) when only minted keys are present, so a restore never blanks the fields", () => {
+    expect(withoutMintedTokenCredentials({ access_token: "t", refresh_token: "r", expires_in: 3600 })).toBeUndefined();
+    // A declared client is always kept, so a stored client_id can never be overwritten with empty.
+    expect(withoutMintedTokenCredentials({ client_id: "x", access_token: "t" })).toEqual({ client_id: "x" });
+  });
 });
 
 describe("credentialAuthClass", () => {

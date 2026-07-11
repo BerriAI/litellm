@@ -748,20 +748,23 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // form's post-reset state (not the pre-reset snapshot, which still holds the discarded token).
     // Editing the client fields is the admin managing/acknowledging the app, so it always dismisses
     // the "may not match upstream" warning regardless of the stale-token branch below.
+    // Editing the client fields is the admin managing/acknowledging the app, so it dismisses the "may
+    // not match upstream" warning. Otherwise a url/endpoint change while a declared app is present keeps
+    // the app but flags that it may not match the new upstream (the "keep + warn" behavior). This is
+    // independent of the held-token stale check below so it fires even without an authorize this session.
     if ("credentials" in changedValues) {
       setAppMayNotMatchUpstream(false);
-    }
-    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
-      // A url/endpoint change while a declared app is present keeps the app but flags that it may not
-      // match the new upstream (the "keep + warn" behavior); a client-key edit is handled above.
+    } else {
       const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
         (key) => key in changedValues,
       );
       const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
-      clearHeldOAuthToken(changedValues);
-      if (upstreamChanged && hasDeclaredApp && !("credentials" in changedValues)) {
+      if (upstreamChanged && hasDeclaredApp) {
         setAppMayNotMatchUpstream(true);
       }
+    }
+    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
+      clearHeldOAuthToken(changedValues);
       setFormValues(form.getFieldsValue(true));
       return;
     }
