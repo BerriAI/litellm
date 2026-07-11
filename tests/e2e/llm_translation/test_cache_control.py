@@ -111,12 +111,11 @@ def _assert_cache_read_on_second_call(
     first = unwrap(_cache_chat(client, key, model, prefix))
     assert first.choices, f"{model}: first cache-priming call returned no choices: {first}"
 
-    read_tokens = 0
     deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline:
+    while True:
         second = unwrap(_cache_chat(client, key, model, prefix))
         read_tokens = _cached_read_tokens(second.usage)
-        if read_tokens > 0:
+        if read_tokens > 0 or time.monotonic() >= deadline:
             break
         time.sleep(3.0)
 
