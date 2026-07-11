@@ -12,11 +12,10 @@ from urllib.parse import urlparse
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.litellm_core_utils.url_utils import validate_url, SSRFError, _extract_redirect_url, _MAX_REDIRECTS
+from litellm.litellm_core_utils.url_utils import async_safe_request, SSRFError
 
 # =============================================================================
 # Result Types - Used by Starlark code to return guardrail decisions
@@ -470,8 +469,23 @@ async def http_request(
         params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
     )
 
+    # Prepare the arguments for async_safe_request
+    json_body, data_body = _prepare_http_body(body)
+    kwargs: Dict[str, Any] = {}
+    if json_body is not None:
+        kwargs["json"] = json_body
+    if data_body is not None:
+        kwargs["data"] = data_body
+
     try:
-        response = await _execute_http_request_safe(client, method, url, headers, body, timeout)
+        response = await async_safe_request(
+            client=client,
+            method=method,
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            **kwargs
+        )
         return _http_success_response(response)
 
     except SSRFError as e:
@@ -488,69 +502,6 @@ async def http_request(
     except Exception as e:
         verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
         return _http_error_response(f"Unexpected error: {str(e)}")
-
-
-async def _execute_http_request_safe(
-    client: Any,
-    method: str,
-    url: str,
-    headers: Optional[Dict[str, str]],
-    body: Optional[Any],
-    timeout: float,
-) -> httpx.Response:
-    """Execute the HTTP request with SSRF protection and safe redirect following."""
-    if not getattr(litellm, "user_url_validation", True):
-        # SSRF protection disabled, execute directly with native redirect following
-        return await _execute_http_request(client, method, url, headers, body, timeout, follow_redirects=True)
-
-    caller_headers = headers.copy() if headers else {}
-    
-    for _ in range(_MAX_REDIRECTS):
-        validated_url, original_host = validate_url(url)
-        caller_headers["Host"] = original_host
-        
-        response = await _execute_http_request(
-            client, 
-            method, 
-            validated_url, 
-            caller_headers, 
-            body, 
-            timeout, 
-            follow_redirects=False
-        )
-        
-        if not response.is_redirect:
-            return response
-            
-        url = _extract_redirect_url(response, url)
-        
-    raise SSRFError("Too many redirects")
-
-
-async def _execute_http_request(
-    client: Any,
-    method: str,
-    url: str,
-    headers: Optional[Dict[str, str]],
-    body: Optional[Any],
-    timeout: float,
-    follow_redirects: bool,
-) -> httpx.Response:
-    """Execute the HTTP request using the appropriate client method."""
-    json_body, data_body = _prepare_http_body(body)
-
-    if method == "GET":
-        return await client.get(url=url, headers=headers, follow_redirects=follow_redirects)
-    elif method == "POST":
-        return await client.post(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout, follow_redirects=follow_redirects)
-    elif method == "PUT":
-        return await client.put(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout, follow_redirects=follow_redirects)
-    elif method == "DELETE":
-        return await client.delete(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout, follow_redirects=follow_redirects)
-    elif method == "PATCH":
-        return await client.patch(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout, follow_redirects=follow_redirects)
-    else:
-        raise ValueError(f"Unsupported HTTP method: {method}")
 
 
 async def http_get(
