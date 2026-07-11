@@ -708,8 +708,10 @@ class ComplexityRouter(CustomLogger):
         override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
         if override_tier is not None:
             routed_model = self.get_model_for_tier(override_tier)
+            cause = "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
             verbose_router_logger.info(
-                f"ComplexityRouter: keyword rule fired, tier={override_tier.value}, routed_model={routed_model}"
+                f"ComplexityRouter: routing decision cause={cause}, "
+                f"tier={override_tier.value}, routed_model={routed_model}"
             )
             return PreRoutingHookResponse(
                 model=routed_model,
@@ -720,7 +722,8 @@ class ComplexityRouter(CustomLogger):
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(
-            f"ComplexityRouter: tier={tier.value}, score={score:.3f}, signals={signals}, routed_model={routed_model}"
+            f"ComplexityRouter: routing decision cause=complexity_scorer, tier={tier.value}, "
+            f"score={score:.3f}, signals={signals}, routed_model={routed_model}"
         )
 
         return PreRoutingHookResponse(
