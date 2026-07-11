@@ -1091,8 +1091,8 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
     """A regional profile with no dedicated cost-map entry must still resolve to its
     region-stripped base entry."""
-    assert "jp.anthropic.claude-opus-4-8" not in litellm.model_cost
-    info = litellm.get_model_info(model="bedrock/jp.anthropic.claude-opus-4-8")
+    assert "apac.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
     assert info["key"] == "anthropic.claude-opus-4-8"
 
 
