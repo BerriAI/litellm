@@ -8,13 +8,18 @@ from starlette.requests import Request
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.management_endpoints.team_endpoints as team_endpoints
 from litellm.proxy._types import (
+    BulkTeamMemberUpdateRequest,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    TeamMemberBulkUpdateFields,
     TeamMemberUpdateRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_endpoints.team_endpoints import team_member_update
+from litellm.proxy.management_endpoints.team_endpoints import (
+    bulk_update_team_members,
+    team_member_update,
+)
 
 
 @pytest.mark.asyncio
@@ -178,3 +183,51 @@ async def test_team_member_update_rejects_invalid_budget_duration(
     assert exc_info.value.status_code == 400
     assert "budget_duration" in str(exc_info.value.detail)
     upsert_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_update_applies_patch_and_returns_member_failures(monkeypatch):
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[Member(user_id="user-1", role="user")],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    update_mock = AsyncMock(
+        side_effect=[
+            team_endpoints.TeamMemberUpdateResponse(team_id="team-1234", user_id="user-1", tpm_limit=42),
+            HTTPException(status_code=404, detail={"error": "User is not a team member"}),
+        ]
+    )
+    monkeypatch.setattr(team_endpoints, "team_member_update", update_mock)
+
+    response = await bulk_update_team_members(
+        data=BulkTeamMemberUpdateRequest(
+            team_id="team-1234",
+            user_ids=["user-1", "user-2", "user-1"],
+            update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+        ),
+        http_request=Request({"type": "http", "method": "POST", "path": "/team/member/bulk_update"}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin"),
+    )
+
+    assert response.total_requested == 2
+    assert [member.user_id for member in response.successful_updates] == ["user-1"]
+    assert response.failed_updates[0].user_id == "user-2"
+    assert "not a team member" in response.failed_updates[0].failed_reason
+    assert update_mock.await_args_list[0].kwargs["data"].model_dump(exclude_unset=True) == {
+        "team_id": "team-1234",
+        "user_id": "user-1",
+        "tpm_limit": 42,
+    }
+
+
+def test_bulk_team_member_update_requires_exactly_one_member_selector():
+    with pytest.raises(ValueError, match="either user_ids or all_members_in_team"):
+        BulkTeamMemberUpdateRequest(
+            team_id="team-1234",
+            user_ids=["user-1"],
+            all_members_in_team=True,
+            update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+        )

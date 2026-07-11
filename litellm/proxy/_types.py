@@ -600,6 +600,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_list",
             "/team/permissions_update",
             "/team/permissions_bulk_update",
+            "/team/member/bulk_update",
             "/team/daily/activity",
             # model
             "/model/new",
@@ -3702,6 +3703,48 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_models: Optional[List[str]] = None
+
+
+class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
+    max_budget_in_team: Optional[float] = None
+    role: Optional[Literal["admin", "user"]] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+    allowed_models: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self):
+        if not self.model_fields_set:
+            raise ValueError("update_fields must specify at least one field to update")
+        return self
+
+
+class BulkTeamMemberUpdateRequest(LiteLLMPydanticObjectBase):
+    team_id: str
+    user_ids: Optional[List[str]] = None
+    all_members_in_team: bool = False
+    update_fields: TeamMemberBulkUpdateFields
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        has_user_ids = self.user_ids is not None and len(self.user_ids) > 0
+        if has_user_ids and self.all_members_in_team:
+            raise ValueError("Provide either user_ids or all_members_in_team=True, not both")
+        if not has_user_ids and not self.all_members_in_team:
+            raise ValueError("Must provide either user_ids (non-empty) or all_members_in_team=True")
+        return self
+
+
+class FailedTeamMemberUpdate(MemberUpdateResponse):
+    failed_reason: str
+
+
+class BulkTeamMemberUpdateResponse(LiteLLMPydanticObjectBase):
+    team_id: str
+    total_requested: int
+    successful_updates: List[TeamMemberUpdateResponse]
+    failed_updates: List[FailedTeamMemberUpdate]
 
 
 class TeamModelAddRequest(BaseModel):

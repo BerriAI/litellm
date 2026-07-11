@@ -28,8 +28,11 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
     BlockTeamRequest,
+    BulkTeamMemberUpdateRequest,
+    BulkTeamMemberUpdateResponse,
     CommonProxyErrors,
     DeleteTeamRequest,
+    FailedTeamMemberUpdate,
     LiteLLM_AuditLogs,
     LiteLLM_DeletedTeamTable,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -2999,6 +3002,82 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+    )
+
+
+@router.post(
+    "/team/member/bulk_update",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkTeamMemberUpdateResponse,
+)
+@management_endpoint_wrapper
+async def bulk_update_team_members(
+    data: BulkTeamMemberUpdateRequest,
+    http_request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Team id={} does not exist in db".format(data.team_id)},
+        )
+    existing_team = LiteLLM_TeamTable(**existing_team_row.model_dump())
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=existing_team)
+        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=existing_team)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member/bulk_update", data.team_id
+                )
+            },
+        )
+
+    if data.all_members_in_team:
+        user_ids = [member.user_id for member in existing_team.members_with_roles if member.user_id is not None]
+    else:
+        user_ids = list(dict.fromkeys(data.user_ids or []))
+
+    max_batch_size = 500
+    if len(user_ids) > max_batch_size:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Maximum {} team members can be updated at once. Found {} user_ids.".format(
+                    max_batch_size, len(user_ids)
+                )
+            },
+        )
+
+    update_fields = data.update_fields.model_dump(exclude_unset=True)
+    successful_updates: List[TeamMemberUpdateResponse] = []
+    failed_updates: List[FailedTeamMemberUpdate] = []
+    for user_id in user_ids:
+        try:
+            response = await team_member_update(
+                data=TeamMemberUpdateRequest(team_id=data.team_id, user_id=user_id, **update_fields),
+                http_request=http_request,
+                user_api_key_dict=user_api_key_dict,
+            )
+            successful_updates.append(response)
+        except HTTPException as exc:
+            failed_updates.append(FailedTeamMemberUpdate(user_id=user_id, failed_reason=str(exc.detail)))
+
+    return BulkTeamMemberUpdateResponse(
+        team_id=data.team_id,
+        total_requested=len(user_ids),
+        successful_updates=successful_updates,
+        failed_updates=failed_updates,
     )
 
 

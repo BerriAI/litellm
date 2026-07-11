@@ -131,6 +131,7 @@ def test_proxy_admin_viewer_config_update_route_rejected():
         "/team/unblock",
         "/team/permissions_update",
         "/team/permissions_bulk_update",
+        "/team/member/bulk_update",
         # JWT key mapping write routes
         "/jwt/key/mapping/new",
         "/jwt/key/mapping/update",
