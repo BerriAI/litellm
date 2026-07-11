@@ -1,10 +1,10 @@
+import { DonutChart } from "@/components/shared/charts";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import {
   Card,
   Col,
-  DonutChart,
   Grid,
   Switch,
   Table,
@@ -20,14 +20,14 @@ import React, { useState } from "react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ChartLoader } from "@/components/shared/chart_loader";
 
-interface ProviderSpendData {
+type ProviderSpendData = {
   provider: string;
   spend: number;
   requests: number;
   successful_requests: number;
   failed_requests: number;
   tokens: number;
-}
+};
 
 interface SpendByProviderProps {
   loading: boolean;
@@ -88,6 +88,9 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
               category="spend"
               valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
               colors={["cyan"]}
+              showLabel
+              startAngle={90}
+              endAngle={-270}
             />
           </Col>
           <Col numColSpan={1}>

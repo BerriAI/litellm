@@ -1,12 +1,12 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { BarChart, DonutChart } from "@/components/shared/charts";
 import { MoneyCell } from "@/components/shared/table_cells";
+import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
-  BarChart,
   Card,
   Col,
   DateRangePickerValue,
-  DonutChart,
   Grid,
   Subtitle,
   Tab,
@@ -67,9 +67,9 @@ interface EntityMetrics {
   metadata: Record<string, any>;
 }
 
-interface ExtendedDailyData extends DailyData {
+type ExtendedDailyData = DailyData & {
   breakdown: BreakdownMetrics;
-}
+};
 
 interface EntitySpendData {
   results: ExtendedDailyData[];
@@ -551,60 +551,66 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
               {/* Daily Spend Chart */}
               <Col numColSpan={2}>
-                <Card>
-                  <Title>Daily Spend</Title>
-                  <BarChart
-                    data={[...spendData.results].sort(
-                      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                    )}
-                    index="date"
-                    categories={["metrics.spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={valueFormatterSpend}
-                    yAxisWidth={100}
-                    showLegend={false}
-                    customTooltip={({ payload, active }) => {
-                      if (!active || !payload?.[0]) return null;
-                      const data = payload[0].payload;
-                      const entityCount = Object.keys(data.breakdown.entities || {}).length;
-                      return (
-                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                          <p className="font-bold">{data.date}</p>
-                          <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
-                          <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
-                          <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                          <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                          <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
-                          <p className="text-gray-600">
-                            Total {capitalizedEntityLabel}s: {entityCount}
-                          </p>
-                          <div className="mt-2 border-t pt-2">
-                            <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
-                            {Object.entries(data.breakdown.entities || {})
-                              .sort(([, a], [, b]) => {
-                                const spendA = (a as EntityMetrics).metrics.spend;
-                                const spendB = (b as EntityMetrics).metrics.spend;
-                                return spendB - spendA;
-                              })
-                              .slice(0, 5)
-                              .map(([entity, entityData]) => {
-                                const metrics = entityData as EntityMetrics;
-                                return (
-                                  <p key={entity} className="text-sm text-gray-600">
-                                    {getEntityLabel(entity, metrics.metadata)}: $
-                                    {formatNumberWithCommas(metrics.metrics.spend, 2)}
-                                  </p>
-                                );
-                              })}
-                            {entityCount > 5 && (
-                              <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>
-                            )}
+                <ShadcnCard>
+                  <CardHeader>
+                    <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <BarChart
+                      data={[...spendData.results].sort(
+                        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+                      )}
+                      index="date"
+                      categories={["metrics.spend"]}
+                      colors={["cyan"]}
+                      valueFormatter={valueFormatterSpend}
+                      yAxisWidth={100}
+                      showLegend={false}
+                      customTooltip={({ payload, active }) => {
+                        if (!active || !payload?.[0]) return null;
+                        const data = payload[0].payload;
+                        const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                        return (
+                          <div className="bg-white p-4 shadow-lg rounded-lg border">
+                            <p className="font-bold">{data.date}</p>
+                            <p className="text-cyan-500">
+                              Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                            </p>
+                            <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
+                            <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                            <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                            <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
+                            <p className="text-gray-600">
+                              Total {capitalizedEntityLabel}s: {entityCount}
+                            </p>
+                            <div className="mt-2 border-t pt-2">
+                              <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
+                              {Object.entries(data.breakdown.entities || {})
+                                .sort(([, a], [, b]) => {
+                                  const spendA = (a as EntityMetrics).metrics.spend;
+                                  const spendB = (b as EntityMetrics).metrics.spend;
+                                  return spendB - spendA;
+                                })
+                                .slice(0, 5)
+                                .map(([entity, entityData]) => {
+                                  const metrics = entityData as EntityMetrics;
+                                  return (
+                                    <p key={entity} className="text-sm text-gray-600">
+                                      {getEntityLabel(entity, metrics.metadata)}: $
+                                      {formatNumberWithCommas(metrics.metrics.spend, 2)}
+                                    </p>
+                                  );
+                                })}
+                              {entityCount > 5 && (
+                                <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    }}
-                  />
-                </Card>
+                        );
+                      }}
+                    />
+                  </CardContent>
+                </ShadcnCard>
               </Col>
 
               {/* Entity Breakdown Section */}
@@ -747,6 +753,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                           category="spend"
                           valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                           colors={["cyan", "blue", "indigo", "violet", "purple"]}
+                          showLabel
+                          startAngle={90}
+                          endAngle={-270}
                         />
                       </Col>
                       <Col numColSpan={1}>

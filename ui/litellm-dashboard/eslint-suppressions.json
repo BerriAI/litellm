@@ -1527,21 +1527,6 @@
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/usage/_components/components/EntityUsage/TopModelView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/KeyModelUsageView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
     "no-nested-ternary": {
       "count": 1

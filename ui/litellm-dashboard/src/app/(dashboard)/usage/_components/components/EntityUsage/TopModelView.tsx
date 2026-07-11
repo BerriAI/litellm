@@ -1,17 +1,17 @@
-import { BarChart } from "@tremor/react";
+import { BarChart } from "@/components/shared/charts";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { Segmented } from "antd";
 import { useState } from "react";
-import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { DataTable } from "@/components/view_logs/table";
 
-interface TopModel {
+type TopModel = {
   key: string;
   spend: number;
   successful_requests: number;
   failed_requests: number;
   tokens: number;
-}
+};
 
 interface TopModelViewProps {
   topModels: TopModel[];
