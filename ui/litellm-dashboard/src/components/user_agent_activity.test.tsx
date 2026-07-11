@@ -183,6 +183,7 @@ describe("UserAgentActivity", () => {
   });
 
   const getPanelForTitle = (title: string): HTMLElement => {
+    // Assumes two wrapper divs between the Tremor <Title> and the panel root; update if Tremor's TabPanel depth changes.
     const panel = screen.getByText(title).closest("div")?.parentElement;
     expect(panel).not.toBeNull();
     return panel!;
@@ -197,7 +198,7 @@ describe("UserAgentActivity", () => {
     const fills = new Set(rectangles.map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-cyan-500, #06b6d4)"]));
 
-    const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.split(",")[0]));
+    const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
     expect(xPositions.size).toBe(1);
 
     expect(chart!.textContent).toContain("Chrome/1.0");

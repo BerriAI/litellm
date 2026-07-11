@@ -94,7 +94,7 @@ describe("PerUserUsage", () => {
     const fills = new Set(rectangles.map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-green-500, #22c55e)"]));
 
-    const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.split(",")[0]));
+    const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
     expect(xPositions.size).toBe(3);
 
     expect(chart!.textContent).toContain("curl/8.0");
