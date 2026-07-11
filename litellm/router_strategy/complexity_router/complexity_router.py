@@ -149,8 +149,11 @@ class ComplexityRouter(CustomLogger):
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
 
         # Lazily built on first semantic request and cached for reuse (route
-        # embeddings are static, only the prompt is embedded per request).
+        # embeddings are static, only the prompt is embedded per request). The lock
+        # serializes the one-time build so concurrent cold-start requests don't each
+        # construct the index and fire duplicate embedding calls.
         self._semantic_routelayer: Optional[SemanticRouter] = None
+        self._semantic_routelayer_lock = asyncio.Lock()
 
         # Pre-compile regex patterns for efficiency
         # Use non-greedy .*? to prevent ReDoS on pathological inputs
@@ -486,6 +489,22 @@ class ComplexityRouter(CustomLogger):
         self._semantic_routelayer = routelayer
         return routelayer
 
+    async def _ensure_semantic_routelayer(self) -> "SemanticRouter":
+        """Return the cached route layer, building it once under a lock if needed.
+
+        The build embeds the static route utterances via the encoder's synchronous path,
+        so it runs in a worker thread to avoid blocking the event loop. A double-checked
+        asyncio lock ensures concurrent cold-start requests build it exactly once rather
+        than each firing duplicate embedding calls.
+        """
+        if self._semantic_routelayer is not None:
+            return self._semantic_routelayer
+        async with self._semantic_routelayer_lock:
+            routelayer = self._semantic_routelayer
+            if routelayer is None:
+                routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
+            return routelayer
+
     async def _semantic_tier_override(self, user_message: str, request_kwargs: Dict) -> Optional[ComplexityTier]:
         """Match the prompt against keyword_tier_rules by embedding similarity.
 
@@ -503,11 +522,7 @@ class ComplexityRouter(CustomLogger):
             LiteLLMRouterEncoder,
         )
 
-        # Building the SemanticRouter embeds the (static) route utterances via the
-        # encoder's *synchronous* path; run it in a worker thread so that one-time,
-        # per-router-instance provider I/O never blocks the async event loop and stalls
-        # other requests. Once cached, subsequent calls return immediately (no I/O).
-        routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
+        routelayer = await self._ensure_semantic_routelayer()
         encoder = cast(LiteLLMRouterEncoder, routelayer.encoder)  # cast-ok: always the encoder we built above
         # Strip the parent request's budget reservation before forwarding: the reservation
         # belongs to the routed completion this embedding is helping select, not to the

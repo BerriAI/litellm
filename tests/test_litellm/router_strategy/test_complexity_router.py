@@ -4,6 +4,7 @@ Tests for the ComplexityRouter.
 Tests the rule-based complexity scoring and tier assignment logic.
 """
 
+import asyncio
 import os
 import sys
 from typing import Dict, List
@@ -1477,6 +1478,11 @@ class FakeEmbeddingRouter:
     def __init__(self):
         self.async_embedding_calls: List[List[str]] = []
         self.async_embedding_kwargs: List[Dict] = []
+        # Every embedded batch (sync route-index build AND async query), so tests can count
+        # builds independently of which embedding path the library happens to use.
+        self.embedded_batches: List[List[str]] = []
+        # Thread ids of the synchronous (route-index build) embedding calls, so a test can
+        # assert the build is offloaded off the event-loop thread.
         self.sync_embedding_thread_ids: List[int] = []
 
     def _vectors(self, docs: List[str]) -> List[List[float]]:
@@ -1490,18 +1496,23 @@ class FakeEmbeddingRouter:
         return text if isinstance(text, list) else [text]
 
     def embedding(self, input, model, **kwargs):
-        # Record the thread this synchronous (route-index build) call ran on, so tests can
-        # assert it is offloaded off the event-loop thread.
         import threading
 
+        docs = self._as_list(input)
+        self.embedded_batches.append(docs)
         self.sync_embedding_thread_ids.append(threading.get_ident())
-        return _make_embedding_response(self._vectors(self._as_list(input)))
+        return _make_embedding_response(self._vectors(docs))
 
     async def aembedding(self, input, model, **kwargs):
         docs = self._as_list(input)
+        self.embedded_batches.append(docs)
         self.async_embedding_calls.append(docs)
         self.async_embedding_kwargs.append(kwargs)
         return _make_embedding_response(self._vectors(docs))
+
+    def utterance_embedding_count(self, utterance: str) -> int:
+        """How many times the given route utterance was embedded == number of route-index builds."""
+        return sum(1 for batch in self.embedded_batches if utterance in batch)
 
 
 class TestSemanticKeywordTierRules:
@@ -1635,6 +1646,42 @@ class TestSemanticKeywordTierRules:
         assert fake_router.sync_embedding_thread_ids, "expected the route-index build to embed utterances"
         # ...and none of it ran on the event-loop thread.
         assert all(tid != loop_thread_id for tid in fake_router.sync_embedding_thread_ids)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_cold_start_builds_routelayer_once(self, basic_config):
+        """Concurrent first requests must not each construct the route index (which would
+        fire duplicate embedding calls); the lazy build happens exactly once.
+        """
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+
+        def _make_router(fake):
+            return ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=fake,
+                complexity_router_config=config,
+            )
+
+        # Baseline: a single cold request's route-index build embeds the route utterance once.
+        route_utterance = "kubernetes deployment"
+        baseline_fake = FakeEmbeddingRouter()
+        await _make_router(baseline_fake)._semantic_tier_override("roll out my k8s cluster", {})
+        baseline_builds = baseline_fake.utterance_embedding_count(route_utterance)
+        assert baseline_builds >= 1
+
+        # Ten simultaneous cold-start requests must build the index the same number of
+        # times as one request - i.e. exactly once, not once per concurrent caller.
+        concurrent_fake = FakeEmbeddingRouter()
+        concurrent_router = _make_router(concurrent_fake)
+        await asyncio.gather(
+            *(concurrent_router._semantic_tier_override("roll out my k8s cluster", {}) for _ in range(10))
+        )
+        assert concurrent_fake.utterance_embedding_count(route_utterance) == baseline_builds
 
     @pytest.mark.asyncio
     async def test_below_threshold_falls_back_to_scoring(self, basic_config):
