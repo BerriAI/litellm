@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
-    match_fallback_generalization,
+    match_capability_generalizations,
+    match_routing_generalization,
     set_fallback_generalizations,
 )
 from litellm.litellm_core_utils.get_model_cost_map import (
@@ -102,9 +103,7 @@ def test_finalize_pops_key_and_installs_rules():
         # The reserved key is removed from the returned model map ...
         assert FALLBACK_GENERALIZATIONS_KEY not in finalized
         # ... and its rules are installed into the generalizations module.
-        assert match_fallback_generalization("widget-9") == {
-            "litellm_provider": "openai"
-        }
+        assert match_routing_generalization("widget-9") == "openai"
     finally:
         set_fallback_generalizations(previous)
 
@@ -116,27 +115,25 @@ def test_finalize_with_no_block_clears_rules():
             [{"name": "stale", "pattern": r"^x", "model_info": {"a": 1}}]
         )
         _finalize_model_cost_map(_make_models(2))
-        assert match_fallback_generalization("x-1") is None
+        assert match_capability_generalizations("x-1") is None
     finally:
         set_fallback_generalizations(previous)
 
 
-def test_shipped_backup_carries_the_anthropic_claude_rule():
-    """The bundled backup must ship the anthropic-claude rule so a fresh install
-    (or an offline fallback) routes unknown Claude models without code changes."""
+def test_shipped_backup_carries_the_claude_routing_rules():
+    """The bundled backup must ship the Claude routing rules so a fresh install
+    (or an offline fallback) routes unknown Claude models without code changes.
+    Bedrock-syntax ids must hit the bedrock rule before the bare-id Anthropic rule."""
     backup = GetModelCostMap.load_local_model_cost_map()
     rules = backup.get(FALLBACK_GENERALIZATIONS_KEY, {}).get("rules", [])
-    names = {r.get("name") for r in rules}
-    assert "anthropic-claude" in names
-
-    rule = next(r for r in rules if r.get("name") == "anthropic-claude")
-    assert rule["model_info"]["litellm_provider"] == "anthropic"
+    names = [r.get("name") for r in rules]
+    assert names.index("bedrock-claude-ids") < names.index("anthropic-claude-ids")
 
     previous = list(get_fallback_generalization_rules())
     try:
         set_fallback_generalizations(rules)
-        matched = match_fallback_generalization("claude-opus-4-9")
-        assert matched is not None and matched["litellm_provider"] == "anthropic"
+        assert match_routing_generalization("claude-opus-4-9") == "anthropic"
+        assert match_routing_generalization("global.anthropic.claude-opus-4-9") == "bedrock"
     finally:
         set_fallback_generalizations(previous)
 
@@ -147,23 +144,19 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     route) and on the version-gated anthropic-claude-adaptive-thinking rule for
     unmapped future Claudes, while leaving the dated Claude 4.0 names
     ("...-4-20250514") unflagged so a date can never be mistaken for a 4.6+ minor
-    version. The version-neutral anthropic-claude pricing rule must not flag it, so
-    an unmapped sub-4.6 name is priced but stays non-adaptive. The adaptive rule must
-    inherit pricing from the pricing rule via ``extends`` and carry only its delta, so
-    the Opus-tier price block is never duplicated across rules."""
+    version. The version-neutral claude-family-baseline capability rule must not flag
+    it, so an unmapped sub-4.6 name resolves but stays non-adaptive. The adaptive rule
+    carries only its delta; capability unioning stacks it onto the baseline, so the
+    baseline block is never duplicated across rules and no rule needs ``extends``."""
     backup = GetModelCostMap.load_local_model_cost_map()
 
     rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
-    pricing_rule = next(r for r in rules if r.get("name") == "anthropic-claude")
-    adaptive_rule = next(
-        r for r in rules if r.get("name") == "anthropic-claude-adaptive-thinking"
-    )
-    assert "supports_adaptive_thinking" not in pricing_rule["model_info"]
-    assert adaptive_rule["model_info"]["supports_adaptive_thinking"] is True
-
-    assert "extends" not in pricing_rule
-    assert adaptive_rule.get("extends") == "anthropic-claude"
+    baseline_rule = next(r for r in rules if r.get("name") == "claude-family-baseline")
+    adaptive_rule = next(r for r in rules if r.get("name") == "claude-adaptive-thinking")
+    assert "supports_adaptive_thinking" not in baseline_rule["model_info"]
+    assert "litellm_provider" not in baseline_rule["model_info"]
     assert adaptive_rule["model_info"] == {"supports_adaptive_thinking": True}
+    assert all("extends" not in r for r in rules)
 
     for adaptive in [
         "anthropic.claude-opus-4-8",

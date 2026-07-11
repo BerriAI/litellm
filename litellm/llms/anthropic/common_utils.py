@@ -290,6 +290,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
 
     @staticmethod
+    def _strip_version_suffix(model: str) -> str:
+        at = model.rfind("@")
+        if at > 0:
+            return model[:at]
+        return model
+
+    @staticmethod
     def _model_map_lookup_candidates(model: str) -> List[str]:
         """Model-map keys to try for ``model``: the id itself, the same id with a
         bedrock/vertex routing prefix removed, the Bedrock base model, and each of
@@ -324,6 +331,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 _DATED_RELEASE_SUFFIX_RE.sub("", cand),
                 _DOTTED_VERSION_RE.sub(r"\1-\2", cand),
                 _strip_bedrock_id_suffixes(cand),
+                AnthropicModelInfo._strip_version_suffix(cand),
             )
         )
         return list(dict.fromkeys((*primary, *normalized)))
