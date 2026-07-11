@@ -508,7 +508,13 @@ class MCPRequestHandler:
         ``PassthroughConfig`` override; the envelope ``Authorization`` the leak-defense
         strips never reaches the upstream. A new headers dict is returned rather than
         mutating the input. Fails closed with a 401 on an invalid or expired envelope, or
-        when the referenced key is missing, blocked, or expired.
+        when the referenced key is missing, blocked, or expired, or its team is blocked.
+
+        The sealed token is keyed alias-first, matching the order egress resolves
+        (``lookup_mcp_server_auth_in_headers`` tries ``alias`` before ``server_name``). Keying
+        under ``server_name`` would leave a caller-supplied ``x-mcp-{alias}-authorization`` at the
+        higher-priority alias slot, pairing the admitted identity with an attacker's upstream
+        credential; the alias-keyed injection overwrites any such caller value.
         """
         from litellm.proxy.proxy_server import master_key
 
@@ -519,7 +525,7 @@ class MCPRequestHandler:
         result = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
         match result:
             case BridgeEnvelopeAdmitted():
-                header_key = server.server_name or server.alias
+                header_key = server.alias or server.server_name
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
                 admitted = await MCPRequestHandler._reload_admitted_key(result.identity.key_hash)
@@ -533,7 +539,7 @@ class MCPRequestHandler:
 
     @staticmethod
     async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:
-        """Reload the live key record an admitted envelope references.
+        """Reload the live key record an admitted envelope references and re-check live policy.
 
         Resolving the current ``UserAPIKeyAuth`` (cache first, then DB) is what stops the
         envelope from carrying frozen authority: the key's present team/org/object-permission
@@ -542,7 +548,9 @@ class MCPRequestHandler:
         unrestricted identity. ``get_key_object`` raises for a hash with no key row; a
         blocked or expired row is rejected explicitly because ``get_key_object`` resolves a
         row without applying those checks (the main ``user_api_key_auth`` pipeline enforces
-        them downstream, which this admission path bypasses).
+        them downstream, which this admission path bypasses). The key's team is reloaded and
+        rejected when blocked, mirroring ``common_checks``, so blocking a team revokes every
+        envelope minted under its keys rather than leaving them live until expiry.
         """
         from litellm.proxy.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -559,7 +567,32 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
         if not MCPRequestHandler._admitted_key_is_active(key_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        await MCPRequestHandler._reject_if_admitted_team_blocked(key_object)
         return key_object
+
+    @staticmethod
+    async def _reject_if_admitted_team_blocked(key_object: UserAPIKeyAuth) -> None:
+        """Reload the key's team and fail closed with a 401 when it is blocked or no longer
+        resolves. ``get_key_object`` returns the key row without any team validation, so this
+        admission path applies the same live team-block gate ``common_checks`` runs on the
+        standard auth pipeline; without it, blocking a team would not revoke envelopes already
+        minted under its keys until they expired."""
+        team_id = key_object.team_id
+        if not team_id:
+            return
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        try:
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+        except (ProxyException, HTTPException):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        if team_object.blocked is True:
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
 
     @staticmethod
     def _admitted_key_is_active(key_object: UserAPIKeyAuth) -> bool:

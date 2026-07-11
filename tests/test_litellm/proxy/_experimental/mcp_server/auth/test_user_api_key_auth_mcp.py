@@ -4962,14 +4962,17 @@ class TestMCPDcrBridgeDelegateAdmission:
 
     @staticmethod
     @contextlib.contextmanager
-    def _patch_key_reload(*, return_value=None, side_effect=None):
+    def _patch_key_reload(*, return_value=None, side_effect=None, team_blocked=False):
         """Patch the live-key reload dependencies used by ``_reload_admitted_key``: the
-        ``get_key_object`` lookup plus the ``prisma_client`` / ``user_api_key_cache`` globals it
-        reads. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
-        the reload key."""
+        ``get_key_object`` lookup, the ``get_team_object`` lookup its team-block gate runs, and the
+        ``prisma_client`` / ``user_api_key_cache`` globals they read. The team resolves unblocked by
+        default; ``team_blocked=True`` simulates an admin blocking the key's team. Yields the
+        ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was the reload key."""
         get_key_object = AsyncMock(return_value=return_value, side_effect=side_effect)
+        get_team_object = AsyncMock(return_value=MagicMock(blocked=team_blocked))
         with (
             patch("litellm.proxy.auth.auth_checks.get_key_object", get_key_object),
+            patch("litellm.proxy.auth.auth_checks.get_team_object", get_team_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
@@ -5102,6 +5105,29 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
 
+    async def test_blocked_team_envelope_fails_closed_401(self):
+        """Blocking the key's TEAM must revoke its envelopes immediately: the reloaded key is active
+        but its team is blocked, so admission 401s. Without the live team re-check, a caller could
+        keep executing tools after an admin blocked the team, until the envelope expired."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key(), team_blocked=True),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+
     async def test_alias_only_server_injects_under_alias_egress_can_resolve(self):
         """When server_name is None, the inner token must be keyed under the alias (which egress
         resolves), never under server.name (which egress never looks up), so the forwarded token is
@@ -5128,6 +5154,28 @@ class TestMCPDcrBridgeDelegateAdmission:
             (_auth, _h, _s, mcp_server_auth_headers, _o, _r) = await MCPRequestHandler.process_mcp_request(scope)
 
         assert mcp_server_auth_headers == {"bridge_alias": {"Authorization": "Bearer inner-upstream-access-token"}}
+
+    async def test_sealed_token_wins_over_caller_forwarded_alias_header(self):
+        """When a bridge server has both a server_name and a distinct alias, the sealed inner token
+        must occupy the alias slot, the identifier egress resolves first. Otherwise a caller who
+        forwards x-mcp-{alias}-authorization keeps that entry at the higher-priority slot and pairs
+        the admitted identity with an attacker-chosen upstream credential."""
+        envelope = self._mint_bridge_envelope()
+        attacker_forwarded = {"bridge_alias": {"Authorization": "Bearer ATTACKER-UPSTREAM-TOKEN"}}
+
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key()),
+        ):
+            _auth, new_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=self._bridge_delegate_server(server_name="bridge_name", alias="bridge_alias"),
+                authorization_value=f"Bearer {envelope}",
+                mcp_server_auth_headers=attacker_forwarded,
+            )
+
+        # The sealed token owns the alias slot, overwriting the caller's value; the attacker token
+        # survives nowhere egress would resolve.
+        assert new_headers == {"bridge_alias": {"Authorization": "Bearer inner-upstream-access-token"}}
 
     async def test_server_with_no_alias_or_server_name_is_not_admitted_via_bridge_arm(self):
         """A bridge server egress cannot route to (no alias and no server_name) must not take the
