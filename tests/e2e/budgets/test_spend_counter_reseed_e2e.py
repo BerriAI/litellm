@@ -23,6 +23,7 @@ from threading import Barrier
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from budget_client import BudgetClient
 from e2e_config import unique_marker
@@ -41,6 +42,8 @@ BURST = 6
 # proxy_batch_write_at (60s) flushes the spend to the DB and default_redis_ttl (20s)
 # expires the counter; this waits out both.
 COLD_WAIT_SECONDS = 80
+
+_JSON_FLOAT: TypeAdapter[float] = TypeAdapter(float)
 
 
 def _redis() -> "redis.Redis[str] | RedisCluster[str]":
@@ -75,12 +78,11 @@ def _parse_counter(raw: object) -> float | None:
     try:
         return float(text)
     except ValueError:
-        try:
-            import json
-
-            return float(json.loads(text))
-        except Exception:
-            return None
+        pass
+    try:
+        return _JSON_FLOAT.validate_json(text)
+    except ValidationError:
+        return None
 
 
 def _spend_counter(rds: "redis.Redis[str] | RedisCluster[str]", key: str) -> float | None:
