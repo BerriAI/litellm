@@ -1,6 +1,6 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Member, TeamMemberBulkUpdateFields, teamMemberBulkUpdateCall } from "@/components/networking";
+import { Member } from "@/components/networking";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import NumericalInput from "@/components/shared/numerical_input";
@@ -12,6 +12,7 @@ import { Button, Checkbox, Form, Modal, Select, Space, Tooltip, Typography } fro
 import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
 import MemberTable from "@/components/common_components/MemberTable";
+import { TeamMemberBulkUpdateFields, teamMemberBulkUpdateCall } from "./teamMemberBulkUpdate";
 import { TeamData } from "./TeamInfo";
 
 interface TeamMemberTabProps {
@@ -229,7 +230,7 @@ export default function TeamMemberTab({
 
     setIsBulkUpdating(true);
     try {
-      const response = await teamMemberBulkUpdateCall(accessToken, teamData.team_id, userIds, false, updateFields);
+      const response = await teamMemberBulkUpdateCall(accessToken, teamData.team_id, userIds, updateFields);
       await onMembersUpdated?.();
       setIsBulkUpdateVisible(false);
       setSelectedMembers([]);

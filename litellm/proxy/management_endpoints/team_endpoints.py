@@ -3060,8 +3060,8 @@ async def bulk_update_team_members(
         )
 
     update_fields = data.update_fields.model_dump(exclude_unset=True)
-    successful_updates: List[TeamMemberUpdateResponse] = []
-    failed_updates: List[FailedTeamMemberUpdate] = []
+    successful_updates: list[TeamMemberUpdateResponse] = []
+    failed_updates: list[FailedTeamMemberUpdate] = []
     for user_id in user_ids:
         try:
             response = await team_member_update(

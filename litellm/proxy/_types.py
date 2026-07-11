@@ -3706,12 +3706,12 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
 
 
 class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
-    max_budget_in_team: Optional[float] = None
-    role: Optional[Literal["admin", "user"]] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    budget_duration: Optional[str] = None
-    allowed_models: Optional[List[str]] = None
+    max_budget_in_team: float | None = None
+    role: Literal["admin", "user"] | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: list[str] | None = None
 
     @model_validator(mode="after")
     def require_at_least_one_field(self):
@@ -3722,7 +3722,7 @@ class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
 
 class BulkTeamMemberUpdateRequest(LiteLLMPydanticObjectBase):
     team_id: str
-    user_ids: Optional[List[str]] = None
+    user_ids: list[str] | None = None
     all_members_in_team: bool = False
     update_fields: TeamMemberBulkUpdateFields
 
@@ -3743,8 +3743,8 @@ class FailedTeamMemberUpdate(MemberUpdateResponse):
 class BulkTeamMemberUpdateResponse(LiteLLMPydanticObjectBase):
     team_id: str
     total_requested: int
-    successful_updates: List[TeamMemberUpdateResponse]
-    failed_updates: List[FailedTeamMemberUpdate]
+    successful_updates: list[TeamMemberUpdateResponse]
+    failed_updates: list[FailedTeamMemberUpdate]
 
 
 class TeamModelAddRequest(BaseModel):

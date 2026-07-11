@@ -2732,32 +2732,6 @@ export interface Member {
   allowed_models?: string[] | null;
 }
 
-export interface TeamMemberBulkUpdateFields {
-  role?: "admin" | "user" | null;
-  max_budget_in_team?: number | null;
-  tpm_limit?: number | null;
-  rpm_limit?: number | null;
-  budget_duration?: string | null;
-  allowed_models?: string[] | null;
-}
-
-export const teamMemberBulkUpdateCall = async (
-  accessToken: string,
-  teamId: string,
-  userIds: string[],
-  allMembersInTeam: boolean,
-  updateFields: TeamMemberBulkUpdateFields,
-) => {
-  return apiClient.post(`/team/member/bulk_update`, {
-    accessToken,
-    body: {
-      team_id: teamId,
-      ...(allMembersInTeam ? { all_members_in_team: true } : { user_ids: userIds }),
-      update_fields: updateFields,
-    },
-  });
-};
-
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_add` : `/team/member_add`;
