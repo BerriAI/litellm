@@ -311,12 +311,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if capped_thinking is not None:
             optional_params["thinking"] = capped_thinking
         else:
-            if not supports_thinking and not (litellm.drop_params or drop_params):
+            if not (litellm.drop_params or drop_params):
+                reason = (
+                    "does not support the `effort` / adaptive `thinking` parameter"
+                    if not supports_thinking
+                    else f"cannot fit the minimum thinking budget of "
+                    f"{ANTHROPIC_MIN_THINKING_BUDGET_TOKENS} tokens within max_tokens={max_tokens}"
+                )
                 raise AnthropicError(
-                    message=(
-                        f"{model} does not support the `effort` / adaptive `thinking` parameter. "
-                        "To drop unsupported params, set `litellm.drop_params = True`."
-                    ),
+                    message=(f"{model} {reason}. To drop unsupported params, set `litellm.drop_params = True`."),
                     status_code=400,
                 )
             verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)

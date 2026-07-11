@@ -128,3 +128,43 @@ def test_thinking_dropped_when_max_tokens_too_small_for_min_budget(monkeypatch):
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+
+def test_non_adaptive_request_without_effort_is_untouched():
+    """A non-adaptive model receiving a request with no adaptive interface (no
+    effort, no adaptive thinking) must pass through untouched."""
+    result = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "thinking" not in result
+    assert "output_config" not in result
+
+
+def test_undersized_max_tokens_raises_without_drop_params(monkeypatch):
+    """Thinking-capable model + max_tokens too small for the minimum budget must be
+    gated on drop_params, same as any other unsupported param: raise a clear
+    max_tokens error when drop_params is off (rather than silently dropping)."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(Exception, match="max_tokens|drop_params"):
+        _transform(
+            "claude-haiku-4-5", _claude_code_payload(effort="medium", max_tokens=512)
+        )
+
+
+def test_residual_output_config_raises_without_drop_params(monkeypatch):
+    """A residual output_config field (e.g. format) on a pre-4.6 model is
+    unsupported and must raise when drop_params is off, even though the effort was
+    translated to legacy thinking."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(Exception, match="output_config|drop_params"):
+        _transform(
+            "claude-haiku-4-5",
+            _claude_code_payload(effort="medium", format={"type": "json_schema"}),
+        )
