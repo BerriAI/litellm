@@ -6,9 +6,7 @@ import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
@@ -145,9 +143,7 @@ class TestExceptionCheckers:
         ]
 
         for error_str in error_strings:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
             assert result is True, f"Should detect policy violation in: {error_str}"
 
     def test_is_azure_content_policy_violation_error_case_insensitive(self):
@@ -161,12 +157,8 @@ class TestExceptionCheckers:
         ]
 
         for error_str in error_strings:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
-            assert (
-                result is True
-            ), f"Should detect policy violation in uppercase: {error_str}"
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+            assert result is True, f"Should detect policy violation in uppercase: {error_str}"
 
     def test_is_azure_content_policy_violation_error_with_non_policy_errors(self):
         """Test that non-policy violation errors are not detected as policy violations"""
@@ -183,12 +175,8 @@ class TestExceptionCheckers:
         ]
 
         for error_str in error_strings:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
-            assert (
-                result is False
-            ), f"Should NOT detect policy violation in: {error_str}"
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+            assert result is False, f"Should NOT detect policy violation in: {error_str}"
 
     def test_is_azure_content_policy_violation_error_with_partial_matches(self):
         """Test that partial keyword matches work correctly"""
@@ -201,9 +189,7 @@ class TestExceptionCheckers:
         ]
 
         for error_str in positive_cases:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
             assert result is True, f"Should detect policy violation in: {error_str}"
 
         # These should not match even though they contain similar words
@@ -215,12 +201,99 @@ class TestExceptionCheckers:
         ]
 
         for error_str in negative_cases:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
-            assert (
-                result is False
-            ), f"Should NOT detect policy violation in: {error_str}"
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+            assert result is False, f"Should NOT detect policy violation in: {error_str}"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "message": "You exceeded your current quota",
+            "type": "insufficient_quota",
+            "param": None,
+            "code": "insufficient_quota",
+        },
+        {
+            "error": {
+                "message": "You exceeded your current quota",
+                "type": "insufficient_quota",
+                "param": None,
+                "code": "insufficient_quota",
+            }
+        },
+    ],
+)
+def test_openai_insufficient_quota_maps_to_distinct_rate_limit_subtype(body):
+    original_exception = OpenAIError(
+        status_code=429,
+        message="Error code: 429 - You exceeded your current quota",
+        headers={},
+        body=body,
+    )
+
+    with pytest.raises(litellm.InsufficientQuotaError) as exc_info:
+        exception_type(
+            model="gpt-5.5",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert isinstance(exc_info.value, litellm.RateLimitError)
+    assert exc_info.value.code == "insufficient_quota"
+    assert exc_info.value.type == "insufficient_quota"
+    assert str(exc_info.value).count("InsufficientQuotaError") == 1
+    assert litellm.InsufficientQuotaError in litellm.LITELLM_EXCEPTION_TYPES
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {
+            "message": "Rate limit reached for requests",
+            "type": "requests",
+            "param": None,
+            "code": "rate_limit_exceeded",
+        },
+    ],
+)
+def test_openai_transient_429_remains_rate_limit_error(body):
+    original_exception = OpenAIError(
+        status_code=429,
+        message="Error code: 429 - Rate limit reached for requests",
+        headers={},
+        body=body,
+    )
+
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        exception_type(
+            model="gpt-5.5",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert type(exc_info.value) is litellm.RateLimitError
+    assert exc_info.value.code == "429"
+    assert exc_info.value.type == "throttling_error"
+
+
+def test_openai_non_429_insufficient_quota_body_is_not_quota_error():
+    original_exception = OpenAIError(
+        status_code=403,
+        message="Forbidden",
+        headers={},
+        body={"error": {"code": "insufficient_quota"}},
+    )
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        exception_type(
+            model="gpt-5.5",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert type(exc_info.value) is litellm.APIError
 
 
 gemini_context_window_test_cases = [
@@ -238,12 +311,8 @@ gemini_context_window_test_cases = [
 ]
 
 
-@pytest.mark.parametrize(
-    "error_message, should_raise_context_window", gemini_context_window_test_cases
-)
-def test_gemini_context_window_error_mapping(
-    error_message, should_raise_context_window
-):
+@pytest.mark.parametrize("error_message, should_raise_context_window", gemini_context_window_test_cases)
+def test_gemini_context_window_error_mapping(error_message, should_raise_context_window):
     """
     Tests that the exception_type function correctly maps Gemini's
     context window exceeded errors to litellm.ContextWindowExceededError.
@@ -340,9 +409,7 @@ vertex_rate_limit_test_cases = [
 ]
 
 
-@pytest.mark.parametrize(
-    "error_message, should_raise_rate_limit", vertex_rate_limit_test_cases
-)
+@pytest.mark.parametrize("error_message, should_raise_rate_limit", vertex_rate_limit_test_cases)
 def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_limit):
     """
     Tests that the exception_type function correctly maps Vertex AI's
@@ -377,10 +444,7 @@ class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 
     def test_parses_int_code(self):
-        body = (
-            '{"error":{"message":"high demand","type":"upstream_error",'
-            '"param":"","code":429}}'
-        )
+        body = '{"error":{"message":"high demand","type":"upstream_error","param":"","code":429}}'
         assert _get_body_error_code(body) == 429
 
     def test_parses_string_code(self):
@@ -417,8 +481,7 @@ gemini_body_code_429_test_cases = [
     ),
     (
         503,
-        '{"error":{"message":"upstream unavailable","type":"upstream_error",'
-        '"param":"","code":429}}',
+        '{"error":{"message":"upstream unavailable","type":"upstream_error","param":"","code":429}}',
         litellm.RateLimitError,
         "HTTP 503 envelope with body code:429 -> RateLimitError",
     ),

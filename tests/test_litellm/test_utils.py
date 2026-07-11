@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from jsonschema import validate
@@ -23,7 +23,9 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _get_wrapper_num_retries,
     _is_streaming_request,
+    client,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
@@ -4710,3 +4712,47 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+def test_wrapper_num_retries_is_zero_for_insufficient_quota():
+    kwargs = {"num_retries": 3}
+    retries, returned_kwargs = _get_wrapper_num_retries(
+        kwargs=kwargs,
+        exception=litellm.InsufficientQuotaError(
+            message="You exceeded your current quota",
+            llm_provider="openai",
+            model="gpt-5.5",
+        ),
+    )
+
+    assert retries == 0
+    assert returned_kwargs is kwargs
+
+
+def test_sync_client_does_not_retry_insufficient_quota():
+    completion_mock = Mock(
+        side_effect=litellm.InsufficientQuotaError(
+            message="You exceeded your current quota",
+            llm_provider="openai",
+            model="gpt-5.5",
+        )
+    )
+    responses_mock = Mock(
+        side_effect=litellm.InsufficientQuotaError(
+            message="You exceeded your current quota",
+            llm_provider="openai",
+            model="gpt-5.5",
+        )
+    )
+
+    def completion(*args, **kwargs):
+        return completion_mock(*args, **kwargs)
+
+    def responses(*args, **kwargs):
+        return responses_mock(*args, **kwargs)
+
+    with pytest.raises(litellm.InsufficientQuotaError):
+        client(completion)(num_retries=3)
+    with pytest.raises(litellm.InsufficientQuotaError):
+        client(responses)(num_retries=3)
+
+    assert completion_mock.call_count == 1
+    assert responses_mock.call_count == 1

@@ -1,7 +1,8 @@
 import json
 import re
 import traceback
-from typing import Any, Optional, Protocol, cast
+from collections.abc import Mapping
+from typing import Any, Optional, Protocol, cast, runtime_checkable
 
 import httpx
 
@@ -18,6 +19,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InsufficientQuotaError,
     InternalServerError,
     NotFoundError,
     PermissionDeniedError,
@@ -249,6 +251,28 @@ class _ProviderHTTPException(Protocol):
     llm_provider: str
 
 
+@runtime_checkable
+class _ProviderQuotaException(Protocol):
+    status_code: int
+    body: object
+    response: httpx.Response
+
+
+def _get_insufficient_quota_response(original_exception: object) -> Optional[httpx.Response]:
+    if not isinstance(original_exception, _ProviderQuotaException):
+        return None
+    if original_exception.status_code != 429:
+        return None
+    body = original_exception.body
+    if not isinstance(body, Mapping):
+        return None
+    nested_error = body.get("error")
+    error_body = nested_error if isinstance(nested_error, Mapping) else body
+    if error_body.get("code") != "insufficient_quota" and error_body.get("type") != "insufficient_quota":
+        return None
+    return original_exception.response
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -280,7 +304,15 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if ExceptionCheckers.is_error_str_rate_limit(error_str):
+    insufficient_quota_response = _get_insufficient_quota_response(original_exception)
+    if insufficient_quota_response is not None:
+        raise InsufficientQuotaError(
+            message=f"{exception_provider} - {message}",
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=insufficient_quota_response,
+        )
+    elif ExceptionCheckers.is_error_str_rate_limit(error_str):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
             model=model,

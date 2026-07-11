@@ -10,6 +10,7 @@ from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
     ContentPolicyViolationError,
+    InsufficientQuotaError,
     RateLimitError,
     Timeout,
 )
@@ -39,6 +40,8 @@ def get_num_retries_from_retry_policy(
     if isinstance(retry_policy, dict):
         retry_policy = RetryPolicy(**retry_policy)
 
+    if isinstance(exception, InsufficientQuotaError):
+        return 0
     if isinstance(exception, AuthenticationError) and retry_policy.AuthenticationErrorRetries is not None:
         return retry_policy.AuthenticationErrorRetries
     if isinstance(exception, Timeout) and retry_policy.TimeoutErrorRetries is not None:

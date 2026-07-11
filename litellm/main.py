@@ -78,7 +78,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import InsufficientQuotaError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
@@ -5679,12 +5679,17 @@ def completion_with_retries(*args, **kwargs):
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -5705,12 +5710,17 @@ async def acompletion_with_retries(*args, **kwargs):
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -5735,12 +5745,17 @@ def responses_with_retries(*args, **kwargs):
     original_function = kwargs.pop("original_function", responses)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -5762,12 +5777,17 @@ async def aresponses_with_retries(*args, **kwargs):
     original_function = kwargs.pop("original_function", aresponses)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            retry=tenacity.retry_if_not_exception_type(InsufficientQuotaError),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
