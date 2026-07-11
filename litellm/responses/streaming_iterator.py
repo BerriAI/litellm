@@ -17,6 +17,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -57,27 +58,30 @@ _CLIENT_ERROR_CODES: frozenset[str] = frozenset(
 )
 
 
-def _error_event_fields(error_obj: object) -> tuple[str, Optional[str]]:
+def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional[str]]:
     if isinstance(error_obj, dict):
         raw_message = error_obj.get("message")
+        raw_type = error_obj.get("type")
         raw_code = error_obj.get("code")
     elif error_obj is not None:
         raw_message = getattr(error_obj, "message", None)
+        raw_type = getattr(error_obj, "type", None)
         raw_code = getattr(error_obj, "code", None)
     else:
         raw_message = None
+        raw_type = None
         raw_code = None
     message = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    error_type = raw_type if isinstance(raw_type, str) else None
     code = raw_code if isinstance(raw_code, str) else None
-    return message, code
+    return message, error_type, code
 
 
-def _status_code_for_error_code(error_code: Optional[str]) -> int:
-    if error_code is None:
-        return 500
-    if error_code.startswith("rate_limit") or error_code == "insufficient_quota":
+def _status_code_for_error_fields(error_type: Optional[str], error_code: Optional[str]) -> int:
+    fields = tuple(field for field in (error_type, error_code) if field is not None)
+    if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    if error_code in _CLIENT_ERROR_CODES:
+    if any(field in _CLIENT_ERROR_CODES for field in fields):
         return 400
     return 500
 
@@ -108,6 +112,7 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Optional[Any] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
+        self._yielded_first_chunk = False
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: Optional[bool] = None
@@ -362,10 +367,10 @@ class BaseResponsesAPIStreamingIterator:
         """
         response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
         error_info = getattr(response_obj, "error", None) if response_obj else None
-        error_message, error_code = _error_event_fields(error_info)
+        error_message, error_type, error_code = _error_event_fields(error_info)
         self._record_failed_response_usage(response_obj)
         exception = litellm.APIError(
-            status_code=_status_code_for_error_code(error_code),
+            status_code=_status_code_for_error_fields(error_type, error_code),
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
@@ -403,12 +408,23 @@ class BaseResponsesAPIStreamingIterator:
             else getattr(result, "error", None)
         )
 
-        error_message, error_code = _error_event_fields(error_obj)
-        raise litellm.APIError(
-            status_code=_status_code_for_error_code(error_code),
+        error_message, error_type, error_code = _error_event_fields(error_obj)
+        status_code = _status_code_for_error_fields(error_type, error_code)
+        mapped_exception = litellm.APIError(
+            status_code=status_code,
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
+        )
+        if 400 <= status_code < 500 and status_code != 429:
+            raise mapped_exception
+        raise MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=self.model or "",
+            llm_provider=self.custom_llm_provider or "",
+            original_exception=mapped_exception,
+            generated_content="",
+            is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
     def _get_completed_response_object(self) -> Optional[Any]:
@@ -690,6 +706,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     result = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
+                    self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -765,6 +782,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
+                    self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
 

@@ -270,30 +270,121 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
 
 @pytest.mark.asyncio
 async def test_aresponses_fallback_on_in_stream_error_event():
-    """APIError raised by _maybe_raise_for_error_event propagates through the wrapper."""
+    """A retriable in-stream error event (429) must trigger the router's mid-stream
+    fallback path: the wrapper catches MidStreamFallbackError raised by the source
+    iterator and yields the fallback stream instead of surfacing the error."""
+    import json
+    from unittest.mock import Mock
+
+    import litellm
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+    from litellm.types.llms.openai import ErrorEvent, ErrorEventError
+
+    router = _make_router()
+
+    error_payload = {
+        "type": "error",
+        "error": {"type": "tokens", "code": "rate_limit_exceeded", "message": "rate limited"},
+    }
+    sse_bytes = f"data: {json.dumps(error_payload)}\n\n".encode()
+
+    async def mock_aiter_bytes():
+        yield sse_bytes
+
+    mock_response = Mock()
+    mock_response.headers = {}
+    mock_response.aiter_bytes = mock_aiter_bytes
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+    mock_logging_obj.completion_start_time = None
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+    mock_config.transform_streaming_response.return_value = ErrorEvent(
+        type=ResponsesAPIStreamEvents.ERROR,
+        sequence_number=0,
+        error=ErrorEventError(type="tokens", code="rate_limit_exceeded", message="rate limited"),
+    )
+
+    source = ResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-5",
+        responses_api_provider_config=mock_config,
+        logging_obj=mock_logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    fallback_event = _make_completed_event(1, 1, 2)
+
+    class _FallbackStream:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._done:
+                raise StopAsyncIteration
+            self._done = True
+            return fallback_event
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_FallbackStream()),
+    ) as mock_fallback:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [ev async for ev in wrapped]
+
+    assert collected == [fallback_event]
+    mock_fallback.assert_awaited_once()
+    raised = mock_fallback.await_args.kwargs["e"]
+    assert isinstance(raised, MidStreamFallbackError)
+    assert raised.status_code == 429
+    assert isinstance(raised.original_exception, litellm.APIError)
+    assert raised.original_exception.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_aresponses_client_error_event_skips_fallback():
+    """A 400-mapped in-stream error (raised as APIError, not MidStreamFallbackError)
+    must surface to the caller without invoking the router's fallback path."""
     import litellm
 
     router = _make_router()
 
-    class _ErrorOnFirstChunkSource:
+    class _ClientErrorSource:
+        completed_response = None
+
         def __aiter__(self):
             return self
 
         async def __anext__(self):
             raise litellm.APIError(
-                status_code=429,
-                message="rate limited",
+                status_code=400,
+                message="bad request",
                 llm_provider="openai",
                 model="gpt-5",
             )
 
-    source = _ErrorOnFirstChunkSource()
     wrapped = await router._aresponses_streaming_iterator(
-        response=source,
+        response=_ClientErrorSource(),
         initial_kwargs={"model": "primary"},
     )
 
-    with pytest.raises(litellm.APIError) as exc_info:
-        async for _ in wrapped:
-            pass
-    assert exc_info.value.status_code == 429
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(),
+    ) as mock_fallback:
+        with pytest.raises(litellm.APIError) as exc_info:
+            async for _ in wrapped:
+                pass
+
+    assert exc_info.value.status_code == 400
+    mock_fallback.assert_not_awaited()
