@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Modal, Form, Button, Select as AntdSelect } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
@@ -6,6 +6,7 @@ import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_m
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 const isComplexityRouterModel = (modelData: any): boolean =>
   modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router") ||
@@ -30,7 +31,17 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
+  const [legacyModelAccessGroups, setLegacyModelAccessGroups] = useState<string[]>([]);
+  const { data: unifiedAccessGroups } = useAccessGroups();
+  const modelAccessGroups = useMemo<string[]>(() => {
+    const merged = new Set<string>(legacyModelAccessGroups);
+    for (const group of unifiedAccessGroups ?? []) {
+      if (group?.access_group_name) {
+        merged.add(group.access_group_name);
+      }
+    }
+    return Array.from(merged).sort();
+  }, [legacyModelAccessGroups, unifiedAccessGroups]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
@@ -52,7 +63,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       if (!accessToken) return;
       try {
         const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
-        setModelAccessGroups(response["data"].map((model: any) => model["id"]));
+        setLegacyModelAccessGroups(response["data"].map((model: any) => model["id"]));
       } catch (error) {
         console.error("Error fetching model access groups:", error);
       }

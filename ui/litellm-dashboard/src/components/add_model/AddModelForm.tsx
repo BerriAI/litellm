@@ -1,6 +1,7 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
@@ -66,6 +67,11 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const { data: guardrailsData } = useGuardrails();
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
+  // Unified access groups (managed via /v1/access_group). These are stored in
+  // LiteLLM_AccessGroupTable, separate from the legacy per-deployment
+  // model_info.access_groups returned by /models. Both sources need to feed
+  // the dropdown so admins can attach a model to either kind.
+  const { data: unifiedAccessGroups } = useAccessGroups();
 
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -74,17 +80,31 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   };
 
   const [isTeamOnly, setIsTeamOnly] = useState<boolean>(false);
-  const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
+  // Legacy access groups discovered from existing deployments' model_info.access_groups.
+  const [legacyModelAccessGroups, setLegacyModelAccessGroups] = useState<string[]>([]);
   // Team admin specific state
   const [teamAdminSelectedTeam, setTeamAdminSelectedTeam] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
-      setModelAccessGroups(response["data"].map((model: any) => model["id"]));
+      setLegacyModelAccessGroups(response["data"].map((model: any) => model["id"]));
     };
     fetchModelAccessGroups();
   }, [accessToken]);
+
+  // Merge unified access group names with the legacy list, deduplicated and
+  // sorted. Without this, groups created on the Access Groups page never
+  // appear here and admins have to free-type them from memory.
+  const modelAccessGroups = useMemo<string[]>(() => {
+    const merged = new Set<string>(legacyModelAccessGroups);
+    for (const group of unifiedAccessGroups ?? []) {
+      if (group?.access_group_name) {
+        merged.add(group.access_group_name);
+      }
+    }
+    return Array.from(merged).sort();
+  }, [legacyModelAccessGroups, unifiedAccessGroups]);
 
   const sortedProviderMetadata: ProviderCreateInfo[] = useMemo(() => {
     if (!providerMetadata) {

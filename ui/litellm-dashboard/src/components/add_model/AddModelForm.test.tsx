@@ -1,4 +1,5 @@
 import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
+import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
@@ -102,6 +103,29 @@ vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
     data: { tag1: ["model1", "model2"] },
     isLoading: false,
     error: null,
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      {
+        access_group_id: "ag-1",
+        access_group_name: "engineering",
+        description: null,
+        access_model_names: [],
+        access_mcp_server_ids: [],
+        access_agent_ids: [],
+        assigned_team_ids: [],
+        assigned_key_ids: [],
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: null,
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: null,
+      },
+    ],
+    isLoading: false,
+    isError: false,
   }),
 }));
 
@@ -277,6 +301,27 @@ describe("AddModelForm", () => {
     });
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("should merge unified access groups (from /v1/access_group) with legacy model_info.access_groups in the dropdown", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    const props = createTestProps("proxy_admin", "user-1", false);
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    await screen.findByText("Provider");
+
+    const accessGroupCombo = await screen.findByRole("combobox", { name: /Model Access Group/i });
+    await act(async () => {
+      await userEvent.click(accessGroupCombo);
+    });
+
+    // legacy entries from modelAvailableCall + unified group from useAccessGroups
+    expect(await screen.findByTitle("model-group-1")).toBeInTheDocument();
+    expect(await screen.findByTitle("model-group-2")).toBeInTheDocument();
+    expect(await screen.findByTitle("engineering")).toBeInTheDocument();
   });
 
   it("should handle non-admin, non-team-admin users - should not see team selection or switch", async () => {

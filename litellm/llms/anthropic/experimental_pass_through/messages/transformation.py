@@ -434,6 +434,22 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)  # type: ignore[assignment]
 
+        # Final guard: the Anthropic Messages API only documents `user_id` inside
+        # `metadata`. Vertex AI / Azure AI mirror this and 400 on any other key
+        # (e.g. `tags` injected by key/team/project metadata or deployment-level
+        # routing tags). Strip everything except `user_id` here so the same
+        # safeguard applies to the unified `/v1/messages` flow as the
+        # chat/completions flow does in AnthropicConfig.transform_request.
+        _metadata = anthropic_messages_optional_request_params.get("metadata")
+        if isinstance(_metadata, dict):
+            _user_id = _metadata.get("user_id")
+            if _user_id is not None:
+                anthropic_messages_optional_request_params["metadata"] = {
+                    "user_id": _user_id
+                }
+            else:
+                anthropic_messages_optional_request_params.pop("metadata", None)
+
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
             messages=messages,
             max_tokens=max_tokens,

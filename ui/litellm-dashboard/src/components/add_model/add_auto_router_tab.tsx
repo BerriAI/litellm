@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, Radio, Badge, Space } from "antd";
 import type { FormInstance } from "antd";
 import { Text, TextInput } from "@tremor/react";
@@ -11,6 +11,7 @@ import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import NotificationManager from "../molecules/notifications_manager";
 import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 interface AddAutoRouterTabProps {
   form: FormInstance;
@@ -29,7 +30,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
-  const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
+  const [legacyModelAccessGroups, setLegacyModelAccessGroups] = useState<string[]>([]);
+  const { data: unifiedAccessGroups } = useAccessGroups();
+  const modelAccessGroups = useMemo<string[]>(() => {
+    const merged = new Set<string>(legacyModelAccessGroups);
+    for (const group of unifiedAccessGroups ?? []) {
+      if (group?.access_group_name) {
+        merged.add(group.access_group_name);
+      }
+    }
+    return Array.from(merged).sort();
+  }, [legacyModelAccessGroups, unifiedAccessGroups]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
@@ -51,7 +62,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
-      setModelAccessGroups(response["data"].map((model: any) => model["id"]));
+      setLegacyModelAccessGroups(response["data"].map((model: any) => model["id"]));
     };
     fetchModelAccessGroups();
   }, [accessToken]);
