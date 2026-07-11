@@ -78,6 +78,11 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     fetchMarketplaces();
   }, [accessToken]);
 
+  const handleMarketplaceAdded = () => {
+    fetchMarketplaces();
+    fetchPlugins();
+  };
+
   const handleDeleteClick = (pluginName: string, displayName: string) => {
     setPluginToDelete({ name: pluginName, displayName });
   };
@@ -212,7 +217,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
         visible={isAddMarketplaceModalVisible}
         onClose={() => setIsAddMarketplaceModalVisible(false)}
         accessToken={accessToken}
-        onSuccess={fetchMarketplaces}
+        onSuccess={handleMarketplaceAdded}
       />
 
       {pluginToDelete && (
