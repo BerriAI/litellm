@@ -360,18 +360,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return value if isinstance(value, bool) else None
 
     @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
+    def _supports_model_capability(model: str, key: str, custom_llm_provider: str) -> bool:
+        """Check a boolean capability ``key`` in the model map under the caller's provider.
 
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
+        The provider-aware lookup makes exact provider-namespaced entries (e.g. the
+        Bedrock ``global.anthropic.*`` ids) authoritative; the raw model-map walk
+        remains as a provider-less backstop for alias forms the lookup misses.
         """
         from litellm.utils import _supports_factory
 
         try:
             if _supports_factory(
                 model=model,
-                custom_llm_provider="anthropic",
+                custom_llm_provider=custom_llm_provider,
                 key=key,
             ):
                 return True
@@ -380,17 +381,24 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._get_model_capability(model, key) is True
 
     @staticmethod
-    def _is_adaptive_thinking_model(model: str) -> bool:
+    def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
         The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
-        entry, or a ``fallback_generalizations`` rule for unknown Claude models. The
-        version gate (>= 4.6, including provider-prefixed Bedrock/Vertex ids that map to
-        no exact entry) lives entirely in that declarative rule, not here.
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unknown Claude models. The version gate (>= 4.6, including
+        provider-prefixed Bedrock/Vertex ids that map to no exact entry) lives entirely
+        in that declarative rule, not here.
         """
-        return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking")
+        return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
 
-    def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
+    def is_effort_used(
+        self,
+        optional_params: Optional[dict],
+        model: Optional[str] = None,
+        *,
+        custom_llm_provider: str,
+    ) -> bool:
         """
         Check if effort parameter is being used and requires a beta header.
 
@@ -402,7 +410,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return False
 
         # Claude 4.6+ models use output_config as a stable API feature — no beta header needed
-        if model and self._is_adaptive_thinking_model(model):
+        if model and self._is_adaptive_thinking_model(model, custom_llm_provider):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
@@ -483,6 +491,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         prompt_caching_set: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
+        *,
+        custom_llm_provider: str,
     ) -> List[str]:
         """
         Get list of common beta headers based on the features that are active.
@@ -495,7 +505,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         betas = []
 
         # Detect features
-        effort_used = self.is_effort_used(optional_params, model)
+        effort_used = self.is_effort_used(optional_params, model, custom_llm_provider=custom_llm_provider)
 
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
@@ -651,7 +661,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         tool_search_used = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         input_examples_used = self.is_input_examples_used(tools=tools)
-        effort_used = self.is_effort_used(optional_params=optional_params, model=model)
+        effort_used = self.is_effort_used(optional_params=optional_params, model=model, custom_llm_provider="anthropic")
         code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(

@@ -335,23 +335,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return any(v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7"))
 
     @staticmethod
-    def _supports_effort_level(model: str, level: str) -> bool:
+    def _supports_effort_level(model: str, level: str, custom_llm_provider: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map."""
-        return AnthropicConfig._supports_model_capability(model, f"supports_{level}_reasoning_effort")
+        return AnthropicConfig._supports_model_capability(
+            model, f"supports_{level}_reasoning_effort", custom_llm_provider
+        )
 
     @staticmethod
-    def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
+    def _validate_effort_for_model(model: str, effort: Optional[str], custom_llm_provider: str) -> Optional[str]:
         """Return ``None`` if ``effort`` is allowed on ``model``, else an error message."""
         if effort == "max" and not (
-            AnthropicConfig._is_adaptive_thinking_model(model) or AnthropicConfig._supports_effort_level(model, "max")
+            AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider)
+            or AnthropicConfig._supports_effort_level(model, "max", custom_llm_provider)
         ):
             return f"effort='max' is not supported by this model. Got model: {model}"
-        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(model, "xhigh"):
+        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider):
             return f"effort='xhigh' is not supported by this model. Got model: {model}"
         return None
 
     @staticmethod
-    def _model_supports_effort_param(model: str) -> bool:
+    def _model_supports_effort_param(model: str, custom_llm_provider: str) -> bool:
         """Whether the model accepts ``output_config.effort`` at all.
 
         A model qualifies if its map entry advertises ``supports_output_config``
@@ -359,10 +362,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         signals: e.g. Claude Opus 4.5 supports ``output_config`` without
         advertising a non-default (max/xhigh) effort level.
         """
-        if AnthropicConfig._supports_model_capability(model, "supports_output_config"):
+        if AnthropicConfig._supports_model_capability(model, "supports_output_config", custom_llm_provider):
             return True
         return any(
-            AnthropicConfig._supports_effort_level(model, level)
+            AnthropicConfig._supports_effort_level(model, level, custom_llm_provider)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
         )
 
@@ -451,7 +454,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if (
             "claude-3-7-sonnet" in model
-            or AnthropicConfig._is_adaptive_thinking_model(model)
+            or AnthropicConfig._is_adaptive_thinking_model(model, self.custom_llm_provider or "anthropic")
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -1159,11 +1162,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
         model: str,
+        custom_llm_provider: str,
         llm_provider: str = "anthropic",
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_adaptive_thinking_model(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -1471,6 +1475,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=effort_value,
                     model=model,
+                    custom_llm_provider=self.custom_llm_provider or "anthropic",
                     llm_provider=self.custom_llm_provider or "anthropic",
                 )
                 if mapped_thinking is None:
@@ -1478,7 +1483,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params.pop("output_config", None)
                 else:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model):
+                    if AnthropicConfig._is_adaptive_thinking_model(model, self.custom_llm_provider or "anthropic"):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
@@ -1902,7 +1907,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         output_config = optional_params.get("output_config")
         if not output_config or not isinstance(output_config, dict):
             return
-        if litellm.drop_params is True and not self._model_supports_effort_param(model):
+        if litellm.drop_params is True and not self._model_supports_effort_param(
+            model, self.custom_llm_provider or "anthropic"
+        ):
             litellm.verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                 model,
@@ -1918,7 +1925,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 llm_provider=self.custom_llm_provider or "anthropic",
             )
-        gate_error = self._validate_effort_for_model(model, effort)
+        gate_error = self._validate_effort_for_model(model, effort, self.custom_llm_provider or "anthropic")
         if gate_error is not None:
             raise litellm.exceptions.BadRequestError(
                 message=gate_error,

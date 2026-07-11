@@ -41,6 +41,10 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING = (
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "anthropic"
+
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [
             "messages",
@@ -181,7 +185,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict) -> None:
+    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict, custom_llm_provider: str) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
@@ -198,7 +202,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         try:
-            mapped_thinking = AnthropicConfig._map_reasoning_effort(reasoning_effort=reasoning_effort, model=model)
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
 
@@ -208,7 +216,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         optional_params.setdefault("thinking", mapped_thinking)
-        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
                 raise AnthropicError(
@@ -219,7 +227,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            gate_error = AnthropicConfig._validate_effort_for_model(model, mapped_effort)
+            gate_error = AnthropicConfig._validate_effort_for_model(model, mapped_effort, custom_llm_provider)
             if gate_error is not None:
                 raise AnthropicError(message=gate_error, status_code=400)
             existing_output_config = optional_params.get("output_config")
@@ -229,13 +237,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params["output_config"] = existing_output_config
 
     @staticmethod
-    def _translate_legacy_thinking_for_adaptive_model(model: str, optional_params: Dict) -> None:
+    def _translate_legacy_thinking_for_adaptive_model(
+        model: str, optional_params: Dict, custom_llm_provider: str
+    ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             return
         thinking = optional_params.get("thinking")
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
@@ -243,7 +253,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         budget = int(thinking.get("budget_tokens") or 0)
         if budget >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
-            AnthropicConfig._supports_effort_level(model, "xhigh")
+            AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider)
         ):
             effort = "xhigh"
         elif budget >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
@@ -262,7 +272,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: Dict, max_tokens: Optional[int]
+        model: str, optional_params: Dict, max_tokens: Optional[int], custom_llm_provider: str
     ) -> None:
         """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
         and/or ``output_config.effort``) down to what an older Anthropic model
@@ -305,7 +315,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        if AnthropicConfig._is_adaptive_thinking_model(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             return
 
         output_config = optional_params.get("output_config")
@@ -315,17 +325,24 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if effort is None and not adaptive_thinking:
             return
 
-        if AnthropicConfig._model_supports_effort_param(model) and (
-            not adaptive_thinking or AnthropicConfig._validate_effort_for_model(model, effort) is None
+        if AnthropicConfig._model_supports_effort_param(model, custom_llm_provider) and (
+            not adaptive_thinking
+            or AnthropicConfig._validate_effort_for_model(model, effort, custom_llm_provider) is None
         ):
             if adaptive_thinking:
                 optional_params.pop("thinking", None)
             return
 
-        supports_thinking = AnthropicModelInfo._supports_model_capability(model, "supports_reasoning")
+        supports_thinking = AnthropicModelInfo._supports_model_capability(
+            model, "supports_reasoning", custom_llm_provider
+        )
         try:
             legacy_thinking = (
-                AnthropicConfig._map_reasoning_effort(reasoning_effort=effort or "medium", model=model)
+                AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort=effort or "medium",
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
                 if supports_thinking
                 else None
             )
@@ -389,17 +406,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+            custom_llm_provider=self.custom_llm_provider or "anthropic",
         )
 
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+            custom_llm_provider=self.custom_llm_provider or "anthropic",
         )
 
         self._translate_adaptive_effort_for_non_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
+            custom_llm_provider=self.custom_llm_provider or "anthropic",
         )
 
         system_param = anthropic_messages_optional_request_params.get("system")
