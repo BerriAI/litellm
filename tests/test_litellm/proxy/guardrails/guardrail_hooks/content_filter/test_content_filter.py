@@ -2500,38 +2500,183 @@ class TestContentFilterMCPPreCall:
         assert "modified_arguments" not in request_data
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_mcp_mask_breaking_json_blocks(self):
+    async def test_apply_guardrail_mcp_anchored_regex_matches_argument_value(self):
         """
-        Masking that corrupts the JSON structure of arguments blocks instead of corrupting the call
+        Anchored custom regexes apply to each argument value, not to a serialized JSON document
         """
         patterns = [
             ContentFilterPattern(
                 pattern_type="regex",
-                pattern="secret..",
-                name="json_breaker",
+                pattern="^secret$",
+                name="anchored_secret",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-anchored",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "save_note", "mcp_arguments": {"note": "secret"}},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_mask_preserves_nested_structure(self):
+        """
+        Masking rewrites string values inside nested dicts and lists without corrupting the structure
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
                 action=ContentFilterAction.MASK,
             ),
         ]
         guardrail = ContentFilterGuardrail(
-            guardrail_name="test-mcp-broken-mask",
+            guardrail_name="test-mcp-nested-mask",
             event_hook=GuardrailEventHooks.pre_mcp_call,
             patterns=patterns,
         )
 
         request_data = {
-            "mcp_tool_name": "save_note",
-            "mcp_arguments": {"note": "secret"},
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {
+                "recipients": ["team", "cc jane.doe@example.com"],
+                "meta": {"note": "from bob@example.com", "count": 2},
+            },
         }
+
+        await guardrail.apply_guardrail(inputs={}, request_data=request_data, input_type="request")
+
+        modified = request_data["modified_arguments"]
+        assert modified["recipients"][0] == "team"
+        assert "[EMAIL_REDACTED]" in modified["recipients"][1]
+        assert "jane.doe@example.com" not in modified["recipients"][1]
+        assert "[EMAIL_REDACTED]" in modified["meta"]["note"]
+        assert modified["meta"]["count"] == 2
+        assert request_data["mcp_arguments"] == modified
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "mcp_arguments",
+        [
+            {"this is confidential data": "x"},
+            {"a": {"contains confidential stuff": "x"}},
+        ],
+    )
+    async def test_apply_guardrail_mcp_argument_keys_scanned(self, mcp_arguments):
+        """
+        Blocked content smuggled in argument keys (top-level or nested) is detected, not just values
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-key-smuggling",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs={},
-                request_data=request_data,
+                request_data={"mcp_tool_name": "send_email", "mcp_arguments": mcp_arguments},
                 input_type="request",
             )
 
         assert exc_info.value.status_code == 400
-        assert "invalid JSON" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_numeric_mask_match_blocks(self):
+        """
+        A MASK rule matching a numeric argument blocks the call, since a redaction tag cannot be
+        represented in a number
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="visa",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-numeric-mask",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "charge_card", "mcp_arguments": {"card": 4111111111111111}},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "non-rewritable" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mixed_mode_chat_call_not_scanned(self):
+        """
+        A mixed pre_call + pre_mcp_call guardrail must not run the MCP scan on a chat invocation,
+        identified by the proxy-owned logging object's call_type, even when MCP keys are planted
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mixed-mode-chat",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call],
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        chat_logging_obj = MagicMock()
+        chat_logging_obj.call_type = "acompletion"
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"body": "this is confidential data"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=chat_logging_obj,
+        )
+
+        assert "modified_arguments" not in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mcp_call_type", [None, "call_mcp_tool"])
+    async def test_apply_guardrail_mixed_mode_mcp_call_scanned(self, mcp_call_type):
+        """
+        The same mixed mode guardrail still scans genuine MCP invocations, whether the logging
+        object is absent (canonical synthetic payload) or carries the MCP call_type
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mixed-mode-mcp",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call],
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        logging_obj = None
+        if mcp_call_type is not None:
+            logging_obj = MagicMock()
+            logging_obj.call_type = mcp_call_type
+
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={
+                    "mcp_tool_name": "send_email",
+                    "mcp_arguments": {"body": "this is confidential data"},
+                },
+                input_type="request",
+                logging_obj=logging_obj,
+            )
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_non_mcp_name_arguments_not_scanned(self):
