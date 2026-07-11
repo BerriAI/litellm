@@ -628,6 +628,60 @@ class TestAsyncSafeRequest:
         with pytest.raises(SSRFError):
             await async_safe_request(FakeClient(), "POST", "http://example.com/start")
 
+    async def test_sensitive_headers_stripped_on_cross_origin_redirect(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        calls = []
+
+        class FakeClient:
+            async def request(self, method, url, headers=None, follow_redirects=False, **kw):
+                calls.append(dict(headers or {}))
+                if len(calls) == 1:
+                    return _FakeResponse(302, "https://other.example.org/next")
+                return _FakeResponse(200)
+
+        await async_safe_request(
+            FakeClient(),
+            "GET",
+            "https://trusted.example.com/start",
+            headers={"Authorization": "Bearer secret", "Cookie": "sid=1", "X-Trace": "keep"},
+        )
+        assert len(calls) == 2
+        assert calls[0]["Authorization"] == "Bearer secret"
+        assert calls[0]["Cookie"] == "sid=1"
+        assert "Authorization" not in calls[1]
+        assert "Cookie" not in calls[1]
+        assert calls[1]["X-Trace"] == "keep"
+
+    async def test_sensitive_headers_kept_on_same_origin_redirect(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        calls = []
+
+        class FakeClient:
+            async def request(self, method, url, headers=None, follow_redirects=False, **kw):
+                calls.append(dict(headers or {}))
+                if len(calls) == 1:
+                    return _FakeResponse(302, "https://trusted.example.com/next")
+                return _FakeResponse(200)
+
+        await async_safe_request(
+            FakeClient(),
+            "GET",
+            "https://trusted.example.com/start",
+            headers={"Authorization": "Bearer secret"},
+        )
+        assert len(calls) == 2
+        assert calls[1]["Authorization"] == "Bearer secret"
+
     async def test_too_many_redirects_raises(self, monkeypatch):
         def fake(host, port, *a, **kw):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]

@@ -21,7 +21,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
@@ -365,6 +365,34 @@ def _extract_redirect_url(response: Any, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
+_SENSITIVE_REDIRECT_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
+
+
+def _same_origin(first_url: str, second_url: str) -> bool:
+    """Return True when both URLs share scheme, host, and effective port."""
+    first = urlparse(first_url)
+    second = urlparse(second_url)
+    first_port = first.port if first.port is not None else _default_port_for_scheme(first.scheme)
+    second_port = second.port if second.port is not None else _default_port_for_scheme(second.scheme)
+    return (
+        first.scheme == second.scheme
+        and _normalize_host(first.hostname or "") == _normalize_host(second.hostname or "")
+        and first_port == second_port
+    )
+
+
+def _headers_for_next_hop(headers: Dict[str, str], current_url: str, next_url: str) -> Dict[str, str]:
+    """Drop credential-bearing headers when a redirect crosses origins.
+
+    Mirrors httpx's own redirect handling, which strips ``Authorization`` and
+    similar headers on cross-origin hops so a redirect can't exfiltrate the
+    caller's credentials to a different host.
+    """
+    if _same_origin(current_url, next_url):
+        return headers
+    return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_REDIRECT_HEADERS}
+
+
 def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
@@ -456,5 +484,7 @@ async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) 
         )
         if not response.is_redirect:
             return response
-        url = _extract_redirect_url(response, url)
+        next_url = _extract_redirect_url(response, url)
+        caller_headers = _headers_for_next_hop(caller_headers, url, next_url)
+        url = next_url
     raise SSRFError("Too many redirects")
