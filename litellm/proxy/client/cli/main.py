@@ -76,6 +76,10 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 
+    # Normalize once here so every downstream command (login, agents, http, ...) can safely
+    # do f"{base_url}/some/path" without producing a double slash.
+    base_url = base_url.rstrip("/")
+
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
     if api_key is None:

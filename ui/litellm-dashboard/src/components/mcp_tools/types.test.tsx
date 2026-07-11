@@ -10,6 +10,9 @@ import {
   getOAuthAuthorizationIdentity,
   isHeldOAuthTokenStale,
   oauth2FlowToFormValue,
+  preservedDeclaredAppCredentials,
+  withoutMintedTokenCredentials,
+  credentialAuthClass,
 } from "./types";
 
 describe("getOAuthAuthorizationIdentity", () => {
@@ -178,5 +181,53 @@ describe("oauth2FlowToFormValue", () => {
   it("returns undefined for a null/unset flow so the select shows its placeholder", () => {
     expect(oauth2FlowToFormValue(null)).toBeUndefined();
     expect(oauth2FlowToFormValue(undefined)).toBeUndefined();
+  });
+});
+
+describe("preservedDeclaredAppCredentials", () => {
+  it("keeps only non-empty string declared-app keys and never token-shaped keys", () => {
+    expect(preservedDeclaredAppCredentials(undefined)).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({})).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: 123 })).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: "" })).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: "a", access_token: "t", scopes: ["s"] })).toEqual({
+      client_id: "a",
+    });
+    expect(preservedDeclaredAppCredentials({ client_secret: "s" })).toEqual({ client_secret: "s" });
+    expect(preservedDeclaredAppCredentials({ client_id: "a", client_secret: "b", refresh_token: "r" })).toEqual({
+      client_id: "a",
+      client_secret: "b",
+    });
+  });
+});
+
+describe("withoutMintedTokenCredentials", () => {
+  it("drops token keys and keeps the declared app and other config", () => {
+    expect(withoutMintedTokenCredentials(undefined)).toBeUndefined();
+    const mixed = {
+      client_id: "a",
+      client_secret: "b",
+      access_token: "t",
+      refresh_token: "r",
+      expires_in: 3600,
+      scope: "read",
+      scopes: ["read"],
+    };
+    expect(withoutMintedTokenCredentials(mixed)).toEqual({ client_id: "a", client_secret: "b", scopes: ["read"] });
+  });
+
+  it("returns undefined (not {}) when only minted keys are present, so a restore never blanks the fields", () => {
+    expect(withoutMintedTokenCredentials({ access_token: "t", refresh_token: "r", expires_in: 3600 })).toBeUndefined();
+    // A declared client is always kept, so a stored client_id can never be overwritten with empty.
+    expect(withoutMintedTokenCredentials({ client_id: "x", access_token: "t" })).toEqual({ client_id: "x" });
+  });
+});
+
+describe("credentialAuthClass", () => {
+  it("collapses the client-forwarded modes to one class and leaves others distinct", () => {
+    expect(credentialAuthClass(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe("client_forwarded");
+    expect(credentialAuthClass(AUTH_TYPE.OAUTH_DELEGATE)).toBe("client_forwarded");
+    expect(credentialAuthClass(AUTH_TYPE.OAUTH2)).toBe(AUTH_TYPE.OAUTH2);
+    expect(credentialAuthClass(null)).toBeNull();
   });
 });
