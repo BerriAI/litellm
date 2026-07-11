@@ -4503,6 +4503,103 @@ async def test_bridge_envelope_does_not_seal_upstream_refresh_token():
     assert opened.grant.refresh_token is None
 
 
+@pytest.mark.asyncio
+async def test_bridge_refresh_grant_fails_closed_before_upstream_when_no_identity():
+    """The pre-exchange identity gate covers the refresh_token grant, not just authorization_code: an
+    unresolvable litellm identity fails closed with invalid_request BEFORE the upstream refresh is
+    exchanged, so the client's refresh token is not rotated/consumed on a rejected request."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token="client-refresh-token",
+        )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    fake_http_client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
+    """master_key is validated BEFORE the upstream exchange, so a misconfigured gateway 500s without
+    consuming the single-use code, avoiding the burn-then-fail the pre-exchange gate exists to prevent."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
+            new=AsyncMock(return_value="hashed-litellm-key-77"),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await exchange_token_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=server,
+                grant_type="authorization_code",
+                code="auth-code",
+                redirect_uri="https://claude.ai/api/mcp/auth_callback",
+                client_id="dcr-client-123",
+                client_secret=None,
+                code_verifier="verifier",
+            )
+
+    assert exc.value.status_code == 500
+    fake_http_client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_reported_expires_in_does_not_overstate_jwt_exp():
+    """The reported expires_in is derived from the envelope JWT's second-truncated exp (rounding the
+    elapsed portion up), so the client is never told the bearer lives past the point admission expires
+    it. Regression for the sub-second overstatement of the raw (expires_at - now) delta."""
+    import time
+
+    import jwt as _jwt
+
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": 300}
+    before = int(time.time())
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    body = json.loads(response.body)
+    claims = _jwt.decode(body["access_token"].removeprefix("llm_env_"), options={"verify_signature": False})
+    # projecting the reported lifetime from a time no later than the mint must not exceed the JWT exp
+    assert before + body["expires_in"] <= claims["exp"]
+
+
 def test_bridge_grant_coerces_numeric_expires_in():
     """expires_in from an IdP may be an int, a float (3600.0), or a numeric string ("3600"); coerce
     it to a positive int so the envelope TTL honors the real lifetime instead of dropping a non-int
