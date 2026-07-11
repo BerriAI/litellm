@@ -77,19 +77,12 @@ EOF
             npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_rel[@]}" || rc=1
         fi
         # Whole-folder lint budgets, exactly as the frontend-lint job runs them: the
-        # counts and the committed metrics file are not diff-scoped, so a local pass
-        # here means the budget step will pass in CI too. Unlike CI (which --checks and
-        # fails), regenerate eslint-metrics.json from the same report — same as the
-        # gen:api block below regenerates schema.d.ts — then flag drift so you re-stage
-        # it, instead of making you run npm run lint:metrics by hand.
+        # counts are not diff-scoped, so a local pass here means the budget step will
+        # pass in CI too.
         report=$(mktemp)
         npx eslint . -f json -o "$report" || true
-        node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json --write eslint-metrics.json || rc=1
+        node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json || rc=1
         rm -f "$report"
-        if ! git diff --quiet -- eslint-metrics.json; then
-            echo "✗ eslint-metrics.json was stale; regenerated it. Stage it and re-run make pre-commit." >&2
-            rc=1
-        fi
         exit $rc
     )
 }
