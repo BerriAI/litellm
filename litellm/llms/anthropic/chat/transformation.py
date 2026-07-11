@@ -1165,6 +1165,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
     ) -> Optional[AnthropicThinkingParam]:
+        """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
         if reasoning_effort is None or reasoning_effort == "none":
             return None
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
