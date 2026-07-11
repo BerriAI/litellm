@@ -18,6 +18,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     is_bridge_envelope_shaped,
     resolve_bridge_envelope,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+    EnvelopeIdentity,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_TeamTable,
@@ -543,7 +546,7 @@ class MCPRequestHandler:
                 header_key = server.alias or server.server_name
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-                admitted = await MCPRequestHandler._reload_admitted_key(result.identity.key_hash)
+                admitted = await MCPRequestHandler._reload_admitted_principal(result.identity)
                 await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
                 injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
                 new_headers = {**(mcp_server_auth_headers or {}), **injected}
@@ -571,6 +574,58 @@ class MCPRequestHandler:
             request_data=await _read_request_body(request=request),
             route=route,
         )
+
+    @staticmethod
+    async def _reload_admitted_principal(identity: EnvelopeIdentity) -> UserAPIKeyAuth:
+        """Reload the live litellm record the envelope's subject references.
+
+        Dispatches on the sealed subject type: a ``key_hash`` reloads the virtual key that
+        minted the envelope (the scripted two-header client that presents a litellm key at the
+        token endpoint), a ``user_id`` reloads the user that authenticated interactively (the
+        DCR client, whose SSO login at the bridged authorize yields a user, not a key). Both
+        return a ``UserAPIKeyAuth`` the caller runs through the centralized policy gate, so
+        team/project/org/budget/SCIM enforcement is identical to the principal presenting
+        itself directly."""
+        match identity.subject_type:
+            case "key_hash":
+                return await MCPRequestHandler._reload_admitted_key(identity.subject)
+            case "user_id":
+                return await MCPRequestHandler._reload_admitted_user(identity.subject)
+            case _:
+                assert_never(identity.subject_type)
+
+    @staticmethod
+    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+        """Reload the live user an interactively-minted envelope references and admit them as
+        themselves.
+
+        The DCR client authenticates via SSO at the bridged authorize, which yields a user
+        subject rather than a virtual key, so the envelope admits under the user's own
+        identity: the reloaded ``user_id`` rides on the returned ``UserAPIKeyAuth`` and the
+        caller's centralized policy gate then enforces the user's live budget and org state,
+        and a SCIM-deactivated owner fails closed here exactly as the key path enforces it. No
+        team is bound; a user may belong to many teams or none, so the envelope grants the
+        user's own access rather than silently selecting one team's scope. A missing user
+        fails closed with a 401 rather than admitting an unresolved identity."""
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
+        try:
+            user_object = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+        except (ProxyException, HTTPException):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        if user_object is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        return UserAPIKeyAuth(user_id=user_object.user_id)
 
     @staticmethod
     async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:

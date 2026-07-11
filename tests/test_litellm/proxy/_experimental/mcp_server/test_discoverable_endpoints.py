@@ -4441,7 +4441,8 @@ async def test_oauth_delegate_bridge_token_exchange_mints_envelope_not_raw_token
     keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
     opened = resolve_bridge_envelope(token, keys, datetime.now(timezone.utc), server.server_id)
     assert isinstance(opened, BridgeEnvelopeAdmitted)
-    assert opened.identity.key_hash == "hashed-litellm-key-77"
+    assert opened.identity.subject_type == "key_hash"
+    assert opened.identity.subject == "hashed-litellm-key-77"
     assert opened.upstream_authorization.get_secret_value() == "Bearer UPSTREAM-SECRET-TOKEN"
 
 
