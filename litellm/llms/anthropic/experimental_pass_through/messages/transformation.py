@@ -2,7 +2,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
+import litellm
 from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
@@ -31,6 +33,12 @@ from ...common_utils import (
 )
 
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+
+DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING = (
+    "Dropping adaptive `thinking`/`output_config.effort` for model=%s: the model "
+    "does not support extended thinking, or max_tokens is too small to fit the "
+    "minimum thinking budget."
+)
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
@@ -253,6 +261,94 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         existing_output_config.setdefault("effort", effort)
         optional_params["output_config"] = existing_output_config
 
+    @staticmethod
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str, optional_params: Dict, max_tokens: Optional[int], drop_params: bool
+    ) -> None:
+        """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
+        and/or ``output_config.effort``) down to what an older Anthropic model
+        supports. Clients like Claude Code send this interface unconditionally, so
+        without translation it reaches a pre-4.6 model and Anthropic rejects it with
+        "This model does not support the effort parameter".
+
+        - 4.6+ (adaptive / ``supports_output_config``): left untouched (early return).
+        - Thinking-capable but non-adaptive (``supports_reasoning``): effort is
+          mapped to legacy ``thinking={type: enabled, budget_tokens}`` via
+          ``AnthropicConfig._map_reasoning_effort``, preserving the caller's intent.
+          Adaptive thinking carries no budget, so the mapped budget is capped below
+          ``max_tokens`` (Anthropic requires ``max_tokens > budget_tokens``); when
+          ``max_tokens`` can't fit even the minimum budget, thinking is dropped.
+        - No reasoning support: ``thinking``/``output_config.effort`` are dropped
+          (gated on ``drop_params``; raises a clean 400 otherwise).
+
+        The residual ``output_config`` (e.g. ``format``) is Anthropic-4.6+-only for
+        these models and is dropped under the same ``drop_params`` gate.
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        if AnthropicConfig._is_adaptive_thinking_model(model) or AnthropicConfig._model_supports_effort_param(model):
+            return
+
+        output_config = optional_params.get("output_config")
+        thinking = optional_params.get("thinking")
+        effort = output_config.get("effort") if isinstance(output_config, dict) else None
+        adaptive_thinking = isinstance(thinking, dict) and thinking.get("type") == "adaptive"
+        if effort is None and not adaptive_thinking:
+            return
+
+        supports_thinking = AnthropicModelInfo._supports_model_capability(model, "supports_reasoning")
+        legacy_thinking = (
+            AnthropicConfig._map_reasoning_effort(reasoning_effort=effort or "medium", model=model)
+            if supports_thinking
+            else None
+        )
+        capped_thinking = (
+            AnthropicMessagesConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+            if legacy_thinking is not None
+            else None
+        )
+
+        if capped_thinking is not None:
+            optional_params["thinking"] = capped_thinking
+        else:
+            if not supports_thinking and not (litellm.drop_params or drop_params):
+                raise AnthropicError(
+                    message=(
+                        f"{model} does not support the `effort` / adaptive `thinking` parameter. "
+                        "To drop unsupported params, set `litellm.drop_params = True`."
+                    ),
+                    status_code=400,
+                )
+            verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)
+            optional_params.pop("thinking", None)
+
+        if isinstance(output_config, dict):
+            residual = {k: v for k, v in output_config.items() if k != "effort"}
+            if residual and not (litellm.drop_params or drop_params):
+                raise AnthropicError(
+                    message=(
+                        f"{model} does not support `output_config`. "
+                        "To drop unsupported params, set `litellm.drop_params = True`."
+                    ),
+                    status_code=400,
+                )
+            optional_params.pop("output_config", None)
+
+    @staticmethod
+    def _cap_thinking_budget_to_max_tokens(thinking: Dict, max_tokens: Optional[int]) -> Optional[Dict]:
+        """Cap a legacy ``thinking.budget_tokens`` below ``max_tokens`` (Anthropic
+        requires ``max_tokens > budget_tokens``). Returns the (possibly capped)
+        thinking dict, or ``None`` when ``max_tokens`` is too small to fit even the
+        minimum thinking budget and thinking should be dropped."""
+        budget = thinking.get("budget_tokens")
+        if max_tokens is None or not isinstance(budget, int):
+            return thinking
+        if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS:
+            return None
+        if budget < max_tokens:
+            return thinking
+        return {**thinking, "budget_tokens": max_tokens - 1}
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -282,6 +378,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+        )
+
+        drop_params = (
+            litellm_params.get("drop_params")
+            if isinstance(litellm_params, dict)
+            else getattr(litellm_params, "drop_params", None)
+        )
+        self._translate_adaptive_effort_for_non_adaptive_model(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            max_tokens=max_tokens,
+            drop_params=bool(drop_params),
         )
 
         system_param = anthropic_messages_optional_request_params.get("system")
