@@ -70,12 +70,18 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: Optional[
     return [*base_keywords, *deduped_custom.values()]
 
 
-# Metadata keys that carry the parent request's budget reservation. These must not
-# reach the classifier's internal acompletion call: the reservation belongs to the
-# routed completion that the classifier is deciding on, not to the classifier call
-# itself, and forwarding it would let the classifier's cost-tracking reconcile
-# against a reservation it isn't responsible for.
-_BUDGET_RESERVATION_METADATA_KEYS = frozenset({"user_api_key_budget_reservation", "user_api_key_auth"})
+# Metadata keys that carry only the parent request's budget reservation state. These
+# must not reach internal sub-calls (classifier, embedding): the reservation belongs to
+# the routed completion being decided on, not to the sub-call itself, and forwarding it
+# would let the sub-call's cost callback finalize the reservation, causing the routed
+# completion's callback to skip incrementing key/team budget counters.
+#
+# Note: user_api_key_auth itself is intentionally kept; it is required by
+# _filter_deployments_by_model_access_groups to scope embedding/classifier model
+# selection to the caller's authorized access groups. Only the budget reservation
+# sub-field inside it is the problem -- stripping the whole object would allow
+# an access-group-scoped caller to reach embedding deployments outside their group.
+_BUDGET_RESERVATION_METADATA_KEYS = frozenset({"user_api_key_budget_reservation"})
 
 
 def _classifier_call_metadata(metadata: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
