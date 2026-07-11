@@ -813,48 +813,12 @@ class TestPrintTokenCommand:
         assert result.output.strip() == "sk-cached-fresh"
         mock_post.assert_not_called()
 
-    def test_stale_key_triggers_silent_refresh(self):
-        """Core apiKeyHelper contract: an expired cached key must be silently
-        refreshed and the *new* key printed, not the stale one. Also
-        proves the refresh call itself targets the server from token.json,
-        not a CLI default -- there's no --base-url anywhere in this test."""
+    def test_stale_key_fails_fast_without_network_call(self):
+        """There is no silent refresh: an expired cached key must fail
+        loudly (stderr, nonzero exit) telling the user to `lite login`
+        again, rather than making a network call or printing a dead key
+        that will just 401 Claude Code."""
         old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {"key": "sk-refreshed-key"}
-
-        with (
-            patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={
-                    "base_url": "https://litellm-proxy.corp.com",
-                    "key": "sk-stale-key",
-                    "timestamp": old_timestamp,
-                },
-            ),
-            patch("requests.post", return_value=mock_response) as mock_post,
-            patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
-        ):
-            result = self.runner.invoke(print_token, obj={})
-
-        assert result.exit_code == 0
-        assert result.output.strip() == "sk-refreshed-key"
-        mock_post.assert_called_once_with(
-            "https://litellm-proxy.corp.com/sso/cli/refresh",
-            headers={"Authorization": "Bearer sk-stale-key"},
-            timeout=10,
-        )
-        # The rotated key must be persisted, or the *next* refresh would
-        # replay an already-rotated (stale) key.
-        saved = mock_save.call_args[0][0]
-        assert saved["key"] == "sk-refreshed-key"
-
-    def test_refresh_failure_does_not_print_stale_token(self):
-        """If the key was revoked/expired server-side, print-token must fail
-        loudly (stderr, nonzero exit) rather than silently handing Claude
-        Code a dead key that will just 401 again."""
-        old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
-        import requests
 
         with (
             patch(
@@ -865,9 +829,11 @@ class TestPrintTokenCommand:
                     "timestamp": old_timestamp,
                 },
             ),
-            patch("requests.post", side_effect=requests.RequestException("401")),
+            patch("requests.post") as mock_post,
         ):
             result = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code != 0
         assert "sk-stale-key" not in result.output
+        assert "lite login" in result.output
+        mock_post.assert_not_called()

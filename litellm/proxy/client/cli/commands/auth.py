@@ -616,9 +616,9 @@ def logout(ctx: click.Context):
 
 
 def _cached_key_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.1) -> bool:
-    """Best-effort local freshness check so print-token can skip the network
-    round trip when the cached key still has meaningful life left. Mirrors
-    the age heuristic already used by `whoami`."""
+    """Best-effort local expiry check so print-token can fail fast, without a
+    network round trip, once the cached key is past its server-side
+    duration. Mirrors the age heuristic already used by `whoami`."""
     timestamp = token_data.get("timestamp")
     if not isinstance(timestamp, (int, float)):
         return False
@@ -626,45 +626,16 @@ def _cached_key_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.
     return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)
 
 
-def _refresh_cli_token(base_url: str, session_key: str) -> Optional[Dict[str, Any]]:
-    """Exchange the CLI session key for a freshly-rotated one, persisting
-    the result. Returns the updated token data, or None on any failure
-    (network error, expired/revoked key)."""
-    try:
-        response = requests.post(
-            f"{base_url}/sso/cli/refresh",
-            headers={"Authorization": f"Bearer {session_key}"},
-            timeout=10,
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        return None
-
-    data = response.json()
-    new_key = data.get("key")
-    if not new_key:
-        return None
-
-    token_data = load_token() or {}
-    token_data.update(
-        {
-            "base_url": base_url.rstrip("/"),
-            "key": new_key,
-            "timestamp": time.time(),
-        }
-    )
-    save_token(token_data)
-    return token_data
-
-
 @click.command(name="print-token")
 @click.pass_context
 def print_token(ctx: click.Context):
-    """Print a valid API token for this proxy, silently refreshing it first if needed.
+    """Print a valid API token for this proxy.
 
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
-    contain only the token, so all diagnostics go to stderr.
+    contain only the token, so all diagnostics go to stderr. The token
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
+    expired, run `lite login` again.
     """
     token_data = load_token()
     if not token_data:
@@ -680,19 +651,10 @@ def print_token(ctx: click.Context):
         if token_data.get("base_url") != base_url.rstrip("/"):
             click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
             sys.exit(1)
-    else:
-        base_url = token_data.get("base_url")
-        if not base_url:
-            click.echo("Not authenticated. Run 'lite login'.", err=True)
-            sys.exit(1)
 
-    session_key = token_data.get("key")
-    if session_key and not _cached_key_still_fresh(token_data):
-        refreshed = _refresh_cli_token(base_url=base_url, session_key=session_key)
-        if refreshed is None:
-            click.echo("Token refresh failed. Run 'lite login' again.", err=True)
-            sys.exit(1)
-        token_data = refreshed
+    if not _cached_key_still_fresh(token_data):
+        click.echo("Token expired. Run 'lite login' again.", err=True)
+        sys.exit(1)
 
     api_key = token_data.get("key")
     if not api_key:

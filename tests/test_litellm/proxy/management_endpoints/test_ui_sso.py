@@ -7316,111 +7316,12 @@ async def test_auth_callback_without_oauth_error_proceeds_to_normal_flow():
 
 
 
-class TestCLIRefreshTokenFlow:
-    """Tests for the CLI session-key rotation mechanism backing
-    `lite auth print-token`.
-
-    The CLI session key is a single, real DB-backed virtual key
-    (metadata.cli_session=True) used directly as the bearer token for LLM
-    calls AND presented back to /sso/cli/refresh to rotate its own secret.
-    Rotation is delegated entirely to regenerate_key_fn -- the same
-    primitive /key/regenerate uses -- so there is no separate team/budget
-    re-derivation logic in this endpoint.
-    """
-
-    @pytest.mark.asyncio
-    async def test_cli_refresh_token_rejects_non_session_key(self):
-        """A normal (non-CLI-session) virtual key must not be usable against /sso/cli/refresh."""
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
-
-        normal_key = UserAPIKeyAuth(
-            token="hashed-normal-key", user_id="user-1", metadata={}
-        )
-
-        with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
-            new=AsyncMock(side_effect=AssertionError("must not rotate a non-session key")),
-        ) as mock_regenerate:
-            with pytest.raises(HTTPException) as exc_info:
-                await cli_refresh_token(user_api_key_dict=normal_key)
-
-        assert exc_info.value.status_code == 401
-        mock_regenerate.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_cli_refresh_token_fails_closed_when_db_unavailable(self):
-        """Without DB access the presented token can never be rotated,
-        so refresh must refuse outright."""
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
-
-        session_key = UserAPIKeyAuth(
-            token="hashed-session",
-            user_id="user-1",
-            metadata={"cli_session": True},
-        )
-
-        with patch("litellm.proxy.proxy_server.prisma_client", None):
-            with pytest.raises(HTTPException) as exc_info:
-                await cli_refresh_token(user_api_key_dict=session_key)
-
-        assert exc_info.value.status_code == 500
-
-    @pytest.mark.asyncio
-    async def test_cli_refresh_token_rotates_via_regenerate_key_fn(self):
-        """Happy path: rotation is delegated entirely to regenerate_key_fn."""
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
-
-        session_key = UserAPIKeyAuth(
-            token="hashed-old",
-            user_id="user-1",
-            metadata={"cli_session": True},
-        )
-        mock_regenerated = MagicMock(key="sk-new-session-key")
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
-                new=AsyncMock(return_value=mock_regenerated),
-            ) as mock_regenerate,
-        ):
-            result = await cli_refresh_token(user_api_key_dict=session_key)
-
-        assert result == {"key": "sk-new-session-key"}
-        mock_regenerate.assert_called_once_with(
-            key="hashed-old",
-            data=None,
-            user_api_key_dict=session_key,
-            litellm_changed_by=None,
-        )
-
-    @pytest.mark.asyncio
-    async def test_cli_refresh_token_propagates_regenerate_failure(self):
-        """If regenerate_key_fn fails to return a usable key, refresh must
-        surface a 500 rather than returning a broken response."""
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
-
-        session_key = UserAPIKeyAuth(
-            token="hashed-old",
-            user_id="user-1",
-            metadata={"cli_session": True},
-        )
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
-                new=AsyncMock(return_value=MagicMock(key=None)),
-            ),
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await cli_refresh_token(user_api_key_dict=session_key)
-
-        assert exc_info.value.status_code == 500
+class TestCLILogoutFlow:
+    """Tests for `/sso/cli/logout`, which revokes the CLI session key
+    (a single, real DB-backed virtual key, metadata.cli_session=True) used
+    directly as the bearer token for LLM calls. There is no separate
+    refresh endpoint -- the key is not silently rotated; once it expires,
+    `lite login` mints a new one."""
 
     @pytest.mark.asyncio
     async def test_cli_logout_rejects_non_session_key(self):

@@ -2208,13 +2208,10 @@ async def _mint_cli_session_key(
     models: List[str],
     max_budget: Optional[float],
 ) -> str:
-    """Mint the CLI's single working credential: a real virtual key used
-    directly as the bearer token for LLM calls AND presented back to
-    ``/sso/cli/refresh`` to rotate its own secret. Bypasses the
-    ``/key/regenerate`` enterprise gate for this INITIAL mint the same way
-    ``generate_key_helper_fn`` always has for internal server-side callers;
-    only the rotation call (which goes through ``regenerate_key_fn``) is
-    enterprise-gated, matching regular key regeneration."""
+    """Mint the CLI's working credential: a real virtual key used directly
+    as the bearer token for LLM calls. Unlike a stateless JWT it's visible
+    and revocable server-side (Admin UI Keys page, ``lite logout``), but has
+    no silent-refresh path -- once its duration elapses, `lite login` again."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         GenerateKeyResponse,
@@ -2246,47 +2243,12 @@ def _require_cli_session_key(user_api_key_dict: UserAPIKeyAuth) -> str:
     return user_api_key_dict.token
 
 
-@router.post("/sso/cli/refresh", tags=["experimental"], include_in_schema=False)
-async def cli_refresh_token(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Silently rotate the CLI session key's secret, given the previously-issued
-    key itself. The session key is a real virtual key used directly for LLM
-    calls, so rotation is a single atomic DB update swapping the secret in
-    place (same row, same models/team_id/max_budget), delegated to
-    /key/regenerate's underlying logic -- the same primitive /key/regenerate
-    itself uses. This intentionally makes silent CLI refresh an Enterprise
-    feature, same as regular key regeneration.
-    """
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        regenerate_key_fn,
-    )
-    from litellm.proxy.proxy_server import prisma_client
-
-    presented_token = _require_cli_session_key(user_api_key_dict)
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="DB not connected, cannot refresh CLI token")
-
-    regenerated = await regenerate_key_fn(
-        key=presented_token,
-        data=None,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=None,
-    )
-    if regenerated is None or regenerated.key is None:
-        raise HTTPException(status_code=500, detail="Failed to rotate CLI session key")
-
-    return {"key": regenerated.key}
-
-
 @router.post("/sso/cli/logout", tags=["experimental"], include_in_schema=False)
 async def cli_logout(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Revoke a CLI refresh token server-side. Called by ``lite logout`` so a
-    copied-then-deleted local token file can't still be used to refresh."""
+    """Revoke a CLI session key server-side. Called by ``lite logout`` so a
+    copied-then-deleted local token file can't still be used."""
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
     from litellm.repositories.verification_token_repository import (
         VerificationTokenRepository,
