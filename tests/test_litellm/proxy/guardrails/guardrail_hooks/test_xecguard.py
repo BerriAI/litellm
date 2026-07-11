@@ -1644,7 +1644,10 @@ class TestXecGuardLoggingHook:
             )
             assert out_kwargs is kwargs
             assert out_result is result
-        info = kwargs["standard_logging_object"]["guardrail_information"]
+        info_list = kwargs["standard_logging_object"]["guardrail_information"]
+        assert isinstance(info_list, list), "guardrail_information must be a list"
+        assert len(info_list) == 1
+        info = info_list[0]
         assert info["guardrail_mode"] == "logging_only"
         assert info["guardrail_name"] == "xecguard"
         assert info["guardrail_status"] == "success"
@@ -1680,7 +1683,9 @@ class TestXecGuardLoggingHook:
                 result=_build_model_response("x"),
                 call_type="acompletion",
             )
-        info = kwargs["standard_logging_object"]["guardrail_information"]
+        info_list = kwargs["standard_logging_object"]["guardrail_information"]
+        assert isinstance(info_list, list), "guardrail_information must be a list"
+        info = info_list[0]
         assert info["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio
