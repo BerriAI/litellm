@@ -70,6 +70,7 @@ def test_key_with_budget_duration_schedules_reset_at_creation(
 # ---- Rung 2: enforcement trips at the cap ------------------------------------
 
 
+@pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
 def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManager) -> None:
     """Sanity that the tiny cap is enforced before we test that it resets: spend
     accrues across calls and eventually returns budget_exceeded, never a 5xx."""
@@ -86,6 +87,7 @@ def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManage
 # ---- Rung 3: the core regression - reset_at strictly advances + spend zeroes --
 
 
+@pytest.mark.covers("quota_management.budget.key.resets_after_window")
 def test_key_budget_reset_at_advances_after_window(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
@@ -123,6 +125,7 @@ def test_key_budget_reset_at_advances_after_window(
 # ---- Rung 4: multi-window - tight window resets, roomy window keeps spend -----
 
 
+@pytest.mark.covers("quota_management.budget.key_multi_window.resets_windows_independently")
 def test_multi_window_key_resets_each_window_independently(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
@@ -164,6 +167,7 @@ def test_multi_window_key_resets_each_window_independently(
 # ---- Rung 5: team-member window advances (JSON-backed per-team budget) --------
 
 
+@pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
 def test_team_member_budget_reset_at_advances(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

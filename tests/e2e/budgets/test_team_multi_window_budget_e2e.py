@@ -32,6 +32,7 @@ def _call(client: BudgetClient, key: str):
     return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
 
 
+@pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
 def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
     team_id = client.create_team(
         alias=f"e2e-team-window-{unique_marker()}",

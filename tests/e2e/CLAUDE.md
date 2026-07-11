@@ -16,7 +16,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
-- `router/` - routing and reliability behavior (rate limits, fallbacks, cooldowns)
+- `router/` - routing and reliability behavior (fallbacks, cooldowns)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
 
 ## Lay the pattern down in a class
@@ -63,7 +63,7 @@ The harness is fully typed with no error budget: `make lint-e2e-basedpyright` mu
 
 The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
 
-Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
+Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Quota Management`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `quota_management`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
 
 The metric is coverage: the share of registry rows that have a passing covering test, reported to Grafana per module so a gap surfaces as an uncovered row rather than a silent absence
 
@@ -115,14 +115,35 @@ Reliability & Performance - behavior features (no route; endpoint is exercised_o
 
 ```
 reliability.<behavior>.<variant>.<assertion>
-  behavior  : fallback | retry | cooldown | timeout | ratelimit | routing | cache | circuit_breaker | perf
+  behavior  : fallback | retry | cooldown | timeout | routing | cache | circuit_breaker | perf
   variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
               <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
               <dimension> latency | throughput   (perf only; SLO/threshold assertion, not binary)
   assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
               | trips_then_recovers | under_slo
   e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]
-        reliability.ratelimit.rpm.blocks_over_limit                exercised_on=[chat_completions, messages]
+        reliability.cooldown.429.trips_then_recovers               exercised_on=[chat_completions, messages]
+```
+
+Quota Management - behavior features (entity- or config-driven caps and their accounting; endpoint is exercised_on)
+
+```
+quota_management.<behavior>.<variant>.<assertion>
+  behavior  : ratelimit | budget | spend_tracking
+  variant   : <ratelimit>      rpm | tpm | priority_generous | priority_strict
+              <budget>         key | internal_user | end_user | organization | team_member | tag
+                               | model_max | soft | key_multi_window | team_multi_window
+                               | fallback | spend_counter
+              <spend_tracking> chat_completions | stream | embeddings | cache_hit | key_rollup
+                               | concurrent_burst | tags | end_user | per_model | failure
+                               | spend_calculate | pagination
+  assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
+              | blocks_then_resets | resets_windows_independently | alerts_without_blocking
+              | isolates_per_model | routes_to_fallback | reseed_matches_db | logs_cost | zero_cost
+              | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
+              | writes_failure_row | returns_cost | keeps_total
+  e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
+        quota_management.budget.key.blocks_over_limit              exercised_on=[chat_completions]
 ```
 
 Logging & Guardrails - behavior features (config-driven; endpoint is exercised_on)
