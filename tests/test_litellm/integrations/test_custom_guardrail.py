@@ -1513,6 +1513,50 @@ class TestEventTypeLogging:
         assert "pre_call" in mode
         assert "post_call" in mode
 
+    @pytest.mark.asyncio
+    async def test_self_recording_guardrail_gets_resolved_mode_backfilled(self):
+        """Guardrails like Presidio record their own guardrail entry inside
+        apply_guardrail (without event_type), so the entry falls back to the
+        raw config. The decorator must backfill the resolved hook onto those
+        entries."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class SelfRecordingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_self_recording",
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                # mimic presidio's check_pii: record the entry internally,
+                # with no event_type available at this depth
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response={"result": "ok"},
+                    request_data=request_data,
+                    guardrail_status="success",
+                    event_type=None,
+                )
+                return inputs
+
+        guardrail = SelfRecordingGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+
 
 class TestTracingFieldsPopulation:
     """Verify add_standard_logging_guardrail_information_to_request_data passes tracing_detail fields."""

@@ -1148,6 +1148,44 @@ def log_guardrail_information(func):
                     total += len(entries)
         return total
 
+    def _backfill_event_type_on_recorded_entries(
+        guardrail: "CustomGuardrail",
+        request_data: dict,
+        entries_before: int,
+        event_type: Optional[GuardrailEventHooks],
+    ) -> None:
+        """Overwrite the raw-config fallback mode on entries the wrapped
+        function recorded itself.
+
+        Guardrails like Presidio call
+        ``add_standard_logging_guardrail_information_to_request_data``
+        internally (without ``event_type``), so those entries fall back to
+        the configured ``event_hook``. The wrapper is the only place that
+        knows the concrete hook that fired, so patch it onto the entries
+        added during this invocation. Entries whose mode differs from the
+        fallback were set deliberately and are left untouched.
+        """
+        if event_type is None:
+            return
+        fallback_mode = guardrail._resolve_logged_guardrail_mode(None)
+        seen = 0
+        for container_key in ("metadata", "litellm_metadata"):
+            container = request_data.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            entries = container.get("standard_logging_guardrail_information")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                seen += 1
+                if seen <= entries_before or not isinstance(entry, dict):
+                    continue
+                if (
+                    entry.get("guardrail_name") == guardrail.guardrail_name
+                    and entry.get("guardrail_mode") == fallback_mode
+                ):
+                    entry["guardrail_mode"] = event_type
+
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
@@ -1165,6 +1203,7 @@ def log_guardrail_information(func):
         try:
             response = await func(*args, **kwargs)
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 return response
             return self._process_response(
                 response=response,
@@ -1177,6 +1216,7 @@ def log_guardrail_information(func):
             )
         except Exception as e:
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 raise
             return self._process_error(
                 e=e,
@@ -1206,6 +1246,7 @@ def log_guardrail_information(func):
         try:
             response = func(*args, **kwargs)
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 return response
             return self._process_response(
                 response=response,
@@ -1216,6 +1257,7 @@ def log_guardrail_information(func):
             )
         except Exception as e:
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 raise
             return self._process_error(
                 e=e,
