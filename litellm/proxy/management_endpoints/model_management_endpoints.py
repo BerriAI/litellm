@@ -1755,7 +1755,8 @@ async def clear_cache():
         db_router_names = {
             model.get("model_name")
             for model in current_models
-            if model.get("model_info", {}).get("db_model", False)
+            if model.get("model_name") is not None
+            and model.get("model_info", {}).get("db_model", False)
             and str(model.get("litellm_params", {}).get("model", "")).startswith("auto_router/")
         }
         for model_name in db_router_names:
