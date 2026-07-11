@@ -309,7 +309,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     syncedServerIdRef.current = mcpServer.server_id;
     form.setFieldsValue(initialValues);
+    // Reset per-server OAuth UI state so it never carries across a server switch without an unmount: a
+    // stale removeStoredApp would send an explicit-null credential write that deletes the new server's
+    // stored app, and a stale warning would show on a server whose upstream did not change.
     setAppMayNotMatchUpstream(false);
+    setRemoveStoredApp(false);
   }, [mcpServer.server_id, initialValues, form]);
 
   // Initialize cost config from existing server data
