@@ -26,7 +26,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_centralized_common_checks,
+    user_api_key_auth,
+)
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.repositories.table_repositories import (
     AgentsRepository,
@@ -256,6 +260,8 @@ class MCPRequestHandler:
                 server=bridge_delegate_target,
                 authorization_value=oauth2_headers["Authorization"],
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
             )
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
@@ -496,19 +502,24 @@ class MCPRequestHandler:
         server: MCPServer,
         authorization_value: str,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        request: Request,
+        route: str,
     ) -> Tuple[UserAPIKeyAuth, Optional[Dict[str, Dict[str, str]]]]:
         """Open the bridge envelope and admit the caller under the live key it references.
 
         The envelope's signature proves the user authenticated when it was minted, but
         authorization is resolved fresh here rather than trusted from the envelope: the
-        sealed ``key_hash`` reloads the current ``UserAPIKeyAuth`` record, so the key's
-        present team/org/object-permission restrictions and its revocation state gate the
-        request instead of a snapshot frozen at mint time. The inner upstream token is
-        injected under the server's per-server auth-header key so egress forwards it via the
+        sealed ``key_hash`` reloads the current ``UserAPIKeyAuth`` record, and the admitted
+        identity then runs through the standard pipeline's centralized policy gate, so the
+        key's present restrictions and revocation state gate the request instead of a
+        snapshot frozen at mint time. The inner upstream token is injected under the
+        server's per-server auth-header key so egress forwards it via the
         ``PassthroughConfig`` override; the envelope ``Authorization`` the leak-defense
         strips never reaches the upstream. A new headers dict is returned rather than
         mutating the input. Fails closed with a 401 on an invalid or expired envelope, or
-        when the referenced key is missing, blocked, or expired, or its team is blocked.
+        when the referenced key is missing, blocked, or expired, its owner is
+        SCIM-deactivated, or the centralized policy gate rejects it (blocked team or
+        project, org or budget limits).
 
         The sealed token is keyed alias-first, matching the order egress resolves
         (``lookup_mcp_server_auth_in_headers`` tries ``alias`` before ``server_name``). Keying
@@ -529,6 +540,7 @@ class MCPRequestHandler:
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
                 admitted = await MCPRequestHandler._reload_admitted_key(result.identity.key_hash)
+                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
                 injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
                 new_headers = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
@@ -548,9 +560,11 @@ class MCPRequestHandler:
         unrestricted identity. ``get_key_object`` raises for a hash with no key row; a
         blocked or expired row is rejected explicitly because ``get_key_object`` resolves a
         row without applying those checks (the main ``user_api_key_auth`` pipeline enforces
-        them downstream, which this admission path bypasses). The key's team is reloaded and
-        rejected when blocked, mirroring ``common_checks``, so blocking a team revokes every
-        envelope minted under its keys rather than leaving them live until expiry.
+        them downstream, which this admission path bypasses). The owner's SCIM state is the
+        other builder-inline check mirrored here, so IdP offboarding revokes every envelope
+        minted under the user's keys rather than leaving them live until expiry. Team,
+        project, org, and budget state are NOT re-checked here; the caller runs the admitted
+        identity through ``_enforce_admitted_live_policy`` for those.
         """
         from litellm.proxy.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -567,32 +581,56 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
         if not MCPRequestHandler._admitted_key_is_active(key_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
-        await MCPRequestHandler._reject_if_admitted_team_blocked(key_object)
+        await MCPRequestHandler._reject_if_admitted_owner_scim_deactivated(key_object)
         return key_object
 
     @staticmethod
-    async def _reject_if_admitted_team_blocked(key_object: UserAPIKeyAuth) -> None:
-        """Reload the key's team and fail closed with a 401 when it is blocked or no longer
-        resolves. ``get_key_object`` returns the key row without any team validation, so this
-        admission path applies the same live team-block gate ``common_checks`` runs on the
-        standard auth pipeline; without it, blocking a team would not revoke envelopes already
-        minted under its keys until they expired."""
-        team_id = key_object.team_id
-        if not team_id:
+    async def _reject_if_admitted_owner_scim_deactivated(key_object: UserAPIKeyAuth) -> None:
+        """Fail closed with a 401 when the key's owning user was deactivated via SCIM.
+
+        The standard pipeline enforces this inline in ``_user_api_key_auth_builder`` rather
+        than in ``common_checks``, so the centralized policy gate does not cover it; without
+        this mirror, IdP offboarding would leave the user's already-minted envelopes live
+        until expiry. A failed user lookup skips the gate, matching the builder."""
+        if key_object.user_id is None:
             return
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         try:
-            team_object = await get_team_object(
-                team_id=team_id,
+            user_object = await get_user_object(
+                user_id=key_object.user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
             )
-        except (ProxyException, HTTPException):
-            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
-        if team_object.blocked is True:
+        except Exception as e:  # noqa: BLE001  # mirror the builder's fail-open user lookup; DB errors are of any type
+            verbose_logger.debug(f"bridge admission: user lookup failed, skipping SCIM gate: {e}")
+            user_object = None
+        if user_object is None or not isinstance(user_object.metadata, dict):
+            return
+        if user_object.metadata.get("scim_active") is False:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
+
+    @staticmethod
+    async def _enforce_admitted_live_policy(admitted: UserAPIKeyAuth, request: Request, route: str) -> None:
+        """Run the standard pipeline's single authorization point over the admitted identity.
+
+        ``_run_centralized_common_checks`` is the same gate ``user_api_key_auth`` applies
+        after every builder path, so the envelope identity gets team-block, project-block,
+        org, and budget enforcement identical to the same key presented directly, and any
+        policy dimension added to the standard pipeline applies here without this arm
+        mirroring it. Every failure maps to the arm's uniform 401 so a caller probing with
+        a stolen envelope learns nothing about why it stopped working."""
+        try:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=admitted,
+                request=request,
+                request_data=await _read_request_body(request=request),
+                route=route,
+            )
+        except Exception:  # noqa: BLE001  # common_checks raises bare Exception for blocked states; narrowing would fail open
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
 
     @staticmethod
     def _admitted_key_is_active(key_object: UserAPIKeyAuth) -> bool:
