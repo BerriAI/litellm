@@ -8,6 +8,7 @@ from starlette.requests import Request
 from starlette.types import Scope
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     BridgeEnvelopeAdmitted,
@@ -592,7 +593,10 @@ class MCPRequestHandler:
         The standard pipeline enforces this inline in ``_user_api_key_auth_builder`` rather
         than in ``common_checks``, so the centralized policy gate does not cover it; without
         this mirror, IdP offboarding would leave the user's already-minted envelopes live
-        until expiry. A failed user lookup skips the gate, matching the builder."""
+        until expiry. A failed user lookup skips the gate (fail-open), matching the builder:
+        this is the one deliberately fail-open check in an otherwise fail-closed arm, so a
+        transient DB outage during this lookup admits the request rather than rejecting it,
+        keeping parity with how the standard pipeline treats the same lookup failure."""
         if key_object.user_id is None:
             return
         from litellm.proxy.auth.auth_checks import get_user_object
@@ -621,8 +625,19 @@ class MCPRequestHandler:
         after every builder path, so the envelope identity gets team-block, project-block,
         org, and budget enforcement identical to the same key presented directly, and any
         policy dimension added to the standard pipeline applies here without this arm
-        mirroring it. Every failure maps to the arm's uniform 401 so a caller probing with
-        a stolen envelope learns nothing about why it stopped working."""
+        mirroring it.
+
+        Failures surface with the status the standard pipeline would give them, mirroring
+        ``UserAPIKeyAuthExceptionHandler``: an over-budget identity is a 429, a sub-check that
+        raised its own ``HTTPException``/``ProxyException`` keeps that status, a transient
+        database outage is a retryable 503, and only a genuinely unresolvable failure (a
+        blocked team/project raises a bare ``Exception``, same as the standard pipeline's
+        fallback) becomes the fail-closed 401. Collapsing every failure to 401 was misleading:
+        it told an over-budget but validly-authenticated caller their credential was invalid,
+        which on a DCR client reads as broken auth and can trigger a pointless re-authorize
+        loop that cannot fix a budget problem, and it masked a DB outage as an auth error."""
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
         try:
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
@@ -630,7 +645,16 @@ class MCPRequestHandler:
                 request_data=await _read_request_body(request=request),
                 route=route,
             )
-        except Exception:  # noqa: BLE001  # common_checks raises bare Exception for blocked states; narrowing would fail open
+        except (HTTPException, ProxyException):
+            raise
+        except litellm.BudgetExceededError as e:
+            raise HTTPException(status_code=getattr(e, "status_code", 429), detail=str(e)) from None
+        except Exception as e:  # noqa: BLE001  # untyped gate failure: retryable 503 for a DB outage, else fail closed 401
+            if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+                ) from None
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
 
     @staticmethod
