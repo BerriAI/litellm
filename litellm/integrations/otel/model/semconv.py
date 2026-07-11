@@ -179,6 +179,19 @@ class ExceptionEvent:
     NAME: Final = "exception"
     TYPE: Final = "exception.type"
     MESSAGE: Final = "exception.message"
+    STACKTRACE: Final = "exception.stacktrace"
+
+
+class GenAIEvent:
+    """GenAI semconv event names, from the GenAI registry's *events* section.
+
+    ``gen_ai.client.operation.exception`` is defined as a log-based event
+    (severity WARN) carrying the ``exception.*`` trio, correlated to the failed
+    span via the trace/span ids — the semconv-compliant home for GenAI failure
+    details, unlike the deprecated ``error.message`` span attribute.
+    """
+
+    OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
 class Server:
