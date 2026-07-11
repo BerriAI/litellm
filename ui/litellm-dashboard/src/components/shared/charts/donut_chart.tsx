@@ -23,6 +23,18 @@ export type DonutChartProps<TDatum extends Record<string, unknown>> = {
   style?: React.CSSProperties;
 };
 
+function formattedCategoryTotal<TDatum extends Record<string, unknown>>(
+  data: readonly TDatum[],
+  category: string,
+  valueFormatter?: (value: number) => string,
+): string {
+  const total = data.reduce((sum, datum) => {
+    const value = datum[category];
+    return sum + (typeof value === "number" ? value : 0);
+  }, 0);
+  return valueFormatter ? valueFormatter(total) : String(total);
+}
+
 export function DonutChart<TDatum extends Record<string, unknown>>({
   data,
   index,
@@ -45,11 +57,6 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
       return [name, { label: name }];
     }),
   );
-  const total = data.reduce((sum, datum) => {
-    const value = datum[category];
-    return sum + (typeof value === "number" ? value : 0);
-  }, 0);
-  const centerLabel = label ?? (valueFormatter ? valueFormatter(total) : String(total));
   const showCenterLabel = showLabel && variant === "donut" && data.length > 0;
 
   return (
@@ -64,7 +71,7 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
         )}
         {showCenterLabel && (
           <text className="fill-foreground text-base" x="50%" y="50%" textAnchor="middle" dominantBaseline="middle">
-            {centerLabel}
+            {label ?? formattedCategoryTotal(data, category, valueFormatter)}
           </text>
         )}
         <Pie

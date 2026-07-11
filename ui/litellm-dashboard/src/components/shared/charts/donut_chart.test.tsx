@@ -61,6 +61,24 @@ describe("DonutChart", () => {
     expect(container.querySelector("text.fill-foreground")?.textContent).toBe("$90.00");
   });
 
+  it("never invokes the valueFormatter for the center label unless it is shown", () => {
+    const formatterCalls: number[] = [];
+    render(
+      <DonutChart
+        data={data}
+        index="provider"
+        category="spend"
+        colors={["cyan"]}
+        showTooltip={false}
+        valueFormatter={(value) => {
+          formatterCalls.push(value);
+          return `$${value.toFixed(2)}`;
+        }}
+      />,
+    );
+    expect(formatterCalls).toEqual([]);
+  });
+
   it("prefers an explicit label over the computed total", () => {
     const { container } = render(
       <DonutChart data={data} index="provider" category="spend" colors={["cyan"]} showLabel label="All providers" />,
