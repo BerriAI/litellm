@@ -23,6 +23,7 @@ from threading import Barrier
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from budget_client import BudgetClient
 from e2e_config import unique_marker
@@ -41,6 +42,8 @@ BURST = 6
 # proxy_batch_write_at (60s) flushes the spend to the DB and default_redis_ttl (20s)
 # expires the counter; this waits out both.
 COLD_WAIT_SECONDS = 80
+
+_JSON_FLOAT: TypeAdapter[float] = TypeAdapter(float)
 
 
 def _redis() -> "redis.Redis[str] | RedisCluster[str]":
@@ -64,25 +67,46 @@ def _redis() -> "redis.Redis[str] | RedisCluster[str]":
     )
 
 
+def _parse_counter(raw: object) -> float | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        return _JSON_FLOAT.validate_json(text)
+    except ValidationError:
+        return None
+
+
 def _spend_counter(rds: "redis.Redis[str] | RedisCluster[str]", key: str) -> float | None:
-    """The shared spend counter for `key`, or None if it is cold. A cluster client
-    can't run a keyspace SCAN that spans shards, so read the key directly - the stage
-    gateway sets no cache namespace, so the key is the bare ``spend:key:{sha256(key)}``.
-    A standalone client matches by suffix, so the local cache namespace (litellm.caching)
-    need not be hard-coded here."""
+    """The shared spend counter for `key`, or None if it is cold.
+
+    The gateway keys counters as ``spend:key:{sha256(raw_sk)}``, optionally under a
+    redis namespace prefix. Cluster mode cannot SCAN all shards, so try the bare key
+    and a few common namespaces; standalone redis uses a suffix SCAN.
+    """
     from redis.cluster import RedisCluster
 
     digest = hashlib.sha256(key.encode()).hexdigest()
     suffix = f"spend:key:{digest}"
     if isinstance(rds, RedisCluster):
-        raw = rds.get(suffix)
-        return float(raw) if raw is not None else None
+        for candidate in (suffix, f"litellm:{suffix}", f"litellm.caching:{suffix}"):
+            parsed = _parse_counter(rds.get(candidate))
+            if parsed is not None:
+                return parsed
+        return None
 
     matches = list(rds.scan_iter(match=f"*{suffix}"))
     if not matches:
         return None
-    raw = rds.get(matches[0])
-    return float(raw) if raw is not None else None
+    return _parse_counter(rds.get(matches[0]))
 
 
 def _chat(client: BudgetClient, key: str) -> StreamingResponse:
@@ -94,19 +118,6 @@ def _accumulate(client: BudgetClient, key: str, count: int) -> None:
         return _chat(client, key)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(one, range(count)))
-
-
-def _burst(client: BudgetClient, key: str, count: int) -> None:
-    """Fire `count` requests that start together, so multiple workers reseed the cold
-    counter concurrently rather than one warming it before the others arrive."""
-    barrier = Barrier(count)
-
-    def one(_: int) -> StreamingResponse:
-        barrier.wait()
-        return _chat(client, key)
-
-    with ThreadPoolExecutor(max_workers=count) as pool:
         list(pool.map(one, range(count)))
 
 
@@ -132,10 +143,28 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
     db_spend = client.gateway.key_info(key).spend or 0.0
     assert db_spend > 0, f"no DB spend accumulated from real calls: {db_spend}"
 
-    _burst(client, key, BURST)
-    time.sleep(3)
+    burst_results = []
+    barrier = Barrier(BURST)
 
-    counter = _spend_counter(rds, key)
+    def one(_: int) -> StreamingResponse:
+        barrier.wait()
+        return _chat(client, key)
+
+    with ThreadPoolExecutor(max_workers=BURST) as pool:
+        burst_results = list(pool.map(one, range(BURST)))
+    assert all(r.ok for r in burst_results), (
+        "some burst calls failed; cannot exercise concurrent reseed. "
+        f"statuses={[r.status_code for r in burst_results]}"
+    )
+
+    counter: float | None = None
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        counter = _spend_counter(rds, key)
+        if counter is not None:
+            break
+        time.sleep(0.5)
+
     assert counter is not None, "the burst did not reseed the cold counter"
     assert db_spend * 0.95 <= counter < db_spend * 1.7, (
         f"redis spend counter {counter} does not equal DB spend {db_spend} (expected ~equal "

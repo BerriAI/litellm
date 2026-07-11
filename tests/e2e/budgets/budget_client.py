@@ -10,12 +10,13 @@ and response models are co-located here because only this suite uses them.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import NoBody, StreamingResponse, Success, unwrap
+from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from models import (
     AnthropicMessagesBody,
     BudgetWindow,
@@ -25,6 +26,9 @@ from models import (
     KeyGenerateBody,
     ModelBudgetEntry,
 )
+
+_TEAM_READY_ATTEMPTS = 15
+_TEAM_READY_SLEEP_SECONDS = 0.4
 
 
 class UserNewBody(BaseModel):
@@ -299,7 +303,7 @@ class BudgetClient:
         organization_id: str | None = None,
         budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
-        return unwrap(
+        team_id = unwrap(
             self.gateway.transport.post(
                 "/team/new",
                 headers=self.gateway.transport.master,
@@ -312,6 +316,8 @@ class BudgetClient:
                 response_type=TeamNewResponse,
             )
         ).team_id
+        self._wait_for_team(team_id)
+        return team_id
 
     def delete_team(self, team_id: str) -> None:
         _ = self.gateway.transport.post(
@@ -321,17 +327,43 @@ class BudgetClient:
             response_type=NoBody,
         )
 
+    def _wait_for_team(self, team_id: str) -> None:
+        last: Result[TeamInfoResponse] | None = None
+        for _ in range(_TEAM_READY_ATTEMPTS):
+            last = self.gateway.transport.get(
+                "/team/info",
+                headers=self.gateway.transport.master,
+                params=TeamInfoParams(team_id=team_id),
+                response_type=TeamInfoResponse,
+            )
+            match last:
+                case Success():
+                    return
+                case _:
+                    time.sleep(_TEAM_READY_SLEEP_SECONDS)
+        assert last is not None
+        raise AssertionError(last)
+
     def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
-        resp = self.gateway.transport.send(
-            "/team/member_add",
-            headers=self.gateway.transport.master,
-            json=TeamMemberAddBody(
-                team_id=team_id,
-                member=TeamMember(role="user", user_id=user_id),
-                max_budget_in_team=max_budget_in_team,
-            ),
-        )
-        assert resp.ok, resp.body
+        last_body = ""
+        for attempt in range(_TEAM_READY_ATTEMPTS):
+            resp = self.gateway.transport.send(
+                "/team/member_add",
+                headers=self.gateway.transport.master,
+                json=TeamMemberAddBody(
+                    team_id=team_id,
+                    member=TeamMember(role="user", user_id=user_id),
+                    max_budget_in_team=max_budget_in_team,
+                ),
+            )
+            if resp.ok:
+                return
+            last_body = resp.body
+            if "doesn't exist" in resp.body and attempt + 1 < _TEAM_READY_ATTEMPTS:
+                time.sleep(_TEAM_READY_SLEEP_SECONDS)
+                continue
+            break
+        assert False, last_body
 
     def update_team_member(
         self,

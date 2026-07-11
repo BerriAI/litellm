@@ -53,6 +53,7 @@ IGNORE_FUNCTIONS = [
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
     "_freeze_for_dedupe",  # OTEL: max depth set (default 16, _FREEZE_MAX_DEPTH); fails closed by returning repr(value) at the cap.
+    "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
 ]
 
 

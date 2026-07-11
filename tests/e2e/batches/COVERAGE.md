@@ -16,8 +16,8 @@ failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 |-----------|--------|----------|--------|------|--------------|
 | OpenAI    | yes | yes | yes | yes | OpenAI Files |
 | Azure     | yes | yes | yes | yes | Azure Files |
-| Vertex AI | yes | yes | yes | yes | GCS bucket (`GCS_BUCKET_NAME` via files_settings) |
-| Bedrock   | yes | yes | no (limited upstream) | no | S3 bucket (`AWS_BATCH_S3_BUCKET` + `AWS_BATCH_ROLE_ARN` on model) |
+| Vertex AI | yes | yes | yes | yes | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
+| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
 Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
 (`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix.
