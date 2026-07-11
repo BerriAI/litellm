@@ -5243,6 +5243,50 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
 
+    _POLICY_GATE = (
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._run_centralized_common_checks"
+    )
+
+    async def _enforce_with_gate_error(self, error):
+        """Drive _enforce_admitted_live_policy with the centralized gate raising ``error`` and return
+        the HTTPException the arm maps it to."""
+        with patch(self._POLICY_GATE, new=AsyncMock(side_effect=error)):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler._enforce_admitted_live_policy(
+                    admitted=UserAPIKeyAuth(user_id="envelope-user-42"),
+                    request=self._mcp_request(),
+                    route="/mcp/bridge_delegate_server",
+                )
+        return exc_info.value
+
+    async def test_over_budget_admission_surfaces_429_not_401(self):
+        """A validly-authenticated but over-budget identity surfaces the standard pipeline's 429, not
+        a misleading 401. Flattening budget to 401 told the caller their credential was invalid, which
+        on a DCR client reads as broken auth and triggers a re-authorize that cannot fix a budget
+        problem. Regression for the status-flattening finding on the live-policy gate."""
+        import litellm
+
+        mapped = await self._enforce_with_gate_error(litellm.BudgetExceededError(current_cost=10.0, max_budget=1.0))
+        assert mapped.status_code == 429
+
+    async def test_db_outage_during_policy_surfaces_503_not_401(self):
+        """A transient database outage during the live-policy gate surfaces a retryable 503, not a 401
+        that masks the outage as an auth failure and tells a valid caller to re-authenticate."""
+        mapped = await self._enforce_with_gate_error(ConnectionError("could not reach database server"))
+        assert mapped.status_code == 503
+
+    async def test_blocked_state_bare_exception_stays_401(self):
+        """A blocked team/project raises a bare Exception (no status) in common_checks, which the
+        standard pipeline renders as 401; the arm keeps failing those closed as 401, never a 500."""
+        mapped = await self._enforce_with_gate_error(Exception("Team=team-x is blocked."))
+        assert mapped.status_code == 401
+
+    async def test_subcheck_httpexception_status_preserved(self):
+        """A sub-check that raises its own HTTPException (e.g. a 403 model-access denial) keeps that
+        status through the arm rather than being flattened to 401."""
+        mapped = await self._enforce_with_gate_error(HTTPException(status_code=403, detail="model not allowed"))
+        assert mapped.status_code == 403
+
     async def test_alias_only_server_injects_under_alias_egress_can_resolve(self):
         """When server_name is None, the inner token must be keyed under the alias (which egress
         resolves), never under server.name (which egress never looks up), so the forwarded token is
