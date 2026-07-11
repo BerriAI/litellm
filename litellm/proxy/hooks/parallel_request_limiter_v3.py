@@ -259,9 +259,7 @@ _LITELLM_STASH_KEYS: Tuple[str, ...] = (
 # Block types whose binary payload (base64 or URL) should not be counted as
 # text characters.  audio/video/file have no meaningful text representation;
 # image blocks get a conservative floor below instead of 0.
-_BINARY_CONTENT_BLOCK_TYPES = frozenset(
-    ("input_audio", "input_video", "input_file")
-)
+_BINARY_CONTENT_BLOCK_TYPES = frozenset(("input_audio", "input_video", "input_file"))
 
 # Conservative per-image char floor used for token pre-reservation.
 # Accurate counting requires image dimensions + detail level (provider-specific);
