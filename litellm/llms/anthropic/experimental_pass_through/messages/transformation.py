@@ -3,7 +3,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import httpx
 
 from litellm.constants import (
-    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
@@ -353,7 +352,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
         capped_thinking = (
-            AnthropicMessagesConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+            AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
             if legacy_thinking is not None
             else None
         )
@@ -370,21 +369,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 optional_params["output_config"] = residual
             else:
                 optional_params.pop("output_config", None)
-
-    @staticmethod
-    def _cap_thinking_budget_to_max_tokens(thinking: Dict, max_tokens: Optional[int]) -> Optional[Dict]:
-        """Cap a legacy ``thinking.budget_tokens`` below ``max_tokens`` (Anthropic
-        requires ``max_tokens > budget_tokens``). Returns the (possibly capped)
-        thinking dict, or ``None`` when ``max_tokens`` is too small to fit even the
-        minimum thinking budget and thinking should be dropped."""
-        budget = thinking.get("budget_tokens")
-        if max_tokens is None or not isinstance(budget, int):
-            return thinking
-        if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS:
-            return None
-        if budget < max_tokens:
-            return thinking
-        return {**thinking, "budget_tokens": max_tokens - 1}
 
     def transform_anthropic_messages_request(
         self,
