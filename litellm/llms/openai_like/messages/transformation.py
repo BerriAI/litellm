@@ -85,6 +85,10 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         super().__init__()
         self._provider = provider
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return self._provider.slug
+
     def should_strip_billing_metadata(self) -> bool:
         return True
 

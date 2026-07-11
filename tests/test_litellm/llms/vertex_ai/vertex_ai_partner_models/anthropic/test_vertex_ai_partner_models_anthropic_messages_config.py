@@ -509,3 +509,59 @@ def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
     assert (
         shared_extra_headers == {}
     ), "extra_headers must not be mutated by completion()"
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so capability flags match this branch."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
+def test_messages_thinking_shape_follows_exact_vertex_entry_flag(local_model_cost_map, monkeypatch):
+    """The Vertex messages config must probe capabilities under ``vertex_ai`` so an
+    operator setting ``supports_adaptive_thinking: false`` on the exact
+    ``vertex_ai/claude-opus-4-8`` entry beats the unmodified ``anthropic`` entry.
+    With the inherited ``"anthropic"`` provider default the flip was ignored and
+    the transform kept emitting ``thinking.type='adaptive'``."""
+    import litellm
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    def transform():
+        return config.transform_anthropic_messages_request(
+            model="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "reasoning_effort": "medium",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result = transform()
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "medium"}
+
+    monkeypatch.setitem(
+        litellm.model_cost["vertex_ai/claude-opus-4-8"], "supports_adaptive_thinking", False
+    )
+    litellm.get_model_info.cache_clear()
+    assert litellm.model_cost["claude-opus-4-8"]["supports_adaptive_thinking"] is True
+
+    flipped = transform()
+    thinking = flipped.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert "output_config" not in flipped

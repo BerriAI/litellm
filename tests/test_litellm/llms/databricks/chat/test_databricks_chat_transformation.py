@@ -416,3 +416,10 @@ def test_transform_request_keeps_parallel_tool_calls_for_claude():
     )["messages"]
 
     assert len([m for m in result if m.get("role") == "assistant"]) == 1
+
+
+def test_databricks_config_probes_capabilities_under_databricks_namespace():
+    """Inherited AnthropicConfig capability probes read ``self.custom_llm_provider``;
+    without this override they probed the ``anthropic`` cost-map namespace and
+    ignored the exact ``databricks/databricks-claude-*`` entries."""
+    assert DatabricksConfig().custom_llm_provider == "databricks"
