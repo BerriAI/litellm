@@ -1129,7 +1129,7 @@ def log_guardrail_information(func):
             "async_post_call_streaming_hook",
         ):
             return GuardrailEventHooks.post_call
-        elif func_name == "apply_guardrail" and kwargs:
+        elif func_name == "apply_guardrail" and kwargs and "input_type" in kwargs:
             input_type = kwargs.get("input_type")
             if input_type == "request":
                 return GuardrailEventHooks.pre_call
