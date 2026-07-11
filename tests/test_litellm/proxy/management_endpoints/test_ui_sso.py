@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request
@@ -7343,7 +7343,10 @@ class TestCLIRefreshTokenFlow:
 
     @pytest.mark.asyncio
     async def test_mint_cli_refresh_token_has_no_model_access(self):
-        """The minted refresh key must not be usable to call any LLM."""
+        """The minted refresh key must not be usable to call any LLM, and
+        must only carry team_id as a preference hint -- never team_alias or
+        max_budget, which must always be recomputed fresh at refresh time
+        rather than trusted from storage."""
         from litellm.proxy.management_endpoints.ui_sso import (
             _mint_cli_refresh_token,
         )
@@ -7364,8 +7367,6 @@ class TestCLIRefreshTokenFlow:
             refresh_token = await _mint_cli_refresh_token(
                 user_id="user-1",
                 team_id="team-1",
-                team_alias="Team One",
-                max_budget=42.0,
             )
 
         assert refresh_token == "sk-refresh-abc"
@@ -7375,8 +7376,6 @@ class TestCLIRefreshTokenFlow:
         assert call_kwargs["metadata"] == {
             "cli_refresh": True,
             "team_id": "team-1",
-            "team_alias": "Team One",
-            "max_budget": 42.0,
         }
         assert call_kwargs["user_id"] == "user-1"
 
@@ -7397,23 +7396,26 @@ class TestCLIRefreshTokenFlow:
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rotates_and_blocks_old_token(self):
-        """Happy path: mints a fresh JWT + refresh token and blocks the presented one."""
+        """Happy path: mints a fresh JWT + refresh token and blocks the presented one.
+
+        The requested team_id is honored because the user IS a current member
+        (per fresh DB state, not the presented token's own metadata); alias
+        and budget come from a live get_team_object lookup, not metadata."""
         from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
 
         refresh_key = UserAPIKeyAuth(
             token="hashed-old-refresh",
             user_id="user-1",
-            metadata={
-                "cli_refresh": True,
-                "team_id": "team-1",
-                "team_alias": "Team One",
-                "max_budget": None,
-            },
+            metadata={"cli_refresh": True, "team_id": "team-1"},
         )
         mock_user = LiteLLM_UserTable(
-            user_id="user-1", user_role="internal_user", models=["gpt-4"]
+            user_id="user-1",
+            user_role="internal_user",
+            models=["gpt-4"],
+            teams=["team-1"],
         )
+        mock_team = MagicMock(team_alias="Team One", max_budget=100.0)
         mock_repo_instance = MagicMock()
         mock_repo_instance.table.update_many = AsyncMock(
             return_value=MagicMock(count=1)
@@ -7427,6 +7429,10 @@ class TestCLIRefreshTokenFlow:
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=mock_user),
             ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(return_value=mock_team),
+            ) as mock_get_team,
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="new-jwt-token",
@@ -7444,18 +7450,22 @@ class TestCLIRefreshTokenFlow:
 
         assert result == {"key": "new-jwt-token", "refresh_token": "sk-new-refresh"}
 
-        # New JWT minted with the team context carried over from the old
-        # refresh token's own metadata, not re-derived from scratch.
+        mock_get_team.assert_called_once_with(
+            team_id="team-1",
+            prisma_client=ANY,
+            user_api_key_cache=mock_cache,
+        )
+
         mock_get_jwt.assert_called_once()
         assert mock_get_jwt.call_args.kwargs["team_id"] == "team-1"
         assert mock_get_jwt.call_args.kwargs["team_alias"] == "Team One"
+        # user has no personal budget and the team has one -> not capped.
+        assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
-        mock_mint.assert_called_once_with(
-            user_id="user-1",
-            team_id="team-1",
-            team_alias="Team One",
-            max_budget=None,
-        )
+        # _mint_cli_refresh_token only ever receives the team_id hint --
+        # never team_alias or max_budget, which must be re-derived fresh on
+        # every future refresh rather than trusted from storage.
+        mock_mint.assert_called_once_with(user_id="user-1", team_id="team-1")
 
         # The presented (now-consumed) refresh token must be blocked
         # atomically via update_many (not a plain update) -- this is what
@@ -7468,6 +7478,118 @@ class TestCLIRefreshTokenFlow:
             data={"blocked": True},
         )
         mock_cache.delete_cache.assert_called_once_with(key="hashed-old-refresh")
+
+    @pytest.mark.asyncio
+    async def test_cli_refresh_token_ignores_team_id_for_removed_member(self):
+        """Security regression: a refresh token whose metadata claims a
+        team_id the user is NO LONGER (or never was) a member of must not
+        grant a JWT scoped to that team. Anyone can self-mint a virtual key
+        with arbitrary metadata via /key/generate, so metadata.team_id is
+        just an untrusted hint -- team membership must always be verified
+        against live DB state."""
+        from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
+
+        refresh_key = UserAPIKeyAuth(
+            token="hashed-refresh",
+            user_id="user-1",
+            # Claims membership in a team the user does not actually belong to.
+            metadata={"cli_refresh": True, "team_id": "victim-team"},
+        )
+        mock_user = LiteLLM_UserTable(
+            user_id="user-1",
+            user_role="internal_user",
+            models=["gpt-4"],
+            teams=["team-1"],  # does NOT include "victim-team"
+        )
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.table.update_many = AsyncMock(
+            return_value=MagicMock(count=1)
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(return_value=mock_user),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(
+                    side_effect=AssertionError("must not look up an unverified team")
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value="new-jwt-token",
+            ) as mock_get_jwt,
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
+                new=AsyncMock(return_value="sk-new-refresh"),
+            ) as mock_mint,
+            patch(
+                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
+                return_value=mock_repo_instance,
+            ),
+        ):
+            result = await cli_refresh_token(user_api_key_dict=refresh_key)
+
+        assert result == {"key": "new-jwt-token", "refresh_token": "sk-new-refresh"}
+        # The forged/stale team_id must be dropped, not honored.
+        assert mock_get_jwt.call_args.kwargs["team_id"] is None
+        assert mock_get_jwt.call_args.kwargs["team_alias"] is None
+        mock_mint.assert_called_once_with(user_id="user-1", team_id=None)
+
+    @pytest.mark.asyncio
+    async def test_cli_refresh_token_ignores_forged_max_budget_in_metadata(self):
+        """Security regression: max_budget must never be read from the
+        presented token's metadata, even when the claimed team_id is valid --
+        it must always be recomputed from live user/team budget state, the
+        same capping logic the initial SSO login poll uses."""
+        from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
+
+        refresh_key = UserAPIKeyAuth(
+            token="hashed-refresh",
+            user_id="user-1",
+            # A self-minted key could claim an arbitrarily large budget here.
+            metadata={"cli_refresh": True, "team_id": None, "max_budget": 999999999.0},
+        )
+        mock_user = LiteLLM_UserTable(
+            user_id="user-1", user_role="internal_user", models=["gpt-4"], teams=[]
+        )
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.table.update_many = AsyncMock(
+            return_value=MagicMock(count=1)
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(return_value=mock_user),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value="new-jwt-token",
+            ) as mock_get_jwt,
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
+                new=AsyncMock(return_value="sk-new-refresh"),
+            ),
+            patch(
+                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
+                return_value=mock_repo_instance,
+            ),
+        ):
+            await cli_refresh_token(user_api_key_dict=refresh_key)
+
+        # No team, no personal budget -> the litellm.max_ui_session_budget
+        # fallback cap applies, never the forged 999999999.0 from metadata.
+        assert mock_get_jwt.call_args.kwargs["max_budget"] != 999999999.0
+        assert mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rejects_replay_of_consumed_token(self):

@@ -2187,8 +2187,6 @@ async def cli_poll_key(
             refresh_token = await _mint_cli_refresh_token(
                 user_id=user_id,
                 team_id=team_id,
-                team_alias=team_alias,
-                max_budget=session_max_budget,
             )
 
             # Delete cache entry (single-use)
@@ -2226,8 +2224,6 @@ CLI_REFRESH_TOKEN_DURATION = "90d"
 async def _mint_cli_refresh_token(
     user_id: str,
     team_id: Optional[str],
-    team_alias: Optional[str],
-    max_budget: Optional[float],
 ) -> str:
     """Mint a long-lived virtual key that can never call an LLM (``models=[]``),
     used solely to silently refresh a CLI JWT via ``/sso/cli/refresh``.
@@ -2235,6 +2231,13 @@ async def _mint_cli_refresh_token(
     Deliberately kept separate from the actual (short-lived) call credential:
     the call credential flows through subprocess env vars and every LLM
     request, so leaking it must not also grant indefinite self-renewal.
+
+    ``team_id`` is stored purely as a UX preference hint (which team the user
+    last selected) -- NOT an authorization grant. Anyone can self-mint a
+    virtual key with arbitrary metadata via the ordinary /key/generate
+    endpoint, so cli_refresh_token must always re-verify current team
+    membership and recompute budget from live DB state before trusting this
+    hint; it must never read team_alias or max_budget back out of metadata.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         GenerateKeyResponse,
@@ -2250,8 +2253,6 @@ async def _mint_cli_refresh_token(
         metadata={
             "cli_refresh": True,
             "team_id": team_id,
-            "team_alias": team_alias,
-            "max_budget": max_budget,
         },
         table_name="key",
     )
@@ -2278,8 +2279,15 @@ async def cli_refresh_token(
     CLI refresh token. Single-use: the presented refresh token is blocked
     immediately after a successful exchange, so a replay (stolen-file race,
     client retry) can't mint a second pair from it.
+
+    The presented token's own metadata is only ever treated as an untrusted
+    UX hint (which team the user last selected), never as an authorization
+    grant -- anyone can self-mint a virtual key with arbitrary metadata via
+    the ordinary /key/generate endpoint, so team membership and budget are
+    always re-derived from live DB state, exactly like the initial SSO login
+    poll does.
     """
-    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
     from litellm.repositories.verification_token_repository import (
         VerificationTokenRepository,
@@ -2319,10 +2327,40 @@ async def cli_refresh_token(
     if user_db_obj is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
 
-    metadata = user_api_key_dict.metadata or {}
-    team_id = metadata.get("team_id")
-    team_alias = metadata.get("team_alias")
-    max_budget = metadata.get("max_budget")
+    # team_id is a preference hint from the presented token's metadata --
+    # NOT trusted for authorization. Only honor it if the user is a CURRENT
+    # member of that team per live DB state; a removed member (or a
+    # self-forged key claiming a team the caller never belonged to) silently
+    # falls back to no team rather than being granted team-scoped access.
+    requested_team_id = (user_api_key_dict.metadata or {}).get("team_id")
+    current_teams = user_db_obj.teams or []
+    team_id = requested_team_id if requested_team_id in current_teams else None
+
+    team_alias: Optional[str] = None
+    team_budget: Optional[float] = None
+    team_budget_resolved = False
+    if team_id is not None:
+        try:
+            team_obj = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            team_alias = team_obj.team_alias
+            team_budget = team_obj.max_budget
+            team_budget_resolved = True
+        except Exception:
+            pass
+
+    # Budget is always recomputed from live DB state, mirroring the exact
+    # capping logic the initial SSO login poll uses -- never read back from
+    # the presented token's metadata, which is attacker-influenceable.
+    user_budget = user_db_obj.max_budget
+    session_max_budget = (
+        litellm.max_ui_session_budget
+        if user_budget is None and (team_id is None or (team_budget_resolved and team_budget is None))
+        else None
+    )
 
     user_info = LiteLLM_UserTable(
         user_id=user_id,
@@ -2333,13 +2371,11 @@ async def cli_refresh_token(
         user_info=user_info,
         team_id=team_id,
         team_alias=team_alias,
-        max_budget=max_budget,
+        max_budget=session_max_budget,
     )
     new_refresh_token = await _mint_cli_refresh_token(
         user_id=user_id,
         team_id=team_id,
-        team_alias=team_alias,
-        max_budget=max_budget,
     )
 
     return {"key": new_jwt, "refresh_token": new_refresh_token}
