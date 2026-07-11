@@ -636,24 +636,32 @@ class MCPRequestHandler:
 
     @staticmethod
     async def _enforce_admitted_live_policy(admitted: UserAPIKeyAuth, request: Request, route: str) -> None:
-        """Run the standard pipeline's single authorization point over the admitted identity.
+        """Run the standard pipeline's authorization checks over the admitted identity.
 
-        ``_run_centralized_common_checks`` is the same gate ``user_api_key_auth`` applies
-        after every builder path, so the envelope identity gets team-block, project-block,
-        org, and budget enforcement identical to the same key presented directly, and any
-        policy dimension added to the standard pipeline applies here without this arm
-        mirroring it.
+        Mirrors the ``user_api_key_auth`` wrapper between the builder and its return: clear the
+        request-scoped ``budget_reservation`` on the reloaded identity, run the route gate
+        (``RouteChecks.should_call_route``) to enforce the identity's ``allowed_routes`` and any
+        disabled/admin-only route, then run ``_run_centralized_common_checks`` (the same gate every
+        builder path funnels through) for team-block, project-block, org, and budget. The route gate
+        closes a bypass: a key barred from MCP routes could otherwise mint an envelope at the token
+        endpoint (not itself an MCP route) and replay it against MCP, because the centralized checks
+        treat MCP as an inference route and never re-check ``allowed_routes``.
 
         Failures surface with the status the standard pipeline would give them, mirroring
-        ``UserAPIKeyAuthExceptionHandler``: an over-budget identity is a 429, a sub-check that
-        raised its own ``HTTPException``/``ProxyException`` keeps that status, a transient
-        database outage is a retryable 503, and only a genuinely unresolvable failure (a
-        blocked team/project raises a bare ``Exception``, same as the standard pipeline's
-        fallback) becomes the fail-closed 401. Collapsing every failure to 401 was misleading:
-        it told an over-budget but validly-authenticated caller their credential was invalid,
-        which on a DCR client reads as broken auth and can trigger a pointless re-authorize
-        loop that cannot fix a budget problem, and it masked a DB outage as an auth error."""
+        ``UserAPIKeyAuthExceptionHandler``: a disallowed route is the route gate's own 403, an
+        over-budget identity is a 429, a sub-check that raised its own ``HTTPException``/
+        ``ProxyException`` keeps that status, a transient database outage is a retryable 503, and
+        only a genuinely unresolvable failure (a blocked team/project raises a bare ``Exception``,
+        same as the standard pipeline's fallback) becomes the fail-closed 401. Collapsing every
+        failure to 401 was misleading: it told an over-budget but validly-authenticated caller their
+        credential was invalid, which on a DCR client reads as broken auth and can trigger a
+        pointless re-authorize loop that cannot fix a budget problem, and it masked a DB outage as an
+        auth error."""
+        from litellm.proxy.auth.route_checks import RouteChecks
+
+        admitted.budget_reservation = None
         try:
+            RouteChecks.should_call_route(route=route, valid_token=admitted, request=request)
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
                 request=request,
