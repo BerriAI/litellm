@@ -439,6 +439,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         oauth_passthrough: oauthPassthroughRaw,
+        dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -545,6 +546,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         oauth_passthrough: Boolean(oauthPassthroughRaw),
+        // ``dcr_bridge`` is only meaningful for the client-forwarded token
+        // modes (true_passthrough / oauth_delegate) and defaults on when the
+        // toggle is shown; force false for any other auth type so a stale
+        // ``true`` is never persisted. Mirrors the sibling flags above.
+        dcr_bridge: isClientForwardedTokenMode(restValues.auth_type) ? Boolean(dcrBridgeRaw ?? true) : false,
         ...(restValues.auth_type === AUTH_TYPE.OAUTH2
           ? {
               oauth2_flow:
@@ -1084,6 +1090,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
                         <PassthroughAuthorizeSection
                           authType={authType}
+                          dcrBridgeInitialChecked
                           oauthFlow={{
                             startOAuthFlow,
                             status: oauthStatus,

@@ -1,5 +1,6 @@
 import React from "react";
 import { Button, Checkbox, Form, Input } from "antd";
+import DcrBridgeToggle from "./DcrBridgeToggle";
 import { credentialAuthClass, isClientForwardedTokenMode } from "./types";
 
 interface PassthroughOAuthFlow {
@@ -32,6 +33,7 @@ interface PassthroughOAuthFlow {
 export default function PassthroughAuthorizeSection({
   authType,
   oauthFlow,
+  dcrBridgeInitialChecked,
   isEditing = false,
   savedAuthType,
   removeStoredApp = false,
@@ -40,6 +42,7 @@ export default function PassthroughAuthorizeSection({
 }: {
   authType?: string | null;
   oauthFlow: PassthroughOAuthFlow;
+  dcrBridgeInitialChecked?: boolean;
   isEditing?: boolean;
   savedAuthType?: string | null;
   removeStoredApp?: boolean;
@@ -79,7 +82,7 @@ export default function PassthroughAuthorizeSection({
         </p>
       )}
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional, saved)</span>}
+        label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional)</span>}
         name={["credentials", "client_id"]}
         extra={clientIdExtra}
       >
@@ -90,7 +93,7 @@ export default function PassthroughAuthorizeSection({
         />
       </Form.Item>
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional, saved)</span>}
+        label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional)</span>}
         name={["credentials", "client_secret"]}
       >
         <Input.Password
@@ -99,6 +102,7 @@ export default function PassthroughAuthorizeSection({
           className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
         />
       </Form.Item>
+      <DcrBridgeToggle authType={authType} initialChecked={dcrBridgeInitialChecked} />
       {isEditing && onRemoveStoredAppChange && (
         <Checkbox checked={removeStoredApp} onChange={(e) => onRemoveStoredAppChange(e.target.checked)}>
           <span className="text-sm text-gray-700">
