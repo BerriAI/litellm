@@ -4450,6 +4450,23 @@ async def test_oauth_delegate_bridge_token_exchange_fails_closed_without_litellm
 
 
 @pytest.mark.asyncio
+async def test_oauth_delegate_bridge_token_exchange_missing_access_token_is_502_not_keyerror():
+    """When the upstream token response has no access_token, a dcr_bridge oauth_delegate exchange
+    returns a clean 502 rather than raising a KeyError. The eager access_token extraction used to run
+    before the bridge branch, so a missing token raised KeyError and _bridge_grant_from_token_response's
+    nil guard (which maps to 502) was dead code; the extraction now lives on the non-bridge path only."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"token_type": "Bearer", "expires_in": 3600}
+
+    with pytest.raises(HTTPException) as exc:
+        await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_true_passthrough_bridge_token_exchange_returns_raw_upstream_token():
     """Only oauth_delegate mints. A true_passthrough dcr_bridge server relays the raw upstream token
     to the client, since that mode has no litellm identity to bind and the caller owns the token."""
