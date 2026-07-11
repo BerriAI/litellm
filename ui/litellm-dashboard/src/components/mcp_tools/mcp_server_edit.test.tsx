@@ -1519,6 +1519,35 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(payload.credentials).toEqual({ client_id: null, client_secret: null });
   });
 
+  it("warns that the saved app may not match after a URL change on a client-forwarded server", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "true_passthrough",
+          credentials: { client_id: "stored-client" },
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // No warning until the upstream changes.
+    expect(screen.queryByText(/registered for the previous upstream/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://different.example.com/mcp" },
+      });
+    });
+
+    // Keep + warn parity with the create form: the stored app is kept, and the banner appears.
+    expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+  });
+
   it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
     // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
     // after switching the form to true_passthrough and authorizing, the fresh token was not sent as

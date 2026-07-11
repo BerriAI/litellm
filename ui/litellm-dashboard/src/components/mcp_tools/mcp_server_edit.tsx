@@ -79,6 +79,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [removeStoredApp, setRemoveStoredApp] = useState(false);
+  // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
+  // section warns that the saved app may not match the new upstream (the app is kept, not wiped).
+  const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
@@ -445,6 +448,21 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   };
 
   const handleFormValuesChange = (changedValues: Record<string, unknown>) => {
+    // Editing the client fields dismisses the "may not match upstream" warning; otherwise a url/endpoint
+    // change while a declared app is present keeps the app but flags that it may not match the new
+    // upstream (the "keep + warn" behavior). Mirrors the create form; independent of the held-token
+    // stale check so it fires even without an authorize this session (the stored app is for the old url).
+    if ("credentials" in changedValues) {
+      setAppMayNotMatchUpstream(false);
+    } else {
+      const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
+        (key) => key in changedValues,
+      );
+      const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
+      if (upstreamChanged && hasDeclaredApp) {
+        setAppMayNotMatchUpstream(true);
+      }
+    }
     if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentityRef.current)) {
       clearHeldOAuthToken(changedValues);
     }
@@ -1086,6 +1104,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   savedAuthType={mcpServer.auth_type}
                   removeStoredApp={removeStoredApp}
                   onRemoveStoredAppChange={setRemoveStoredApp}
+                  appMayNotMatchUpstream={appMayNotMatchUpstream}
                 />
               </>
             )}
