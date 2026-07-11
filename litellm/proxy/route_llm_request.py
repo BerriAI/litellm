@@ -522,10 +522,7 @@ async def route_request(
         elif (
             is_proxy_admin_without_team
             and data["model"] not in router_model_names
-            and any(
-                public_model_name == data["model"]
-                for _, public_model_name in llm_router.team_model_to_deployment_indices
-            )
+            and data["model"] in llm_router.team_public_model_names
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 

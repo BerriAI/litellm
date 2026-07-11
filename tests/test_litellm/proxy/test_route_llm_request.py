@@ -125,6 +125,31 @@ async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_wi
 
     router.add_deployment(
         Deployment(
+            model_name="internal-team-only",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
+                "api_base": "https://internal.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+            },
+            model_info={
+                "id": "internal-team-only-id",
+                "team_id": "team-a",
+            },
+        )
+    )
+    internal_deployments = await router.async_get_healthy_deployments(
+        model="internal-team-only",
+        request_kwargs={
+            **data,
+            "model": "internal-team-only",
+        },
+    )
+
+    assert {deployment["model_info"]["id"] for deployment in internal_deployments} == {"internal-team-only-id"}
+
+    router.add_deployment(
+        Deployment(
             model_name="internal-other-team-azure",
             litellm_params={
                 "model": "azure/gpt-4o",

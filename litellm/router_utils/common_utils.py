@@ -76,20 +76,25 @@ def filter_team_based_models(
         requested_model = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )
-        candidate_model_info = tuple(
-            model_info for deployment in healthy_deployments for model_info in [deployment.get("model_info") or {}]
+        candidate_deployments = tuple(
+            (deployment.get("model_name"), deployment.get("model_info") or {}) for deployment in healthy_deployments
         )
         team_ids = frozenset(
             team_id
-            for model_info in candidate_model_info
+            for _, model_info in candidate_deployments
             for team_id in [model_info.get("team_id")]
             if team_id is not None
         )
-        if (
+        matches_requested_model = (
             isinstance(requested_model, str)
-            and len(team_ids) > 1
-            and all(model_info.get("team_public_model_name") == requested_model for model_info in candidate_model_info)
-        ):
+            and bool(candidate_deployments)
+            and all(
+                model_info.get("team_id") is not None
+                and (model_name == requested_model or model_info.get("team_public_model_name") == requested_model)
+                for model_name, model_info in candidate_deployments
+            )
+        )
+        if matches_requested_model and len(team_ids) > 1:
             raise BadRequestError(
                 message=(
                     f"Model name '{requested_model}' matches deployments from multiple teams. "
@@ -98,14 +103,7 @@ def filter_team_based_models(
                 model=requested_model,
                 llm_provider="",
             )
-        if (
-            isinstance(requested_model, str)
-            and candidate_model_info
-            and all(
-                model_info.get("team_id") is not None and model_info.get("team_public_model_name") == requested_model
-                for model_info in candidate_model_info
-            )
-        ):
+        if matches_requested_model:
             return healthy_deployments
 
     ids_to_remove = set()
