@@ -68,9 +68,10 @@ const CopyButton: React.FC<{ value: string | null; label: string }> = ({ value, 
       type="button"
       variant="ghost"
       size="icon-xs"
-      onClick={() => {
+      onClick={async () => {
+        if (!navigator.clipboard) return;
         try {
-          navigator.clipboard?.writeText(value);
+          await navigator.clipboard.writeText(value);
           setCopied(true);
         } catch {
           setCopied(false);
@@ -218,7 +219,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
               title="Thanks for using LiteLLM!"
               aria-hidden
             >
-              🌑
+              🌴
             </span>
           )}
           <span className="flex-1" />
