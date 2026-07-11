@@ -1686,13 +1686,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _get_mcp_tool_name(request_data: dict) -> Optional[str]:
+    def _get_mcp_tool_name(request_data: dict) -> str | None:
         raw_name: object = request_data.get("mcp_tool_name")
         if isinstance(raw_name, str) and raw_name:
             return raw_name
         return None
 
-    def _assert_mcp_argument_label_clean(self, text: str, detections: List[ContentFilterDetection]) -> None:
+    def _assert_mcp_argument_label_clean(self, text: str, detections: list[ContentFilterDetection]) -> None:
         if self._filter_single_text(text, detections=detections) != text:
             raise HTTPException(
                 status_code=400,
@@ -1702,7 +1702,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
 
     def _filter_mcp_argument_value(
-        self, value: object, detections: List[ContentFilterDetection], depth: int = 0
+        self, value: object, detections: list[ContentFilterDetection], depth: int = 0
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             raise HTTPException(
@@ -1726,7 +1726,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _scan_mcp_tool_call_arguments(
         self,
         request_data: dict,
-        detections: List[ContentFilterDetection],
+        detections: list[ContentFilterDetection],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> None:
         if not self._event_hook_is_event_type(GuardrailEventHooks.pre_mcp_call):
