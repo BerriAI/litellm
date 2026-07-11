@@ -7343,11 +7343,19 @@ class TestCLIRefreshTokenFlow:
 
     @pytest.mark.asyncio
     async def test_mint_cli_refresh_token_has_no_model_access(self):
-        """The minted refresh key must not be usable to call any LLM, and
-        must only carry team_id as a preference hint -- never team_alias or
-        max_budget, which must always be recomputed fresh at refresh time
-        rather than trusted from storage."""
+        """The minted refresh key must not be usable to call any LLM or reach
+        any other route, and must only carry team_id as a preference hint --
+        never team_alias or max_budget, which must always be recomputed
+        fresh at refresh time rather than trusted from storage.
+
+        Regression: `models=[]` does NOT mean "no models allowed" in this
+        codebase -- _check_model_access_helper treats an empty models list
+        as unrestricted access (`len(filtered_models) == 0 and len(models)
+        == 0` -> all_model_access = True). The refresh key must carry a real,
+        unmatchable model entry plus a hard allowed_routes restriction."""
         from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_REFRESH_TOKEN_ALLOWED_ROUTES,
+            CLI_REFRESH_TOKEN_SENTINEL_MODEL,
             _mint_cli_refresh_token,
         )
 
@@ -7372,12 +7380,60 @@ class TestCLIRefreshTokenFlow:
         assert refresh_token == "sk-refresh-abc"
         mock_generate.assert_called_once()
         call_kwargs = mock_generate.call_args.kwargs
-        assert call_kwargs["models"] == []
+        assert call_kwargs["models"] == [CLI_REFRESH_TOKEN_SENTINEL_MODEL]
+        assert call_kwargs["models"] != []
+        assert call_kwargs["allowed_routes"] == CLI_REFRESH_TOKEN_ALLOWED_ROUTES
         assert call_kwargs["metadata"] == {
             "cli_refresh": True,
             "team_id": "team-1",
         }
         assert call_kwargs["user_id"] == "user-1"
+
+    def test_cli_refresh_token_key_shape_cannot_call_any_model(self):
+        """End-to-end proof (not just "what args did we pass") that a key
+        shaped like the one _mint_cli_refresh_token mints is actually
+        rejected by the real model-access-control code path.
+
+        This is the test that would have caught the original bug: asserting
+        `models == []` in isolation is exactly as consistent with "no access"
+        as it is with "unrestricted access" -- the real enforcement logic
+        (_check_model_access_helper) treats an empty models list as
+        UNRESTRICTED when the key has no team_id, so a key literally shaped
+        `models=[]` sails through here. Only the sentinel-model shape
+        actually denies."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.auth_checks import _can_object_call_model
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_REFRESH_TOKEN_SENTINEL_MODEL,
+        )
+
+        refresh_key_shaped_token = UserAPIKeyAuth(
+            token="hashed-refresh",
+            user_id="user-1",
+            models=[CLI_REFRESH_TOKEN_SENTINEL_MODEL],
+            metadata={"cli_refresh": True},
+        )
+
+        for real_model in ("gpt-4o", "claude-sonnet-4-5", "gpt-3.5-turbo"):
+            with pytest.raises(Exception):
+                _can_object_call_model(
+                    model=real_model,
+                    llm_router=None,
+                    models=refresh_key_shaped_token.models,
+                )
+
+        # Sanity check the test itself: confirm the OLD (buggy) shape this
+        # regression replaces really was permissive, so we know this test
+        # actually distinguishes the two -- not just always-passing.
+        old_buggy_shape = UserAPIKeyAuth(
+            token="hashed-refresh", user_id="user-1", models=[], metadata={}
+        )
+        assert (
+            _can_object_call_model(
+                model="gpt-4o", llm_router=None, models=old_buggy_shape.models
+            )
+            is True
+        )
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rejects_non_refresh_key(self):
@@ -7648,7 +7704,12 @@ class TestCLIRefreshTokenFlow:
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rejects_deleted_user(self):
-        """A refresh token for a user who no longer exists must not mint a new JWT."""
+        """A refresh token for a user who no longer exists must not mint a
+        new JWT, AND the consumed token must stay permanently blocked --
+        NOT be un-blocked by the compensating-rollback path. A deleted user
+        is an intentional, permanent rejection, not a transient failure; if
+        it were un-blocked and this user_id is ever reused/re-registered,
+        the stale token would immediately become valid for the new account."""
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
 
@@ -7678,6 +7739,11 @@ class TestCLIRefreshTokenFlow:
                 await cli_refresh_token(user_api_key_dict=refresh_key)
 
         assert exc_info.value.status_code == 401
+        # Only the initial consume -- no compensating un-consume call.
+        mock_repo_instance.table.update_many.assert_called_once()
+        assert mock_repo_instance.table.update_many.call_args.kwargs["data"] == {
+            "blocked": True
+        }
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_un_consumes_on_mint_failure(self):

@@ -2221,12 +2221,29 @@ async def cli_poll_key(
 CLI_REFRESH_TOKEN_DURATION = "90d"
 
 
+# `models=[]` on a virtual key does NOT mean "no models allowed" -- per
+# _resolve_key_models_for_auth_check / _check_model_access_helper in
+# auth_checks.py, an empty models list (with no team_id on the key) is
+# treated as "no restriction configured", i.e. UNRESTRICTED access to every
+# model. A CLI refresh token must never be usable to call an LLM, so it
+# needs a real, unmatchable model entry -- not an empty list.
+CLI_REFRESH_TOKEN_SENTINEL_MODEL = "litellm-cli-refresh-token-no-model-access"
+# The actual enforced boundary: allowed_routes is a hard, deny-by-default
+# allowlist checked in the shared user_api_key_auth dependency for every
+# route, including LLM calls -- unlike the models field, an empty/absent
+# allowed_routes is NOT a footgun (it just means "no route restriction"),
+# so this is the primary defense; the sentinel model above is belt-and-
+# suspenders in case any code path only consults the models field.
+CLI_REFRESH_TOKEN_ALLOWED_ROUTES = ["/sso/cli/refresh", "/sso/cli/logout"]
+
+
 async def _mint_cli_refresh_token(
     user_id: str,
     team_id: Optional[str],
 ) -> str:
-    """Mint a long-lived virtual key that can never call an LLM (``models=[]``),
-    used solely to silently refresh a CLI JWT via ``/sso/cli/refresh``.
+    """Mint a long-lived virtual key that can never call an LLM or reach any
+    route other than the CLI refresh/logout endpoints, used solely to
+    silently refresh a CLI JWT via ``/sso/cli/refresh``.
 
     Deliberately kept separate from the actual (short-lived) call credential:
     the call credential flows through subprocess env vars and every LLM
@@ -2246,7 +2263,8 @@ async def _mint_cli_refresh_token(
 
     response = await generate_key_helper_fn(
         request_type="key",
-        models=[],
+        models=[CLI_REFRESH_TOKEN_SENTINEL_MODEL],
+        allowed_routes=CLI_REFRESH_TOKEN_ALLOWED_ROUTES,
         user_id=user_id,
         duration=CLI_REFRESH_TOKEN_DURATION,
         key_alias=f"cli-refresh-{user_id}",
@@ -2318,6 +2336,21 @@ async def cli_refresh_token(
     if consumed.count == 0:
         raise HTTPException(status_code=401, detail="CLI refresh token already used or revoked")
 
+    # A deleted user is a permanent, intentional rejection, not a transient
+    # failure -- this check deliberately sits outside (before) the
+    # compensating-rollback block below, so the consumed token stays
+    # permanently blocked rather than being un-blocked. Un-blocking it here
+    # would let a stale refresh token become valid again for a different
+    # account if this user_id is ever reused/re-registered.
+    user_db_obj = await get_user_object(
+        user_id=user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+    )
+    if user_db_obj is None:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
     # Everything below runs after the token was already irreversibly
     # consumed above. Without a compensating action, a single transient
     # failure here (DB hiccup, etc.) would permanently strand the user with
@@ -2327,15 +2360,6 @@ async def cli_refresh_token(
     # retryable blip. On any failure, best-effort un-consume the presented
     # token so a retry can succeed, then propagate the original error.
     try:
-        user_db_obj = await get_user_object(
-            user_id=user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-        )
-        if user_db_obj is None:
-            raise HTTPException(status_code=401, detail="User no longer exists")
-
         # team_id is a preference hint from the presented token's metadata --
         # NOT trusted for authorization. Only honor it if the user is a
         # CURRENT member of that team per live DB state; a removed member
