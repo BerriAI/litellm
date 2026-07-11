@@ -22,7 +22,8 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
-import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -38,6 +39,12 @@ import type {
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import {
+  registerAuthHeaderNameGetter,
+  registerAuthTokenGetter,
+  registerBaseUrlGetter,
+  registerErrorHandler,
+} from "@/lib/http/runtime";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -370,6 +377,11 @@ const apiClient = createApiClient({
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
 });
+
+registerBaseUrlGetter(getProxyBaseUrl);
+registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
+registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
+registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;

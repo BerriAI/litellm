@@ -342,7 +342,7 @@ class BudgetClient:
                 case _:
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
         assert last is not None
-        _ = unwrap(last)
+        raise AssertionError(last)
 
     def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
         last_body = ""
