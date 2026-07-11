@@ -329,26 +329,37 @@ def _litellm_key_from_request(request: Request) -> Optional[str]:
     return None
 
 
-def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
-    """The key's ``user_id``, or ``None`` if the key is blocked or expired.
+def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
+    """``True`` when the presented key is neither blocked nor past its expiry.
 
-    The OAuth token endpoint is unauthenticated, so the presented key is validated here before its
-    identity is trusted to key a stored credential; a revoked or expired key must not be able to
-    write or overwrite the per-user OAuth token. ``get_key_object`` resolves a row without these
-    checks (the main ``user_api_key_auth`` pipeline enforces them downstream, which this endpoint
-    bypasses), so they are applied here. Deleted keys are already rejected upstream, where
-    ``get_key_object`` raises on a row that no longer exists.
+    The OAuth token endpoint is unauthenticated, so the presented key is validated here before it is
+    trusted; a revoked or expired key must not mint a bridge envelope or write a stored credential.
+    ``get_key_object`` resolves a row without these checks (the main ``user_api_key_auth`` pipeline
+    enforces them downstream, which this endpoint bypasses), so they are applied here. Deleted keys
+    are already rejected upstream, where ``get_key_object`` raises on a row that no longer exists.
+
+    This is an active-state gate only; it deliberately does not require a ``user_id``. A valid
+    team-scoped or service-account key has no ``user_id`` yet is a legitimate credential, so gating
+    on ``user_id`` presence would wrongly reject it. Callers that need the user (the per-user token
+    store) derive it separately via :func:`_active_key_user_id`.
     """
     if key_obj.blocked is True:
-        return None
+        return False
     expires = key_obj.expires
     if expires is not None:
         expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
         if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if expiry < datetime.now(timezone.utc):
-            return None
-    return key_obj.user_id
+            return False
+    return True
+
+
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
+    """The active key's ``user_id``, or ``None`` when the key is blocked/expired or simply has no
+    ``user_id`` (a team-scoped or service-account key). Used only by the per-user token store, which
+    needs a user to key the stored credential; the bridge mint uses the key hash and does not."""
+    return key_obj.user_id if _key_is_active(key_obj) else None
 
 
 async def _resolve_active_litellm_key(request: Request) -> Optional[Tuple[str, "UserAPIKeyAuth"]]:
@@ -361,10 +372,11 @@ async def _resolve_active_litellm_key(request: Request) -> Optional[Tuple[str, "
     cross-replica Redis hit deserializes to a plain ``dict`` rather than a ``UserAPIKeyAuth``; the
     previous code read only ``Authorization`` and did ``getattr(cached, "user_id")`` with no
     ``model_type`` rehydration and no DB fallback, so it silently returned ``None``. The resolved key
-    is validated (``_active_key_user_id``) before it is trusted, so a blocked or expired key resolves
-    to ``None``. The returned hash is the value ``get_key_object`` and the cache/DB layer key the
-    record by. Callers derive the ``user_id`` (per-user token store) or seal the hash (dcr_bridge
-    envelope) from the result.
+    is validated (``_key_is_active``) before it is trusted, so a blocked or expired key resolves to
+    ``None``, while a valid team-scoped or service-account key (no ``user_id``) still resolves so it
+    can mint a bridge envelope. The returned hash is the value ``get_key_object`` and the cache/DB
+    layer key the record by. Callers derive the ``user_id`` (per-user token store) or seal the hash
+    (dcr_bridge envelope) from the result.
     """
     token = _litellm_key_from_request(request)
     if not token:
@@ -393,7 +405,7 @@ async def _resolve_active_litellm_key(request: Request) -> Optional[Tuple[str, "
             type(exc).__name__,
         )
         return None
-    if _active_key_user_id(key_obj) is None:
+    if not _key_is_active(key_obj):
         return None
     return key_hash, key_obj
 
