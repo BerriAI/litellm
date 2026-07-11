@@ -75,6 +75,9 @@ class TestTTLNormalization:
             ("1h", "3600s"),
             ("2h", "7200s"),
             ("0.5h", "1800s"),
+            ("48h", "86400s"),
+            ("1500m", "86400s"),
+            ("1000000s", "86400s"),
         ],
     )
     def test_normalizes_units_to_seconds(self, ttl, expected):
