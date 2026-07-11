@@ -802,7 +802,9 @@ describe("CreateMCPServer", () => {
       });
 
       // Keep + warn: the app stays in the field, and a non-blocking warning appears.
-      expect(screen.getByText(/OAuth app entered here was registered for the previous upstream/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/OAuth app configured for this server was registered for the previous upstream/),
+      ).toBeInTheDocument();
     });
 
     it("keeps client_secret when only client_id is edited after a client-forwarded authorize", async () => {

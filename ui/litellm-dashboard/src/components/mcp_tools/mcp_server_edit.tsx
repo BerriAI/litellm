@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import {
   AUTH_TYPE,
+  credentialAuthClass,
   isClientForwardedTokenMode,
   getOAuthAuthorizationIdentity,
   CLEARED_ON_INVALIDATION,
@@ -463,6 +464,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     // change while a declared app is present keeps the app but flags that it may not match the new
     // upstream (the "keep + warn" behavior). Mirrors the create form; independent of the held-token
     // stale check so it fires even without an authorize this session (the stored app is for the old url).
+    // A stored app counts too: the GET redacts credentials to null, so blank fields (keep-existing) can
+    // still hide a saved client. has_configured_client is the backend's non-secret "a client exists"
+    // bit; it only warns while the credential class is unchanged, because a cross-class switch replaces
+    // the stored app on save (blanks then mean "no app"), so there is nothing kept to mismatch.
     if ("credentials" in changedValues) {
       setAppMayNotMatchUpstream(false);
     } else {
@@ -470,7 +475,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         (key) => key in changedValues,
       );
       const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
-      if (upstreamChanged && hasDeclaredApp) {
+      const formAuthType = form.getFieldValue("auth_type") as string | undefined;
+      const hasStoredKeptApp =
+        mcpServer.has_configured_client === true &&
+        isClientForwardedTokenMode(formAuthType) &&
+        credentialAuthClass(mcpServer.auth_type) === credentialAuthClass(formAuthType);
+      if (upstreamChanged && (hasDeclaredApp || hasStoredKeptApp)) {
         setAppMayNotMatchUpstream(true);
       }
     }

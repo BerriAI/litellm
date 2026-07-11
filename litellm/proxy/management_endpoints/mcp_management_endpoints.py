@@ -473,12 +473,30 @@ if MCP_AVAILABLE:
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
-        """Return a copy of the MCP server object with credentials removed."""
+        """Return a copy of the MCP server object with credentials removed.
+
+        Stamps ``has_configured_client`` before redacting so the admin edit form
+        can tell that a stored OAuth app exists without ever seeing its value
+        (the URL-change "app may not match upstream" warning needs exactly this
+        bit; the stored ``client_id`` itself is encrypted and never returned).
+        Derives from the credentials blob when the object carries one (DB reads),
+        otherwise preserves a truthy flag already stamped upstream
+        (``_build_mcp_server_table`` on the registry list path, whose tables
+        never include the blob).
+        """
 
         try:
             redacted_server = mcp_server.model_copy(deep=True)
         except AttributeError:
             redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
+
+        stored_credentials = getattr(mcp_server, "credentials", None)
+        stored_client_id = stored_credentials.get("client_id") if isinstance(stored_credentials, dict) else None
+        setattr(
+            redacted_server,
+            "has_configured_client",
+            bool(stored_client_id or getattr(mcp_server, "has_configured_client", None)),
+        )
 
         if hasattr(redacted_server, "credentials"):
             setattr(redacted_server, "credentials", None)
@@ -548,6 +566,8 @@ if MCP_AVAILABLE:
         # admin configured. Non-admins get the per-user vars they must fill in
         # from the dedicated /user-env-vars/status endpoint instead.
         sanitized.env_vars = None
+        # Only the admin edit form needs the stored-app indicator.
+        sanitized.has_configured_client = None
         return sanitized
 
     def _sanitize_mcp_server_list_for_non_admin(
@@ -591,6 +611,7 @@ if MCP_AVAILABLE:
 
         sanitized.health_check_error = None
         sanitized.last_health_check = None
+        sanitized.has_configured_client = None
 
         sanitized.created_by = None
         sanitized.updated_by = None

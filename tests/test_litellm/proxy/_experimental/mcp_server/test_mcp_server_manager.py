@@ -7335,3 +7335,44 @@ def test_build_mcp_server_table_carries_null_oauth2_flow():
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow is None
+
+
+def test_build_mcp_server_table_stamps_has_configured_client():
+    """The list endpoint serves registry servers through this conversion WITHOUT the
+    credentials blob, so the redaction layer cannot see the stored client there. The
+    build must stamp has_configured_client from the registry's decrypted client_id or
+    the edit form never learns a saved OAuth app exists (its URL-change "app may not
+    match upstream" warning would stay silent for stored apps)."""
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="stored-app-server",
+        name="stored_app_server",
+        server_name="stored_app_server",
+        alias="stored_app_server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        client_id="org-slack-app-client-id",
+        client_secret="org-slack-app-secret",
+    )
+
+    table = manager._build_mcp_server_table(server)
+
+    assert table.has_configured_client is True
+
+
+def test_build_mcp_server_table_has_configured_client_false_without_client():
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="no-app-server",
+        name="no_app_server",
+        server_name="no_app_server",
+        alias="no_app_server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+    )
+
+    table = manager._build_mcp_server_table(server)
+
+    assert table.has_configured_client is False

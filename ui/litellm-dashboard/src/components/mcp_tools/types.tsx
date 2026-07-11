@@ -371,6 +371,12 @@ export interface MCPServer {
   max_concurrent_requests?: number | null;
   /** Redacted to null in server responses; present when constructing a server locally. */
   credentials?: Record<string, unknown> | null;
+  /**
+   * Response-only: true when the stored (redacted) credentials include an OAuth client_id. Lets the
+   * edit form know a saved app exists without ever seeing its value, so the "app may not match
+   * upstream" warning can fire on a URL change even though `credentials` arrives null.
+   */
+  has_configured_client?: boolean | null;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;
