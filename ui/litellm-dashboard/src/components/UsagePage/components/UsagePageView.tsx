@@ -498,7 +498,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     showSearch
                     allowClear
                     style={{ width: "100%" }}
-                    placeholder="Select user to filter..."
+                    placeholder="Search users by name, email, or ID..."
                     value={selectedUserId}
                     onChange={(value) => setSelectedUserId(value ?? null)}
                     filterOption={false}

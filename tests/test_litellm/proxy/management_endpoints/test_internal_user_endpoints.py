@@ -1960,6 +1960,69 @@ async def test_get_users_user_id_partial_match(mocker):
     assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]
 
 
+@pytest.mark.asyncio
+async def test_get_users_searches_alias_email_user_id_and_sso_user_id(mocker):
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    admin_key = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await get_users(
+        role=LitellmUserRoles.INTERNAL_USER.value,
+        search="  中文别名  ",
+        page=1,
+        page_size=1,
+        user_api_key_dict=admin_key,
+        organization_ids=None,
+    )
+
+    where = mock_prisma_client.db.litellm_usertable.find_many.call_args.kwargs[
+        "where"
+    ]
+    assert where["user_role"] == LitellmUserRoles.INTERNAL_USER.value
+    assert where["OR"] == [
+        {"user_id": {"contains": "中文别名", "mode": "insensitive"}},
+        {"sso_user_id": {"contains": "中文别名", "mode": "insensitive"}},
+        {"user_email": {"contains": "中文别名", "mode": "insensitive"}},
+        {"user_alias": {"contains": "中文别名", "mode": "insensitive"}},
+    ]
+    mock_prisma_client.db.litellm_usertable.count.assert_awaited_once_with(
+        where=where
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_users_ignores_blank_search_and_keeps_legacy_email_filter(mocker):
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    admin_key = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await get_users(
+        user_email="user",
+        search="   ",
+        page=1,
+        page_size=1,
+        user_api_key_dict=admin_key,
+        organization_ids=None,
+    )
+
+    where = mock_prisma_client.db.litellm_usertable.find_many.call_args.kwargs[
+        "where"
+    ]
+    assert "OR" not in where
+    assert where["user_email"] == {
+        "contains": "user",
+        "mode": "insensitive",
+    }
+
+
 def test_update_internal_user_params_reset_max_budget_with_none():
     """
     Test that _update_internal_user_params allows setting max_budget to None.
