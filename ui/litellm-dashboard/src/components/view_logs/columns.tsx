@@ -1,11 +1,10 @@
+import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
 import { getSpendString } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Badge, Button } from "@tremor/react";
 import { Tooltip } from "antd";
-import React, { useState } from "react";
+import React from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
-import { TimeCell } from "./time_cell";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
@@ -119,11 +118,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Time",
     accessorKey: "startTime",
-    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+    size: 200,
+    cell: (info: any) => <DateCell value={info.getValue()} />,
   },
   {
     header: "Type",
     id: "type",
+    size: 90,
     cell: (info: any) => {
       const row = info.row.original;
       const sessionCount = row.session_total_count || 1;
@@ -168,50 +169,24 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Status",
     accessorKey: "metadata.status",
+    size: 100,
     cell: (info: any) => {
       const status = info.getValue() || "Success";
       const isSuccess = status.toLowerCase() !== "failure";
-
-      return (
-        <span
-          className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
-            isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-          }`}
-        >
-          {isSuccess ? "Success" : "Failure"}
-        </span>
-      );
+      return <StatusBadge tone={isSuccess ? "success" : "error"} label={isSuccess ? "Success" : "Failure"} />;
     },
   },
   {
     header: "Session ID",
     accessorKey: "session_id",
-    cell: (info: any) => {
-      const value = String(info.getValue() || "");
-      const onSessionClick = info.row.original.onSessionClick;
-      return (
-        <Tooltip title={String(info.getValue() || "")}>
-          <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal text-xs max-w-[15ch] truncate block"
-            onClick={() => onSessionClick?.(value)}
-          >
-            {String(info.getValue() || "")}
-          </Button>
-        </Tooltip>
-      );
-    },
+    size: 120,
+    cell: (info: any) => <IdCell value={info.getValue()} onClick={info.row.original.onSessionClick} />,
   },
 
   {
     header: "Request ID",
     accessorKey: "request_id",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "")}>
-        <span className="font-mono text-xs max-w-[15ch] truncate block">{String(info.getValue() || "")}</span>
-      </Tooltip>
-    ),
+    cell: (info: any) => <IdCell value={info.getValue()} variant="plain" />,
   },
   {
     header: sortProps
@@ -226,16 +201,23 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Cost",
     accessorKey: "spend",
+    size: 110,
+    meta: { numeric: true },
     cell: (info: any) => {
       const row = info.row.original;
       const mcpCount = row.mcp_tool_call_count || 0;
       const mcpSpend = row.mcp_tool_call_spend || 0;
+      const isMultiCallSession = (row.session_total_count || 1) > 1;
+      const spend = isMultiCallSession && row.session_total_spend != null ? row.session_total_spend : info.getValue();
 
       return (
-        <div className="flex flex-col">
-          <Tooltip title={`$${String(info.getValue() || 0)}`}>
-            <span>{getSpendString(info.getValue() || 0)}</span>
+        <div className="flex flex-col items-end">
+          <Tooltip title={spend ? `$${String(spend)}` : undefined}>
+            <span>
+              <MoneyCell value={spend} decimals={6} />
+            </span>
           </Tooltip>
+          {isMultiCallSession && <span className="text-[10px] text-gray-400">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
@@ -258,13 +240,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Duration (s)",
     accessorKey: "request_duration_ms",
+    meta: { numeric: true },
     cell: (info: any) => {
       const ms = info.getValue();
       if (ms == null) return <span>-</span>;
       const seconds = (ms / 1000).toFixed(2);
       return (
         <Tooltip title={`${ms}ms`}>
-          <span className="max-w-[15ch] truncate block">{seconds}</span>
+          <span className="max-w-[15ch] truncate inline-block">{seconds}</span>
         </Tooltip>
       );
     },
@@ -282,6 +265,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "TTFT (s)",
     accessorKey: "completionStartTime",
+    meta: { numeric: true },
     cell: (info: any) => {
       const row = info.row.original;
       const completionStartTime = info.getValue();
@@ -293,7 +277,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const ttftSeconds = (ttftMs / 1000).toFixed(2);
       return (
         <Tooltip title={`${ttftMs}ms`}>
-          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
+          <span className="max-w-[15ch] truncate inline-block">{ttftSeconds}</span>
         </Tooltip>
       );
     },
@@ -301,6 +285,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -310,25 +295,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Key Hash",
     accessorKey: "metadata.user_api_key",
-    cell: (info: any) => {
-      const value = String(info.getValue() || "-");
-      const onKeyHashClick = info.row.original.onKeyHashClick;
-
-      return (
-        <Tooltip title={value}>
-          <span
-            className="font-mono max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
-            onClick={() => onKeyHashClick?.(value)}
-          >
-            {value}
-          </span>
-        </Tooltip>
-      );
-    },
+    size: 110,
+    cell: (info: any) => <IdCell value={info.getValue()} variant="plain" onClick={info.row.original.onKeyHashClick} />,
   },
   {
     header: "Key Alias",
     accessorKey: "metadata.user_api_key_alias",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -348,6 +321,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Model",
     accessorKey: "model",
+    size: 200,
     cell: (info: any) => {
       const row = info.row.original;
       const provider = row.custom_llm_provider;
@@ -385,6 +359,8 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Tokens",
     accessorKey: "total_tokens",
+    size: 140,
+    meta: { numeric: true },
     cell: (info: any) => {
       const row = info.row.original;
       return (
@@ -400,6 +376,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Internal User",
     accessorKey: "user",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -409,6 +386,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "End User",
     accessorKey: "end_user",
+    size: 140,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -419,6 +397,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Tags",
     accessorKey: "request_tags",
+    size: 150,
     cell: (info: any) => {
       const tags = info.getValue();
       if (!tags || Object.keys(tags).length === 0) return "-";
@@ -486,7 +465,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
           <h3 className="text-sm font-medium">Request</h3>
           <button
             onClick={() => copyToClipboard(requestStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded-sm"
             title="Copy request"
           >
             <svg
@@ -505,7 +484,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap wrap-break-word">{requestStr}</pre>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-gray-50">
@@ -513,7 +492,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
           <h3 className="text-sm font-medium">Response</h3>
           <button
             onClick={() => copyToClipboard(responseStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded-sm"
             title="Copy response"
           >
             <svg
@@ -532,7 +511,9 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{responseStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap wrap-break-word">
+          {responseStr}
+        </pre>
       </div>
     </div>
   );
@@ -553,7 +534,7 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
         {isExpanded ? "Hide JSON" : "Show JSON"} ({Object.keys(jsonData).length} fields)
       </button>
       {isExpanded && (
-        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
+        <pre className="mt-2 p-2 bg-gray-50 border rounded-sm text-xs overflow-auto max-h-60">{jsonString}</pre>
       )}
     </div>
   );
@@ -570,141 +551,3 @@ export type AuditLogEntry = {
   before_value: Record<string, any>;
   updated_values: Record<string, any>;
 };
-
-const getActionBadge = (action: string) => {
-  return (
-    <Badge color="gray" className="flex items-center gap-1">
-      <span className="whitespace-nowrap text-xs">{action}</span>
-    </Badge>
-  );
-};
-
-export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
-  {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) => {
-      const ExpanderCell = () => {
-        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
-
-        const toggleHandler = React.useCallback(() => {
-          setLocalExpanded((prev) => !prev);
-          row.getToggleExpandedHandler()();
-        }, [row]);
-
-        return row.getCanExpand() ? (
-          <button
-            onClick={toggleHandler}
-            style={{ cursor: "pointer" }}
-            aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
-          >
-            <svg
-              className={`w-4 h-4 transform transition-transform ${localExpanded ? "rotate-90" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        ) : (
-          <span className="w-6 h-6 flex items-center justify-center">●</span>
-        );
-      };
-      return <ExpanderCell />;
-    },
-  },
-  {
-    header: "Timestamp",
-    accessorKey: "updated_at",
-    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
-  },
-  {
-    header: "Table Name",
-    accessorKey: "table_name",
-    cell: (info: any) => {
-      const tableName = info.getValue();
-      let displayValue = tableName;
-      switch (tableName) {
-        case "LiteLLM_VerificationToken":
-          displayValue = "Keys";
-          break;
-        case "LiteLLM_TeamTable":
-          displayValue = "Teams";
-          break;
-        case "LiteLLM_OrganizationTable":
-          displayValue = "Organizations";
-          break;
-        case "LiteLLM_UserTable":
-          displayValue = "Users";
-          break;
-        case "LiteLLM_ProxyModelTable":
-          displayValue = "Models";
-          break;
-        default:
-          displayValue = tableName;
-      }
-      return <span>{displayValue}</span>;
-    },
-  },
-  {
-    header: "Action",
-    accessorKey: "action",
-    cell: (info: any) => <span>{getActionBadge(info.getValue())}</span>,
-  },
-  {
-    header: "Changed By",
-    accessorKey: "changed_by",
-    cell: (info: any) => {
-      const changedBy = info.row.original.changed_by;
-      const apiKey = info.row.original.changed_by_api_key;
-      return (
-        <div className="space-y-1">
-          <div className="font-medium">{changedBy}</div>
-          {apiKey && ( // Only show API key if it exists
-            <Tooltip title={apiKey}>
-              <div className="text-xs text-muted-foreground max-w-[15ch] truncate">
-                {" "}
-                {/* Apply max-width and truncate */}
-                {apiKey}
-              </div>
-            </Tooltip>
-          )}
-        </div>
-      );
-    },
-  },
-  {
-    header: "Affected Item ID",
-    accessorKey: "object_id",
-    cell: (props) => {
-      const ObjectIdDisplay = () => {
-        const objectId = props.getValue();
-        const [copied, setCopied] = useState(false);
-
-        if (!objectId) return <>-</>;
-
-        const handleCopy = async () => {
-          try {
-            await navigator.clipboard.writeText(String(objectId));
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          } catch (err) {
-            console.error("Failed to copy object ID: ", err);
-          }
-        };
-
-        return (
-          <Tooltip title={copied ? "Copied!" : String(objectId)}>
-            <span className="max-w-[20ch] truncate block cursor-pointer hover:text-blue-600" onClick={handleCopy}>
-              {String(objectId)}
-            </span>
-          </Tooltip>
-        );
-      };
-      return <ObjectIdDisplay />;
-    },
-  },
-];

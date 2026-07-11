@@ -346,6 +346,9 @@ def get_llm_provider(
                     elif endpoint == "https://pinstripes.io/v1":
                         custom_llm_provider = "pinstripes"
                         dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")
+                    elif endpoint == "https://api.meta.ai/v1":
+                        custom_llm_provider = "meta"
+                        dynamic_api_key = get_secret_str("META_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception("api base needs to be a string. api_base={}".format(api_base))
@@ -446,6 +449,8 @@ def get_llm_provider(
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("gdc/"):
+            custom_llm_provider = "gdc"
         elif model.startswith("lemonade/"):
             custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):
@@ -650,6 +655,10 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"  # type: ignore
 
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
+    elif custom_llm_provider == "tencent":
+        api_base = api_base or get_secret("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
+
+        dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (

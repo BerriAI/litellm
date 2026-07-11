@@ -23,7 +23,11 @@ from litellm._redis_credential_provider import (
     GCPIAMCredentialProvider,
     _generate_gcp_iam_access_token,
 )
-from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
+from litellm.constants import (
+    REDIS_CLUSTER_HEALTH_CHECK_INTERVAL,
+    REDIS_CONNECTION_POOL_TIMEOUT,
+    REDIS_SOCKET_TIMEOUT,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
@@ -102,6 +106,8 @@ def _get_redis_cluster_kwargs(client=None):
         "max_connections",
         "socket_timeout",
         "socket_connect_timeout",
+        "health_check_interval",
+        "socket_keepalive",
     }
 
     return available_args
@@ -319,8 +325,19 @@ def _get_redis_client_logic(**env_overrides):
             value = get_secret(v)  # type: ignore
             env_overrides[k] = value
 
+    environment_kwargs = _redis_kwargs_from_environment()
+
+    # An explicitly configured connection target outranks REDIS_URL from the
+    # environment. Without this, the url branch below strips the caller's
+    # host/port/password and silently connects to whatever REDIS_URL names.
+    caller_named_a_target = any(
+        env_overrides.get(key) is not None for key in ("host", "startup_nodes", "sentinel_nodes")
+    )
+    if caller_named_a_target and env_overrides.get("url") is None:
+        environment_kwargs.pop("url", None)
+
     redis_kwargs = {
-        **_redis_kwargs_from_environment(),
+        **environment_kwargs,
         **env_overrides,
     }
 
@@ -579,6 +596,13 @@ def get_redis_async_client(
             new_startup_nodes.append(ClusterNode(**item))
         cluster_kwargs.pop("startup_nodes", None)
 
+        # Default to a periodic health check + TCP keepalive so a connection silently dropped
+        # by a cluster restart (e.g. ElastiCache Serverless maintenance) is revalidated and
+        # reconnected before reuse instead of stalling in re-initialization; an explicit value
+        # from config still wins.
+        cluster_kwargs.setdefault("health_check_interval", REDIS_CLUSTER_HEALTH_CHECK_INTERVAL)
+        cluster_kwargs.setdefault("socket_keepalive", True)
+
         # Create async RedisCluster with IAM token as password if available
         cluster_client = async_redis.RedisCluster(
             startup_nodes=new_startup_nodes,
@@ -665,9 +689,8 @@ def get_redis_connection_pool(
         redis_kwargs["credential_provider"] = GCPIAMCredentialProvider(redis_connect_func._gcp_service_account)
 
     connection_class = async_redis.Connection
-    if "ssl" in redis_kwargs:
+    if redis_kwargs.pop("ssl", False):
         connection_class = async_redis.SSLConnection
-        redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 

@@ -166,9 +166,9 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                 onClick={() => toggleCollapse(op)}
               >
                 {isCollapsed ? (
-                  <ChevronRightIcon className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                  <ChevronRightIcon className="w-4 h-4 text-gray-500 shrink-0" />
                 ) : (
-                  <ChevronDownIcon className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                  <ChevronDownIcon className="w-4 h-4 text-gray-500 shrink-0" />
                 )}
                 <span className="font-semibold text-gray-900 text-sm">{meta.label}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${RISK_BADGE[meta.risk]}`}>
@@ -241,7 +241,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                           )}
                         </div>
                         <span
-                          className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+                          className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
                             allowed ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
                           }`}
                         >

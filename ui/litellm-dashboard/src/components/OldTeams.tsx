@@ -31,6 +31,7 @@ import type { SorterResult } from "antd/es/table/interface";
 import { KeyIcon, LayersIcon, SearchIcon, UsersIcon } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AntDLoadingSpinner } from "@/components/ui/AntDLoadingSpinner";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { teamListCall as v2TeamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -94,7 +95,6 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
 
   if (organization) {
     if (organization.models.length > 0) {
-      console.log(`organization.models: ${organization.models}`);
       tempModelsToPick = organization.models;
     } else {
       // show all available models if the team has no models set
@@ -251,9 +251,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
-    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
     const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
-    console.log(`models: ${models}`);
     setModelsToPick(models);
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
@@ -431,7 +429,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
@@ -674,18 +671,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         key: "team_id",
         width: 170,
         ellipsis: true,
-        render: (id: string, record: Team) => (
-          <Tooltip title={id}>
-            <Text
-              ellipsis
-              className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-              style={{ fontSize: 14, padding: "1px 8px" }}
-              onClick={() => setSelectedTeamId(record.team_id)}
-              data-testid="team-id-cell"
-            >
-              {id}
-            </Text>
-          </Tooltip>
+        render: (id: string) => (
+          <IdCell value={id} onClick={(teamId) => setSelectedTeamId(teamId)} dataTestId="team-id-cell" />
         ),
       },
       {
@@ -801,13 +788,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         width: 130,
         ellipsis: true,
         sorter: true,
-        render: (date: string | undefined) => (
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            {date
-              ? new Date(date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
-              : "—"}
-          </Text>
-        ),
+        render: (date: string | undefined) => <DateCell value={date} precision="date" />,
       },
       {
         title: "Actions",
@@ -1479,6 +1460,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                       accessToken={accessToken || ""}
                       placeholder="Select MCP servers or access groups (optional)"
+                      allowAllProxyMcpServers={isProxyAdminRole(userRole || "")}
                     />
                   </Form.Item>
 

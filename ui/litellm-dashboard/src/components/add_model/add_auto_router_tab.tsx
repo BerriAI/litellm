@@ -8,7 +8,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
-import ComplexityRouterConfig from "./ComplexityRouterConfig";
+import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import NotificationManager from "../molecules/notifications_manager";
 import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
 
@@ -20,13 +20,6 @@ interface AddAutoRouterTabProps {
 }
 
 type RouterType = "complexity" | "semantic";
-
-interface ComplexityTiers {
-  SIMPLE: string;
-  MEDIUM: string;
-  COMPLEX: string;
-  REASONING: string;
-}
 
 const { Title, Link } = Typography;
 
@@ -48,12 +41,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [routerConfig, setRouterConfig] = useState<any>(null);
 
   // Complexity router config (new)
-  const [complexityTiers, setComplexityTiers] = useState<ComplexityTiers>({
-    SIMPLE: "",
-    MEDIUM: "",
-    COMPLEX: "",
-    REASONING: "",
+  const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
+    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    classifier_type: "heuristic",
   });
+
+  const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
@@ -67,7 +60,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for auto router:", uniqueModels);
         setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info for auto router:", error);
@@ -87,11 +79,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
   // Auto router specific form submit handler
   const handleAutoRouterSubmit = () => {
-    console.log("Auto router submit triggered!");
-    console.log("Router type:", routerType);
-
     const currentFormValues = form.getFieldsValue();
-    console.log("Form values:", currentFormValues);
 
     // Check basic required fields first
     if (!currentFormValues.auto_router_name) {
@@ -102,15 +90,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     // Validation differs based on router type
     if (routerType === "complexity") {
       // Complexity Router validation
-      const filledTiers = Object.values(complexityTiers).filter(Boolean);
+      const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
+      const filledTiers = Object.values(tiers).filter(Boolean);
       if (filledTiers.length === 0) {
         NotificationManager.fromBackend("Please select at least one model for a complexity tier");
         return;
       }
 
+      if (classifier_type === "llm" && !classifier_llm_config?.model) {
+        NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+        return;
+      }
+
       // For complexity router, use the first non-empty tier as default
-      const defaultModel =
-        complexityTiers.MEDIUM || complexityTiers.SIMPLE || complexityTiers.COMPLEX || complexityTiers.REASONING;
+      const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
 
       // Set form values for complexity router
       form.setFieldsValue({
@@ -123,8 +116,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       form
         .validateFields(["auto_router_name"])
         .then((values) => {
-          console.log("Complexity router validation passed");
-
           // Build the complexity router config
           const submitValues = {
             ...values,
@@ -133,12 +124,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             // Use special model prefix for complexity router
             model_type: "complexity_router",
             complexity_router_config: {
-              tiers: complexityTiers,
+              tiers,
+              classifier_type,
+              ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
+              ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
             },
             model_access_group: currentFormValues.model_access_group,
           };
 
-          console.log("Final submit values:", submitValues);
           handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
         })
         .catch((error) => {
@@ -179,13 +172,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       form
         .validateFields()
         .then((values) => {
-          console.log("Form validation passed, submitting with values:", values);
           const submitValues = {
             ...values,
             auto_router_config: routerConfig,
             model_type: "semantic_router",
           };
-          console.log("Final submit values:", submitValues);
           handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
         })
         .catch((error) => {
@@ -286,10 +277,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             <div className="w-full mb-4">
               <ComplexityRouterConfig
                 modelInfo={modelInfo}
-                value={complexityTiers}
-                onChange={(tiers) => {
-                  setComplexityTiers(tiers);
+                value={complexityRouterConfig}
+                onChange={(config) => {
+                  setComplexityRouterConfig(config);
                 }}
+                customTechnicalKeywords={customTechnicalKeywords}
+                onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
               />
             </div>
           ) : (
@@ -364,9 +357,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           )}
 
           <div className="flex items-center my-4">
-            <div className="flex-grow border-t border-gray-200"></div>
+            <div className="grow border-t border-gray-200"></div>
             <span className="px-4 text-gray-500 text-sm">Additional Settings</span>
-            <div className="flex-grow border-t border-gray-200"></div>
+            <div className="grow border-t border-gray-200"></div>
           </div>
 
           {/* Model Access Groups - Admin only */}
@@ -404,7 +397,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               <Button
                 type="primary"
                 onClick={() => {
-                  console.log("Add Auto Router button clicked!");
                   handleAutoRouterSubmit();
                 }}
               >

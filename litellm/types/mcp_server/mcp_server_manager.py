@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 from litellm.types.mcp import (
+    DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
@@ -65,10 +66,13 @@ class MCPServer(BaseModel):
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
     aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
-    # Token Exchange (OBO) fields — RFC 8693
+    # Token Exchange (OBO) fields
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
-    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
+    # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
+    # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
+    token_exchange_profile: str = "rfc8693"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -99,6 +103,7 @@ class MCPServer(BaseModel):
     # ``Authorization`` for non-OAuth reasons (e.g. static bearer tokens). Must
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
@@ -118,6 +123,9 @@ class MCPServer(BaseModel):
     # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
     timeout: Optional[float] = None
+    # Max concurrent outbound tool calls to this server; excess calls queue.
+    # None or a value <= 0 means unlimited.
+    max_concurrent_requests: Optional[int] = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
     # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two
@@ -146,6 +154,27 @@ class MCPServer(BaseModel):
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
 
     @property
+    def is_true_passthrough(self) -> bool:
+        """True for the transparent-proxy mode: LiteLLM performs no admission auth and forwards the
+        client's ``Authorization`` to the upstream unchanged."""
+        return self.auth_type == MCPAuth.true_passthrough
+
+    @property
+    def is_oauth_delegate(self) -> bool:
+        """True for the delegated-upstream-OAuth mode: LiteLLM still admits the caller (API key / SSO /
+        JWT) but forwards the caller's separate upstream ``Authorization`` unchanged, minting nothing."""
+        return self.auth_type == MCPAuth.oauth_delegate
+
+    @property
+    def is_dcr_bridge(self) -> bool:
+        """True when this client-forwarded-token server serves the gateway-hosted DCR front door
+        (gateway-self protected-resource and authorization-server metadata plus the register,
+        authorize, and token relays) instead of relaying the upstream's own OAuth discovery
+        verbatim. ``dcr_bridge`` is rejected on every other auth type at create, update, and
+        config load, so the mode gate here only defends rows edited outside those paths."""
+        return bool(self.dcr_bridge) and (self.is_true_passthrough or self.is_oauth_delegate)
+
+    @property
     def requires_per_user_auth(self) -> bool:
         """
         True if this server requires per-user/per-request authentication.
@@ -158,6 +187,9 @@ class MCPServer(BaseModel):
         """
         # OAuth2 without client credentials
         if self.needs_user_oauth_token:
+            return True
+
+        if self.is_true_passthrough or self.is_oauth_delegate:
             return True
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers

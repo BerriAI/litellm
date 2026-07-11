@@ -1165,27 +1165,19 @@ class ModifyResponseException(Exception):
         request_data: Dict[str, Any],
         guardrail_name: Optional[str] = None,
         detection_info: Optional[Dict[str, Any]] = None,
+        original_response: Optional[Any] = None,
     ):
         self.message = message
         self.model = model
         self.request_data = request_data
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        # The LLM response that was blocked (post-call). Carries the real token
+        # usage the upstream call consumed, so the synthetic block response can
+        # report it instead of discarding it. None for pre-call blocks (the LLM
+        # was never invoked).
+        self.original_response = original_response
         super().__init__(message)
-
-
-class GuardrailInterventionNormalStringError(
-    Exception
-):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-    def __str__(self):
-        return self.message
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class SensitiveDataRouteException(Exception):

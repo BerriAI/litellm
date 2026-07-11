@@ -6,9 +6,9 @@ All values are configurable via proxy config.yaml.
 """
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ComplexityTier(str, Enum):
@@ -197,6 +197,18 @@ DEFAULT_TIER_MODELS: Dict[str, str] = {
 }
 
 
+class ClassifierLLMConfig(BaseModel):
+    """Configuration for the LLM-based complexity classifier."""
+
+    model: str = Field(
+        description="Model name (from the router's model_list) to call for classification",
+    )
+    timeout_ms: int = Field(
+        default=3000,
+        description="Timeout budget for the classification call, in milliseconds",
+    )
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -237,6 +249,15 @@ class ComplexityRouterConfig(BaseModel):
         default=None,
         description="Keywords indicating technical content",
     )
+    custom_technical_keywords: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Domain-specific technical keywords appended to the effective base list "
+            "(technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). "
+            "Order is preserved; duplicates are removed case-insensitively against "
+            "the base list and within this list."
+        ),
+    )
     simple_keywords: Optional[List[str]] = Field(
         default=None,
         description="Keywords indicating simple/basic queries",
@@ -248,7 +269,23 @@ class ComplexityRouterConfig(BaseModel):
         description="Default model to use if tier cannot be determined",
     )
 
+    # Classifier strategy
+    classifier_type: Literal["heuristic", "llm"] = Field(
+        default="heuristic",
+        description="Classification strategy: local regex/keyword scoring, or an LLM call",
+    )
+    classifier_llm_config: Optional[ClassifierLLMConfig] = Field(
+        default=None,
+        description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+
     model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+    @model_validator(mode="after")
+    def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
+        if self.classifier_type == "llm" and self.classifier_llm_config is None:
+            raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
+        return self
 
 
 # Combined default config

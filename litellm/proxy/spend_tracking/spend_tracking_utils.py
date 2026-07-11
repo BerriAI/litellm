@@ -55,6 +55,13 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
+def _hash_api_key_for_spend_log(api_key: str) -> str:
+    stripped = api_key[7:] if api_key[:7].lower() == "bearer " else api_key
+    if stripped.startswith("sk-"):
+        return hash_token(stripped)
+    return stripped
+
+
 def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
@@ -120,13 +127,16 @@ def _get_spend_logs_metadata(
             key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
         }
     )
+    raw_user_api_key = clean_metadata.get("user_api_key")
+    if raw_user_api_key is not None and isinstance(raw_user_api_key, str):
+        clean_metadata["user_api_key"] = _hash_api_key_for_spend_log(raw_user_api_key)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
     )
-    clean_metadata["guardrail_information"] = guardrail_information
+    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -281,9 +291,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     if api_key is not None and isinstance(api_key, str):
-        if api_key.startswith("sk-"):
-            # hash the api_key
-            api_key = hash_token(api_key)
+        api_key = _hash_api_key_for_spend_log(api_key)
 
     if (
         standard_logging_payload is not None
@@ -483,6 +491,74 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
     """Helper to ensure datetime is in UTC"""
     timestamp = timestamp.astimezone(timezone.utc)
     return timestamp
+
+
+async def get_spend_by_team(
+    start_date: dt,
+    end_date: dt,
+    team_id: Optional[str],
+    prisma_client: PrismaClient,
+):
+    sql_query = """
+    WITH SpendByModelApiKey AS (
+        SELECT
+            date_trunc('day', sl."startTime") AS group_by_day,
+            COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+            sl.model,
+            sl.api_key,
+            SUM(sl.spend) AS model_api_spend,
+            SUM(sl.total_tokens) AS model_api_tokens
+        FROM
+            "LiteLLM_SpendLogs" sl
+        LEFT JOIN
+            "LiteLLM_TeamTable" tt
+        ON
+            sl.team_id = tt.team_id
+        WHERE
+            sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+            AND ($3::text IS NULL OR sl.team_id = $3)
+        GROUP BY
+            date_trunc('day', sl."startTime"),
+            tt.team_alias,
+            sl.model,
+            sl.api_key
+    )
+        SELECT
+            group_by_day,
+            jsonb_agg(jsonb_build_object(
+                'team_name', team_name,
+                'total_spend', total_spend,
+                'metadata', metadata
+            )) AS teams
+        FROM (
+            SELECT
+                group_by_day,
+                team_name,
+                SUM(model_api_spend) AS total_spend,
+                jsonb_agg(jsonb_build_object(
+                    'model', model,
+                    'api_key', api_key,
+                    'spend', model_api_spend,
+                    'total_tokens', model_api_tokens
+                )) AS metadata
+            FROM
+                SpendByModelApiKey
+            GROUP BY
+                group_by_day,
+                team_name
+        ) AS aggregated
+        GROUP BY
+            group_by_day
+        ORDER BY
+            group_by_day;
+    """
+
+    db_response = await prisma_client.db.query_raw(sql_query, start_date, end_date, team_id)
+    if db_response is None:
+        return []
+
+    return db_response
 
 
 async def get_spend_by_team_and_customer(
@@ -790,6 +866,51 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
             # carrier, leave intact and resume after the key match.
             pos = v_start
     return "".join(out)
+
+
+def _sanitize_guardrail_information_for_spend_logs(
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]],
+) -> Optional[List[StandardLoggingGuardrailInformation]]:
+    """
+    When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
+    (``guardrail_request``, ``guardrail_response``, ``match_details``,
+    ``classification``) before they land in ``LiteLLM_SpendLogs.metadata``.
+
+    Guardrail hooks may echo the LLM request payload back into
+    ``guardrail_response``, and two first-party hooks
+    (``block_code_execution``, ``litellm_content_filter``) inline user-prompt
+    substrings into ``match_details`` / ``classification`` too, so the flag
+    must cover all four fields. Every other typed field on the entry (name,
+    provider, mode, status, timings, action, violation_categories, risk_score,
+    masked_entity_count, ...) is preserved so guardrail dashboards keep
+    working.
+
+    ``guardrail_information`` is typed ``Optional[List[...]]`` but at least
+    one writer (``xecguard``) assigns a bare dict, so normalize to a list
+    here to match OTEL's defensive read pattern; otherwise iteration would
+    yield the dict's keys and crash the whole spend-log write.
+    """
+    if guardrail_information is None or _should_store_prompts_and_responses_in_spend_logs():
+        return guardrail_information
+    entries = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
+    return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
+
+
+_PROMPT_CARRYING_GUARDRAIL_FIELDS = (
+    "guardrail_request",
+    "guardrail_response",
+    "match_details",
+    "classification",
+)
+
+
+def _redact_prompt_fields_in_guardrail_entry(
+    entry: StandardLoggingGuardrailInformation,
+) -> StandardLoggingGuardrailInformation:
+    return {
+        **entry,
+        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+    }
 
 
 def _sanitize_error_information_for_spend_logs(

@@ -53,10 +53,10 @@ const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
 
   return (
     <div className="flex items-center space-x-2">
-      <pre className="font-mono text-xs bg-gray-50 p-2 rounded max-w-md overflow-auto">
+      <pre className="font-mono text-xs bg-gray-50 p-2 rounded-sm max-w-md overflow-auto">
         {showPassword ? headerString : "••••••••"}
       </pre>
-      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded" type="button">
+      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded-sm" type="button">
         {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
       </button>
     </div>
@@ -254,7 +254,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
                 <div className="mt-4 space-y-2">
                   {Object.entries(endpointData.guardrails).map(([name, settings]) => (
-                    <div key={name} className="p-3 bg-gray-50 rounded">
+                    <div key={name} className="p-3 bg-gray-50 rounded-sm">
                       <div className="font-medium text-sm">{name}</div>
                       {settings && (settings.request_fields || settings.response_fields) && (
                         <div className="mt-2 text-xs text-gray-600 space-y-1">

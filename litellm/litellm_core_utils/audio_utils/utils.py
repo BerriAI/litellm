@@ -123,6 +123,34 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
     return ProcessedAudioFile(file_content=file_content, filename=filename, content_type=content_type)
 
 
+BARE_ISO_639_1_TO_BCP47 = {
+    "en": "en-US",
+    "es": "es-ES",
+    "de": "de-DE",
+    "fr": "fr-FR",
+    "it": "it-IT",
+    "pt": "pt-BR",
+    "ja": "ja-JP",
+    "ko": "ko-KR",
+    "zh": "zh-CN",
+    "ru": "ru-RU",
+    "hi": "hi-IN",
+    "ar": "ar-SA",
+}
+
+
+def normalize_transcription_language_to_bcp47(language: str) -> str:
+    """
+    OpenAI's transcription `language` param accepts bare ISO-639-1 codes like
+    ``en``; speech APIs such as Google Speech-to-Text and NVIDIA Riva require
+    BCP-47 like ``en-US``. Map the most common bare codes and pass through
+    anything already region-qualified (or unknown, for a clear provider error).
+    """
+    if "-" in language:
+        return language
+    return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
+
+
 def get_audio_file_name(file_obj: FileTypes) -> str:
     """
     Safely get the name of a file-like object or return its string representation.
