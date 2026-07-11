@@ -35,6 +35,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.datadog import (
+    DD_MAX_BATCH_SIZE,
+    DD_MAX_PAYLOAD_SIZE_BYTES,
+)
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
     CallTypes,
@@ -160,6 +164,12 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {str(e)}")
 
     async def async_send_batch(self):
+        """Send queued LLM Obs spans to Datadog, splitting oversized batches.
+
+        Mirrors the proactive-split + 413-retry strategy from the log-intake
+        logger (``DataDogLogger._send_with_413_split``) so a busy flush window
+        cannot exceed the intake's payload limits (5 MB / 1000 events).
+        """
         try:
             if not self.log_queue:
                 return
@@ -169,52 +179,133 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
-            # Prepare the payload
-            payload = {
-                "data": DDIntakePayload(
-                    type="span",
-                    attributes=DDSpanAttributes(
-                        ml_app=get_datadog_service(),
-                        tags=get_datadog_tags(),
-                        spans=self.log_queue,
-                    ),
-                ),
-            }
+            batch_to_send = self.log_queue[:]
+            self.log_queue.clear()
 
-            # serialize datetime objects - for budget reset time in spend metrics
-            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-            try:
-                verbose_logger.debug("payload %s", safe_dumps(payload))
-            except Exception as debug_error:
-                verbose_logger.debug("payload serialization failed: %s", str(debug_error))
-
-            json_payload = safe_dumps(payload)
-
-            headers = {"Content-Type": "application/json"}
-            if self.DD_API_KEY:
-                headers["DD-API-KEY"] = self.DD_API_KEY
-
-            response = await self.async_client.post(
-                url=self.intake_url,
-                content=json_payload,
-                headers=headers,
-            )
-
-            if response.status_code != 202:
-                raise Exception(
-                    f"DataDogLLMObs: Unexpected response - status_code: {response.status_code}, text: {response.text}"
-                )
+            undelivered = await self._send_with_413_split(batch_to_send)
+            if undelivered:
+                self.log_queue = undelivered + self.log_queue
 
             if self.is_mock_mode:
-                verbose_logger.debug(f"[DATADOG MOCK] Batch of {len(self.log_queue)} events successfully mocked")
-            else:
-                verbose_logger.debug(f"DataDogLLMObs: Successfully sent batch - status_code: {response.status_code}")
-            self.log_queue.clear()
-        except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e.response.text}")
+                verbose_logger.debug(f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked")
+
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
+
+    async def _send_with_413_split(self, batch: List[LLMObsPayload]) -> List[LLMObsPayload]:
+        """Send *batch*, halving any sub-batch that exceeds intake limits.
+
+        Proactively splits before serializing when the chunk is too large,
+        and retries with smaller halves on a 413 response.  A lone span
+        that still 413s is dropped to prevent wedging the queue.
+
+        Returns spans that could not be delivered due to a transient
+        (non-413) error so the caller can re-queue them.
+        """
+        pending: List[List[LLMObsPayload]] = [batch]
+        while pending:
+            chunk = pending.pop()
+            if not chunk:
+                continue
+            if len(chunk) > 1 and self._exceeds_intake_limits(chunk):
+                mid = len(chunk) // 2
+                pending.append(chunk[mid:])
+                pending.append(chunk[:mid])
+                continue
+            try:
+                response = await self._post_spans(chunk)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 413:
+                    response = e.response  # fall through to 413 handling below
+                else:
+                    verbose_logger.exception(
+                        "DataDogLLMObs: Error sending batch - %s", str(e)
+                    )
+                    return self._undelivered(chunk, pending)
+            except Exception as e:
+                verbose_logger.exception(
+                    "DataDogLLMObs: Error sending batch - %s", str(e)
+                )
+                return self._undelivered(chunk, pending)
+
+            if response.status_code == 413:
+                if len(chunk) == 1:
+                    verbose_logger.error(
+                        "DataDogLLMObs: single span exceeds intake limit, dropping"
+                    )
+                    continue
+                mid = len(chunk) // 2
+                pending.append(chunk[mid:])
+                pending.append(chunk[:mid])
+                continue
+
+            if response.status_code != 202:
+                verbose_logger.error(
+                    "DataDogLLMObs: unexpected response status_code=%s, text=%s",
+                    response.status_code,
+                    response.text,
+                )
+                return self._undelivered(chunk, pending)
+
+            verbose_logger.debug(
+                "DataDogLLMObs: delivered %s spans, status_code=%s",
+                len(chunk),
+                response.status_code,
+            )
+        return []
+
+    async def _post_spans(self, spans: List[LLMObsPayload]) -> httpx.Response:
+        """Serialize and POST a list of spans to the LLM Obs intake."""
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        payload = {
+            "data": DDIntakePayload(
+                type="span",
+                attributes=DDSpanAttributes(
+                    ml_app=get_datadog_service(),
+                    tags=get_datadog_tags(),
+                    spans=spans,
+                ),
+            ),
+        }
+
+        json_payload = safe_dumps(payload)
+
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self.DD_API_KEY:
+            headers["DD-API-KEY"] = self.DD_API_KEY
+
+        response = await self.async_client.post(
+            url=self.intake_url,
+            content=json_payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response
+
+    @staticmethod
+    def _exceeds_intake_limits(chunk: List[LLMObsPayload]) -> bool:
+        """True when *chunk* would breach Datadog's span intake limits.
+
+        Uses the same constants as the log intake logger — 1 000 events max
+        and 4 MB serialised payload (under the 5 MB hard cap so the split
+        happens before the intake rejects it).
+        """
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        if len(chunk) > DD_MAX_BATCH_SIZE:
+            return True
+        payload_size_bytes = len(safe_dumps(chunk).encode("utf-8"))
+        return payload_size_bytes > DD_MAX_PAYLOAD_SIZE_BYTES
+
+    @staticmethod
+    def _undelivered(
+        chunk: List[LLMObsPayload], pending: List[List[LLMObsPayload]]
+    ) -> List[LLMObsPayload]:
+        """Flatten the current chunk + remaining pending into a single list."""
+        return chunk + [
+            span for remaining in reversed(pending) for span in remaining
+        ]
 
     def create_llm_obs_payload(self, kwargs: Dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
