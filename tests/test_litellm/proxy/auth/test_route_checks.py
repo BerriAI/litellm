@@ -2724,6 +2724,164 @@ def test_team_update_gate_rejects_cross_org_admin_with_resolved_org():
         )
 
 
+# ── PATCH /team/{team_id}: same org-context + role reach as POST /team/update ──
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_resolves_org_from_path_for_patch_route():
+    """PATCH /team/{team_id} carries team_id in the PATH, not the body. The target
+    team's org is resolved from the last path segment (identified by the route
+    template) and injected, so an org admin of that team's org clears the same gate
+    they clear for POST /team/update."""
+
+    async def fetch(team_id: str):
+        assert team_id == "team-1"
+        return "org-1"
+
+    out = await add_team_org_context_to_request_body(
+        route="/team/team-1",
+        request_body={"metadata": {"cost_center": "x"}},
+        fetch_team_org_id=fetch,
+        route_template="/team/{team_id}",
+    )
+    assert out == {"metadata": {"cost_center": "x"}, "organization_id": "org-1"}
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_path_noop_for_team_subresource():
+    """A sub-resource like /team/{team_id}/members/me has a different route template,
+    so it is not mistaken for the bare team route and no org is injected."""
+
+    async def fetch(team_id: str):
+        raise AssertionError("must not resolve for a team sub-resource route")
+
+    body = {"foo": "bar"}
+    out = await add_team_org_context_to_request_body(
+        route="/team/team-1/members/me",
+        request_body=body,
+        fetch_team_org_id=fetch,
+        route_template="/team/{team_id}/members/me",
+    )
+    assert out == body
+
+
+@pytest.mark.asyncio
+async def test_add_team_org_context_noop_for_static_team_route():
+    """A static sibling route (e.g. POST /team/new) whose resolved path also has the
+    single-segment shape has its own template, not /team/{team_id}, so no team lookup
+    is attempted — the guard against a spurious DB hit on every /team/<verb> call."""
+
+    async def fetch(team_id: str):
+        raise AssertionError("must not resolve for a static /team/<verb> route")
+
+    body = {"team_alias": "new team"}
+    out = await add_team_org_context_to_request_body(
+        route="/team/new",
+        request_body=body,
+        fetch_team_org_id=fetch,
+        route_template="/team/new",
+    )
+    assert out == body
+
+
+def test_patch_team_route_has_same_reach_as_team_update():
+    """/team/{team_id} is reachable by org admins (in org_admin_allowed_routes) but
+    NOT by regular internal users or the role-agnostic self_managed_routes — the
+    latter would open /team/new (the collision footgun) to any authenticated user."""
+    from litellm.proxy._types import LiteLLMRoutes
+
+    assert RouteChecks.check_route_access(
+        route="/team/abc-123", allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value
+    )
+    assert not RouteChecks.check_route_access(
+        route="/team/abc-123", allowed_routes=LiteLLMRoutes.internal_user_routes.value
+    )
+    assert not RouteChecks.check_route_access(
+        route="/team/abc-123", allowed_routes=LiteLLMRoutes.self_managed_routes.value
+    )
+
+
+def _patch_team_request() -> MagicMock:
+    request = MagicMock(spec=Request)
+    request.method = "PATCH"
+    request.query_params = {}
+    return request
+
+
+def test_patch_team_gate_allows_org_admin_with_resolved_org():
+    """Post-resolution, an org admin of the team's org clears the coarse gate for
+    PATCH /team/{team_id} — parity with /team/update."""
+    user_obj = _make_org_admin_user("org-1")
+    valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/team/team-1",
+        request=_patch_team_request(),
+        valid_token=valid_token,
+        request_data={"organization_id": "org-1"},
+    )
+
+
+def test_patch_team_gate_rejects_regular_internal_user():
+    """A plain internal user (not an org admin) is rejected at the coarse gate for
+    PATCH /team/{team_id}, even with the team's org resolved — injection alone is
+    not access. Same outcome as /team/update."""
+    user_obj = LiteLLM_UserTable(
+        user_id="regular-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=None,
+    )
+    valid_token = UserAPIKeyAuth(user_id="regular-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/team/team-1",
+            request=_patch_team_request(),
+            valid_token=valid_token,
+            request_data={"organization_id": "org-1"},
+        )
+
+
+def test_patch_team_gate_rejects_cross_org_admin():
+    """An org admin of a DIFFERENT org is rejected even after org resolution."""
+    user_obj = _make_org_admin_user("org-1")
+    valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/team/team-1",
+            request=_patch_team_request(),
+            valid_token=valid_token,
+            request_data={"organization_id": "org-2"},
+        )
+
+
+def test_patch_team_gate_rejects_view_only_admin():
+    """A view-only proxy admin cannot PATCH a team (unsafe method), parity with the
+    /team/update view-only block."""
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value)
+
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route="/team/team-1",
+            request=_patch_team_request(),
+            valid_token=valid_token,
+            request_data={"organization_id": "org-1"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
     """
