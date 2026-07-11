@@ -4962,21 +4962,56 @@ class TestMCPDcrBridgeDelegateAdmission:
 
     @staticmethod
     @contextlib.contextmanager
-    def _patch_key_reload(*, return_value=None, side_effect=None, team_blocked=False):
-        """Patch the live-key reload dependencies used by ``_reload_admitted_key``: the
-        ``get_key_object`` lookup, the ``get_team_object`` lookup its team-block gate runs, and the
-        ``prisma_client`` / ``user_api_key_cache`` globals they read. The team resolves unblocked by
-        default; ``team_blocked=True`` simulates an admin blocking the key's team. Yields the
-        ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was the reload key."""
+    def _patch_key_reload(*, return_value=None, side_effect=None, team_blocked=False, owner=None, project_object=None):
+        """Patch the live-policy dependencies of the admission arm: the ``get_key_object`` reload,
+        the ``prisma_client`` / ``user_api_key_cache`` globals, and optionally the live objects the
+        policy gates re-check. ``team_blocked=True`` patches the centralized gate's
+        ``get_team_object`` at the ``user_api_key_auth`` namespace it actually calls; ``owner``
+        patches the SCIM gate's ``get_user_object`` (``auth_checks`` namespace); ``project_object``
+        patches the centralized gate's ``get_project_object``. Unpatched lookups hit the MagicMock
+        prisma and are swallowed (``_safe_fetch`` / the SCIM gate's fail-open), so their checks
+        skip. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
+        the reload key."""
         get_key_object = AsyncMock(return_value=return_value, side_effect=side_effect)
-        get_team_object = AsyncMock(return_value=MagicMock(blocked=team_blocked))
-        with (
+        patchers = [
             patch("litellm.proxy.auth.auth_checks.get_key_object", get_key_object),
-            patch("litellm.proxy.auth.auth_checks.get_team_object", get_team_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        ):
+        ]
+        if team_blocked:
+            patchers.append(
+                patch(
+                    "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                    AsyncMock(return_value=MagicMock(blocked=True)),
+                )
+            )
+        if owner is not None:
+            patchers.append(patch("litellm.proxy.auth.auth_checks.get_user_object", AsyncMock(return_value=owner)))
+        if project_object is not None:
+            patchers.append(
+                patch(
+                    "litellm.proxy.auth.user_api_key_auth.get_project_object",
+                    AsyncMock(return_value=project_object),
+                )
+            )
+        with contextlib.ExitStack() as stack:
+            for patcher in patchers:
+                stack.enter_context(patcher)
             yield get_key_object
+
+    @staticmethod
+    def _mcp_request(path="/mcp/bridge_delegate_server"):
+        """A minimal ``Request`` for direct ``_admit_dcr_bridge_delegate`` calls, mirroring how
+        ``process_mcp_request`` builds one from the ASGI scope with a stubbed empty JSON body."""
+        from starlette.requests import Request
+
+        request = Request(scope={"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""})
+
+        async def mock_body():
+            return b"{}"
+
+        request.body = mock_body
+        return request
 
     async def test_valid_envelope_reloads_live_key_and_admits_its_authorization_context(self):
         """A valid envelope admits under the LIVE key record the sealed key_hash references, not a
@@ -5128,6 +5163,86 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
 
+    async def test_scim_deactivated_owner_envelope_fails_closed_401(self):
+        """SCIM-deactivating the key's OWNER must revoke the user's envelopes immediately: the
+        standard pipeline rejects every key of a deactivated user inline in the builder, so the
+        admission arm mirrors that gate. Without it, IdP offboarding would leave the offboarded
+        user's already-minted envelopes executing tools until they expired."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(
+                return_value=self._reloaded_key(),
+                owner=MagicMock(metadata={"scim_active": False}),
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+
+    async def test_scim_active_owner_envelope_admits(self):
+        """A SCIM-ACTIVE owner must still be admitted: the gate rejects only an explicit
+        ``scim_active: False``, so SCIM-managed users whose accounts are in good standing keep
+        working (and non-SCIM deployments, which never set the flag, are untouched)."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(
+                return_value=self._reloaded_key(),
+                owner=MagicMock(metadata={"scim_active": True}),
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            (auth_result, _, _, _, _, _) = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert auth_result.user_id == "envelope-user-42"
+
+    async def test_blocked_project_envelope_fails_closed_401(self):
+        """Blocking the key's PROJECT must revoke its envelopes immediately: the admitted identity
+        runs through the standard pipeline's centralized policy gate, which rejects a blocked
+        project exactly as it would for the same key presented directly. This is the regression for
+        the project half of the revocation finding; the gate also covers future policy dimensions
+        without the admission arm mirroring them one by one."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(
+                return_value=self._reloaded_key(project_id="project-restricted"),
+                project_object=MagicMock(blocked=True),
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+
     async def test_alias_only_server_injects_under_alias_egress_can_resolve(self):
         """When server_name is None, the inner token must be keyed under the alias (which egress
         resolves), never under server.name (which egress never looks up), so the forwarded token is
@@ -5171,11 +5286,52 @@ class TestMCPDcrBridgeDelegateAdmission:
                 server=self._bridge_delegate_server(server_name="bridge_name", alias="bridge_alias"),
                 authorization_value=f"Bearer {envelope}",
                 mcp_server_auth_headers=attacker_forwarded,
+                request=self._mcp_request(),
+                route="/mcp/bridge_name",
             )
 
         # The sealed token owns the alias slot, overwriting the caller's value; the attacker token
         # survives nowhere egress would resolve.
         assert new_headers == {"bridge_alias": {"Authorization": "Bearer inner-upstream-access-token"}}
+
+    @pytest.mark.parametrize(
+        "server_name,alias",
+        [
+            (None, "bridge_alias"),
+            ("bridge_delegate_server", None),
+            ("bridge_name", "bridge_alias"),
+        ],
+        ids=["alias_only", "server_name_only", "both"],
+    )
+    async def test_injection_key_agrees_with_egress_lookup(self, server_name, alias):
+        """Round-trip the injected headers through the REAL egress resolver for every admissible
+        server shape: whatever identifier the admission arm keys the sealed token under,
+        ``lookup_mcp_server_auth_in_headers`` called the way egress calls it (alias first, then
+        server_name) must recover exactly that token. This pins the agreement between the two key
+        hierarchies so neither side can drift and silently drop the forwarded token."""
+        from litellm.proxy._experimental.mcp_server.utils import lookup_mcp_server_auth_in_headers
+
+        envelope = self._mint_bridge_envelope()
+        server = self._bridge_delegate_server(server_name=server_name, alias=alias)
+
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key()),
+        ):
+            _auth, new_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=server,
+                authorization_value=f"Bearer {envelope}",
+                mcp_server_auth_headers=None,
+                request=self._mcp_request(),
+                route="/mcp/bridge_delegate_server",
+            )
+
+        resolved = lookup_mcp_server_auth_in_headers(
+            new_headers,
+            alias=server.alias,
+            server_name=server.server_name,
+        )
+        assert resolved == {"Authorization": "Bearer inner-upstream-access-token"}
 
     async def test_server_with_no_alias_or_server_name_is_not_admitted_via_bridge_arm(self):
         """A bridge server egress cannot route to (no alias and no server_name) must not take the
@@ -5447,6 +5603,8 @@ class TestMCPDcrBridgeDelegateAdmission:
                 server=self._bridge_delegate_server(),
                 authorization_value=f"Bearer {envelope}",
                 mcp_server_auth_headers=existing,
+                request=self._mcp_request(),
+                route="/mcp/bridge_delegate_server",
             )
 
         assert auth_result.user_id == "unit-user"
@@ -5469,6 +5627,8 @@ class TestMCPDcrBridgeDelegateAdmission:
                     server=self._bridge_delegate_server(),
                     authorization_value=f"Bearer {envelope}",
                     mcp_server_auth_headers=None,
+                    request=self._mcp_request(),
+                    route="/mcp/bridge_delegate_server",
                 )
         assert exc_info.value.status_code == 500
 
@@ -5485,5 +5645,7 @@ class TestMCPDcrBridgeDelegateAdmission:
                     server=self._bridge_delegate_server(),
                     authorization_value=f"Bearer {envelope}",
                     mcp_server_auth_headers=None,
+                    request=self._mcp_request(),
+                    route="/mcp/bridge_delegate_server",
                 )
         assert exc_info.value.status_code == 500
