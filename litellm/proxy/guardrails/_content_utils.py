@@ -41,6 +41,24 @@ TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"
 _OUTPUT_ITEM_TYPES: FrozenSet[str] = frozenset({"function_call_output", "custom_tool_call_output"})
 
 
+def _iter_summary_texts(summary: Any) -> Iterator[str]:
+    """Yield text fragments from a ``reasoning`` item's ``summary`` list —
+    ``summary_text`` parts and bare strings; anything else is skipped."""
+    if not isinstance(summary, list):
+        return
+    for summary_part in summary:
+        if isinstance(summary_part, str):
+            if summary_part:
+                yield summary_part
+            continue
+        if not isinstance(summary_part, dict):
+            continue
+        if summary_part.get("type") in TEXT_PART_TYPES:
+            summary_text = summary_part.get("text")
+            if isinstance(summary_text, str) and summary_text:
+                yield summary_text
+
+
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped.
@@ -69,9 +87,7 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
             elif part.get("type") == "reasoning":
                 # Reasoning items carry a ``summary`` list of
                 # ``{"type": "summary_text", "text": "..."}`` parts.
-                summary = part.get("summary")
-                if isinstance(summary, list):
-                    yield from _iter_text_parts_in_content(summary)
+                yield from _iter_summary_texts(part.get("summary"))
 
 
 def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:

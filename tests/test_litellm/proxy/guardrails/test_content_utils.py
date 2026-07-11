@@ -544,6 +544,31 @@ def test_iter_message_text_walks_reasoning_summary_text():
     assert "secret-in-cot" in texts
 
 
+def test_iter_message_text_reasoning_part_inside_message_content():
+    """A reasoning item nested inside a message's content list is walked
+    directly by ``_iter_text_parts_in_content``: summary_text parts and bare
+    strings in the summary yield their text, everything else is skipped."""
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "cot-secret"},
+                            "bare-summary-string",
+                            {"type": "image_url", "image_url": {"url": "..."}},
+                            42,
+                        ],
+                    },
+                ],
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == ["cot-secret", "bare-summary-string"]
+
+
 def test_walk_user_text_redacts_reasoning_summary_text():
     """walk_user_text should rewrite text inside reasoning.summary."""
     data = {
