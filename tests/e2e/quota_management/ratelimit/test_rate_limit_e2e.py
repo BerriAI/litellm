@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
 from models import KeyGenerateBody
@@ -45,7 +45,7 @@ from quota_client import QuotaClient
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "claude-haiku-4-5"
+MODEL = CHEAP_ANTHROPIC_MODEL
 TPM_LIMIT = 60
 CHAT_MAX_TOKENS = 16
 RESERVATION_CHARS_PER_TOKEN = 4
