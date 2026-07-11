@@ -5,6 +5,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+import logging
 import os
 import sys
 from typing import Dict, List
@@ -19,6 +20,7 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm._logging import verbose_router_logger
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
     DimensionScore,
@@ -2019,3 +2021,88 @@ class TestSubCallMetadataSanitization:
         assert sanitized_auth.team_id == "team-1"
         assert sanitized_auth.api_key == auth.api_key
         assert auth.budget_reservation == {"reserved_cost": 1.0}
+
+
+class TestRoutingDecisionCauseLogging:
+    """The info log must name what drove each routing decision so an operator can tell a
+    literal keyword match, a semantic keyword match, and the complexity scorer apart.
+    """
+
+    @pytest.fixture
+    def router_log_capture(self, caplog):
+        # verbose_router_logger sets propagate=False, so caplog's root handler never sees
+        # its records; attach the capture handler directly for the duration of the test.
+        caplog.set_level(logging.INFO, logger="LiteLLM Router")
+        verbose_router_logger.addHandler(caplog.handler)
+        try:
+            yield caplog
+        finally:
+            verbose_router_logger.removeHandler(caplog.handler)
+
+    @pytest.mark.asyncio
+    async def test_literal_keyword_match_logs_its_cause(
+        self, mock_router_instance, basic_config, router_log_capture
+    ):
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["deploy to k8s"], "tier": "REASONING"}],
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "please deploy to k8s now"}],
+        )
+        assert "routing decision cause=literal_keyword_match" in router_log_capture.text
+        assert "tier=REASONING" in router_log_capture.text
+        # A literal match must not be mislabelled as semantic.
+        assert "cause=semantic_keyword_match" not in router_log_capture.text
+
+    @pytest.mark.asyncio
+    async def test_semantic_keyword_match_logs_its_cause(self, basic_config, router_log_capture):
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "help me roll out my k8s cluster today"}],
+        )
+        assert "routing decision cause=semantic_keyword_match" in router_log_capture.text
+        assert "tier=REASONING" in router_log_capture.text
+        # A semantic match must not be mislabelled as literal.
+        assert "cause=literal_keyword_match" not in router_log_capture.text
+
+    @pytest.mark.asyncio
+    async def test_complexity_scorer_logs_its_cause(
+        self, mock_router_instance, basic_config, router_log_capture
+    ):
+        # No keyword rules -> the scorer decides, and its line must be tagged as such.
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "What is the boiling point of water at sea level?"}],
+        )
+        assert "routing decision cause=complexity_scorer" in router_log_capture.text
+        assert "score=" in router_log_capture.text
+        assert "cause=literal_keyword_match" not in router_log_capture.text
+        assert "cause=semantic_keyword_match" not in router_log_capture.text
