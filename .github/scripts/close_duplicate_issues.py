@@ -39,31 +39,28 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
+def parse_slurped_issues(raw: str) -> list[dict]:
+    """Flatten the pages returned by `gh api --paginate --slurp` and drop PRs."""
+    pages = json.loads(raw)
+    return [
+        issue
+        for page in pages
+        for issue in page
+        if "pull_request" not in issue
+    ]
+
+
 def fetch_open_issues(repo: str | None) -> list[dict]:
-    """Fetch all open issues (excluding PRs) via gh api --paginate."""
+    """Fetch all open issues (excluding PRs) via gh api --paginate --slurp."""
     if repo:
         endpoint = (
             f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
         )
     else:
         endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-    cmd = ["api", "--paginate", endpoint]
 
-    raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
-
-    # Filter out pull requests (they also appear in the issues endpoint)
-    return [i for i in issues if "pull_request" not in i]
+    raw = gh("api", "--paginate", "--slurp", endpoint)
+    return parse_slurped_issues(raw)
 
 
 def close_as_duplicate(
