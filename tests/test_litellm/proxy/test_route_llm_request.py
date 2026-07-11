@@ -173,6 +173,29 @@ async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_wi
             litellm_params={
                 "model": "azure/gpt-4o",
                 "api_key": "fake",
+                "api_base": "https://other-legacy.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+            },
+            model_info={
+                "id": "other-legacy-team-azure",
+                "team_id": "team-b",
+                "team_public_model_name": "team-azure",
+            },
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+        await router.async_get_healthy_deployments(
+            model="team-azure",
+            request_kwargs=data,
+        )
+
+    router.add_deployment(
+        Deployment(
+            model_name="team-azure",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
                 "api_base": "https://global.example.openai.azure.com",
                 "api_version": "2024-02-15-preview",
             },
