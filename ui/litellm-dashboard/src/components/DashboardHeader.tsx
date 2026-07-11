@@ -27,7 +27,7 @@ interface DashboardHeaderProps {
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
 export function DashboardHeader({ page }: DashboardHeaderProps) {
-  const { section, title } = getBreadcrumb(page);
+  const { title } = getBreadcrumb(page);
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
@@ -44,12 +44,10 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
     <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4">
       <Breadcrumb className="min-w-0">
         <BreadcrumbList className="flex-nowrap">
-          {section && (
-            <>
-              <BreadcrumbItem className="whitespace-nowrap">{section}</BreadcrumbItem>
-              <BreadcrumbSeparator />
-            </>
-          )}
+          <BreadcrumbItem className="flex-none">
+            <ViewSwitcher />
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
             <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
           </BreadcrumbItem>
@@ -76,8 +74,6 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <Separator orientation="vertical" className="mx-1.5 h-5" />
         <NotificationsBell />
-        <Separator orientation="vertical" className="mx-1.5 h-5" />
-        <ViewSwitcher />
       </div>
     </header>
   );
