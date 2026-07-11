@@ -266,6 +266,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "anthropic"
 
+    @property
+    def _resolved_provider(self) -> str:
+        return self.custom_llm_provider or "anthropic"
+
     @classmethod
     def get_config(cls, *, model: Optional[str] = None):
         config = super().get_config()
@@ -454,7 +458,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if (
             "claude-3-7-sonnet" in model
-            or AnthropicConfig._is_adaptive_thinking_model(model, self.custom_llm_provider or "anthropic")
+            or AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider)
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -1476,21 +1480,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=effort_value,
                     model=model,
-                    custom_llm_provider=self.custom_llm_provider or "anthropic",
-                    llm_provider=self.custom_llm_provider or "anthropic",
+                    custom_llm_provider=self._resolved_provider,
+                    llm_provider=self._resolved_provider,
                 )
                 if mapped_thinking is None:
                     optional_params.pop("thinking", None)
                     optional_params.pop("output_config", None)
                 else:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model, self.custom_llm_provider or "anthropic"):
+                    if AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
                                 model=model,
                                 value=effort_value,
-                                llm_provider=self.custom_llm_provider or "anthropic",
+                                llm_provider=self._resolved_provider,
                             )
                         optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
@@ -1819,7 +1823,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages = anthropic_messages_pt(
                 model=model,
                 messages=messages,
-                llm_provider=self.custom_llm_provider or "anthropic",
+                llm_provider=self._resolved_provider,
             )
         except Exception as e:
             raise AnthropicError(
@@ -1908,9 +1912,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         output_config = optional_params.get("output_config")
         if not output_config or not isinstance(output_config, dict):
             return
-        if litellm.drop_params is True and not self._model_supports_effort_param(
-            model, self.custom_llm_provider or "anthropic"
-        ):
+        if litellm.drop_params is True and not self._model_supports_effort_param(model, self._resolved_provider):
             litellm.verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                 model,
@@ -1924,14 +1926,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise litellm.exceptions.BadRequestError(
                 message=(f"Invalid effort value: {effort!r}. Must be one of: 'high', 'medium', 'low', 'xhigh', 'max'"),
                 model=model,
-                llm_provider=self.custom_llm_provider or "anthropic",
+                llm_provider=self._resolved_provider,
             )
-        gate_error = self._validate_effort_for_model(model, effort, self.custom_llm_provider or "anthropic")
+        gate_error = self._validate_effort_for_model(model, effort, self._resolved_provider)
         if gate_error is not None:
             raise litellm.exceptions.BadRequestError(
                 message=gate_error,
                 model=model,
-                llm_provider=self.custom_llm_provider or "anthropic",
+                llm_provider=self._resolved_provider,
             )
         data["output_config"] = output_config
 

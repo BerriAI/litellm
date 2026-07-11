@@ -45,6 +45,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "anthropic"
 
+    @property
+    def _resolved_provider(self) -> str:
+        return self.custom_llm_provider or "anthropic"
+
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [
             "messages",
@@ -406,20 +410,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
-            custom_llm_provider=self.custom_llm_provider or "anthropic",
+            custom_llm_provider=self._resolved_provider,
         )
 
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
-            custom_llm_provider=self.custom_llm_provider or "anthropic",
+            custom_llm_provider=self._resolved_provider,
         )
 
         self._translate_adaptive_effort_for_non_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
-            custom_llm_provider=self.custom_llm_provider or "anthropic",
+            custom_llm_provider=self._resolved_provider,
         )
 
         system_param = anthropic_messages_optional_request_params.get("system")
