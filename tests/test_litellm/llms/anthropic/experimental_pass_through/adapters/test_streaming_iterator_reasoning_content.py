@@ -98,6 +98,23 @@ def _make_text_chunk(text: str) -> ModelResponseStream:
     )
 
 
+def _make_dual_chunk(reasoning: str, content: str) -> ModelResponseStream:
+    """Chunk with both reasoning_content and text content (provider quirk)."""
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                delta=Delta(
+                    reasoning_content=reasoning,
+                    content=content,
+                    role="assistant",
+                ),
+                index=0,
+                finish_reason=None,
+            )
+        ],
+    )
+
+
 def _make_stop_chunk() -> ModelResponseStream:
     """Create a streaming chunk signalling end of generation."""
     return ModelResponseStream(
@@ -334,6 +351,113 @@ class TestBlockTransitionIncludesFirstDelta:
         assert events[idx_second_start]["content_block"]["type"] == "text"
         text_delta_idx = types.index("content_block_delta", idx_second_start)
         assert events[text_delta_idx]["delta"]["type"] == "text_delta"
+
+    def test_sync_dual_chunk_thinking_to_text_no_thinking_delta_on_text_block(self):
+        """
+        GLM-style providers can emit a transition chunk with both
+        reasoning_content and content. Residual reasoning must land on the
+        closing thinking block; the text block must only see text_delta.
+        """
+        chunks = [
+            _make_thinking_chunk("I'll provide a clean, simple answer"),
+            _make_dual_chunk(".", "'s a simple iterative"),
+            _make_text_chunk(" Fibonacci."),
+            _make_stop_chunk(),
+        ]
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=MockSyncStream(chunks), model="glm-5"
+        )
+        events = _collect_all_events(wrapper)
+
+        thinking_deltas = [
+            e["delta"]["thinking"]
+            for e in events
+            if e.get("type") == "content_block_delta"
+            and e.get("delta", {}).get("type") == "thinking_delta"
+        ]
+        assert thinking_deltas == [
+            "I'll provide a clean, simple answer",
+            ".",
+        ]
+
+        text_block_starts = [
+            i
+            for i, e in enumerate(events)
+            if e.get("type") == "content_block_start"
+            and e.get("content_block", {}).get("type") == "text"
+        ]
+        assert text_block_starts, "expected a text content_block_start"
+        text_start_idx = text_block_starts[0]
+        text_block_index = events[text_start_idx]["index"]
+
+        # Residual thinking_delta must appear before the thinking block stops
+        # and before the text block starts.
+        residual_idx = next(
+            i
+            for i, e in enumerate(events)
+            if e.get("type") == "content_block_delta"
+            and e.get("delta", {}).get("type") == "thinking_delta"
+            and e.get("delta", {}).get("thinking") == "."
+        )
+        first_thinking_stop = next(
+            i
+            for i, e in enumerate(events)
+            if e.get("type") == "content_block_stop" and e.get("index") == 0
+        )
+        assert residual_idx < first_thinking_stop < text_start_idx
+
+        for event in events[text_start_idx:]:
+            if event.get("type") != "content_block_delta":
+                if event.get("type") == "content_block_stop" and event.get(
+                    "index"
+                ) == text_block_index:
+                    break
+                continue
+            if event.get("index") != text_block_index:
+                continue
+            assert event["delta"]["type"] == "text_delta", (
+                "thinking_delta must not be emitted on a text content block; "
+                f"got {event['delta']!r}"
+            )
+
+        text_deltas = [
+            e["delta"]["text"]
+            for e in events
+            if e.get("type") == "content_block_delta"
+            and e.get("delta", {}).get("type") == "text_delta"
+        ]
+        assert text_deltas[0] == "'s a simple iterative"
+        assert " Fibonacci." in text_deltas
+        _assert_monotonic_indices(events)
+
+    @pytest.mark.asyncio
+    async def test_async_dual_chunk_thinking_to_text_splits_residual_reasoning(self):
+        chunks = [
+            _make_thinking_chunk("Think"),
+            _make_dual_chunk("ing.", "Answer"),
+            _make_stop_chunk(),
+        ]
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=MockAsyncStream(chunks), model="glm-5"
+        )
+        events = await _collect_all_events_async(wrapper)
+
+        thinking_deltas = [
+            e["delta"]["thinking"]
+            for e in events
+            if e.get("type") == "content_block_delta"
+            and e.get("delta", {}).get("type") == "thinking_delta"
+        ]
+        assert thinking_deltas == ["Think", "ing."]
+
+        text_deltas = [
+            e["delta"]["text"]
+            for e in events
+            if e.get("type") == "content_block_delta"
+            and e.get("delta", {}).get("type") == "text_delta"
+        ]
+        assert text_deltas == ["Answer"]
+        _assert_monotonic_indices(events)
 
 
 # ---------------------------------------------------------------------------

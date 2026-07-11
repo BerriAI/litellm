@@ -13,6 +13,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     get_args,
 )
 
@@ -455,6 +456,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                previous_block_type = self.current_content_block_type
+                previous_block_index = self.current_content_block_index
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
@@ -494,40 +497,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
 
                 if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start
-                    # -> (optionally) the trigger chunk's delta.
-                    #
-                    # The synthesized content_block_start always carries an
-                    # empty body, so the chunk that *triggered* the transition
-                    # also carries the new block's first delta. It must be
-                    # re-emitted or the first token of the new block is lost.
-                    # This applies to text_delta and thinking_delta (the first
-                    # non-empty text/thinking token) as well as input_json_delta
-                    # (providers like xAI/Gemini bundle tool arguments with the
-                    # function name/id in a single chunk).
-
-                    # 1. Stop current content block
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": max(self.current_content_block_index - 1, 0),
-                        }
+                    self._enqueue_content_block_transition(
+                        previous_block_index=previous_block_index,
+                        previous_block_type=previous_block_type,
+                        chunk=chunk,
+                        processed_chunk=processed_chunk,
                     )
-
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_start",
-                            "index": self.current_content_block_index,
-                            "content_block": self.current_content_block_start,
-                        }
-                    )
-
-                    # 3. If the trigger chunk carries delta content, queue it
-                    # so the first delta of the new block is not silently dropped.
-                    if self._delta_has_content(processed_chunk):
-                        self.chunk_queue.append(processed_chunk)
-
-                    self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
                 if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(processed_chunk):
@@ -723,6 +698,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     raise Exception
 
                 # Check if we need to start a new content block
+                previous_block_type = self.current_content_block_type
+                previous_block_index = self.current_content_block_index
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
@@ -756,40 +733,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
-                        # Queue the sequence: content_block_stop -> content_block_start
-                        # -> (optionally) the trigger chunk's delta.
-                        #
-                        # The synthesized content_block_start always carries an
-                        # empty body, so the chunk that *triggered* the transition
-                        # also carries the new block's first delta. It must be
-                        # re-emitted or the first token of the new block is lost.
-                        # This applies to text_delta and thinking_delta (the
-                        # first non-empty text/thinking token) as well as
-                        # input_json_delta (providers like xAI/Gemini bundle tool
-                        # arguments with the function name/id in a single chunk).
-
-                        # 1. Stop current content block
-                        self.chunk_queue.append(
-                            {
-                                "type": "content_block_stop",
-                                "index": max(self.current_content_block_index - 1, 0),
-                            }
+                        self._enqueue_content_block_transition(
+                            previous_block_index=previous_block_index,
+                            previous_block_type=previous_block_type,
+                            chunk=chunk,
+                            processed_chunk=processed_chunk,
                         )
-                        self.chunk_queue.append(
-                            {
-                                "type": "content_block_start",
-                                "index": self.current_content_block_index,
-                                "content_block": self.current_content_block_start,
-                            }
-                        )
-
-                        # 3. If the trigger chunk carries delta content, queue it
-                        # so the first delta of the new block is not silently dropped.
-                        if self._delta_has_content(processed_chunk):
-                            self.chunk_queue.append(processed_chunk)
-
-                        # Reset state for new block
-                        self.sent_content_block_finish = False
                         return self.chunk_queue.popleft()
 
                     if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(
@@ -926,6 +875,103 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
+
+    def _enqueue_content_block_transition(
+        self,
+        *,
+        previous_block_index: int,
+        previous_block_type: Literal["text", "tool_use", "thinking"],
+        chunk: "ModelResponseStream",
+        processed_chunk: Dict[str, Any],
+    ) -> None:
+        """
+        Queue stop/start (and deltas) when switching content block types.
+
+        Some providers emit a single OpenAI chunk with both ``reasoning_content``
+        and ``content`` at the thinking→text boundary. Preferring text for the
+        translated delta keeps the new text block valid, but would drop the
+        residual reasoning. Emit that residual as ``thinking_delta`` on the
+        closing thinking block before stop/start.
+        """
+        residual_thinking = self._residual_thinking_on_thinking_to_text_transition(
+            chunk=chunk,
+            previous_block_type=previous_block_type,
+        )
+        if residual_thinking:
+            self.chunk_queue.append(
+                {
+                    "type": "content_block_delta",
+                    "index": previous_block_index,
+                    "delta": {
+                        "type": "thinking_delta",
+                        "thinking": residual_thinking,
+                    },
+                }
+            )
+
+        self.chunk_queue.append(
+            {
+                "type": "content_block_stop",
+                "index": previous_block_index,
+            }
+        )
+        self.chunk_queue.append(
+            {
+                "type": "content_block_start",
+                "index": self.current_content_block_index,
+                "content_block": self.current_content_block_start,
+            }
+        )
+        if self._delta_has_content(processed_chunk):
+            self.chunk_queue.append(processed_chunk)
+        self.sent_content_block_finish = False
+
+    def _residual_thinking_on_thinking_to_text_transition(
+        self,
+        *,
+        chunk: "ModelResponseStream",
+        previous_block_type: Literal["text", "tool_use", "thinking"],
+    ) -> Optional[str]:
+        if previous_block_type != "thinking" or self.current_content_block_type != "text":
+            return None
+        parts = self._get_nonempty_reasoning_and_text(chunk)
+        if parts is None:
+            return None
+        return parts[0]
+
+    @staticmethod
+    def _get_nonempty_reasoning_and_text(
+        chunk: "ModelResponseStream",
+    ) -> Optional[Tuple[str, str]]:
+        """Return (reasoning, text) when both are non-empty on the same chunk."""
+        from litellm.types.utils import StreamingChoices
+
+        reasoning = ""
+        text = ""
+        for choice in chunk.choices:
+            delta = choice.delta
+            if delta.content is not None and len(delta.content) > 0:
+                text += delta.content
+            if (
+                isinstance(choice, StreamingChoices)
+                and hasattr(delta, "thinking_blocks")
+                and delta.thinking_blocks
+            ):
+                for thinking_block in delta.thinking_blocks:
+                    if thinking_block.get("type") == "thinking":
+                        thinking = thinking_block.get("thinking") or ""
+                        if isinstance(thinking, str):
+                            reasoning += thinking
+            elif (
+                isinstance(choice, StreamingChoices)
+                and hasattr(delta, "reasoning_content")
+                and delta.reasoning_content
+            ):
+                reasoning += delta.reasoning_content
+
+        if reasoning and text:
+            return reasoning, text
+        return None
 
     @staticmethod
     def _delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
