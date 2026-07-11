@@ -24,6 +24,8 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
 
+CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
+
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
