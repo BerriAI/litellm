@@ -2344,6 +2344,8 @@ class Router:
                 self.completed_response = None
                 self.start_time = getattr(source_iterator, "start_time", datetime.now())
                 self._failure_handled = False
+                self._yielded_first_chunk = False
+                self._generated_content = ""
                 self._completed_response_cached = False
                 self._completed_response_logged = False
                 self._completed_response_cache_hit = None

@@ -1,7 +1,9 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
-import MCPServerEdit from "./mcp_server_edit";
+import userEvent from "@testing-library/user-event";
+import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { selectAntOption } from "./testUtils";
@@ -1377,6 +1379,258 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     },
   );
 
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "persists admin-entered OAuth app credentials in the update payload for the %s mode",
+    async (authType) => {
+      mockOauth.tokenResponse = { access_token: "cf-tok", expires_in: 1800, token_type: "bearer" };
+      vi.mocked(networking.updateMCPServer).mockResolvedValue({
+        ...interactiveOAuthServer,
+        auth_type: authType,
+      });
+
+      render(
+        <MCPServerEdit
+          mcpServer={{ ...interactiveOAuthServer, auth_type: authType }}
+          accessToken="access-token"
+          userID="user-1"
+          onCancel={vi.fn()}
+          onSuccess={vi.fn()}
+          availableAccessGroups={[]}
+        />,
+      );
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)"),
+        "org-app-client-id",
+      );
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to keep the currently saved secret (if any)"),
+        "org-app-secret",
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+
+      await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+
+      // The declared app is config and persists onto the row; the browser-held token still never
+      // reaches the payload or the per-user credential store.
+      expect(payload.credentials).toMatchObject({
+        client_id: "org-app-client-id",
+        client_secret: "org-app-secret",
+      });
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
+      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "preserves admin-entered app credentials when the URL changes after authorize for the %s mode",
+    async (authType) => {
+      vi.mocked(networking.updateMCPServer).mockResolvedValue({
+        ...interactiveOAuthServer,
+        auth_type: authType,
+      });
+
+      render(
+        <MCPServerEdit
+          mcpServer={{ ...interactiveOAuthServer, auth_type: authType }}
+          accessToken="access-token"
+          userID="user-1"
+          onCancel={vi.fn()}
+          onSuccess={vi.fn()}
+          availableAccessGroups={[]}
+        />,
+      );
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)"),
+        "org-app-client-id",
+      );
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to keep the currently saved secret (if any)"),
+        "org-app-secret",
+      );
+
+      act(() => {
+        mockOauth.onTokenReceived?.({ access_token: "cf-tok", token_type: "bearer" });
+      });
+
+      // The URL edit invalidates the held browser token (removeToken fires), but the declared app
+      // is config and must survive the invalidation into the update payload.
+      await act(async () => {
+        fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+          target: { value: "https://other.example.com/mcp" },
+        });
+      });
+      expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+
+      await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+      expect(payload.url).toBe("https://other.example.com/mcp");
+      expect(payload.credentials).toMatchObject({
+        client_id: "org-app-client-id",
+        client_secret: "org-app-secret",
+      });
+      expect(JSON.stringify(payload)).not.toContain("cf-tok");
+    },
+  );
+
+  it("sends an explicit-null credential write when removing the saved app for true_passthrough", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // Blank fields keep the stored app (the backend merges partial credential updates), so the
+    // edit form states that convention and removal is an explicit checkbox that saves nulls.
+    expect(screen.getByPlaceholderText("Leave blank to keep the currently saved app (if any)")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Remove the saved OAuth app on save/,
+      }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials).toEqual({ client_id: null, client_secret: null });
+  });
+
+  it("warns that the saved app may not match after a URL change on a client-forwarded server", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "true_passthrough",
+          credentials: { client_id: "stored-client" },
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // No warning until the upstream changes.
+    expect(screen.queryByText(/registered for the previous upstream/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://different.example.com/mcp" },
+      });
+    });
+
+    // Keep + warn parity with the create form: the stored app is kept, and the banner appears.
+    expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+  });
+
+  it("preserves a stored client_id on OAuth-resume restore even when the saved snapshot is token-only", async () => {
+    // Post-redirect restore: the sessionStorage snapshot carries only a minted token (no client keys),
+    // while the loaded server has a stored client_id. The restore must merge the server's declared app
+    // under the snapshot before stripping tokens, so the stored client_id is never cleared to blank.
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: "oauth_server_1",
+        formValues: { auth_type: "true_passthrough", credentials: { access_token: "leftover-token" } },
+      }),
+    );
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "true_passthrough",
+          credentials: { client_id: "stored-client" },
+        }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const clientIdField = await screen.findByPlaceholderText("Leave blank to keep the currently saved app (if any)");
+    await waitFor(() => expect((clientIdField as HTMLInputElement).value).toBe("stored-client"));
+    // The leftover minted token must not have rehydrated anywhere.
+    expect(document.body.innerHTML).not.toContain("leftover-token");
+  });
+
+  it("resets the remove-app checkbox on a server switch so it never deletes the next server's stored app", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+    });
+
+    const { rerender } = render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, server_id: "server-A", auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // Check "remove saved app" on server A.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }));
+    expect(
+      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+
+    // Switch the panel to server B without unmounting.
+    rerender(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, server_id: "server-B", auth_type: "true_passthrough" }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // The checkbox must have reset, so saving server B does not send the explicit-null delete write.
+    expect(
+      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
+    ).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials).not.toEqual({ client_id: null, client_secret: null });
+  });
+
   it("forwards a newly authorized browser-held token for tool loading before the form is saved", async () => {
     // Regression: fetchTools keyed the browser-held decision off the saved mcpServer.auth_type, so
     // after switching the form to true_passthrough and authorizing, the fresh token was not sent as
@@ -1735,5 +1989,170 @@ describe("MCPServerEdit (max concurrent requests)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.max_concurrent_requests).toBeNull();
+  });
+});
+
+describe("MCPServerEdit (dcr_bridge toggle)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOauth.tokenResponse = null;
+  });
+
+  const getDcrToggle = () => document.getElementById("dcr_bridge");
+
+  function renderEdit(server: Record<string, unknown>) {
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, ...server }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+  }
+
+  async function saveAndGetPayload() {
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it.each([["true_passthrough"], ["oauth_delegate"]])("renders the toggle for a %s server", async (authType) => {
+    renderEdit({ auth_type: authType });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(screen.getByText("Gateway-hosted sign-in (DCR bridge)")).toBeInTheDocument();
+  });
+
+  it.each([["oauth2"], ["api_key"], ["none"]])("does not render the toggle for an %s server", async (authType) => {
+    renderEdit({ auth_type: authType });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Save Changes" }).length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("Gateway-hosted sign-in (DCR bridge)")).not.toBeInTheDocument();
+    expect(getDcrToggle()).not.toBeInTheDocument();
+  });
+
+  it("renders the toggle between the OAuth client fields and the Authorize button", async () => {
+    renderEdit({ auth_type: "true_passthrough" });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    const toggle = getDcrToggle() as HTMLElement;
+    const secretInput = screen.getByPlaceholderText("Leave blank to keep the currently saved secret (if any)");
+    const authorizeButton = screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" });
+    expect(secretInput.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(authorizeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("initializes unchecked from a null stored value and saves an explicit false", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: null });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "false");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("initializes checked from a stored true and saves an explicit true", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth_delegate",
+      dcr_bridge: true,
+    });
+    renderEdit({ auth_type: "oauth_delegate", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(true);
+  });
+
+  it("saves an explicit false after the admin unchecks a stored true", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "true_passthrough",
+      dcr_bridge: false,
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(getDcrToggle()!);
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "false");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("forces dcr_bridge: false when the auth type is switched away", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "api_key",
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+
+    await selectAntOption("Authentication", "API Key");
+    await waitFor(() => {
+      expect(getDcrToggle()).not.toBeInTheDocument();
+    });
+
+    // Mirrors the sibling delegate_auth_to_upstream / oauth_passthrough force-false: a stale true is
+    // never left behind to silently re-activate if the mode is switched back.
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("preserves the toggle value when switching between the two client-forwarded modes", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth_delegate",
+      dcr_bridge: true,
+    });
+    renderEdit({ auth_type: "true_passthrough", dcr_bridge: true });
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    // The Form.Item stays mounted across the two client-forwarded modes, so the live toggle value is
+    // preserved rather than forced false by the switch.
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    const payload = await saveAndGetPayload();
+    expect(payload.dcr_bridge).toBe(true);
   });
 });

@@ -31,7 +31,7 @@ export const pageDescriptions: Record<string, string> = {
   api_ref: "Browse API documentation and endpoints",
   "model-hub-table": "Explore available AI models and providers",
   "learning-resources": "Access tutorials and documentation",
-  caching: "Configure response caching settings",
+  caching: "Configure response caching and coordination Redis settings",
   "transform-request": "Set up request transformation rules",
   "cost-tracking": "Track and analyze API costs",
   "ui-theme": "Customize dashboard appearance",
