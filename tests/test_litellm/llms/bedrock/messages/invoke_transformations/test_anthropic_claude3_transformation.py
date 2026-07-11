@@ -1893,13 +1893,22 @@ def test_bedrock_invoke_transform_merges_list_content_system_role_into_system():
     ]
 
 
-def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-opus-4-8",
+        "jp.anthropic.claude-opus-4-8",
+        "us.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-fable-5",
+    ],
+)
+def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(local_model_cost_map, model):
     """Regression test for the Bedrock prompt-cache collapse: hoisting a
     mid-conversation ``role: "system"`` message (e.g. Claude Code's
     ``mid-conversation-system-2026-04-07`` reminders) into the top-level
     ``system`` field mutates the cache prefix and invalidates the cached message
-    history, so on models flagged ``supports_mid_conversation_system`` (the Opus
-    4.8 family, which Invoke accepts the role on) such entries must be forwarded
+    history, so on models flagged ``supports_mid_conversation_system`` (Claude
+    4.8+, which Invoke accepts the role on) such entries must be forwarded
     in place. Billing-header blocks must still be stripped from the top-level
     ``system`` field even when nothing is hoisted."""
     from litellm.types.router import GenericLiteLLMParams
@@ -1913,7 +1922,7 @@ def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(lo
     ]
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-opus-4-8",
+        model=model,
         messages=copy.deepcopy(messages),
         anthropic_messages_optional_request_params={
             "max_tokens": 256,
@@ -2063,6 +2072,36 @@ def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_clau
 
     assert result["messages"] == messages
     assert "system" not in result
+
+
+def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
+    """Exact cost-map hits resolve before fallback-generalization rules, so a
+    mapped Bedrock Claude 4.8+ entry without ``supports_mid_conversation_system``
+    silently loses the cache-preserving in-place handling that the
+    ``bedrock-anthropic-claude-mid-conversation-system`` rule grants unmapped
+    ids. Every mapped entry the rule's own pattern matches must carry the flag
+    explicitly."""
+    import re
+
+    import litellm
+
+    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+    with open(cost_map_path) as f:
+        cost_map = json.load(f)
+    rules = cost_map["fallback_generalizations"]["rules"]
+    pattern = re.compile(
+        next(r["pattern"] for r in rules if r["name"] == "bedrock-anthropic-claude-mid-conversation-system"),
+        re.IGNORECASE,
+    )
+    missing = [
+        key
+        for key, info in cost_map.items()
+        if isinstance(info, dict)
+        and str(info.get("litellm_provider", "")).startswith("bedrock")
+        and pattern.search(key)
+        and info.get("supports_mid_conversation_system") is not True
+    ]
+    assert missing == []
 
 
 def test_as_system_content_blocks_handles_each_shape():
