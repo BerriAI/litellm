@@ -4910,6 +4910,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         cls,
         *,
         key_hash=None,
+        user_id=None,
         server_id="bridge-server-id",
         access_token="inner-upstream-access-token",
         token_type="Bearer",
@@ -4921,17 +4922,23 @@ class TestMCPDcrBridgeDelegateAdmission:
             envelope_keys_from_master_key,
         )
         from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
-            EnvelopeIdentity,
             SealedEnvelope,
             UpstreamTokenGrant,
+            key_hash_identity,
             mint_envelope,
+            user_identity,
         )
         from pydantic import SecretStr
 
+        identity = (
+            user_identity(server_id=server_id, user_id=user_id)
+            if user_id is not None
+            else key_hash_identity(server_id=server_id, key_hash=key_hash or cls._KEY_HASH)
+        )
         keys = envelope_keys_from_master_key(master_key or cls._MASTER_KEY)
         now = minted_at or datetime.now(timezone.utc)
         sealed = mint_envelope(
-            identity=EnvelopeIdentity(server_id=server_id, key_hash=key_hash or cls._KEY_HASH),
+            identity=identity,
             grant=UpstreamTokenGrant(
                 access_token=SecretStr(access_token),
                 token_type=token_type,
@@ -5000,6 +5007,22 @@ class TestMCPDcrBridgeDelegateAdmission:
             yield get_key_object
 
     @staticmethod
+    @contextlib.contextmanager
+    def _patch_user_reload(*, return_value=None, side_effect=None):
+        """Patch the user-subject reload path an interactively-minted envelope takes: the
+        ``get_user_object`` lookup ``_reload_admitted_user`` runs (which also drives the SCIM gate),
+        plus the ``prisma_client`` / ``user_api_key_cache`` globals. The centralized gate's own
+        fetches fail-safe to None under the MagicMock prisma, so an unblocked user admits. Yields the
+        ``get_user_object`` mock so a caller can assert the sealed user_id was the reload key."""
+        get_user_object = AsyncMock(return_value=return_value, side_effect=side_effect)
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            yield get_user_object
+
+    @staticmethod
     def _mcp_request(path="/mcp/bridge_delegate_server"):
         """A minimal ``Request`` for direct ``_admit_dcr_bridge_delegate`` calls, mirroring how
         ``process_mcp_request`` builds one from the ASGI scope with a stubbed empty JSON body."""
@@ -5059,6 +5082,84 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert mcp_server_auth_headers == {
             "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
         }
+
+    async def test_user_subject_envelope_admits_under_the_reloaded_user(self):
+        """An interactively-minted (user_id) envelope admits under the reloaded USER, not a key: the
+        reload is keyed by the sealed user_id, the admitted auth carries that user_id, the raw-key
+        pipeline is never invoked, and the inner upstream token is injected for egress. This is the
+        interactive-DCR admission the whole flow exists for."""
+        envelope = self._mint_bridge_envelope(user_id="sso-user-7")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_user_reload(
+                return_value=MagicMock(user_id="sso-user-7", metadata={"scim_active": True})
+            ) as get_user_object,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            (auth_result, _h, _s, mcp_server_auth_headers, _o, _r) = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert get_user_object.await_args.kwargs["user_id"] == "sso-user-7"
+        assert auth_result.user_id == "sso-user-7"
+        mock_auth.assert_not_called()
+        assert mcp_server_auth_headers == {
+            "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
+        }
+
+    async def test_user_subject_envelope_missing_user_fails_closed_401(self):
+        """A user_id envelope whose user has since been deleted must fail closed: get_user_object
+        resolves None, so admission 401s instead of admitting an unresolved identity."""
+        envelope = self._mint_bridge_envelope(user_id="ghost-user")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_user_reload(return_value=None),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+
+    async def test_user_subject_envelope_scim_deactivated_user_fails_closed_401(self):
+        """SCIM-deactivating the envelope's user revokes it immediately: the reloaded user carries
+        scim_active False, so admission 401s rather than letting an offboarded user keep tool access
+        until the envelope expires."""
+        envelope = self._mint_bridge_envelope(user_id="offboarded-user")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_user_reload(
+                return_value=MagicMock(user_id="offboarded-user", metadata={"scim_active": False})
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
 
     async def test_revoked_key_envelope_fails_closed_401(self):
         """An envelope whose key has since been deleted must fail closed: ``get_key_object`` raises

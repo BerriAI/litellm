@@ -961,15 +961,15 @@ def _finish_bridge_mint(
         build_bridge_token_response,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
-        EnvelopeIdentity,
         SealedEnvelope,
         UpstreamTokenGrant,
+        key_hash_identity,
     )
 
     grant = _bridge_grant_from_token_response(token_response)
     if not isinstance(grant, UpstreamTokenGrant):
         return _upstream_rejection_to_mint_error(grant)
-    identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=ready.key_hash)
+    identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=ready.key_hash)
     sealed = build_bridge_token_response(identity, grant, ready.keys, now)
     if not isinstance(sealed, SealedEnvelope):
         return "too_large"
