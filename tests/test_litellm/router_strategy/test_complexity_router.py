@@ -1254,15 +1254,19 @@ class TestLLMClassifier:
             "user_api_key": "sk-abc",
             "user_api_key_team_id": "team-1",
             "user_api_key_budget_reservation": {"reserved_cost": 1.0},
-            "user_api_key_auth": {"budget_reservation": {"reserved_cost": 1.0}},
+            "user_api_key_auth": {"models": ["gpt-4o"], "budget_reservation": {"reserved_cost": 1.0}},
         }
         await llm_complexity_router.aclassify(
             "hi", request_kwargs={"litellm_metadata": request_metadata}
         )
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        # user_api_key_budget_reservation is stripped (budget enforcement) but
+        # user_api_key_auth is kept so _filter_deployments_by_model_access_groups
+        # can scope the classifier's model selection to the caller's access groups.
         assert call_kwargs["metadata"] == {
             "user_api_key": "sk-abc",
             "user_api_key_team_id": "team-1",
+            "user_api_key_auth": {"models": ["gpt-4o"], "budget_reservation": {"reserved_cost": 1.0}},
         }
 
     @pytest.mark.asyncio
@@ -1638,7 +1642,7 @@ class TestSemanticKeywordTierRules:
             "user_api_key_hash": "hash-abc",
             "user_api_key_team_id": "team-1",
             "user_api_key_budget_reservation": {"reserved_cost": 1.0},
-            "user_api_key_auth": {"budget_reservation": {"reserved_cost": 1.0}},
+            "user_api_key_auth": {"models": ["voyage-3-5"], "budget_reservation": {"reserved_cost": 1.0}},
         }
         await router.async_pre_routing_hook(
             model="test-model",
@@ -1646,7 +1650,14 @@ class TestSemanticKeywordTierRules:
             messages=[{"role": "user", "content": "roll out my k8s cluster"}],
         )
         assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
-        expected = {"user_api_key_hash": "hash-abc", "user_api_key_team_id": "team-1"}
+        # user_api_key_budget_reservation is stripped to prevent budget-bypass.
+        # user_api_key_auth is kept so _filter_deployments_by_model_access_groups
+        # scopes the embedding model selection to the caller's authorized groups.
+        expected = {
+            "user_api_key_hash": "hash-abc",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_auth": {"models": ["voyage-3-5"], "budget_reservation": {"reserved_cost": 1.0}},
+        }
         assert fake_router.async_embedding_kwargs[0]["metadata"] == expected
         assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == expected
 
