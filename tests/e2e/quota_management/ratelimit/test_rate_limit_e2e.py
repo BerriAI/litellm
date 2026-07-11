@@ -51,6 +51,7 @@ CHAT_MAX_TOKENS = 16
 RESERVATION_CHARS_PER_TOKEN = 4
 WINDOW_SECONDS = 60
 RESET_TOLERANCE_SECONDS = 5
+LAST_CALL_LATENCY_MARGIN_SECONDS = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +160,7 @@ class TestKeyRateLimits:
         assert info.tpm_limit == TPM_LIMIT, f"/key/info reports tpm_limit {info.tpm_limit}, configured {TPM_LIMIT}"
 
         first = _first_ok(client, key)
-        window_deadline = first.sent_at + WINDOW_SECONDS - 10
+        window_deadline = first.sent_at + WINDOW_SECONDS - LAST_CALL_LATENCY_MARGIN_SECONDS
         spent = _total_tokens(first.response)
 
         while spent < TPM_LIMIT:
