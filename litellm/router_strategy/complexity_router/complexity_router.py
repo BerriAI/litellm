@@ -660,6 +660,64 @@ class ComplexityRouter(CustomLogger):
 
         return user_message, system_prompt
 
+    SESSION_TIER_CACHE_KEY_PREFIX = "complexity_router:session_tier:v1"
+
+    @classmethod
+    def get_session_tier_cache_key(cls, model_name: str, session_id: str) -> str:
+        return f"{cls.SESSION_TIER_CACHE_KEY_PREFIX}:{model_name}:{session_id}"
+
+    @staticmethod
+    def _get_session_id(request_kwargs: Dict) -> "str | None":
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+            DeploymentAffinityCheck,
+        )
+
+        return DeploymentAffinityCheck._get_session_id_from_request_kwargs(request_kwargs)
+
+    async def _get_pinned_tier(self, session_id: str) -> "ComplexityTier | None":
+        """Read the session's pinned tier from the router cache.
+
+        An unparseable stored value (e.g. from an older/newer version) is treated as
+        no pin rather than failing the request.
+        """
+        cache = getattr(self.litellm_router_instance, "cache", None)
+        if cache is None:
+            return None
+        raw = await cache.async_get_cache(self.get_session_tier_cache_key(self.model_name, session_id))
+        if raw is None:
+            return None
+        try:
+            return ComplexityTier(str(raw))
+        except ValueError:
+            return None
+
+    async def _pin_session_tier(self, session_id: str, tier: ComplexityTier) -> None:
+        cache = getattr(self.litellm_router_instance, "cache", None)
+        if cache is None:
+            return
+        ttl = self.config.session_stickiness.ttl_seconds
+        await cache.async_set_cache(
+            self.get_session_tier_cache_key(self.model_name, session_id),
+            tier.value,
+            ttl=ttl,
+        )
+        verbose_router_logger.debug(f"ComplexityRouter: pinned session {session_id} to tier={tier.value} ttl={ttl}")
+
+    async def _decide_tier(
+        self,
+        user_message: str,
+        system_prompt: "str | None",
+        request_kwargs: Dict,
+    ) -> Tuple[ComplexityTier, str, str]:
+        """Run keyword overrides then the classifier; returns (tier, cause, extra_log)."""
+        override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
+        if override_tier is not None:
+            cause = "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
+            return override_tier, cause, ""
+
+        tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
+        return tier, "complexity_scorer", f"score={score:.3f}, signals={signals}, "
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -674,6 +732,10 @@ class ComplexityRouter(CustomLogger):
         Classifies the request by complexity and returns the appropriate model.
         Supports chat completions (messages), Responses API (input), and other
         formats via the guardrail translation handler dispatch.
+
+        With session_stickiness enabled, the decision is pinned per session_id so
+        multi-turn conversations keep hitting the same tier (preserving provider-side
+        prompt/KV cache) and skip classifier/embedding work where possible.
 
         Args:
             model: The original model name requested.
@@ -695,6 +757,7 @@ class ComplexityRouter(CustomLogger):
 
         # Determine whether the original request used messages directly
         has_original_messages = messages is not None and len(messages) > 0
+        response_messages = messages if has_original_messages else None
 
         user_message, system_prompt = self._extract_user_message_and_system_prompt(resolved_messages)
 
@@ -702,31 +765,36 @@ class ComplexityRouter(CustomLogger):
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
             return PreRoutingHookResponse(
                 model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
-                messages=messages if has_original_messages else None,
+                messages=response_messages,
             )
 
-        override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
-        if override_tier is not None:
-            routed_model = self.get_model_for_tier(override_tier)
-            cause = "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
+        stickiness = self.config.session_stickiness
+        session_id = self._get_session_id(request_kwargs) if stickiness.mode != "none" else None
+        pinned_tier = await self._get_pinned_tier(session_id) if session_id is not None else None
+
+        if pinned_tier is not None and (stickiness.mode == "sticky" or pinned_tier is TIER_SEVERITY_ORDER[-1]):
+            routed_model = self.get_model_for_tier(pinned_tier)
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={cause}, "
-                f"tier={override_tier.value}, routed_model={routed_model}"
+                f"ComplexityRouter: routing decision cause=session_pinned, "
+                f"tier={pinned_tier.value}, routed_model={routed_model}"
             )
-            return PreRoutingHookResponse(
-                model=routed_model,
-                messages=messages if has_original_messages else None,
-            )
+            return PreRoutingHookResponse(model=routed_model, messages=response_messages)
 
-        tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
+        tier, cause, extra_log = await self._decide_tier(user_message, system_prompt, request_kwargs)
+
+        if session_id is not None and pinned_tier is not None:
+            if TIER_SEVERITY_ORDER.index(tier) > TIER_SEVERITY_ORDER.index(pinned_tier):
+                await self._pin_session_tier(session_id, tier)
+                cause, extra_log = "session_escalation", ""
+            else:
+                tier, cause, extra_log = pinned_tier, "session_pinned", ""
+        elif session_id is not None:
+            await self._pin_session_tier(session_id, tier)
+
         routed_model = self.get_model_for_tier(tier)
-
         verbose_router_logger.info(
-            f"ComplexityRouter: routing decision cause=complexity_scorer, tier={tier.value}, "
-            f"score={score:.3f}, signals={signals}, routed_model={routed_model}"
+            f"ComplexityRouter: routing decision cause={cause}, tier={tier.value}, "
+            f"{extra_log}routed_model={routed_model}"
         )
 
-        return PreRoutingHookResponse(
-            model=routed_model,
-            messages=messages if has_original_messages else None,
-        )
+        return PreRoutingHookResponse(model=routed_model, messages=response_messages)

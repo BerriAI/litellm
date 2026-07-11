@@ -2106,3 +2106,473 @@ class TestRoutingDecisionCauseLogging:
         assert "score=" in router_log_capture.text
         assert "cause=literal_keyword_match" not in router_log_capture.text
         assert "cause=semantic_keyword_match" not in router_log_capture.text
+
+
+class TestSessionStickinessConfigValidation:
+    """SessionStickinessConfig defaults and cross-field validation."""
+
+    def test_defaults(self):
+        config = ComplexityRouterConfig()
+        assert config.session_stickiness.mode == "none"
+        assert config.session_stickiness.ttl_seconds == 3600
+        assert config.session_stickiness.enable_deployment_session_affinity is False
+
+    def test_deployment_affinity_requires_stickiness(self):
+        with pytest.raises(ValidationError, match="enable_deployment_session_affinity"):
+            ComplexityRouterConfig(
+                session_stickiness={"mode": "none", "enable_deployment_session_affinity": True}
+            )
+
+    def test_deployment_affinity_allowed_with_sticky_mode(self):
+        config = ComplexityRouterConfig(
+            session_stickiness={"mode": "sticky", "enable_deployment_session_affinity": True}
+        )
+        assert config.session_stickiness.enable_deployment_session_affinity is True
+
+    def test_non_positive_ttl_rejected(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(session_stickiness={"mode": "sticky", "ttl_seconds": 0})
+
+    def test_unknown_mode_rejected(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(session_stickiness={"mode": "always"})
+
+
+def _sticky_router(mock_router_instance, basic_config: Dict, mode: str) -> ComplexityRouter:
+    from litellm.caching.caching import DualCache
+
+    mock_router_instance.cache = DualCache()
+    return ComplexityRouter(
+        model_name="test-sticky-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={**basic_config, "session_stickiness": {"mode": mode}},
+    )
+
+
+def _session_kwargs(session_id: str, metadata_key: str = "metadata") -> Dict:
+    return {metadata_key: {"session_id": session_id}}
+
+
+SIMPLE_MESSAGES = [{"role": "user", "content": "What is the capital of France?"}]
+COMPLEX_MESSAGES = [
+    {
+        "role": "user",
+        "content": (
+            "Refactor this distributed microservice architecture to optimize database "
+            "query throughput, implement async request handling in python, and debug "
+            "the authentication api endpoint errors step by step"
+        ),
+    }
+]
+
+
+class TestSessionStickyRouting:
+    """mode=sticky pins the first decision and skips all classification work afterwards."""
+
+    @pytest.mark.asyncio
+    async def test_mode_none_never_touches_cache(self, mock_router_instance, basic_config):
+        mock_router_instance.cache = MagicMock()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-none"),
+            messages=SIMPLE_MESSAGES,
+        )
+        assert result is not None
+        mock_router_instance.cache.async_get_cache.assert_not_called()
+        mock_router_instance.cache.async_set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_falls_back_to_per_turn(self, mock_router_instance, basic_config):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=SIMPLE_MESSAGES,
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+        cached = await mock_router_instance.cache.async_get_cache(
+            ComplexityRouter.get_session_tier_cache_key("test-sticky-router", "")
+        )
+        assert cached is None
+
+    @pytest.mark.asyncio
+    async def test_first_turn_classifies_and_pins_with_ttl(self, mock_router_instance, basic_config):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky")
+        set_cache_mock = AsyncMock()
+        with patch.object(mock_router_instance.cache, "async_set_cache", set_cache_mock):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=_session_kwargs("sess-1"),
+                messages=SIMPLE_MESSAGES,
+            )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+        set_cache_mock.assert_awaited_once_with(
+            ComplexityRouter.get_session_tier_cache_key("test-sticky-router", "sess-1"),
+            ComplexityTier.SIMPLE.value,
+            ttl=3600,
+        )
+
+    @pytest.mark.asyncio
+    async def test_second_turn_skips_classifier_and_overrides(self, mock_router_instance, basic_config):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky")
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-2"),
+            messages=SIMPLE_MESSAGES,
+        )
+        with (
+            patch.object(router, "aclassify", new_callable=AsyncMock) as classify_mock,
+            patch.object(
+                router, "_resolve_keyword_tier_override", new_callable=AsyncMock
+            ) as override_mock,
+        ):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=_session_kwargs("sess-2"),
+                messages=COMPLEX_MESSAGES,
+            )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+        classify_mock.assert_not_awaited()
+        override_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_keyword_override_on_first_turn_shapes_the_pin(
+        self, mock_router_instance, basic_config
+    ):
+        from litellm.caching.caching import DualCache
+
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-sticky-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_stickiness": {"mode": "sticky"},
+                "keyword_tier_rules": [{"keywords": ["wire transfer"], "tier": "REASONING"}],
+            },
+        )
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-3"),
+            messages=[{"role": "user", "content": "please process this wire transfer"}],
+        )
+        assert first is not None
+        assert first.model == "o1-preview"
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-3"),
+            messages=SIMPLE_MESSAGES,
+        )
+        assert second is not None
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_invalid_cached_value_falls_through_and_overwrites(
+        self, mock_router_instance, basic_config
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky")
+        key = ComplexityRouter.get_session_tier_cache_key("test-sticky-router", "sess-4")
+        await mock_router_instance.cache.async_set_cache(key, "BOGUS")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-4"),
+            messages=SIMPLE_MESSAGES,
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+        assert await mock_router_instance.cache.async_get_cache(key) == ComplexityTier.SIMPLE.value
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    async def test_session_id_read_from_both_metadata_dicts(
+        self, mock_router_instance, basic_config, metadata_key
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky")
+        session_id = f"sess-{metadata_key}"
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs(session_id, metadata_key),
+            messages=SIMPLE_MESSAGES,
+        )
+        cached = await mock_router_instance.cache.async_get_cache(
+            ComplexityRouter.get_session_tier_cache_key("test-sticky-router", session_id)
+        )
+        assert cached == ComplexityTier.SIMPLE.value
+
+
+class TestSessionEscalation:
+    """mode=sticky_with_escalation ratchets the pinned tier up, never down."""
+
+    async def _seed_pin(self, mock_router_instance, tier: ComplexityTier, session_id: str) -> None:
+        await mock_router_instance.cache.async_set_cache(
+            ComplexityRouter.get_session_tier_cache_key("test-sticky-router", session_id),
+            tier.value,
+        )
+
+    @pytest.mark.asyncio
+    async def test_classified_below_pin_stays_pinned_without_write(
+        self, mock_router_instance, basic_config
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky_with_escalation")
+        await self._seed_pin(mock_router_instance, ComplexityTier.MEDIUM, "sess-e1")
+        set_cache_mock = AsyncMock()
+        with patch.object(mock_router_instance.cache, "async_set_cache", set_cache_mock):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=_session_kwargs("sess-e1"),
+                messages=SIMPLE_MESSAGES,
+            )
+        assert result is not None
+        assert result.model == "gpt-4o"
+        set_cache_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_classified_above_pin_escalates_and_rewrites(
+        self, mock_router_instance, basic_config
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky_with_escalation")
+        await self._seed_pin(mock_router_instance, ComplexityTier.SIMPLE, "sess-e2")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-e2"),
+            messages=COMPLEX_MESSAGES,
+        )
+        assert result is not None
+        assert result.model != "gpt-4o-mini"
+        cached = await mock_router_instance.cache.async_get_cache(
+            ComplexityRouter.get_session_tier_cache_key("test-sticky-router", "sess-e2")
+        )
+        assert cached != ComplexityTier.SIMPLE.value
+
+    @pytest.mark.asyncio
+    async def test_max_tier_pin_skips_all_classification_work(
+        self, mock_router_instance, basic_config
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky_with_escalation")
+        await self._seed_pin(mock_router_instance, ComplexityTier.REASONING, "sess-e3")
+        with (
+            patch.object(router, "aclassify", new_callable=AsyncMock) as classify_mock,
+            patch.object(
+                router, "_resolve_keyword_tier_override", new_callable=AsyncMock
+            ) as override_mock,
+        ):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=_session_kwargs("sess-e3"),
+                messages=SIMPLE_MESSAGES,
+            )
+        assert result is not None
+        assert result.model == "o1-preview"
+        classify_mock.assert_not_awaited()
+        override_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_keyword_override_escalates_a_pin(self, mock_router_instance, basic_config):
+        from litellm.caching.caching import DualCache
+
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-sticky-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_stickiness": {"mode": "sticky_with_escalation"},
+                "keyword_tier_rules": [{"keywords": ["wire transfer"], "tier": "REASONING"}],
+            },
+        )
+        await self._seed_pin(mock_router_instance, ComplexityTier.MEDIUM, "sess-e4")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-e4"),
+            messages=[{"role": "user", "content": "please process this wire transfer"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_keyword_override_cannot_demote_a_pin(self, mock_router_instance, basic_config):
+        from litellm.caching.caching import DualCache
+
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-sticky-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_stickiness": {"mode": "sticky_with_escalation"},
+                "keyword_tier_rules": [{"keywords": ["hello"], "tier": "SIMPLE"}],
+            },
+        )
+        await self._seed_pin(mock_router_instance, ComplexityTier.COMPLEX, "sess-e5")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-e5"),
+            messages=[{"role": "user", "content": "hello there"}],
+        )
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514"
+
+
+class TestSessionStickyCauseLogging:
+    """Pinned and escalated decisions must be distinguishable in the info log."""
+
+    @pytest.fixture
+    def router_log_capture(self, caplog):
+        caplog.set_level(logging.INFO, logger="LiteLLM Router")
+        verbose_router_logger.addHandler(caplog.handler)
+        try:
+            yield caplog
+        finally:
+            verbose_router_logger.removeHandler(caplog.handler)
+
+    @pytest.mark.asyncio
+    async def test_pinned_decision_logs_session_pinned(
+        self, mock_router_instance, basic_config, router_log_capture
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky")
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-log1"),
+            messages=SIMPLE_MESSAGES,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-log1"),
+            messages=SIMPLE_MESSAGES,
+        )
+        assert "routing decision cause=session_pinned" in router_log_capture.text
+        assert "routed_model=gpt-4o-mini" in router_log_capture.text
+
+    @pytest.mark.asyncio
+    async def test_escalation_logs_session_escalation(
+        self, mock_router_instance, basic_config, router_log_capture
+    ):
+        router = _sticky_router(mock_router_instance, basic_config, "sticky_with_escalation")
+        await mock_router_instance.cache.async_set_cache(
+            ComplexityRouter.get_session_tier_cache_key("test-sticky-router", "sess-log2"),
+            ComplexityTier.SIMPLE.value,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=_session_kwargs("sess-log2"),
+            messages=COMPLEX_MESSAGES,
+        )
+        assert "routing decision cause=session_escalation" in router_log_capture.text
+
+
+class TestDeploymentAffinityAutoEnable:
+    """enable_deployment_session_affinity wires session_affinity for the tier target groups."""
+
+    @staticmethod
+    def _router(complexity_router_config: Dict, **router_kwargs) -> Router:
+        return Router(
+            model_list=[
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {
+                    "model_name": "auto-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "gpt-4o-mini",
+                        "complexity_router_config": complexity_router_config,
+                    },
+                },
+            ],
+            **router_kwargs,
+        )
+
+    _TIERS = {
+        "SIMPLE": "gpt-4o-mini",
+        "MEDIUM": "gpt-4o",
+        "COMPLEX": "gpt-4o",
+        "REASONING": "gpt-4o",
+    }
+
+    def test_opted_in_config_enables_affinity_for_tier_groups(self):
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+            DeploymentAffinityCheck,
+        )
+
+        router = self._router(
+            {
+                "tiers": self._TIERS,
+                "session_stickiness": {
+                    "mode": "sticky",
+                    "enable_deployment_session_affinity": True,
+                },
+            }
+        )
+        assert router.model_group_affinity_config is not None
+        for group in ("gpt-4o-mini", "gpt-4o"):
+            assert "session_affinity" in router.model_group_affinity_config[group]
+        affinity_callbacks = [
+            cb for cb in (router.optional_callbacks or []) if isinstance(cb, DeploymentAffinityCheck)
+        ]
+        assert len(affinity_callbacks) == 1
+        assert affinity_callbacks[0].enable_session_id_affinity is False
+        assert affinity_callbacks[0].enable_user_key_affinity is False
+
+    def test_opt_out_is_a_full_noop(self):
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+            DeploymentAffinityCheck,
+        )
+
+        router = self._router(
+            {"tiers": self._TIERS, "session_stickiness": {"mode": "sticky"}}
+        )
+        assert router.model_group_affinity_config is None
+        assert not any(
+            isinstance(cb, DeploymentAffinityCheck) for cb in (router.optional_callbacks or [])
+        )
+
+    def test_user_affinity_entry_is_extended_not_replaced(self):
+        router = self._router(
+            {
+                "tiers": self._TIERS,
+                "session_stickiness": {
+                    "mode": "sticky",
+                    "enable_deployment_session_affinity": True,
+                },
+            },
+            model_group_affinity_config={"gpt-4o": ["deployment_affinity"]},
+        )
+        assert router.model_group_affinity_config is not None
+        assert set(router.model_group_affinity_config["gpt-4o"]) == {
+            "deployment_affinity",
+            "session_affinity",
+        }
+
+    def test_existing_affinity_callback_is_reused_and_seeded(self):
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+            DeploymentAffinityCheck,
+        )
+
+        router = self._router(
+            {
+                "tiers": self._TIERS,
+                "session_stickiness": {
+                    "mode": "sticky",
+                    "enable_deployment_session_affinity": True,
+                },
+            },
+            optional_pre_call_checks=["deployment_affinity"],
+        )
+        affinity_callbacks = [
+            cb for cb in (router.optional_callbacks or []) if isinstance(cb, DeploymentAffinityCheck)
+        ]
+        assert len(affinity_callbacks) == 1
+        assert router.model_group_affinity_config is not None
+        for group in ("gpt-4o-mini", "gpt-4o"):
+            assert set(router.model_group_affinity_config[group]) == {
+                "deployment_affinity",
+                "session_affinity",
+            }
+        assert affinity_callbacks[0].model_group_affinity_config == router.model_group_affinity_config

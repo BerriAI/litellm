@@ -241,6 +241,36 @@ class ClassifierLLMConfig(BaseModel):
     )
 
 
+class SessionStickinessConfig(BaseModel):
+    """Session-sticky tier routing to preserve provider-side prompt/KV cache across turns.
+
+    Modes:
+    - "none": classify every turn (default; today's behavior).
+    - "sticky": the first decision pins the session; later turns skip keyword overrides
+      and the classifier entirely and reuse the pinned tier.
+    - "sticky_with_escalation": the pinned tier can only ratchet up in severity, never
+      down. Keyword overrides and the classifier still run (unless already at the top
+      tier) so a complexity jump mid-session escalates; downgrades are suppressed.
+    """
+
+    mode: Literal["none", "sticky", "sticky_with_escalation"] = Field(
+        default="none",
+        description="Session stickiness mode for tier decisions",
+    )
+    ttl_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description="How long a session's pinned tier lives after its last write",
+    )
+    enable_deployment_session_affinity: bool = Field(
+        default=False,
+        description=(
+            "Also enable deployment-level session_affinity for this router's tier target "
+            "model groups, so the same physical deployment serves the whole session"
+        ),
+    )
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -333,6 +363,12 @@ class ComplexityRouterConfig(BaseModel):
         description="Minimum cosine similarity for a semantic keyword match",
     )
 
+    # Session-sticky tier routing
+    session_stickiness: SessionStickinessConfig = Field(
+        default_factory=SessionStickinessConfig,
+        description="Pin tier decisions per session to preserve provider prompt/KV cache",
+    )
+
     model_config = ConfigDict(extra="allow")  # Allow additional fields
 
     @model_validator(mode="after")
@@ -349,6 +385,16 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError("embedding_model is required when semantic_keyword_matching is enabled")
         if not self.keyword_tier_rules:
             raise ValueError("keyword_tier_rules must be non-empty when semantic_keyword_matching is enabled")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_session_stickiness(self) -> "ComplexityRouterConfig":
+        stickiness = self.session_stickiness
+        if stickiness.enable_deployment_session_affinity and stickiness.mode == "none":
+            raise ValueError(
+                "enable_deployment_session_affinity requires session_stickiness.mode to be "
+                "'sticky' or 'sticky_with_escalation'"
+            )
         return self
 
 

@@ -701,6 +701,8 @@ class Router:
             self.optional_callbacks.append(affinity_callback)
             litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
+        self._apply_complexity_router_session_affinity()
+
         if self.alerting_config is not None:
             self._initialize_alerting()
 
@@ -7571,6 +7573,79 @@ class Router:
                 f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.complexity_routers[deployment.model_name] = complexity_router
+        if hasattr(self, "model_group_affinity_config"):
+            self._apply_complexity_router_session_affinity()
+
+    def _apply_complexity_router_session_affinity(self) -> None:
+        """Enable deployment-level session affinity for the tier target model groups of
+        complexity routers that opted in via
+        session_stickiness.enable_deployment_session_affinity.
+
+        The complexity router's pre-routing hook rewrites the request's model to a tier
+        target group before DeploymentAffinityCheck.async_filter_deployments runs, so
+        affinity must be configured on the tier groups (not the auto-router group) for
+        the same physical deployment to serve a whole session.
+
+        Runs after __init__ has assigned model_group_affinity_config (guarded at the
+        init_complexity_router_deployment callsite because set_model_list runs earlier
+        in __init__), and again on runtime hot-adds. Explicit per-group entries make
+        _get_effective_flags ignore the callback's global flags for that group, so new
+        entries are seeded with the currently-enabled global flags; user-provided
+        entries are extended, never replaced.
+        """
+        opted_in_groups = {
+            group
+            for complexity_router in self.complexity_routers.values()
+            if complexity_router.config.session_stickiness.enable_deployment_session_affinity
+            for group in (*complexity_router.config.tiers.values(), complexity_router.config.default_model)
+            if group
+        }
+        if not opted_in_groups:
+            return
+
+        existing_affinity_callback = next(
+            (cb for cb in (self.optional_callbacks or []) if isinstance(cb, DeploymentAffinityCheck)),
+            None,
+        )
+        global_flag_seed = tuple(
+            flag
+            for flag, enabled in (
+                ("deployment_affinity", getattr(existing_affinity_callback, "enable_user_key_affinity", False)),
+                (
+                    "responses_api_deployment_check",
+                    getattr(existing_affinity_callback, "enable_responses_api_affinity", False),
+                ),
+                ("session_affinity", getattr(existing_affinity_callback, "enable_session_id_affinity", False)),
+            )
+            if enabled
+        )
+
+        current_config = self.model_group_affinity_config or {}
+        merged_config = {
+            **current_config,
+            **{
+                group: list(dict.fromkeys([*current_config.get(group, global_flag_seed), "session_affinity"]))
+                for group in opted_in_groups
+            },
+        }
+        self.model_group_affinity_config = merged_config
+
+        if existing_affinity_callback is not None:
+            existing_affinity_callback.model_group_affinity_config = merged_config
+            return
+
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        affinity_callback = DeploymentAffinityCheck(
+            cache=self.cache,
+            ttl_seconds=self.deployment_affinity_ttl_seconds,
+            enable_user_key_affinity=False,
+            enable_responses_api_affinity=False,
+            enable_session_id_affinity=False,
+            model_group_affinity_config=merged_config,
+        )
+        self.optional_callbacks.append(affinity_callback)
+        litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
