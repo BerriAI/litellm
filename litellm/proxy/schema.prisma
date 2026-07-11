@@ -1284,6 +1284,7 @@ model LiteLLM_SkillMarketplaceTable {
   enabled        Boolean   @default(true)
   sync_status    String    @default("pending") // "pending" | "success" | "error"
   sync_error     String?
+  skipped_count  Int       @default(0) // skills that failed to fetch after retries during the last sync
   last_synced_at DateTime?
   created_at     DateTime? @default(now())
   updated_at     DateTime? @default(now()) @updatedAt

@@ -56,6 +56,14 @@ DEFAULT_SYNC_TIMEOUT_SECONDS = 10.0
 _MAX_CONCURRENT_GITHUB_FETCHES = 6
 _github_fetch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_GITHUB_FETCHES)
 
+# A sync fans out one request per skill folder; on a repo with dozens of
+# skills, at least one request occasionally hitting a transient connection
+# blip is expected, not exceptional. Retrying here means one flaky request
+# doesn't cost the whole sync - see _fetch_skill_entry for what happens if
+# a request still fails after retries (skipped, not fatal).
+_MAX_HTTP_RETRIES = 2
+_RETRY_BACKOFF_SECONDS = 0.3
+
 SourceHost = Literal["github", "gitlab", "bitbucket", "url"]
 SyncErrorReason = Literal["unreachable", "http_error", "invalid_json", "invalid_schema"]
 
@@ -102,6 +110,7 @@ class SyncResult:
     status: Literal["success", "error"]
     error: str | None
     plugin_count: int
+    skipped_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,16 +186,23 @@ def _git_clone_url(resolved: ResolvedSource) -> str:
 
 
 async def _http_get(client: AsyncHTTPHandler, url: str, *, timeout: float) -> httpx.Response:
-    try:
-        # async_safe_get is SSRF-guarded (resolves + validates every redirect
-        # hop) - required here because the target URL is admin-supplied.
-        # Bounded by _github_fetch_semaphore: see its module-level comment.
-        async with _github_fetch_semaphore:
-            return await async_safe_get(client, url, headers={}, timeout=timeout)
-    except SSRFError as exc:
-        raise MarketplaceSyncError(reason="unreachable", detail=str(exc)) from exc
-    except httpx.HTTPError as exc:
-        raise MarketplaceSyncError(reason="unreachable", detail=str(exc)) from exc
+    last_exc: httpx.HTTPError | None = None
+    for attempt in range(_MAX_HTTP_RETRIES + 1):
+        try:
+            # async_safe_get is SSRF-guarded (resolves + validates every
+            # redirect hop) - required here because the target URL is
+            # admin-supplied. Bounded by _github_fetch_semaphore: see its
+            # module-level comment.
+            async with _github_fetch_semaphore:
+                return await async_safe_get(client, url, headers={}, timeout=timeout)
+        except SSRFError as exc:
+            # A policy rejection, not a transient failure - retrying won't help.
+            raise MarketplaceSyncError(reason="unreachable", detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt < _MAX_HTTP_RETRIES:
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    raise MarketplaceSyncError(reason="unreachable", detail=str(last_exc)) from last_exc
 
 
 def _parse_json_body(response: httpx.Response) -> object:
@@ -385,7 +401,18 @@ async def _list_github_contents(
 
 async def _skill_md_exists(client: AsyncHTTPHandler, repo: str, branch: str, dir_path: str, *, timeout: float) -> bool:
     url = f"https://raw.githubusercontent.com/{repo}/{branch}/{dir_path}/SKILL.md"
-    response = await _http_get(client, url, timeout=timeout)
+    try:
+        response = await _http_get(client, url, timeout=timeout)
+    except MarketplaceSyncError as exc:
+        # This is a discovery-phase existence check, not a confirmed skill's
+        # content fetch - after _http_get's own retries are exhausted, treat
+        # it as "not found" rather than aborting the entire sync over one
+        # candidate folder. _fetch_skill_entry is where a CONFIRMED skill's
+        # failure gets tracked and surfaced via skipped_count.
+        verbose_proxy_logger.warning(
+            "skill-marketplace-sync: could not check %s after retries (%s), treating as not found", url, exc
+        )
+        return False
     return response.status_code == 200
 
 
@@ -498,7 +525,17 @@ async def _fetch_skill_entry(
     timeout: float,
 ) -> ResolvedPluginEntry | None:
     url = f"https://raw.githubusercontent.com/{repo}/{branch}/{doc.skill_md_path}"
-    response = await _http_get(client, url, timeout=timeout)
+    try:
+        response = await _http_get(client, url, timeout=timeout)
+    except MarketplaceSyncError as exc:
+        # A CONFIRMED skill (its SKILL.md's existence already passed a
+        # separate check) still failed to fetch after _http_get's retries.
+        # Skip it rather than aborting every other skill's import - the
+        # caller counts this against skipped_count so it's visible, not silent.
+        verbose_proxy_logger.warning(
+            "skill-marketplace-sync: could not fetch %s after retries (%s), skipping this skill", url, exc
+        )
+        return None
     if response.status_code != 200:
         return None
 
@@ -524,19 +561,21 @@ async def _fetch_entries_for_docs(
     docs: tuple[_DiscoveredSkillDoc, ...],
     *,
     timeout: float,
-) -> tuple[ResolvedPluginEntry, ...]:
+) -> tuple[tuple[ResolvedPluginEntry, ...], int]:
+    """Returns (successfully-fetched entries, count skipped after retries)."""
     fetched = await asyncio.gather(
         *(
             _fetch_skill_entry(client, repo, branch, marketplace_name, doc, timeout=timeout)
             for doc in docs
         )
     )
-    return tuple(entry for entry in fetched if entry is not None)
+    entries = tuple(entry for entry in fetched if entry is not None)
+    return entries, len(docs) - len(entries)
 
 
 async def _fetch_github_fallback_entries(
     client: AsyncHTTPHandler, resolved: ResolvedSource, branch: str, marketplace_name: str
-) -> tuple[tuple[ResolvedPluginEntry, ...], MarketplaceSourceType]:
+) -> tuple[tuple[ResolvedPluginEntry, ...], MarketplaceSourceType, int]:
     """Called once the repo has no ``.claude-plugin/marketplace.json``. Tries,
     in order: an explicit single-plugin ``.claude-plugin/plugin.json`` skill
     list, the ``skills/*/SKILL.md`` (or one level of category nesting)
@@ -551,22 +590,24 @@ async def _fetch_github_fallback_entries(
         plugin_manifest = _parse_plugin_manifest(plugin_json_response)
         plugin_docs = _plugin_manifest_skill_docs(plugin_manifest)
         if plugin_docs:
-            entries = await _fetch_entries_for_docs(
+            entries, skipped = await _fetch_entries_for_docs(
                 client, repo, branch, marketplace_name, plugin_docs, timeout=timeout
             )
             if entries:
-                return entries, "claude_plugin_json"
+                return entries, "claude_plugin_json", skipped
 
     skills_dir_docs = await _discover_github_skill_docs(client, repo, branch, timeout=timeout)
     if not skills_dir_docs:
         skills_dir_docs = await _discover_root_skill_docs(client, repo, branch, timeout=timeout)
-    entries = await _fetch_entries_for_docs(client, repo, branch, marketplace_name, skills_dir_docs, timeout=timeout)
-    return entries, "skills_dir"
+    entries, skipped = await _fetch_entries_for_docs(
+        client, repo, branch, marketplace_name, skills_dir_docs, timeout=timeout
+    )
+    return entries, "skills_dir", skipped
 
 
 async def _fetch_marketplace_entries(
     marketplace_row: MarketplaceRow,
-) -> tuple[tuple[ResolvedPluginEntry, ...], MarketplaceSourceType]:
+) -> tuple[tuple[ResolvedPluginEntry, ...], MarketplaceSourceType, int]:
     if not marketplace_row.source_ref:
         raise MarketplaceSyncError(reason="invalid_schema", detail="marketplace has no source_ref to sync from")
 
@@ -583,7 +624,7 @@ async def _fetch_marketplace_entries(
     if manifest_response.status_code == 200:
         manifest = _parse_marketplace_manifest(manifest_response)
         entries = _build_manifest_plugin_entries(marketplace_row.name, resolved, manifest)
-        return entries, "claude_marketplace_json"
+        return entries, "claude_marketplace_json", len(manifest.plugins) - len(entries)
 
     if manifest_response.status_code == 404 and resolved.host == "github":
         return await _fetch_github_fallback_entries(client, resolved, branch, marketplace_row.name)
@@ -672,6 +713,7 @@ async def _record_sync_success(
     prisma_client: Any,  # noqa: ANN401  # prisma_client has no importable type stubs, see _upsert_plugin_entries
     marketplace_row: MarketplaceRow,
     source_type: MarketplaceSourceType,
+    skipped_count: int,
 ) -> None:
     await SkillMarketplaceRepository(prisma_client).table.update(
         where={"id": marketplace_row.id},
@@ -679,6 +721,7 @@ async def _record_sync_success(
             "sync_status": "success",
             "sync_error": None,
             "source_type": source_type,
+            "skipped_count": skipped_count,
             "last_synced_at": datetime.now(timezone.utc),
         },
     )
@@ -709,13 +752,21 @@ async def resolve_and_sync(
     (``sync_status="error"``) and reflected in the returned ``SyncResult``.
     """
     try:
-        entries, source_type = await _fetch_marketplace_entries(marketplace_row)
+        entries, source_type, skipped_count = await _fetch_marketplace_entries(marketplace_row)
     except MarketplaceSyncError as exc:
         verbose_proxy_logger.warning("skill-marketplace-sync: failed to sync %r: %s", marketplace_row.name, exc)
         await _record_sync_failure(prisma_client, marketplace_row, str(exc))
         return SyncResult(status="error", error=str(exc), plugin_count=0)
 
+    if skipped_count:
+        verbose_proxy_logger.warning(
+            "skill-marketplace-sync: %r imported %d skill(s), skipped %d after retries",
+            marketplace_row.name,
+            len(entries),
+            skipped_count,
+        )
+
     await _upsert_plugin_entries(prisma_client, marketplace_row.id, entries)
     await _soft_disable_stale_plugins(prisma_client, marketplace_row.id, entries)
-    await _record_sync_success(prisma_client, marketplace_row, source_type)
-    return SyncResult(status="success", error=None, plugin_count=len(entries))
+    await _record_sync_success(prisma_client, marketplace_row, source_type, skipped_count)
+    return SyncResult(status="success", error=None, plugin_count=len(entries), skipped_count=skipped_count)

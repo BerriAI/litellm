@@ -113,6 +113,7 @@ def _to_marketplace_source_response(marketplace, plugin_count: Optional[int]) ->
         sync_error=marketplace.sync_error,
         last_synced_at=marketplace.last_synced_at.isoformat() if marketplace.last_synced_at else None,
         plugin_count=plugin_count,
+        skipped_count=marketplace.skipped_count,
         created_at=marketplace.created_at.isoformat() if marketplace.created_at else None,
         updated_at=marketplace.updated_at.isoformat() if marketplace.updated_at else None,
     )

@@ -7,6 +7,7 @@ GitHub-only skills/ directory-scan fallback), error classification, and the
 idempotent/soft-disable upsert semantics.
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -261,6 +262,114 @@ async def test_resolve_and_sync_falls_back_to_skills_directory_scan(monkeypatch)
         "url": "https://github.com/vercel-labs/skills.git",
         "path": "skills/find-skills",
     }
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_retries_transient_failures_then_succeeds(monkeypatch):
+    """Regression test: a request that fails with a connection error on its
+    first attempt but succeeds on retry must not be treated as a permanent
+    failure - this is the exact shape of the flakiness a single unlucky
+    request among many concurrent fetches used to cause. Uses the contents
+    listing (a single call site) so the retry count is unambiguous, unlike
+    a SKILL.md URL which is hit once for discovery and again for content."""
+    client = _make_fake_prisma_client()
+    marketplace = await _create_marketplace(client, name="vercel-skills", source_ref="vercel-labs/skills")
+
+    manifest_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/.claude-plugin/marketplace.json"
+    plugin_json_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/.claude-plugin/plugin.json"
+    contents_url = "https://api.github.com/repos/vercel-labs/skills/contents/skills?ref=main"
+    skill_md_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/skills/find-skills/SKILL.md"
+
+    contents_attempts = {"count": 0}
+
+    async def _get(http_client, url, **kwargs):
+        if url == manifest_url:
+            return httpx.Response(404)
+        if url == plugin_json_url:
+            return httpx.Response(404)
+        if url == contents_url:
+            contents_attempts["count"] += 1
+            if contents_attempts["count"] == 1:
+                raise httpx.ConnectError("connection reset", request=httpx.Request("GET", url))
+            return httpx.Response(
+                200,
+                json=[{"name": "find-skills", "path": "skills/find-skills", "type": "dir"}],
+            )
+        if url == skill_md_url:
+            return httpx.Response(200, text=_FIND_SKILLS_SKILL_MD)
+        raise AssertionError(f"unexpected url requested: {url}")
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(sync_module.asyncio, "sleep", lambda *_a, **_kw: _real_sleep(0))
+
+    result = await resolve_and_sync(client, marketplace)
+
+    assert result.status == "success"
+    assert result.plugin_count == 1
+    assert result.skipped_count == 0
+    assert contents_attempts["count"] == 2, "expected exactly one retry after the first transient failure"
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_skips_skill_that_fails_after_retries_exhausted(monkeypatch):
+    """Regression test: a skill whose SKILL.md is confirmed to exist (discovery
+    succeeds) but whose content fetch keeps failing even after retries must be
+    skipped (and counted via skipped_count), not abort the whole sync - the
+    other, healthy skill must still import successfully."""
+    client = _make_fake_prisma_client()
+    marketplace = await _create_marketplace(client, name="vercel-skills", source_ref="vercel-labs/skills")
+
+    manifest_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/.claude-plugin/marketplace.json"
+    plugin_json_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/.claude-plugin/plugin.json"
+    contents_url = "https://api.github.com/repos/vercel-labs/skills/contents/skills?ref=main"
+    healthy_skill_md_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/skills/find-skills/SKILL.md"
+    flaky_skill_md_url = "https://raw.githubusercontent.com/vercel-labs/skills/main/skills/flaky-skill/SKILL.md"
+
+    # First call to flaky_skill_md_url is the discovery-phase existence check
+    # (must succeed so this candidate is confirmed as a real skill); every
+    # call after that is the content-fetch phase, which keeps failing.
+    flaky_attempts = {"count": 0}
+
+    async def _get(http_client, url, **kwargs):
+        if url == manifest_url:
+            return httpx.Response(404)
+        if url == plugin_json_url:
+            return httpx.Response(404)
+        if url == contents_url:
+            return httpx.Response(
+                200,
+                json=[
+                    {"name": "find-skills", "path": "skills/find-skills", "type": "dir"},
+                    {"name": "flaky-skill", "path": "skills/flaky-skill", "type": "dir"},
+                ],
+            )
+        if url == healthy_skill_md_url:
+            return httpx.Response(200, text=_FIND_SKILLS_SKILL_MD)
+        if url == flaky_skill_md_url:
+            flaky_attempts["count"] += 1
+            if flaky_attempts["count"] == 1:
+                return httpx.Response(200, text=_FIND_SKILLS_SKILL_MD)
+            raise httpx.ConnectError("connection reset", request=httpx.Request("GET", url))
+        raise AssertionError(f"unexpected url requested: {url}")
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(sync_module.asyncio, "sleep", lambda *_a, **_kw: _real_sleep(0))
+
+    result = await resolve_and_sync(client, marketplace)
+
+    assert result.status == "success"
+    assert result.plugin_count == 1
+    assert result.skipped_count == 1
+
+    plugins = await client.db.litellm_claudecodeplugintable.find_many(where={"marketplace_id": marketplace.id})
+    assert len(plugins) == 1
+    assert plugins[0].name == "vercel-skills--find-skills"
+
+    refreshed_marketplace = await client.db.litellm_skillmarketplacetable.find_unique(where={"id": marketplace.id})
+    assert refreshed_marketplace.sync_status == "success"
+    assert refreshed_marketplace.skipped_count == 1
 
 
 @pytest.mark.asyncio

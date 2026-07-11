@@ -63,6 +63,7 @@ class _FakeTable:
             "branch": "main",
             "enabled": True,
             "sync_error": None,
+            "skipped_count": 0,
             "last_synced_at": None,
             "created_at": None,
             "updated_at": None,

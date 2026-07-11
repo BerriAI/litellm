@@ -180,6 +180,7 @@ class MarketplaceSourceResponse(BaseModel):
     sync_error: Optional[str] = None
     last_synced_at: Optional[str] = None
     plugin_count: Optional[int] = None
+    skipped_count: int = 0
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
