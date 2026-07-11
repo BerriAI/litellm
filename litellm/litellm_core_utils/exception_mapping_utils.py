@@ -4,6 +4,7 @@ import traceback
 from typing import Any, Optional, Protocol, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string, verbose_logger
@@ -84,9 +85,6 @@ class ExceptionCheckers:
         Returns:
             True if the error indicates insufficient quota, False otherwise
         """
-        if not isinstance(error_str, str):
-            return False
-
         return "insufficient_quota" in error_str.lower()
 
     @staticmethod
@@ -201,6 +199,9 @@ def _get_body_error_code(error_str: str) -> int | None:
         return None
 
 
+_ERROR_BODY_ADAPTER: TypeAdapter[dict[object, object]] = TypeAdapter(dict[object, object])
+
+
 def _body_has_insufficient_quota_code(error_obj: object) -> bool:
     """True only when the provider's STRUCTURED error body carries
     code or type == "insufficient_quota".
@@ -211,26 +212,25 @@ def _body_has_insufficient_quota_code(error_obj: object) -> bool:
     missing or unparseable body returns False, so callers degrade to the plain
     retryable RateLimitError rather than promoting on a free-text match.
     """
-    try:
-        if error_obj is None:
-            return False
-        if getattr(error_obj, "code", None) == "insufficient_quota":
-            return True
-        if getattr(error_obj, "type", None) == "insufficient_quota":
-            return True
-        body = getattr(error_obj, "body", None)
-        if not isinstance(body, dict):
-            return False
-        nested = body.get("error")
-        candidates = (
-            body.get("code"),
-            body.get("type"),
-            nested.get("code") if isinstance(nested, dict) else None,
-            nested.get("type") if isinstance(nested, dict) else None,
-        )
-        return "insufficient_quota" in candidates
-    except Exception:
+    if error_obj is None:
         return False
+    if getattr(error_obj, "code", None) == "insufficient_quota":
+        return True
+    if getattr(error_obj, "type", None) == "insufficient_quota":
+        return True
+    raw_body = getattr(error_obj, "body", None)
+    if not isinstance(raw_body, dict):
+        return False
+    body = _ERROR_BODY_ADAPTER.validate_python(raw_body)
+    raw_nested = body.get("error")
+    nested = _ERROR_BODY_ADAPTER.validate_python(raw_nested) if isinstance(raw_nested, dict) else None
+    candidates = (
+        body.get("code"),
+        body.get("type"),
+        nested.get("code") if nested is not None else None,
+        nested.get("type") if nested is not None else None,
+    )
+    return "insufficient_quota" in candidates
 
 
 def _get_response_headers(original_exception: Exception) -> Optional[httpx.Headers]:

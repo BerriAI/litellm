@@ -749,9 +749,6 @@ class TestIsErrorStrInsufficientQuota:
             is False
         )
 
-    def test_non_string_returns_false(self):
-        assert ExceptionCheckers.is_error_str_insufficient_quota(None) is False  # type: ignore
-
 
 def test_openai_insufficient_quota_maps_to_insufficient_quota_error():
     """

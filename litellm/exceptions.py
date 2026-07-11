@@ -425,9 +425,9 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: str,
+        llm_provider: str,
+        model: Optional[str],
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
@@ -435,7 +435,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         category: Union[str, RateLimitErrorCategory] = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         headers: Optional[Dict[str, str]] = None,
-        detail: Any = None,
+        detail: object = None,
     ):
         self.status_code = 429
         self.message = "litellm.RateLimitError: {}".format(message)
@@ -509,9 +509,9 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
 class InsufficientQuotaError(RateLimitError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: str,
+        llm_provider: str,
+        model: Optional[str],
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
@@ -519,7 +519,7 @@ class InsufficientQuotaError(RateLimitError):
         category: Union[str, RateLimitErrorCategory] = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         headers: Optional[Dict[str, str]] = None,
-        detail: Any = None,
+        detail: object = None,
     ):
         super().__init__(
             message=message,
