@@ -628,6 +628,20 @@ class TestAsyncSafeRequest:
         with pytest.raises(SSRFError):
             await async_safe_request(FakeClient(), "POST", "http://example.com/start")
 
+    async def test_too_many_redirects_raises(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+
+        class FakeClient:
+            async def request(self, method, url, headers=None, follow_redirects=False, **kw):
+                return _FakeResponse(302, location="http://example.com/next")
+
+        with pytest.raises(SSRFError, match="Too many redirects"):
+            await async_safe_request(FakeClient(), "POST", "http://example.com/start")
+
     async def test_master_switch_disabled_bypasses_validation(self, monkeypatch):
         monkeypatch.setattr(litellm, "user_url_validation", False)
 
