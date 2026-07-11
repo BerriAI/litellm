@@ -5141,6 +5141,9 @@ async def get_member_team_ids(
     return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
+VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -5511,9 +5514,6 @@ def _validate_sort_params(sort_by: Optional[str], sort_order: str) -> Optional[D
     order_by[sort_by] = sort_order.lower()
 
     return order_by
-
-
-VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
 
 
 def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, Any]:
