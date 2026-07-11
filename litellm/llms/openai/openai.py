@@ -35,6 +35,7 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
@@ -50,8 +51,6 @@ from litellm.utils import (
     ProviderConfigManager,
     convert_to_model_response_object,
 )
-from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
-
 
 from ...types.llms.openai import *
 from ..base import BaseLLM

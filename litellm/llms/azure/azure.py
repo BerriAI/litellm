@@ -16,6 +16,7 @@ import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -33,8 +34,6 @@ from litellm.utils import (
     convert_to_model_response_object,
     modify_url,
 )
-from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
-
 
 from ...types.llms.openai import HttpxBinaryResponseContent
 from ..base import BaseLLM
