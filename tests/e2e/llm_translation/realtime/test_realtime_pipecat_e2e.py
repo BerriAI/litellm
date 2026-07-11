@@ -60,7 +60,12 @@ from pipecat.services.llm_service import FunctionCallParams  # noqa: E402
 
 from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 
-PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
+# Vertex native-audio live is flaky through pipecat tool calling (upstream
+# pipecat-ai/pipecat#2544); raw-ws tool_call_round_trip[vertex_ai] is the
+# source of truth for that provider. Keep openai/azure/gemini here.
+PROVIDER_PARAMS = [
+    pytest.param(p, id=p.id) for p in PROVIDERS if p.id != "vertex_ai"
+]
 
 WEATHER_TOOL = ToolsSchema(
     standard_tools=[
