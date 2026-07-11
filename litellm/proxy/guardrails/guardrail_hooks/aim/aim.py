@@ -105,11 +105,10 @@ class AimGuardrail(CustomGuardrail):
             user_email=user_email,
             litellm_call_id=call_id,
         )
-        # Covers multimodal list content + Responses-API input.
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": build_inspection_messages(data)},
+            json={"messages": self._build_aim_inspection_messages(data)},
         )
         response.raise_for_status()
         res = response.json()
@@ -127,6 +126,18 @@ class AimGuardrail(CustomGuardrail):
         else:
             verbose_proxy_logger.error(f"Aim: {action_type} action")
         return data
+
+    @staticmethod
+    def _build_aim_inspection_messages(data: dict) -> list[dict[str, str]]:
+        """AIM validates against the OpenAI chat schema. Bare ``role: "tool"``
+        without ``tool_call_id`` and bare ``role: "function"`` without ``name``
+        are rejected; the flatten drops those fields, so any role outside
+        ``{system, user, assistant}`` collapses to ``user`` for the AIM POST."""
+        safe_roles = {"system", "user", "assistant"}
+        return [
+            {**m, "role": "user"} if m["role"] not in safe_roles else m
+            for m in build_inspection_messages(data)
+        ]
 
     @staticmethod
     def _rejection(message: str, *, openai_code: str | None = None) -> ProxyException:
@@ -192,7 +203,7 @@ class AimGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={
-                "messages": build_inspection_messages(request_data)
+                "messages": self._build_aim_inspection_messages(request_data)
                 + [{"role": "assistant", "content": output}]
             },
         )
