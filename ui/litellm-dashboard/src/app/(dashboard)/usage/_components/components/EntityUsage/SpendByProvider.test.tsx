@@ -2,13 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import SpendByProvider from "./SpendByProvider";
 
-vi.mock("../../../shared/chart_loader", () => ({
+vi.mock("@/components/shared/chart_loader", () => ({
   ChartLoader: ({ isDateChanging }: { isDateChanging: boolean }) => (
     <div data-testid="chart-loader">{isDateChanging ? "Processing date selection..." : "Loading chart data..."}</div>
   ),
 }));
 
-vi.mock("../../../molecules/models/ProviderLogo", () => ({
+vi.mock("@/components/molecules/models/ProviderLogo", () => ({
   ProviderLogo: ({ provider }: { provider: string }) => <div data-testid={`provider-logo-${provider}`}>{provider}</div>,
 }));
 

@@ -26,10 +26,10 @@ import {
 import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Alert, Button } from "antd";
 import React, { useMemo, useState } from "react";
-import TeamMultiSelect from "../../../common_components/team_multi_select";
-import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
-import { UsageExportHeader } from "../../../EntityUsageExport";
-import type { EntityType } from "../../../EntityUsageExport/types";
+import TeamMultiSelect from "@/components/common_components/team_multi_select";
+import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
+import { UsageExportHeader } from "@/components/EntityUsageExport";
+import type { EntityType } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
   customerDailyActivityCall,
@@ -37,13 +37,19 @@ import {
   tagDailyActivityCall,
   teamDailyActivityCall,
   userDailyActivityCall,
-} from "../../../networking";
-import { getProviderLogoAndName } from "../../../provider_info_helpers";
+} from "@/components/networking";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
-import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMetadata, TagUsage } from "../../types";
-import { valueFormatterSpend } from "../../utils/value_formatters";
+import {
+  BreakdownMetrics,
+  DailyData,
+  EntityMetricWithMetadata,
+  KeyMetricWithMetadata,
+  TagUsage,
+} from "@/components/UsagePage/types";
+import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
-import TopKeyView from "./TopKeyView";
+import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import TopModelView from "./TopModelView";
 
 interface EntityMetrics {

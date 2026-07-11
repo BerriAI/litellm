@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DailyData } from "../types";
+import { DailyData } from "@/components/UsagePage/types";
 
 export interface PaginationProgress {
   currentPage: number;

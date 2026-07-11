@@ -1,6 +1,6 @@
 import { screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 
 beforeAll(() => {
@@ -13,7 +13,7 @@ beforeAll(() => {
   }
 });
 
-vi.mock("../../networking", () => ({
+vi.mock("@/components/networking", () => ({
   modelHubCall: vi.fn().mockResolvedValue({
     data: [{ model_group: "gpt-4" }, { model_group: "claude-3-opus" }],
   }),

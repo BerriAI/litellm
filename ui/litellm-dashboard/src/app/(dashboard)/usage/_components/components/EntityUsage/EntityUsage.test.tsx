@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as networking from "../../../networking";
+import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
 
 beforeAll(() => {
@@ -14,7 +14,7 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("../../../networking", () => ({
+vi.mock("@/components/networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
@@ -24,12 +24,12 @@ vi.mock("../../../networking", () => ({
 }));
 
 // Mock the child components to simplify testing
-vi.mock("../../../activity_metrics", () => ({
+vi.mock("@/components/activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("./TopKeyView", () => ({
+vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
@@ -37,15 +37,15 @@ vi.mock("./TopModelView", () => ({
   default: () => <div>Top Models</div>,
 }));
 
-vi.mock("../../../EntityUsageExport/EntityUsageExportModal", () => ({
+vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
-vi.mock("../../../EntityUsageExport", () => ({
+vi.mock("@/components/EntityUsageExport", () => ({
   UsageExportHeader: () => <div>Usage Export Header</div>,
 }));
 
-vi.mock("../../../common_components/team_multi_select", () => ({
+vi.mock("@/components/common_components/team_multi_select", () => ({
   default: () => <div>Team Multi Select</div>,
 }));
 

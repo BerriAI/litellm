@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import EndpointUsageBarChart from "./components/EndpointUsageBarChart";
 import EndpointUsageLineChart from "./components/EndpointUsageLineChart";
 import EndpointUsageTable from "./components/EndpointUsageTable";
-import { DailyData, MetricWithMetadata } from "../../types";
+import { DailyData, MetricWithMetadata } from "@/components/UsagePage/types";
 
 interface EndpointUsageProps {
   userSpendData?: {

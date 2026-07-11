@@ -2,7 +2,7 @@ import React from "react";
 import { Table, Progress } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { MoneyCell } from "@/components/shared/table_cells";
-import { MetricWithMetadata } from "../../../types";
+import { MetricWithMetadata } from "@/components/UsagePage/types";
 
 interface EndpointUsageTableProps {
   endpointData: Record<string, MetricWithMetadata>;
