@@ -487,7 +487,11 @@ class SetupWizard:
             return _KeyUnverified(reason=f"{type(exc).__name__}: {exc}")
 
     @staticmethod
-    def _validate_and_report(provider: Dict, api_key: str) -> str:
+    def _validate_and_report(
+        provider: Dict,
+        api_key: str,
+        completion: Callable[..., object] = litellm.completion,
+    ) -> str:
         """
         Validate credentials with a live completion and print the result.
         Offers a re-entry loop on failure. Returns the final (possibly re-entered) key.
@@ -501,7 +505,7 @@ class SetupWizard:
                 f"  {grey('Testing connection to ' + provider['name'] + '...')}",
                 flush=True,
             )
-            result = SetupWizard._classify_key(test_model, api_key, litellm.completion)
+            result = SetupWizard._classify_key(test_model, api_key, completion)
             match result:
                 case _KeyValid():
                     print(f"  {green(_CHECK)} {bold(provider['name'])} connected successfully")
