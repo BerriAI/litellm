@@ -1618,6 +1618,14 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str] = None,
         user_api_key_org_id: Optional[str] = None,
     ):
+        if (
+            isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric)
+        ):
+            return
+
         _metadata = litellm_params.get("metadata") or {}
         _team_spend = _metadata.get("user_api_key_team_spend", None)
         _team_max_budget = _metadata.get("user_api_key_team_max_budget", None)
@@ -3332,6 +3340,9 @@ class PrometheusLogger(CustomLogger):
             - looks up team info from db if not available in metadata
         - Set team budget metrics
         """
+        if isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric):
+            return
+
         if user_api_team:
             team_object = await self._assemble_team_object(
                 team_id=user_api_team,
@@ -3453,6 +3464,9 @@ class PrometheusLogger(CustomLogger):
         - Fetches org info via cache (get_org_object)
         - Sets org budget metrics
         """
+        if isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric):
+            return
+
         if not org_id:
             return
 
@@ -3582,6 +3596,9 @@ class PrometheusLogger(CustomLogger):
         key_max_budget: Optional[float],
         key_spend: Optional[float],
     ):
+        if isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric):
+            return
+
         if user_api_key:
             user_api_key_dict = await self._assemble_key_object(
                 user_api_key=user_api_key,
@@ -3642,6 +3659,9 @@ class PrometheusLogger(CustomLogger):
             - looks up user info from db if not available in metadata
         - Set user budget metrics
         """
+        if isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric):
+            return
+
         if user_id:
             user_object = await self._assemble_user_object(
                 user_id=user_id,

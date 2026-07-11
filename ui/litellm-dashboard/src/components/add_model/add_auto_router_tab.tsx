@@ -8,7 +8,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
-import ComplexityRouterConfig from "./ComplexityRouterConfig";
+import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import NotificationManager from "../molecules/notifications_manager";
 import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
 
@@ -20,13 +20,6 @@ interface AddAutoRouterTabProps {
 }
 
 type RouterType = "complexity" | "semantic";
-
-interface ComplexityTiers {
-  SIMPLE: string;
-  MEDIUM: string;
-  COMPLEX: string;
-  REASONING: string;
-}
 
 const { Title, Link } = Typography;
 
@@ -48,11 +41,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [routerConfig, setRouterConfig] = useState<any>(null);
 
   // Complexity router config (new)
-  const [complexityTiers, setComplexityTiers] = useState<ComplexityTiers>({
-    SIMPLE: "",
-    MEDIUM: "",
-    COMPLEX: "",
-    REASONING: "",
+  const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
+    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    classifier_type: "heuristic",
   });
 
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
@@ -99,15 +90,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     // Validation differs based on router type
     if (routerType === "complexity") {
       // Complexity Router validation
-      const filledTiers = Object.values(complexityTiers).filter(Boolean);
+      const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
+      const filledTiers = Object.values(tiers).filter(Boolean);
       if (filledTiers.length === 0) {
         NotificationManager.fromBackend("Please select at least one model for a complexity tier");
         return;
       }
 
+      if (classifier_type === "llm" && !classifier_llm_config?.model) {
+        NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+        return;
+      }
+
       // For complexity router, use the first non-empty tier as default
-      const defaultModel =
-        complexityTiers.MEDIUM || complexityTiers.SIMPLE || complexityTiers.COMPLEX || complexityTiers.REASONING;
+      const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
 
       // Set form values for complexity router
       form.setFieldsValue({
@@ -128,7 +124,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             // Use special model prefix for complexity router
             model_type: "complexity_router",
             complexity_router_config: {
-              tiers: complexityTiers,
+              tiers,
+              classifier_type,
+              ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
               ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
             },
             model_access_group: currentFormValues.model_access_group,
@@ -279,9 +277,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             <div className="w-full mb-4">
               <ComplexityRouterConfig
                 modelInfo={modelInfo}
-                value={complexityTiers}
-                onChange={(tiers) => {
-                  setComplexityTiers(tiers);
+                value={complexityRouterConfig}
+                onChange={(config) => {
+                  setComplexityRouterConfig(config);
                 }}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}

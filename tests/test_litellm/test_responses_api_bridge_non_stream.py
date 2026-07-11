@@ -269,29 +269,30 @@ def test_transform_usage_with_zero_values():
     """
     Test transformation when token details are explicitly set to 0.
 
-    This ensures 0 values are preserved and not treated as None.
+    cached_tokens=0 is preserved (cache was available; nothing was cached).
+    reasoning_tokens=0 is preserved the same way: an explicit provider-reported
+    zero passes through, while an absent value (None) is omitted.
     """
     completion_response = create_mock_completion_response(
         model="gpt-4",
         prompt_tokens=100,
         completion_tokens=50,
         total_tokens=150,
-        cached_tokens=0,  # Explicitly 0
-        reasoning_tokens=0,  # Explicitly 0
+        cached_tokens=0,  # Explicitly 0 — preserved
+        reasoning_tokens=0,  # Explicitly 0 — preserved
     )
 
     responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
         completion_response
     )
 
-    # Should preserve 0 values
     assert responses_usage.input_tokens_details is not None
     assert responses_usage.input_tokens_details.cached_tokens == 0
 
     assert responses_usage.output_tokens_details is not None
     assert responses_usage.output_tokens_details.reasoning_tokens == 0
 
-    print("✓ Transformation preserves explicit 0 values")
+    print("✓ Transformation preserves explicit reasoning_tokens=0 and omits absent values")
 
 
 def test_input_tokens_details_requires_cached_tokens():
@@ -315,25 +316,23 @@ def test_input_tokens_details_requires_cached_tokens():
     print("✓ InputTokensDetails correctly defaults cached_tokens to 0")
 
 
-def test_output_tokens_details_requires_reasoning_tokens():
+def test_output_tokens_details_reasoning_tokens():
     """
-    Test that OutputTokensDetails has reasoning_tokens as an int with default value 0.
+    Test OutputTokensDetails.reasoning_tokens field semantics.
 
-    This ensures backward compatibility while making the field non-optional.
+    reasoning_tokens is Optional[int] = None: present only when reasoning actually occurred.
     """
-    # Should work with reasoning_tokens=0
-    details1 = OutputTokensDetails(reasoning_tokens=0)
-    assert details1.reasoning_tokens == 0
+    details_explicit_zero = OutputTokensDetails(reasoning_tokens=0)
+    assert details_explicit_zero.reasoning_tokens == 0
 
-    # Should work with reasoning_tokens=100
-    details2 = OutputTokensDetails(reasoning_tokens=100)
-    assert details2.reasoning_tokens == 100
+    details_positive = OutputTokensDetails(reasoning_tokens=100)
+    assert details_positive.reasoning_tokens == 100
 
-    # Should work without reasoning_tokens (defaults to 0)
-    details3 = OutputTokensDetails()
-    assert details3.reasoning_tokens == 0
+    # Default is None — absence means reasoning did not occur (or was not tracked)
+    details_default = OutputTokensDetails()
+    assert details_default.reasoning_tokens is None
 
-    print("✓ OutputTokensDetails correctly defaults reasoning_tokens to 0")
+    print("✓ OutputTokensDetails.reasoning_tokens defaults to None")
 
 
 def test_all_providers_transformation_scenarios():
@@ -419,7 +418,7 @@ if __name__ == "__main__":
     test_transform_usage_with_both_token_details()
     test_transform_usage_with_zero_values()
     test_input_tokens_details_requires_cached_tokens()
-    test_output_tokens_details_requires_reasoning_tokens()
+    test_output_tokens_details_reasoning_tokens()
     test_all_providers_transformation_scenarios()
 
     print("\n" + "=" * 60)
