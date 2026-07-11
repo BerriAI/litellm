@@ -1893,6 +1893,79 @@ def test_bedrock_invoke_transform_merges_list_content_system_role_into_system():
     ]
 
 
+def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place():
+    """Regression test for the Bedrock prompt-cache collapse: hoisting a
+    mid-conversation ``role: "system"`` message (e.g. Claude Code's
+    ``mid-conversation-system-2026-04-07`` reminders) into the top-level
+    ``system`` field mutates the cache prefix and invalidates the cached message
+    history, so such entries must be forwarded in place. Invoke only rejects a
+    system entry at ``messages.0``. Billing-header blocks must still be stripped
+    from the top-level ``system`` field even when nothing is hoisted."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-8",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": [
+                {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.205;"},
+                {"type": "text", "text": "Base.", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == messages
+    assert result["system"] == [
+        {"type": "text", "text": "Base.", "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+def test_bedrock_invoke_transform_hoists_only_leading_system_run():
+    """Only the leading run of ``role: "system"`` messages is hoisted into the
+    top-level ``system`` field; a later system entry keeps its position in
+    ``messages`` so the serialized prefix stays stable across turns."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "system", "content": "Cite sources."},
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "mid-conversation reminder"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-8",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "mid-conversation reminder"},
+        {"role": "user", "content": "continue"},
+    ]
+    assert result["system"] == [
+        {"type": "text", "text": "You are terse."},
+        {"type": "text", "text": "Cite sources."},
+    ]
+
+
 def test_as_system_content_blocks_handles_each_shape():
     """``_as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
     a string -> a single text block, a list -> a shallow copy, and any other value
