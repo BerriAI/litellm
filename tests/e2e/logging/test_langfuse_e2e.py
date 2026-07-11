@@ -73,7 +73,18 @@ def _assert_logs_spend(
     assert obs_cost is not None and obs_cost > 0, (
         f"{scope}: Langfuse must log positive spend; calculatedTotalCost={obs_cost!r}"
     )
-    if outcome.response_cost is not None and outcome.response_cost > 0:
+    # Stream responses send headers before final cost is known, so the cost header
+    # is often absent; non-stream must always expose x-litellm-response-cost.
+    if not outcome.is_streaming:
+        assert outcome.response_cost is not None and outcome.response_cost > 0, (
+            f"{scope}: proxy must return positive x-litellm-response-cost; "
+            f"got {outcome.response_cost!r}"
+        )
+        assert costs_agree(outcome.response_cost, obs_cost), (
+            f"{scope}: Langfuse cost {obs_cost!r} disagrees with "
+            f"x-litellm-response-cost {outcome.response_cost!r}"
+        )
+    elif outcome.response_cost is not None and outcome.response_cost > 0:
         assert costs_agree(outcome.response_cost, obs_cost), (
             f"{scope}: Langfuse cost {obs_cost!r} disagrees with "
             f"x-litellm-response-cost {outcome.response_cost!r}"
@@ -83,8 +94,8 @@ def _assert_logs_spend(
         response_id=completion_response_id(outcome.body),
         require_positive_spend=True,
     )
-    assert spend_row is not None and spend_row.spend is not None, (
-        f"{scope}: proxy /spend/logs never produced a spend row for key"
+    assert spend_row is not None and spend_row.spend is not None and spend_row.spend > 0, (
+        f"{scope}: proxy /spend/logs never produced a positive spend row for key"
     )
     assert costs_agree(spend_row.spend, obs_cost), (
         f"{scope}: Langfuse cost {obs_cost!r} disagrees with proxy spend "
@@ -321,15 +332,13 @@ class TestLangfuseTeamLogging:
             ),
             observations[0],
         )
-        cost = observation_spend(gen)
-        if cost is not None and cost > 0 and outcome.response_cost is not None:
-            _assert_logs_spend(
-                client,
-                key=key,
-                outcome=outcome,
-                obs_cost=cost,
-                scope="team-guardrail",
-            )
+        _assert_logs_spend(
+            client,
+            key=key,
+            outcome=outcome,
+            obs_cost=observation_spend(gen),
+            scope="team-guardrail",
+        )
         assert any(
             observation_has_guardrail(o, guardrail_name=guardrail_name)
             or (o.name is not None and "guardrail" in o.name.lower())
