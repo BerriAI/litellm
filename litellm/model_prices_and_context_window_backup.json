@@ -45088,8 +45088,8 @@
             },
             {
                 "name": "claude-adaptive-thinking",
-                "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
-                "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions with no code change.",
+                "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))|claude-[a-z]+-(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?",
+                "description": "Claude opus/sonnet/haiku at version 4.6 or higher (4.6 through 4.99, then any later major-minor), plus any claude-<family>- id at major version 5 or higher, bare major or major-minor, so a new family shaped like claude-fable-5 is covered by the same gate as the core families. 4.x coverage stays limited to opus/sonnet/haiku. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions and new families with no code change.",
                 "model_info": {
                     "supports_adaptive_thinking": true
                 }

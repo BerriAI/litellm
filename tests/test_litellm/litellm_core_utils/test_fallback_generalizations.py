@@ -343,11 +343,32 @@ def test_shipped_version_boundaries(shipped_cost_map, model, provider, adaptive,
     assert info.get("supports_mid_conversation_system") is mid_conversation, model
 
 
-def test_shipped_mid_conversation_rule_covers_new_families_like_fable(shipped_cost_map):
-    """The 4.8+ mid-conversation gate accepts bare 5+ majors, so a new family shaped
-    like claude-fable-5 is covered. The adaptive rule keeps its opus/sonnet/haiku
-    family list, so a fable-shaped id gets no adaptive flag from the rules."""
+def test_shipped_rules_cover_new_families_like_fable_at_5_plus(shipped_cost_map):
+    """Both version gates accept any claude-<family>- id at major 5 or higher, bare
+    major or major-minor, so a new family shaped like claude-fable-5 gets adaptive
+    thinking and mid-conversation system support without a cost-map entry."""
     model = "claude-fable-5-1"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
+    assert info["supports_mid_conversation_system"] is True
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+
+
+def test_shipped_rules_flag_bare_5_plus_majors_of_any_family(shipped_cost_map):
+    """A bare 5+ major with no minor gets both flags at the rule level; the mapped
+    claude-fable-5 entry itself still resolves from the cost map, so this pins the
+    pattern via the capability union rather than get_model_info."""
+    matched = match_capability_generalizations("claude-fable-5")
+    assert matched is not None
+    assert matched["supports_adaptive_thinking"] is True
+    assert matched["supports_mid_conversation_system"] is True
+
+
+def test_shipped_adaptive_rule_keeps_4x_coverage_to_core_families(shipped_cost_map):
+    """The family-agnostic adaptive branch starts at major 5; a non-core family at
+    4.x gets the 4.8+ mid-conversation flag and baseline caps but never adaptive."""
+    model = "claude-newfam-4-9"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model, custom_llm_provider="anthropic")
     assert info["supports_mid_conversation_system"] is True
