@@ -322,7 +322,7 @@ npm run build
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and create a pull request
+2. **Create a PR**: Go to GitHub and open a pull request against the current daily OSS branch, named `litellm_oss_daily_YYYY_MM_DD`. A fresh one is cut each weekday, so pick the most recent from the [branch list](https://github.com/BerriAI/litellm/branches/all?query=litellm_oss_daily). Do not target `main`.
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

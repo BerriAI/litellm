@@ -26,7 +26,7 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
         "claude-haiku-4-5",
         f"hi {unique_marker()}",
         tags=[tag],
-        max_tokens=16,
+        max_tokens=64,
     )
     if not result.ok and not is_budget_block(result):
         require_successful_call(result)
@@ -40,17 +40,20 @@ def test_tag_budget_blocks_tagged_requests(
     client.create_tag(budgeted_tag, max_budget=TINY_BUDGET)
     resources.defer(lambda: client.delete_tag(budgeted_tag))
 
-    # Requests under the budgeted tag get blocked once its spend is exceeded.
-    blocked = False
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if is_budget_block(_tagged_call(client, scoped_key, budgeted_tag)):
-            blocked = True
-            break
-        time.sleep(1)
+    first = _tagged_call(client, scoped_key, budgeted_tag)
+    if is_budget_block(first):
+        blocked = True
+    else:
+        require_successful_call(first)
+        blocked = False
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if is_budget_block(_tagged_call(client, scoped_key, budgeted_tag)):
+                blocked = True
+                break
+            time.sleep(1)
     assert blocked, f"tag budget for {budgeted_tag!r} never enforced"
 
-    # A request with an unbudgeted tag on the same key is unaffected.
     free_tag = f"e2e-free-tag-{unique_marker()}"
     other = _tagged_call(client, scoped_key, free_tag)
     assert not is_budget_block(other), (

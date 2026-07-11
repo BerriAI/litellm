@@ -471,7 +471,8 @@ def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
     through: the caller owns the upstream token, and this relayed flow is how a browser obtains
     one against the upstream IdP (the admin UI's browser-only Authorize uses it). The minted
     token is upstream-audienced and held by the caller; the gateway persists nothing for these
-    modes (DCR persistence is opt-in and never enabled on this path).
+    modes (``_persist_dcr_client_registration`` skips them unconditionally, so even the admin
+    Authorize path with ``persist_credentials`` enabled writes nothing to the server row).
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
@@ -498,21 +499,84 @@ def _raise_unless_oauth2_discovery_server(
     mcp_server_name: Optional[str],
     description: str,
 ) -> None:
-    """404 a NAMED discovery request unless it resolves to an oauth2 server.
+    """404 a NAMED discovery request unless it resolves to an oauth2 or DCR-bridge server.
 
     A named server that is unknown (or hidden from the caller) and one that exists
     but is non-oauth2 both return the same 404, so the well-known discovery paths
     cannot be used to enumerate non-OAuth server names. Root discovery (no name) is
     unaffected, and pass-through servers are resolved by the caller before this runs.
+    DCR-bridge servers are admitted because they serve the gateway's own authorization
+    server metadata (the register, authorize, and token relays).
     """
     if mcp_server_name is None:
         return
     if mcp_server is not None and mcp_server.auth_type == MCPAuth.oauth2:
         return
+    if mcp_server is not None and mcp_server.is_dcr_bridge:
+        return
     raise HTTPException(
         status_code=404,
         detail=f"MCP server '{mcp_server_name}' is {description}",
     )
+
+
+def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
+    """True when a DCR-bridge server relays client registration to the upstream authorization
+    server instead of short-circuiting to an admin-configured OAuth client. In the relay arm the
+    upstream holds each client's own registration, so the authorize and token relays pass the
+    client's ``client_id`` and ``redirect_uri`` through verbatim and the authorization code
+    returns directly to the client's redirect URI without transiting the gateway. Gateway-side
+    redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
+    arm, where the upstream only knows the gateway's own callback."""
+    return mcp_server.is_dcr_bridge and bool(mcp_server.registration_url) and not mcp_server.client_id
+
+
+def _require_s256_pkce(
+    code_challenge: Optional[str],
+    code_challenge_method: Optional[str],
+) -> Tuple[str, str]:
+    """DCR-bridge servers serve unauthenticated public OAuth clients, so the PKCE downgrade
+    paths (no challenge, or a non-S256 method; RFC 7636 defaults a missing method to ``plain``)
+    are rejected at the gateway instead of relying on upstream enforcement. Returns the
+    validated pair so callers get non-optional values."""
+    if code_challenge and code_challenge_method == "S256":
+        return code_challenge, code_challenge_method
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "This server requires PKCE: send code_challenge with "
+            "code_challenge_method=S256 on the authorization request"
+        ),
+    )
+
+
+def _redirect_to_upstream_authorize(
+    *,
+    mcp_server: MCPServer,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str,
+    code_challenge_method: str,
+    response_type: Optional[str],
+    scope: Optional[str],
+) -> RedirectResponse:
+    """The bridge relay arm's authorize redirect: every client-supplied parameter passes through
+    to the upstream authorize endpoint verbatim, no relay state cookie is set, and the upstream
+    enforces its own registered redirect binding for the client."""
+    scope_value = scope or (" ".join(mcp_server.scopes) if mcp_server.scopes else None)
+    passthrough_params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "response_type": response_type or "code",
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        **({"scope": scope_value} if scope_value else {}),
+    }
+    parsed_auth_url = urlparse(mcp_server.authorization_url or "")
+    merged_params = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
+    return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
 
 
 async def authorize_with_server(
@@ -529,6 +593,24 @@ async def authorize_with_server(
     _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
         raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+
+    if mcp_server.is_dcr_bridge:
+        # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
+        # now-non-optional pair to the upstream authorize; the short-circuit arm keeps
+        # calling this for its enforcement side effect, then falls through to the gateway
+        # /callback flow below, which reads the original code_challenge names.
+        bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
+        if _dcr_bridge_relays_client_registration(mcp_server):
+            return _redirect_to_upstream_authorize(
+                mcp_server=mcp_server,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                state=state,
+                code_challenge=bridge_challenge,
+                code_challenge_method=bridge_method,
+                response_type=response_type,
+                scope=scope,
+            )
 
     # Trusted redirect_uri: same-origin, loopback, or ops-allowlisted.
     # The URI is encrypted into the OAuth state and decoded on
@@ -625,11 +707,21 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="code is required for authorization_code grant",
             )
+        bridge_token_relay = _dcr_bridge_relays_client_registration(mcp_server)
+        if bridge_token_relay and not redirect_uri:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "redirect_uri is required for the authorization_code grant on this server; "
+                    "send the same redirect_uri used on the authorization request"
+                ),
+            )
         proxy_base_url = get_request_base_url(request)
+        resolved_redirect_uri = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": f"{proxy_base_url}/callback",
+            "redirect_uri": resolved_redirect_uri,
             **client_auth.body,
         }
         if code_verifier:
@@ -647,7 +739,17 @@ async def exchange_token_with_server(
             detail="MCP upstream token endpoint returned no response",
         )
 
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if "invalid_target" in exc.response.text:
+            verbose_logger.warning(
+                "MCP server %s: the upstream authorization server rejected the token request with "
+                "invalid_target; it may require RFC 8707 resource indicators, which the gateway "
+                "does not send yet (tracked as LIT-4339)",
+                mcp_server.server_id,
+            )
+        raise
     token_response = response.json()
     access_token = token_response["access_token"]
 
@@ -718,6 +820,22 @@ class _PersistedDcrCredentials(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     token_endpoint_auth_method: Optional[str] = None
+    redirect_uris: Optional[list[str]] = None
+
+
+def _redirect_uri_not_registered(credentials: _PersistedDcrCredentials, current_redirect_uri: str) -> bool:
+    """Whether a persisted DCR client is positively known NOT to cover the current callback.
+
+    A DCR client is bound to the redirect_uris it was registered with; if the proxy's
+    resolved public origin has since changed, every authorize built for it will be
+    rejected by the IdP. Clients persisted before ``redirect_uris`` was recorded (and
+    admin-configured clients, which never get a recording) return False so they are
+    grandfathered rather than re-registered, because re-minting a client_id orphans
+    every user's refresh tokens for that server."""
+    recorded = credentials.redirect_uris
+    if not recorded:
+        return False
+    return current_redirect_uri not in recorded
 
 
 def _get_persisted_dcr_credentials(credentials: object) -> Optional[_PersistedDcrCredentials]:
@@ -784,11 +902,23 @@ async def _get_persisted_mcp_server_with_dcr_client_id(
     return persisted_mcp_server, credentials
 
 
-async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> bool:
+async def _reuse_persisted_dcr_client_if_available(
+    mcp_server: MCPServer, current_redirect_uri: Optional[str] = None
+) -> bool:
     persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
     if persisted is None:
         return False
     persisted_mcp_server, credentials = persisted
+    if current_redirect_uri is not None and _redirect_uri_not_registered(credentials, current_redirect_uri):
+        verbose_logger.debug(
+            "register_client_with_server: not reusing persisted DCR client for server_id=%s; its registered "
+            "redirect_uris=%s do not include the current callback %s. The operator-facing warning for this "
+            "re-registration event is emitted once by _persisted_dcr_redirect_uri_is_stale.",
+            mcp_server.server_id,
+            credentials.redirect_uris,
+            current_redirect_uri,
+        )
+        return False
     if not _apply_persisted_dcr_credentials(mcp_server, credentials):
         return False
 
@@ -807,11 +937,36 @@ async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> boo
     return bool(mcp_server.client_id)
 
 
-DcrRegistrationPersistenceResult = Literal["persisted", "reused", "failed"]
+async def _persisted_dcr_redirect_uri_is_stale(mcp_server: MCPServer, current_redirect_uri: str) -> bool:
+    """Whether the server's persisted DCR client is bound to redirect_uris that no longer
+    cover the current proxy callback, meaning authorize is guaranteed to fail IdP-side.
+
+    Consulted when the in-memory server already carries a hydrated client_id, which
+    otherwise short-circuits registration before any redirect check can run. Servers
+    without a persisted DCR recording (admin-configured client_id, or registered before
+    redirect_uris were recorded) are never reported stale."""
+    persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
+    if persisted is None:
+        return False
+    _, credentials = persisted
+    if not _redirect_uri_not_registered(credentials, current_redirect_uri):
+        return False
+    verbose_logger.warning(
+        "register_client_with_server: persisted DCR client for server_id=%s is registered with redirect_uris=%s "
+        "which do not include the current callback %s (proxy origin changed); registering a replacement client. "
+        "Users previously signed in to this server will need to re-authenticate.",
+        mcp_server.server_id,
+        credentials.redirect_uris,
+        current_redirect_uri,
+    )
+    return True
+
+
+DcrRegistrationPersistenceResult = Literal["persisted", "reused", "skipped", "failed"]
 
 
 async def _persist_dcr_client_registration(
-    mcp_server: MCPServer, registration_response: object
+    mcp_server: MCPServer, registration_response: object, current_redirect_uri: str
 ) -> DcrRegistrationPersistenceResult:
     """Persist the dynamically registered OAuth client (RFC 7591) onto the MCP server row.
 
@@ -821,7 +976,23 @@ async def _persist_dcr_client_registration(
     full re-authorization instead of a silent refresh. Mirrors the ``encrypt_credentials``
     write that ``client_credentials`` and token exchange already use. Failures are logged,
     never raised: registration still returns to the caller even when persistence fails.
+
+    The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are skipped
+    unconditionally: the caller holds the upstream token and the gateway must hold no OAuth
+    client identity for these servers. Persisting here would stamp ``oauth2_flow`` and a
+    ``client_id`` onto a server whose mode promises the gateway stores nothing, making a
+    fresh pass-through server read as gateway-authorized.
+
+    ``redirect_uris`` records what the client is bound to so a later origin change can be
+    detected as a positive mismatch and trigger re-registration instead of stranding the
+    server on IdP-side redirect_uri rejections. ``client_secret`` and
+    ``token_endpoint_auth_method`` are written explicitly (None when absent) because
+    ``update_mcp_server`` merges credential blobs: a re-registered public client must not
+    inherit the previous client's secret or auth method.
     """
+    if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+        return "skipped"
+
     try:
         registration = _DcrClientRegistration.model_validate(registration_response)
     except ValidationError as exc:
@@ -833,17 +1004,16 @@ async def _persist_dcr_client_registration(
         )
         return "failed"
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+    if await _reuse_persisted_dcr_client_if_available(mcp_server, current_redirect_uri=current_redirect_uri):
         return "reused"
 
     credentials: MCPCredentials = {
         "client_id": registration.client_id,
-        **({"client_secret": registration.client_secret} if registration.client_secret is not None else {}),
-        **(
-            {"token_endpoint_auth_method": "client_secret_basic"}
-            if registration.token_endpoint_auth_method == "client_secret_basic"
-            else {}
+        "client_secret": registration.client_secret,
+        "token_endpoint_auth_method": (
+            "client_secret_basic" if registration.token_endpoint_auth_method == "client_secret_basic" else None
         ),
+        "redirect_uris": [current_redirect_uri],
     }
 
     from litellm.proxy._experimental.mcp_server.db import update_mcp_server  # noqa: PLC0415
@@ -878,6 +1048,21 @@ async def _persist_dcr_client_registration(
         return "failed"
 
 
+_MAX_UPSTREAM_ERROR_CHARS = 500
+
+
+def _safe_upstream_error_detail(response: httpx.Response) -> str:
+    """Bounded plaintext summary of an upstream registration failure for the client.
+
+    RFC 7591 error bodies are small JSON objects (``error`` / ``error_description``); relaying the
+    text lets the client read the real reason instead of a bare 500, and the length bound keeps a
+    hostile or oversized upstream body from bloating the gateway response."""
+    body = response.text
+    if not body:
+        return response.reason_phrase or "upstream registration failed"
+    return body[:_MAX_UPSTREAM_ERROR_CHARS]
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -887,19 +1072,28 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
+    client_redirect_uris: Optional[list] = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
+    current_redirect_uri = f"{request_base_url}/callback"
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": [current_redirect_uri],
     }
 
-    if mcp_server.client_id:
+    if mcp_server.client_id and not (
+        persist_credentials
+        and mcp_server.registration_url
+        and await _persisted_dcr_redirect_uri_is_stale(mcp_server, current_redirect_uri)
+    ):
         return dummy_return
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+    if await _reuse_persisted_dcr_client_if_available(
+        mcp_server,
+        current_redirect_uri=current_redirect_uri if persist_credentials else None,
+    ):
         return dummy_return
 
     if mcp_server.authorization_url is None:
@@ -908,12 +1102,19 @@ async def register_client_with_server(
     if mcp_server.registration_url is None:
         return dummy_return
 
+    bridge_relay = _dcr_bridge_relays_client_registration(mcp_server)
+    if bridge_relay and not client_redirect_uris:
+        raise HTTPException(
+            status_code=400,
+            detail="redirect_uris is required to register a client with this server",
+        )
+
     register_data = {
         "client_name": client_name,
-        "redirect_uris": [f"{request_base_url}/callback"],
-        "grant_types": grant_types or [],
-        "response_types": response_types or [],
-        "token_endpoint_auth_method": token_endpoint_auth_method or "",
+        "redirect_uris": client_redirect_uris if bridge_relay else [current_redirect_uri],
+        "grant_types": grant_types or (["authorization_code", "refresh_token"] if bridge_relay else []),
+        "response_types": response_types or (["code"] if bridge_relay else []),
+        "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
     }
     headers = {
         "Content-Type": "application/json",
@@ -931,12 +1132,14 @@ async def register_client_with_server(
             status_code=502,
             detail="MCP upstream registration endpoint returned no response",
         )
+    if bridge_relay and response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=_safe_upstream_error_detail(response))
     response.raise_for_status()
 
     token_response = response.json()
 
-    if persist_credentials:
-        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response)
+    if persist_credentials and not bridge_relay:
+        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
 
@@ -1359,6 +1562,13 @@ async def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    if mcp_server is not None and mcp_server_name and mcp_server.is_dcr_bridge:
+        return {
+            "authorization_servers": [f"{request_base_url}/{mcp_server_name}"],
+            "resource": resource_url,
+            "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+        }
+
     # Pass-through branch: proxy the upstream's own metadata so discovery
     # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
     if mcp_server is not None and (
@@ -1688,6 +1898,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
+                client_redirect_uris=data.get("redirect_uris"),
             )
         return dummy_return
 
@@ -1702,4 +1913,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
+        client_redirect_uris=data.get("redirect_uris"),
     )

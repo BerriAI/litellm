@@ -1,21 +1,36 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Divider, Space, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Card, Collapse, Divider, InputNumber, Radio, Space, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const { Text } = Typography;
 
-interface ComplexityTiers {
+export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
+
+export interface ComplexityTiers {
   SIMPLE: string;
   MEDIUM: string;
   COMPLEX: string;
   REASONING: string;
 }
 
+export interface ClassifierLLMConfig {
+  model: string;
+  timeout_ms: number;
+}
+
+export type ClassifierType = "heuristic" | "llm";
+
+export interface ComplexityRouterConfigValue {
+  tiers: ComplexityTiers;
+  classifier_type: ClassifierType;
+  classifier_llm_config?: ClassifierLLMConfig;
+}
+
 interface ComplexityRouterConfigProps {
   modelInfo: ModelGroup[];
-  value: ComplexityTiers;
-  onChange: (tiers: ComplexityTiers) => void;
+  value: ComplexityRouterConfigValue;
+  onChange: (value: ComplexityRouterConfigValue) => void;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
 }
@@ -59,7 +74,38 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const handleTierChange = (tier: keyof ComplexityTiers, model: string) => {
     onChange({
       ...value,
-      [tier]: model,
+      tiers: { ...value.tiers, [tier]: model },
+    });
+  };
+
+  const handleClassifierTypeChange = (classifierType: ClassifierType) => {
+    onChange({
+      ...value,
+      classifier_type: classifierType,
+      classifier_llm_config:
+        classifierType === "llm"
+          ? value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }
+          : undefined,
+    });
+  };
+
+  const handleClassifierModelChange = (model: string) => {
+    onChange({
+      ...value,
+      classifier_llm_config: {
+        model,
+        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+      },
+    });
+  };
+
+  const handleClassifierTimeoutChange = (timeoutMs: number | null) => {
+    onChange({
+      ...value,
+      classifier_llm_config: {
+        model: value.classifier_llm_config?.model ?? "",
+        timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+      },
     });
   };
 
@@ -98,7 +144,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   Examples: {tierInfo.examples}
                 </Text>
                 <AntdSelect
-                  value={value[tier]}
+                  value={value.tiers[tier]}
                   onChange={(model) => handleTierChange(tier, model)}
                   placeholder={`Select model for ${tierInfo.label.toLowerCase()} queries`}
                   showSearch
@@ -110,6 +156,76 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           );
         })}
       </Card>
+
+      <Divider />
+
+      <Collapse
+        ghost
+        style={{ background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}
+        items={[
+          {
+            key: "classifier",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Classification Method
+              </Text>
+            ),
+            children: (
+              <>
+                <Radio.Group
+                  value={value.classifier_type}
+                  onChange={(e) => handleClassifierTypeChange(e.target.value)}
+                  className="w-full"
+                >
+                  <Space direction="vertical" className="w-full">
+                    <Radio value="heuristic">
+                      <Text strong>Heuristic</Text>{" "}
+                      <Text type="secondary">(default) — rule-based scoring, no API calls, &lt;1ms latency</Text>
+                    </Radio>
+                    <Radio value="llm">
+                      <Text strong>LLM Classifier</Text>{" "}
+                      <Text type="secondary">— use a model to decide the tier (e.g. a small/fast model)</Text>
+                    </Radio>
+                  </Space>
+                </Radio.Group>
+
+                {value.classifier_type === "llm" && (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <Text strong style={{ display: "block", marginBottom: 4 }}>
+                        Classifier Model
+                      </Text>
+                      <AntdSelect
+                        value={value.classifier_llm_config?.model || undefined}
+                        onChange={handleClassifierModelChange}
+                        placeholder="Select the model that will classify request complexity"
+                        showSearch
+                        style={{ width: "100%" }}
+                        options={modelOptions}
+                      />
+                    </div>
+                    <div>
+                      <Text strong style={{ display: "block", marginBottom: 4 }}>
+                        Timeout (ms)
+                      </Text>
+                      <InputNumber
+                        value={value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}
+                        onChange={handleClassifierTimeoutChange}
+                        min={1}
+                        style={{ width: "100%" }}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Falls back to the heuristic scorer if the classifier call errors, times out, or returns an
+                        unparseable response.
+                      </Text>
+                    </div>
+                  </div>
+                )}
+              </>
+            ),
+          },
+        ]}
+      />
 
       <Divider />
 

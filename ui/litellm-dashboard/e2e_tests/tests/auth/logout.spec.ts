@@ -6,7 +6,8 @@ test.describe("Logout", () => {
 
   test("Clicking Logout clears the session and forces re-login on a protected page", async ({ page }) => {
     await page.goto("/ui");
-    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
+    // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
+    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
 
     // Open the navbar User dropdown. The trigger button exposes an aria-label
     // of "Account menu — <role> — signed in as <email>", and the antd Dropdown
