@@ -250,24 +250,6 @@ export default function TeamMemberTab({
 
   return (
     <>
-      {canEditTeam && (
-        <Space className="mb-3">
-          <Button
-            onClick={() => {
-              setSelectionMode((current) => !current);
-              setSelectedMembers([]);
-            }}
-            type={selectionMode ? "primary" : "default"}
-          >
-            {selectionMode ? "Cancel Selection" : "Select Members"}
-          </Button>
-          {selectionMode && (
-            <Button type="primary" disabled={selectedMembers.length === 0} onClick={() => setIsBulkUpdateVisible(true)}>
-              Bulk Edit ({selectedMembers.length} selected)
-            </Button>
-          )}
-        </Space>
-      )}
       <MemberTable
         members={teamData.team_info.members_with_roles}
         canEdit={canEditTeam}
@@ -286,6 +268,28 @@ export default function TeamMemberTab({
         }}
         onDelete={handleMemberDelete}
         onAddMember={() => setIsAddMemberModalVisible(true)}
+        extraActions={
+          <>
+            <Button
+              onClick={() => {
+                setSelectionMode((current) => !current);
+                setSelectedMembers([]);
+              }}
+              type={selectionMode ? "primary" : "default"}
+            >
+              {selectionMode ? "Cancel Selection" : "Select Members"}
+            </Button>
+            {selectionMode && (
+              <Button
+                type="primary"
+                disabled={selectedMembers.length === 0}
+                onClick={() => setIsBulkUpdateVisible(true)}
+              >
+                Bulk Edit ({selectedMembers.length} selected)
+              </Button>
+            )}
+          </>
+        }
         roleColumnTitle="Team Role"
         roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
         extraColumns={extraColumns}

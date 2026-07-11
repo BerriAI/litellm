@@ -19,6 +19,7 @@ export interface MemberTableProps {
   showDeleteForMember?: (member: Member) => boolean;
   emptyText?: string;
   rowSelection?: React.ComponentProps<typeof Table<Member>>["rowSelection"];
+  extraActions?: React.ReactNode;
 }
 
 export default function MemberTable({
@@ -33,6 +34,7 @@ export default function MemberTable({
   showDeleteForMember,
   emptyText,
   rowSelection,
+  extraActions,
 }: MemberTableProps) {
   const baseColumns: ColumnsType<Member> = [
     {
@@ -115,10 +117,15 @@ export default function MemberTable({
         scroll={{ x: "max-content" }}
         locale={emptyText ? { emptyText } : undefined}
       />
-      {onAddMember && canEdit && (
-        <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
-          Add Member
-        </Button>
+      {(onAddMember || extraActions) && canEdit && (
+        <Space>
+          {onAddMember && (
+            <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
+              Add Member
+            </Button>
+          )}
+          {extraActions}
+        </Space>
       )}
     </Space>
   );
