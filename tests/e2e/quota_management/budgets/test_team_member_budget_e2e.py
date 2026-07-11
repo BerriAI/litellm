@@ -97,6 +97,7 @@ class TestTeamMemberBudget:
                 f"call {row.request_id} logged under user {row.user}, not member {member.user_id}"
             )
 
+    @pytest.mark.covers("quota_management.budget.team_member.blocks_over_limit")
     def test_member_spend_over_budget_is_blocked(self, client: BudgetClient, member: _Member) -> None:
         for _ in range(40):
             result = client.chat(member.key, MODEL, f"spend {unique_marker()}", max_tokens=16)

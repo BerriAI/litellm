@@ -121,6 +121,7 @@ def _accumulate(client: BudgetClient, key: str, count: int) -> None:
         list(pool.map(one, range(count)))
 
 
+@pytest.mark.covers("quota_management.budget.spend_counter.reseed_matches_db")
 def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

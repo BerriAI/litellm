@@ -134,11 +134,26 @@ def _case_id(case_cls: Type[_BudgetCase]) -> str:
 @pytest.mark.parametrize(
     "case_cls",
     [
-        KeyBudgetCase,
-        InternalUserBudgetCase,
-        EndUserBudgetCase,
-        OrganizationBudgetCase,
-        TeamMemberBudgetCase,
+        pytest.param(
+            KeyBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.key.blocks_over_limit"),
+        ),
+        pytest.param(
+            InternalUserBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.internal_user.blocks_over_limit"),
+        ),
+        pytest.param(
+            EndUserBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.end_user.blocks_over_limit"),
+        ),
+        pytest.param(
+            OrganizationBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.organization.blocks_over_limit"),
+        ),
+        pytest.param(
+            TeamMemberBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.team_member.blocks_over_limit"),
+        ),
     ],
     ids=_case_id,
 )

@@ -33,6 +33,7 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
     return result
 
 
+@pytest.mark.covers("quota_management.budget.tag.blocks_over_limit")
 def test_tag_budget_blocks_tagged_requests(
     client: BudgetClient, scoped_key: str, resources: ResourceManager
 ) -> None:

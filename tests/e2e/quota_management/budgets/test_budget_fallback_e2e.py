@@ -19,6 +19,7 @@ PRIMARY_MODEL = "claude-haiku-4-5"
 FALLBACK_MODEL = "gpt-5.5"
 
 
+@pytest.mark.covers("quota_management.budget.fallback.routes_to_fallback")
 def test_budget_fallback_reroutes_anthropic_messages_to_openai(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

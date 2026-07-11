@@ -12,7 +12,7 @@ Pre-existing live coverage outside this suite:
 - `tests/local_testing/test_router_budget_limiter.py` - provider / tag / deployment
   budgets at the router.
 
-This suite (`tests/e2e/budgets/`) adds the missing live coverage and runs
+This suite (`tests/e2e/quota_management/budgets/`) adds the missing live coverage and runs
 on the shared lifecycle (every entity it creates is deleted on teardown).
 
 ---

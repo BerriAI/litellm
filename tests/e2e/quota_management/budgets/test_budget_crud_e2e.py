@@ -15,6 +15,7 @@ from lifecycle import ResourceManager
 pytestmark = pytest.mark.e2e
 
 
+@pytest.mark.covers("mgmt.budget.new.persists")
 def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager) -> None:
     budget_id = client.create_budget(max_budget=12.5, soft_budget=10.0, budget_duration="30d")
     resources.defer(lambda: client.delete_budget(budget_id))
@@ -36,6 +37,7 @@ def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager)
     )
 
 
+@pytest.mark.covers("mgmt.budget.delete.persists")
 def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManager) -> None:
     budget_id = client.create_budget(max_budget=1.0)
     resources.defer(lambda: client.delete_budget(budget_id))
