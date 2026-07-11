@@ -224,10 +224,13 @@ class ClassifierLLMConfig(BaseModel):
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
-    # Tier to model mapping (string = pin; list = soft-floor home pool when adaptive)
+    # string = pin; list = random pick when adaptive=False, soft-floor home pool when adaptive=True
     tiers: Dict[str, Union[str, List[str]]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
-        description="Mapping of complexity tiers to a model or model pool",
+        description=(
+            "Mapping of complexity tiers to a model or model pool. "
+            "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
+        ),
     )
 
     # Tier boundaries (normalized scores)
@@ -303,6 +306,13 @@ class ComplexityRouterConfig(BaseModel):
         default=DEFAULT_TIER_DISTANCE_PENALTY,
         ge=0.0,
         description="Score penalty per tier-step away from the classified tier when adaptive=True",
+    )
+    adaptive_eligible: Literal["all", "classified_tier"] = Field(
+        default="all",
+        description=(
+            "When adaptive=True: 'all' scores every pool model with a tier-distance penalty (soft floors); "
+            "'classified_tier' Thompson-samples only inside the classified tier's pool"
+        ),
     )
 
     model_config = ConfigDict(extra="allow")  # Allow additional fields

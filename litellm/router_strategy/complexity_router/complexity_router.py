@@ -11,6 +11,7 @@ model instead, trading that latency/cost guarantee for potentially better accura
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
+import random
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -408,29 +409,26 @@ class ComplexityRouter(CustomLogger):
         """
         tier_key = tier.value if isinstance(tier, ComplexityTier) else tier
 
-        # Check config tiers mapping
         model = self.config.tiers.get(tier_key)
         if model:
-            if isinstance(model, list):
-                if not model:
-                    raise ValueError(f"Empty model pool for tier {tier_key}")
-                return model[0]
-            return model
+            return self._pick_from_tier_value(model, tier_key)
 
-        # Fallback to default model if configured
         if self.config.default_model:
             return self.config.default_model
 
-        # Last resort: return MEDIUM tier model or error
         medium_model = self.config.tiers.get(ComplexityTier.MEDIUM.value)
         if medium_model:
-            if isinstance(medium_model, list):
-                if not medium_model:
-                    raise ValueError("Empty model pool for MEDIUM tier")
-                return medium_model[0]
-            return medium_model
+            return self._pick_from_tier_value(medium_model, ComplexityTier.MEDIUM.value)
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
+
+    @staticmethod
+    def _pick_from_tier_value(model: Union[str, List[str]], tier_key: str) -> str:
+        if isinstance(model, str):
+            return model
+        if not model:
+            raise ValueError(f"Empty model pool for tier {tier_key}")
+        return random.choice(model)
 
     def _tier_pools(self) -> Dict[str, List[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
@@ -460,8 +458,10 @@ class ComplexityRouter(CustomLogger):
         home_tier: Dict[str, ComplexityTier] = {}
         for tier_name, models in pools.items():
             tier = ComplexityTier(tier_name)
+            tier_idx = TIER_SEVERITY_ORDER.index(tier)
             for model in models:
-                if model not in home_tier:
+                prev = home_tier.get(model)
+                if prev is None or TIER_SEVERITY_ORDER.index(prev) < tier_idx:
                     home_tier[model] = tier
         self._model_home_tier = home_tier
 
@@ -501,7 +501,12 @@ class ComplexityRouter(CustomLogger):
         self._adaptive_chosen_model_key = ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY
         return self.adaptive_router
 
-    def _soft_floor_pick(self, classified_tier: ComplexityTier, user_message: str) -> str:
+    def _soft_floor_pick(
+        self,
+        classified_tier: ComplexityTier,
+        user_message: str,
+        request_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> str:
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
             thompson_sample,
@@ -514,25 +519,59 @@ class ComplexityRouter(CustomLogger):
 
         request_type = classify_prompt(user_message)
         classified_idx = TIER_SEVERITY_ORDER.index(classified_tier)
-        all_costs = [adaptive.model_to_cost.get(m, 0.0) for m in adaptive.config.available_models]
+        pools = self._tier_pools()
+        if self.config.adaptive_eligible == "classified_tier":
+            candidates = list(pools.get(classified_tier.value, []))
+            if not candidates:
+                return self.get_model_for_tier(classified_tier)
+        else:
+            candidates = list(adaptive.config.available_models)
+
+        all_costs = [adaptive.model_to_cost.get(m, 0.0) for m in candidates]
         quality_weight = self.config.adaptive_weights.quality
         cost_weight = self.config.adaptive_weights.cost
         penalty_weight = self.config.tier_distance_penalty
 
         best_model: Optional[str] = None
         best_score = float("-inf")
-        for model in adaptive.config.available_models:
+        candidate_scores: List[Dict[str, Any]] = []
+        for model in candidates:
             cell = adaptive._cells[(request_type, model)]
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
-            home = self._model_home_tier.get(model, classified_tier)
-            distance = abs(TIER_SEVERITY_ORDER.index(home) - classified_idx)
+            if self.config.adaptive_eligible == "classified_tier":
+                distance = 0
+            else:
+                home = self._model_home_tier.get(model, classified_tier)
+                distance = abs(TIER_SEVERITY_ORDER.index(home) - classified_idx)
             score = quality_weight * quality_sample + cost_weight * cost_score - penalty_weight * distance
+            candidate_scores.append(
+                {
+                    "model": model,
+                    "quality_sample": quality_sample,
+                    "cost_score": cost_score,
+                    "tier_distance": distance,
+                    "score": score,
+                }
+            )
             if score > best_score:
                 best_score = score
                 best_model = model
         if best_model is None:
             return self.get_model_for_tier(classified_tier)
+        if request_kwargs is not None:
+            metadata = request_kwargs.setdefault("metadata", {})
+            if isinstance(metadata, dict):
+                metadata["adaptive_router_decision"] = {
+                    "classified_tier": classified_tier.value,
+                    "request_type": request_type.value,
+                    "eligible_mode": self.config.adaptive_eligible,
+                    "quality_weight": quality_weight,
+                    "cost_weight": cost_weight,
+                    "tier_distance_penalty": penalty_weight,
+                    "chosen_model": best_model,
+                    "candidates": candidate_scores,
+                }
         return best_model
 
     def _resolve_messages(
@@ -657,7 +696,7 @@ class ComplexityRouter(CustomLogger):
 
         tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
         if self.config.adaptive:
-            routed_model = self._soft_floor_pick(tier, user_message)
+            routed_model = self._soft_floor_pick(tier, user_message, request_kwargs)
             adaptive = self._ensure_adaptive_router()
             if adaptive is not None:
                 kwargs_metadata = request_kwargs.setdefault("metadata", {})

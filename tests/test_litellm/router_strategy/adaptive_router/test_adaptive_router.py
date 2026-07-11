@@ -233,6 +233,81 @@ async def test_record_turn_failure_increments_beta():
 
 
 @pytest.mark.asyncio
+async def test_record_turn_attributes_user_feedback_to_previous_response_model():
+    r = _make_router()
+    fast_before = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_before = r._cells[(RequestType.GENERAL, "smart")]
+
+    await r.record_turn(
+        session_id="feedback-switch",
+        model_name="fast",
+        request_type=RequestType.CODE_GENERATION,
+        turn=Turn(
+            user_content="fix this python retry bug",
+            assistant_content="clear the cache on every retry",
+        ),
+    )
+    await r.record_turn(
+        session_id="feedback-switch",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(
+            user_content="the python fix is still broken",
+            assistant_content="keep successful cache entries",
+        ),
+    )
+
+    fast_after = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_after = r._cells[(RequestType.GENERAL, "smart")]
+    assert fast_after.beta == pytest.approx(fast_before.beta + 1.0)
+    assert smart_after.beta == pytest.approx(smart_before.beta)
+    snapshot = await r.get_state_snapshot()
+    assert snapshot["feedback_attributed_total"] == 1
+    assert snapshot["cross_model_feedback_total"] == 1
+    assert snapshot["feedback_without_context_total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_record_turn_attributes_satisfaction_to_previous_response_model():
+    r = _make_router()
+    await r.record_turn(
+        session_id="satisfaction-switch",
+        model_name="smart",
+        request_type=RequestType.CODE_GENERATION,
+        turn=Turn(
+            user_content="write a python retry helper",
+            assistant_content="first draft",
+        ),
+    )
+    await r.record_turn(
+        session_id="satisfaction-switch",
+        model_name="fast",
+        request_type=RequestType.CODE_GENERATION,
+        turn=Turn(
+            user_content="add exponential backoff to the python helper",
+            assistant_content="updated draft",
+        ),
+    )
+    fast_before = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_before = r._cells[(RequestType.GENERAL, "smart")]
+
+    await r.record_turn(
+        session_id="satisfaction-switch",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(
+            user_content="thanks, that worked",
+            assistant_content="glad to help",
+        ),
+    )
+
+    fast_after = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_after = r._cells[(RequestType.GENERAL, "smart")]
+    assert fast_after.alpha == pytest.approx(fast_before.alpha + 1.0)
+    assert smart_after.alpha == pytest.approx(smart_before.alpha)
+
+
+@pytest.mark.asyncio
 async def test_load_state_from_db_overrides_cold_start():
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]

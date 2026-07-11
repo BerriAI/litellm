@@ -1275,7 +1275,7 @@ class TestAdaptiveSoftFloors:
         with pytest.raises(ValidationError):
             ComplexityRouterConfig(adaptive=True, tiers={"SIMPLE": []})
 
-    def test_get_model_for_tier_list_without_adaptive_uses_first(self, mock_router_instance):
+    def test_get_model_for_tier_list_without_adaptive_random_choice(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="test",
             litellm_router_instance=mock_router_instance,
@@ -1285,7 +1285,14 @@ class TestAdaptiveSoftFloors:
                 "default_model": "mid",
             },
         )
-        assert router.get_model_for_tier(ComplexityTier.SIMPLE) == "cheap"
+        pool = ["cheap", "premium"]
+        with patch(
+            "litellm.router_strategy.complexity_router.complexity_router.random.choice",
+            return_value="premium",
+        ) as choice:
+            assert router.get_model_for_tier(ComplexityTier.SIMPLE) == "premium"
+            choice.assert_called_once_with(pool)
+        assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
 
     def test_soft_floor_prefers_home_tier_when_posteriors_equal(self, adaptive_router_instance, hybrid_config):
         from litellm.router_strategy.adaptive_router.bandit import BanditCell
@@ -1346,3 +1353,12 @@ class TestAdaptiveSoftFloors:
         assert result is not None
         assert result.model in {"cheap", "premium"}
         assert request_kwargs["metadata"].get("adaptive_router_chosen_model") == result.model
+        decision = request_kwargs["metadata"]["adaptive_router_decision"]
+        assert decision["classified_tier"] == "SIMPLE"
+        assert decision["request_type"] == "general"
+        assert decision["eligible_mode"] == "all"
+        assert decision["chosen_model"] == result.model
+        assert {candidate["model"] for candidate in decision["candidates"]} == {
+            "cheap",
+            "premium",
+        }

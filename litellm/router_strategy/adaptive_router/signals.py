@@ -219,39 +219,52 @@ def _detect_exhaustion(status: Optional[int], tool_results: List[Dict[str, Any]]
     return False
 
 
-# ---- Public entrypoint ----------------------------------------------------
+def detect_user_feedback(
+    previous_user_content: Optional[str],
+    current_user_content: Optional[str],
+    tool_results: List[Dict[str, Any]],
+    allow_satisfaction: bool,
+) -> SignalDelta:
+    return SignalDelta(
+        misalignment=int(_detect_misalignment(previous_user_content, current_user_content)),
+        disengagement=int(_detect_disengagement(current_user_content)),
+        satisfaction=int(allow_satisfaction and _detect_satisfaction(current_user_content)),
+        failure=int(_detect_failure(tool_results)),
+    )
 
 
-def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
-    """
-    Detect signals on this turn, mutate state, return the delta.
+def detect_response_signals(
+    previous_assistant_content: Optional[str],
+    current_assistant_content: Optional[str],
+    tool_call_history: List[str],
+    tool_calls: List[Dict[str, Any]],
+    response_status: Optional[int],
+) -> SignalDelta:
+    return SignalDelta(
+        stagnation=int(
+            _detect_stagnation(
+                previous_assistant_content,
+                current_assistant_content,
+            )
+        ),
+        loop=int(_detect_loop(tool_call_history, tool_calls)),
+        exhaustion=int(_detect_exhaustion(response_status, [])),
+    )
 
-    O(1) per turn (no full-history rescan). Only inspects last_*, recent tool history
-    (which is bounded at TOOL_CALL_HISTORY_MAX), and the new turn payload.
-    """
-    delta = SignalDelta()
 
-    if _detect_misalignment(state.last_user_content, turn.user_content):
-        delta.misalignment = 1
-    if _detect_stagnation(state.last_assistant_content, turn.assistant_content):
-        delta.stagnation = 1
-    if _detect_disengagement(turn.user_content):
-        delta.disengagement = 1
-    if _detect_satisfaction(turn.user_content):
-        # Gate: only award satisfaction credit once per session, and only
-        # after MIN_TURNS_FOR_CLEAN_CREDIT turns of context. Early "thanks"
-        # on turn 1-2 is noise, not a validated quality signal.
-        current_turn_index = state.turn_count + 1
-        if not state.clean_credit_awarded and current_turn_index >= MIN_TURNS_FOR_CLEAN_CREDIT:
-            delta.satisfaction = 1
-            state.clean_credit_awarded = True
-    if _detect_failure(turn.tool_results):
-        delta.failure = 1
-    if _detect_loop(state.tool_call_history, turn.tool_calls):
-        delta.loop = 1
-    if _detect_exhaustion(turn.response_status, turn.tool_results):
-        delta.exhaustion = 1
+def merge_signal_deltas(*deltas: SignalDelta) -> SignalDelta:
+    return SignalDelta(
+        misalignment=sum(delta.misalignment for delta in deltas),
+        stagnation=sum(delta.stagnation for delta in deltas),
+        disengagement=sum(delta.disengagement for delta in deltas),
+        satisfaction=sum(delta.satisfaction for delta in deltas),
+        failure=sum(delta.failure for delta in deltas),
+        loop=sum(delta.loop for delta in deltas),
+        exhaustion=sum(delta.exhaustion for delta in deltas),
+    )
 
+
+def apply_signal_delta(state: SessionState, delta: SignalDelta) -> None:
     state.misalignment_count += delta.misalignment
     state.stagnation_count += delta.stagnation
     state.disengagement_count += delta.disengagement
@@ -260,6 +273,8 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
     state.loop_count += delta.loop
     state.exhaustion_count += delta.exhaustion
 
+
+def advance_session_state(state: SessionState, turn: Turn) -> None:
     if turn.user_content:
         state.last_user_content = turn.user_content
     if turn.assistant_content:
@@ -275,5 +290,40 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
 
     state.turn_count += 1
     state.last_processed_turn = state.turn_count
+
+
+# ---- Public entrypoint ----------------------------------------------------
+
+
+def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
+    """
+    Detect signals on this turn, mutate state, return the delta.
+
+    O(1) per turn (no full-history rescan). Only inspects last_*, recent tool history
+    (which is bounded at TOOL_CALL_HISTORY_MAX), and the new turn payload.
+    """
+    feedback_delta = detect_user_feedback(
+        state.last_user_content,
+        turn.user_content,
+        turn.tool_results,
+        allow_satisfaction=(not state.clean_credit_awarded and state.turn_count + 1 >= MIN_TURNS_FOR_CLEAN_CREDIT),
+    )
+    response_delta = detect_response_signals(
+        state.last_assistant_content,
+        turn.assistant_content,
+        state.tool_call_history,
+        turn.tool_calls,
+        turn.response_status,
+    )
+    exhaustion_delta = SignalDelta(exhaustion=int(_detect_exhaustion(None, turn.tool_results)))
+    delta = merge_signal_deltas(
+        feedback_delta,
+        response_delta,
+        exhaustion_delta,
+    )
+    apply_signal_delta(state, delta)
+    if delta.satisfaction:
+        state.clean_credit_awarded = True
+    advance_session_state(state, turn)
 
     return delta

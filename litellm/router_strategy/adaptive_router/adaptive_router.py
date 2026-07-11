@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_router_logger
@@ -36,6 +36,7 @@ from litellm.router_strategy.adaptive_router.bandit import (
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
+    MIN_TURNS_FOR_CLEAN_CREDIT,
     MIN_QUALITY_TIER_HEADER,
     MIN_QUALITY_TIER_METADATA_KEY,
     OWNER_CACHE_TTL_SECONDS,
@@ -44,7 +45,11 @@ from litellm.router_strategy.adaptive_router.signals import (
     SessionState,
     SignalDelta,
     Turn,
-    apply_turn,
+    advance_session_state,
+    apply_signal_delta,
+    detect_response_signals,
+    detect_user_feedback,
+    merge_signal_deltas,
 )
 from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
@@ -70,6 +75,17 @@ def _default_prefs() -> AdaptiveRouterPreferences:
     return AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
 
+@dataclass(frozen=True, slots=True)
+class _FeedbackContext:
+    model_name: str
+    request_type: RequestType
+    user_content: Optional[str]
+    assistant_content: Optional[str]
+    turn_count: int
+    clean_credit_awarded: bool
+    expires_at: float
+
+
 class AdaptiveRouter:
     """One instance per router_name. Holds in-memory caches + the update queue."""
 
@@ -89,10 +105,15 @@ class AdaptiveRouter:
         self._cells: Dict[Tuple[RequestType, str], BanditCell] = {}
         self._owner_cache: Dict[str, Tuple[str, float]] = {}
         self._session_states: Dict[Tuple[str, str], SessionState] = {}
+        self._feedback_contexts: Dict[str, _FeedbackContext] = {}
         # Parallel expiry map for _session_states, same TTL as _owner_cache.
         # Evicted opportunistically in `get_or_create_session_state`.
         self._session_states_expiry: Dict[Tuple[str, str], float] = {}
         self._skipped_updates_total: int = 0
+        self._feedback_attributed_total: int = 0
+        self._feedback_without_context_total: int = 0
+        self._cross_model_feedback_total: int = 0
+        self._response_signal_updates_total: int = 0
         # Set to True once the proxy flusher has loaded persisted priors from
         # Postgres. Checked to support lazy-load on hot-reloaded routers.
         self._state_loaded: bool = False
@@ -265,6 +286,7 @@ class AdaptiveRouter:
         queue = await self.queue.queue_size()
         now = time.time()
         owner_cache_live = sum(1 for _, exp in self._owner_cache.values() if exp > now)
+        feedback_contexts_live = sum(1 for context in self._feedback_contexts.values() if context.expires_at > now)
         return {
             "router_name": self.router_name,
             "available_models": list(self.config.available_models),
@@ -276,6 +298,11 @@ class AdaptiveRouter:
             "cells": cells,
             "owner_cache_live": owner_cache_live,
             "skipped_updates_total": self._skipped_updates_total,
+            "feedback_contexts_live": feedback_contexts_live,
+            "feedback_attributed_total": self._feedback_attributed_total,
+            "feedback_without_context_total": self._feedback_without_context_total,
+            "cross_model_feedback_total": self._cross_model_feedback_total,
+            "response_signal_updates_total": self._response_signal_updates_total,
             "queue": queue,
         }
 
@@ -363,17 +390,130 @@ class AdaptiveRouter:
         request_type: RequestType,
         turn: Turn,
     ) -> SignalDelta:
-        """Apply one turn, push session snapshot + bandit deltas to the queue."""
-        state = self.get_or_create_session_state(session_id, model_name, request_type)
-        delta = apply_turn(state, turn)
-        verbose_router_logger.debug("AdaptiveRouter[%s]: record_turn delta=%s", self.router_name, delta)
+        """Attribute feedback to the previous response and response signals to the current model."""
+        async with self._lock:
+            now = time.time()
+            if len(self._feedback_contexts) >= _SESSION_STATE_SWEEP_THRESHOLD:
+                self._feedback_contexts = {
+                    key: context for key, context in self._feedback_contexts.items() if context.expires_at > now
+                }
+            previous = self._feedback_contexts.get(session_id)
+            if previous is not None and previous.expires_at <= now:
+                self._feedback_contexts.pop(session_id, None)
+                previous = None
 
-        # Strip the raw conversation content before persisting. The
-        # last_user/assistant_content and tool_call_history fields are only
-        # needed in-memory for the next turn's incremental signal detection;
-        # writing user prompts and tool payloads to the DB would store PII
-        # for every adaptive-router conversation. Counts + bookkeeping is
-        # all the persisted row needs.
+            effective_request_type = (
+                previous.request_type if previous is not None and request_type == RequestType.GENERAL else request_type
+            )
+            current_state = self.get_or_create_session_state(
+                session_id,
+                model_name,
+                effective_request_type,
+            )
+            feedback_delta = detect_user_feedback(
+                previous.user_content if previous else None,
+                turn.user_content,
+                turn.tool_results,
+                allow_satisfaction=(
+                    previous is not None
+                    and not previous.clean_credit_awarded
+                    and previous.turn_count + 1 >= MIN_TURNS_FOR_CLEAN_CREDIT
+                ),
+            )
+            previous_assistant = previous.assistant_content if previous else None
+            response_delta = detect_response_signals(
+                previous_assistant,
+                turn.assistant_content,
+                current_state.tool_call_history,
+                turn.tool_calls,
+                turn.response_status,
+            )
+            states_to_persist: Dict[str, SessionState] = {model_name: current_state}
+            bandit_deltas: Dict[Tuple[RequestType, str], SignalDelta] = {}
+
+            if previous is not None:
+                feedback_state = self.get_or_create_session_state(
+                    session_id,
+                    previous.model_name,
+                    previous.request_type,
+                )
+                apply_signal_delta(feedback_state, feedback_delta)
+                if feedback_delta.satisfaction:
+                    feedback_state.clean_credit_awarded = True
+                states_to_persist[previous.model_name] = feedback_state
+                if feedback_delta.any_fired():
+                    self._feedback_attributed_total += 1
+                    if previous.model_name != model_name:
+                        self._cross_model_feedback_total += 1
+                bandit_deltas[(previous.request_type, previous.model_name)] = feedback_delta
+            else:
+                if feedback_delta.any_fired():
+                    self._feedback_without_context_total += 1
+                initial_failure = SignalDelta(failure=feedback_delta.failure)
+                apply_signal_delta(current_state, initial_failure)
+                bandit_deltas[(effective_request_type, model_name)] = initial_failure
+
+            apply_signal_delta(current_state, response_delta)
+            if self._compute_bandit_delta(response_delta) != (0.0, 0.0):
+                self._response_signal_updates_total += 1
+            current_key = (effective_request_type, model_name)
+            bandit_deltas[current_key] = merge_signal_deltas(
+                bandit_deltas.get(current_key, SignalDelta()),
+                response_delta,
+            )
+            advance_session_state(current_state, turn)
+
+            next_turn_count = (previous.turn_count if previous else 0) + 1
+            clean_credit_awarded = bool((previous and previous.clean_credit_awarded) or feedback_delta.satisfaction)
+            self._feedback_contexts[session_id] = _FeedbackContext(
+                model_name=model_name,
+                request_type=effective_request_type,
+                user_content=turn.user_content,
+                assistant_content=turn.assistant_content,
+                turn_count=next_turn_count,
+                clean_credit_awarded=clean_credit_awarded,
+                expires_at=now + OWNER_CACHE_TTL_SECONDS,
+            )
+
+            for state_model, state in states_to_persist.items():
+                await self.queue.add_session_state(
+                    session_id,
+                    self.router_name,
+                    state_model,
+                    self._persistable_session_snapshot(state),
+                )
+
+            combined_delta = SignalDelta()
+            for (attribution_type, target_model), delta in bandit_deltas.items():
+                combined_delta = merge_signal_deltas(combined_delta, delta)
+                d_alpha, d_beta = self._compute_bandit_delta(delta)
+                if d_alpha == 0 and d_beta == 0:
+                    continue
+                cell_key = (attribution_type, target_model)
+                self._cells[cell_key] = apply_delta(
+                    self._cells[cell_key],
+                    d_alpha,
+                    d_beta,
+                )
+                await self.queue.add_state_delta(
+                    self.router_name,
+                    attribution_type.value,
+                    target_model,
+                    d_alpha,
+                    d_beta,
+                )
+
+            verbose_router_logger.debug(
+                "AdaptiveRouter[%s]: feedback_target=%s current_model=%s delta=%s",
+                self.router_name,
+                previous.model_name if previous else None,
+                model_name,
+                combined_delta,
+            )
+            return combined_delta
+
+    @staticmethod
+    def _persistable_session_snapshot(state: SessionState) -> Dict[str, Any]:
         snapshot = asdict(state)
         for sensitive in (
             "last_user_content",
@@ -382,35 +522,7 @@ class AdaptiveRouter:
             "pending_tool_calls",
         ):
             snapshot.pop(sensitive, None)
-        await self.queue.add_session_state(session_id, self.router_name, model_name, snapshot)
-
-        d_alpha, d_beta = self._compute_bandit_delta(delta)
-        verbose_router_logger.debug(
-            "AdaptiveRouter[%s]: bandit delta alpha=%.2f beta=%.2f",
-            self.router_name,
-            d_alpha,
-            d_beta,
-        )
-        if d_alpha != 0 or d_beta != 0:
-            # For non-GENERAL turns, attribute to the current-turn classification
-            # so genuine mid-session topic shifts (e.g. code → math) update the
-            # correct cell. For GENERAL turns ("thanks!", "ok", "sounds good"), fall
-            # back to the session's original type so closing pleasantries don't
-            # misattribute the reward.
-            attribution_type = (
-                request_type if request_type != RequestType.GENERAL else RequestType(state.classified_type)
-            )
-            cell_key = (attribution_type, model_name)
-            self._cells[cell_key] = apply_delta(self._cells[cell_key], d_alpha, d_beta)
-            await self.queue.add_state_delta(
-                self.router_name,
-                attribution_type.value,
-                model_name,
-                d_alpha,
-                d_beta,
-            )
-
-        return delta
+        return snapshot
 
     @staticmethod
     def _compute_bandit_delta(delta: SignalDelta) -> Tuple[float, float]:
