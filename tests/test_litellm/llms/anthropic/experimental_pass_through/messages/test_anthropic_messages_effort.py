@@ -1,5 +1,3 @@
-import litellm
-import pytest
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -61,40 +59,19 @@ def test_adaptive_effort_passes_through_untouched_for_4_6():
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_effort_dropped_for_non_reasoning_model_with_drop_params(monkeypatch):
-    monkeypatch.setattr(litellm, "drop_params", True)
+def test_thinking_and_effort_dropped_for_non_reasoning_model():
+    """A model with no reasoning support cannot take thinking or effort, so both are
+    silently dropped (no drop_params required) so the request still succeeds."""
     result = _transform("claude-3-5-haiku-latest", _claude_code_payload(effort="medium"))
 
     assert "thinking" not in result
     assert "output_config" not in result
 
 
-def test_effort_raises_for_non_reasoning_model_without_drop_params(monkeypatch):
-    monkeypatch.setattr(litellm, "drop_params", False)
-
-    with pytest.raises(Exception, match="drop_params"):
-        _transform("claude-3-5-haiku-latest", _claude_code_payload(effort="medium"))
-
-
-def test_drop_params_from_litellm_params_gates_the_drop(monkeypatch):
-    """A per-request drop_params (threaded via litellm_params) must also permit the
-    drop even when the global litellm.drop_params is False."""
-    monkeypatch.setattr(litellm, "drop_params", False)
-    result = _transform(
-        "claude-3-5-haiku-latest",
-        _claude_code_payload(effort="medium"),
-        litellm_params={"drop_params": True},
-    )
-
-    assert "thinking" not in result
-    assert "output_config" not in result
-
-
-def test_effort_translated_but_residual_output_config_dropped_for_haiku_4_5(monkeypatch):
-    """output_config may carry `format` (structured outputs) alongside effort. On a
-    model without output_config support, effort is translated to thinking and the
-    residual output_config is dropped under drop_params."""
-    monkeypatch.setattr(litellm, "drop_params", True)
+def test_residual_output_config_preserved_after_effort_translation():
+    """output_config may carry `format` (structured outputs) alongside effort. Only
+    the consumed effort key is removed; the residual is left for provider subclasses
+    (bedrock/vertex) to handle, and effort is translated to legacy thinking."""
     result = _transform(
         "claude-haiku-4-5",
         _claude_code_payload(effort="medium", format={"type": "json_schema"}),
@@ -104,27 +81,22 @@ def test_effort_translated_but_residual_output_config_dropped_for_haiku_4_5(monk
         "type": "enabled",
         "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     }
-    assert "output_config" not in result
+    assert result["output_config"] == {"format": {"type": "json_schema"}}
 
 
 def test_budget_capped_below_max_tokens():
     """Adaptive thinking carries no budget, so the translated legacy budget must be
     capped below max_tokens (Anthropic requires max_tokens > budget_tokens). A
     high-effort budget (4096) with max_tokens=3000 must be capped to 2999."""
-    result = _transform(
-        "claude-haiku-4-5", _claude_code_payload(effort="high", max_tokens=3000)
-    )
+    result = _transform("claude-haiku-4-5", _claude_code_payload(effort="high", max_tokens=3000))
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 2999}
 
 
-def test_thinking_dropped_when_max_tokens_too_small_for_min_budget(monkeypatch):
+def test_thinking_dropped_when_max_tokens_too_small_for_min_budget():
     """When max_tokens can't fit even the minimum thinking budget, thinking is
-    dropped so the request still succeeds rather than being rejected."""
-    monkeypatch.setattr(litellm, "drop_params", True)
-    result = _transform(
-        "claude-haiku-4-5", _claude_code_payload(effort="medium", max_tokens=512)
-    )
+    silently dropped so the request still succeeds rather than being rejected."""
+    result = _transform("claude-haiku-4-5", _claude_code_payload(effort="medium", max_tokens=512))
 
     assert "thinking" not in result
     assert "output_config" not in result
@@ -143,28 +115,3 @@ def test_non_adaptive_request_without_effort_is_untouched():
 
     assert "thinking" not in result
     assert "output_config" not in result
-
-
-def test_undersized_max_tokens_raises_without_drop_params(monkeypatch):
-    """Thinking-capable model + max_tokens too small for the minimum budget must be
-    gated on drop_params, same as any other unsupported param: raise a clear
-    max_tokens error when drop_params is off (rather than silently dropping)."""
-    monkeypatch.setattr(litellm, "drop_params", False)
-
-    with pytest.raises(Exception, match="max_tokens|drop_params"):
-        _transform(
-            "claude-haiku-4-5", _claude_code_payload(effort="medium", max_tokens=512)
-        )
-
-
-def test_residual_output_config_raises_without_drop_params(monkeypatch):
-    """A residual output_config field (e.g. format) on a pre-4.6 model is
-    unsupported and must raise when drop_params is off, even though the effort was
-    translated to legacy thinking."""
-    monkeypatch.setattr(litellm, "drop_params", False)
-
-    with pytest.raises(Exception, match="output_config|drop_params"):
-        _transform(
-            "claude-haiku-4-5",
-            _claude_code_payload(effort="medium", format={"type": "json_schema"}),
-        )
