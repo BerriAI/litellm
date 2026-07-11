@@ -810,8 +810,9 @@ def _format_object_parameters(parameters, indent):
 def _format_type(props, indent):
     type = props.get("type")
     if type == "string":
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        enum_values = props.get("enum")
+        if enum_values:
+            return " | ".join([f'"{item}"' for item in enum_values])
         return "string"
     elif type == "array":
         # items is required, OpenAI throws an error if it's missing
@@ -819,8 +820,9 @@ def _format_type(props, indent):
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
     elif type in ["integer", "number"]:
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        enum_values = props.get("enum")
+        if enum_values:
+            return " | ".join([f'"{item}"' for item in enum_values])
         return "number"
     elif type == "boolean":
         return "boolean"
