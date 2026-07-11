@@ -10,16 +10,24 @@ behavior (the 429, the recovery, or the headers on live traffic).
 
 The v3 limiter counts a request against the rpm budget at the pre-call hook,
 before model routing, so every call that clears auth consumes budget whether or
-not it ultimately succeeds. All calls of one test must land inside a single
-window (LITELLM_RATE_LIMIT_WINDOW_SIZE, 60s default), which real chat latency
+not it ultimately succeeds. The tpm budget is reserved pre-call from an estimate
+(message chars // 4 + max_tokens) and reconciled to the body's actual
+usage.total_tokens after the call, so a block may legitimately fire before the
+actual spend crosses the limit; the tpm test asserts the exact contract on both
+sides (a 429 only once the blocked call's reservation exceeds the remaining
+budget, and no later than the first call after actual spend reaches the limit).
+All calls of one test must land inside a single window
+(LITELLM_RATE_LIMIT_WINDOW_SIZE, 60s default), which real chat latency
 comfortably allows.
 """
 
 from __future__ import annotations
 
+import re
 import time
 
 import pytest
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
@@ -30,6 +38,40 @@ from quota_client import QuotaClient
 pytestmark = pytest.mark.e2e
 
 MODEL = "claude-haiku-4-5"
+TPM_LIMIT = 60
+CHAT_MAX_TOKENS = 16
+RESERVATION_CHARS_PER_TOKEN = 4
+WINDOW_SECONDS = 60
+
+
+class _ChatUsage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    total_tokens: int
+
+
+class _ChatBodyWithUsage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    usage: _ChatUsage
+
+
+def _total_tokens(outcome: StreamingResponse) -> int:
+    try:
+        return _ChatBodyWithUsage.model_validate_json(outcome.body).usage.total_tokens
+    except ValidationError:
+        pytest.fail(f"successful chat body must report usage.total_tokens, got: {outcome.body[:300]}")
+
+
+def _reserved_tokens(content: str) -> int:
+    return max(1, len(content) // RESERVATION_CHARS_PER_TOKEN) + CHAT_MAX_TOKENS
+
+
+def _remaining_from_429(body: str) -> int:
+    found = re.search(r"Remaining: (\d+)", body)
+    if found is None:
+        pytest.fail(f"429 body must report the remaining budget, got: {body[:300]}")
+    return int(found.group(1))
 
 
 def _limited_key(
@@ -95,18 +137,34 @@ class TestKeyRateLimits:
 
     @pytest.mark.covers("quota_management.ratelimit.tpm.blocks_over_limit")
     def test_tpm_limit_blocks_over_limit(self, client: QuotaClient, resources: ResourceManager) -> None:
-        key = _limited_key(client, resources, tpm_limit=60)
+        key = _limited_key(client, resources, tpm_limit=TPM_LIMIT)
         info = client.gateway.key_info(key)
-        assert info.tpm_limit == 60, f"/key/info reports tpm_limit {info.tpm_limit}, configured 60"
+        assert info.tpm_limit == TPM_LIMIT, f"/key/info reports tpm_limit {info.tpm_limit}, configured {TPM_LIMIT}"
 
-        _ = _first_ok(client, key)
-        for _ in range(8):
-            outcome = _chat(client, key)
+        first = _first_ok(client, key)
+        window_deadline = time.monotonic() + WINDOW_SECONDS - 10
+        spent = _total_tokens(first)
+
+        while spent < TPM_LIMIT:
+            assert time.monotonic() < window_deadline, (
+                f"spent only {spent} of {TPM_LIMIT} tokens before the {WINDOW_SECONDS}s window could roll; "
+                "the exact-crossing assertion needs every call inside one window"
+            )
+            content = f"reply with one word {unique_marker()}"
+            outcome = client.chat(key, MODEL, content, max_tokens=CHAT_MAX_TOKENS)
             if outcome.status_code == 429:
                 _assert_rate_limited(outcome, "tokens")
+                remaining = _remaining_from_429(outcome.body)
+                reserved = _reserved_tokens(content)
+                assert reserved > remaining, (
+                    f"blocked while the call still fit: {remaining} of {TPM_LIMIT} tokens remained but the call "
+                    f"reserved only {reserved} ({spent} actual tokens spent so far)"
+                )
                 return
             require_successful_call(outcome)
-        pytest.fail("tpm_limit=60 was never enforced with a 429 within 8 calls of ~25 tokens each")
+            spent += _total_tokens(outcome)
+
+        _assert_rate_limited(_chat(client, key), "tokens")
 
     @pytest.mark.covers("quota_management.ratelimit.rpm.resets_after_window")
     def test_rpm_limit_resets_after_window(self, client: QuotaClient, resources: ResourceManager) -> None:
