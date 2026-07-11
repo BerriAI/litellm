@@ -10,10 +10,10 @@ import {
 } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Badge, Icon, Text } from "@tremor/react";
 import { Popover, Tooltip, Typography } from "antd";
-import debounce from "lodash/debounce";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -43,24 +43,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: 300 });
 
-  const debouncedSetSearch = useMemo(
-    () =>
-      debounce((value: string) => {
-        setSearchQuery(value);
-        setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-      }, 300),
-    [],
-  );
-  useEffect(() => () => debouncedSetSearch.cancel(), [debouncedSetSearch]);
-  const handleSearchChange = useCallback(
-    (value: string) => {
-      setSearchInput(value);
-      debouncedSetSearch(value);
-    },
-    [debouncedSetSearch],
-  );
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
 
   const getFilterValue = useCallback(
     (columnId: string): string | undefined => {

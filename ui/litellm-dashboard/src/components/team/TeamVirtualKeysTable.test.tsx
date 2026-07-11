@@ -24,6 +24,11 @@ vi.mock("../templates/key_info_view", () => ({
   )),
 }));
 
+// Resolve the debounced search synchronously so typed input lands in the useKeys query within the test tick.
+vi.mock("@tanstack/react-pacer/debouncer", () => ({
+  useDebouncedValue: (value: unknown) => [value, { cancel: vi.fn(), flush: vi.fn() }],
+}));
+
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
 
 const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
@@ -286,10 +291,8 @@ describe("TeamVirtualKeysTable", () => {
 
     await user.type(await screen.findByTestId("datatable-search"), "check-002");
 
-    await waitFor(
-      () =>
-        expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "check-002" })),
-      { timeout: 2000 },
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "check-002" })),
     );
   });
 
