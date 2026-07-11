@@ -351,44 +351,73 @@ def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
     return key_obj.user_id
 
 
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
-    """Resolve the LiteLLM ``user_id`` at the OAuth token endpoint so a per-user token is stored
-    under the same identity the egress later reads it by (``user_api_key_auth.user_id``).
+async def _resolve_active_litellm_key(request: Request) -> Optional[Tuple[str, "UserAPIKeyAuth"]]:
+    """Resolve the presented litellm key to ``(its hash, the live active key record)``, or ``None``
+    when the key is absent, unresolvable, or blocked/expired.
 
-    Resolves authoritatively via ``get_key_object`` (cache first, then DB) instead of a raw cache
-    peek. On a multi-replica gateway the token-exchange request can land on a worker whose in-memory
-    cache never saw the key, and a cross-replica Redis hit deserializes to a plain ``dict`` rather
-    than a ``UserAPIKeyAuth``; the previous code read only ``Authorization`` and did
-    ``getattr(cached, "user_id")`` with no ``model_type`` rehydration and no DB fallback, so it
-    silently returned ``None`` and the token was never persisted, which makes the egress 401 on every
-    reconnect. The resolved key is validated (``_active_key_user_id``) before its identity is trusted,
-    so a blocked or expired key cannot write. Returns ``None`` when no key is present, the key cannot
-    be resolved, or it is blocked/expired.
+    Single resolution path the OAuth token endpoint reuses. Resolves authoritatively via
+    ``get_key_object`` (cache first, then DB) instead of a raw cache peek. On a multi-replica gateway
+    the token-exchange request can land on a worker whose in-memory cache never saw the key, and a
+    cross-replica Redis hit deserializes to a plain ``dict`` rather than a ``UserAPIKeyAuth``; the
+    previous code read only ``Authorization`` and did ``getattr(cached, "user_id")`` with no
+    ``model_type`` rehydration and no DB fallback, so it silently returned ``None``. The resolved key
+    is validated (``_active_key_user_id``) before it is trusted, so a blocked or expired key resolves
+    to ``None``. The returned hash is the value ``get_key_object`` and the cache/DB layer key the
+    record by. Callers derive the ``user_id`` (per-user token store) or seal the hash (dcr_bridge
+    envelope) from the result.
     """
     token = _litellm_key_from_request(request)
     if not token:
         return None
     try:
-        from litellm.proxy._types import hash_token  # noqa: PLC0415
-        from litellm.proxy.auth.auth_checks import get_key_object  # noqa: PLC0415
-        from litellm.proxy.proxy_server import (  # noqa: PLC0415
+        from litellm.proxy._types import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+            hash_token,
+        )
+        from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+            get_key_object,
+        )
+        from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
             prisma_client,
             user_api_key_cache,
         )
 
+        key_hash = hash_token(token)
         key_obj = await get_key_object(
-            hashed_token=hash_token(token),
+            hashed_token=key_hash,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
-        return _active_key_user_id(key_obj)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # fail closed to None on any key-resolution error
         verbose_logger.debug(
-            "_extract_user_id_from_request: could not resolve a LiteLLM user_id for the presented "
-            "key (%s); per-user token will not be stored server-side.",
+            "_resolve_active_litellm_key: could not resolve the presented key (%s)",
             type(exc).__name__,
         )
         return None
+    if _active_key_user_id(key_obj) is None:
+        return None
+    return key_hash, key_obj
+
+
+async def _extract_user_id_from_request(request: Request) -> Optional[str]:
+    """The LiteLLM ``user_id`` for the token request, so a per-user token is stored under the same
+    identity the egress later reads it by (``user_api_key_auth.user_id``). ``None`` when no active
+    key is present. See :func:`_resolve_active_litellm_key` for the resolution and active-key gate.
+    """
+    resolved = await _resolve_active_litellm_key(request)
+    return _active_key_user_id(resolved[1]) if resolved else None
+
+
+async def _extract_active_key_hash_from_request(request: Request) -> Optional[str]:
+    """The hash of the litellm key that authorized the token request, when it maps to an active key.
+
+    A DCR-bridge envelope seals this hash so admission can reload the live ``UserAPIKeyAuth`` record
+    and enforce the key's current team/org/tool restrictions and revocation, rather than trusting a
+    frozen identity. The hash is a one-way digest, not a usable credential (the edge rejects a bare
+    hash presented as a bearer). ``None`` when no active key is present, so no envelope is minted for
+    a missing, unresolvable, or revoked key.
+    """
+    resolved = await _resolve_active_litellm_key(request)
+    return resolved[0] if resolved else None
 
 
 async def _store_per_user_token_server_side(
@@ -688,10 +717,12 @@ async def _mint_bridge_delegate_token_response(
 ) -> JSONResponse:
     """Return the client-held envelope bearer for a DCR-bridge ``oauth_delegate`` token exchange.
 
-    The envelope binds the caller's litellm identity (resolved from the token request) to the
+    The envelope binds the authorizing litellm key (its hash, resolved from the token request) to the
     upstream grant, so the client holds one bearer that later admits it and forwards the upstream
-    token, with nothing stored server-side. Fails closed with an OAuth ``invalid_request`` when no
-    litellm identity accompanies the token request rather than minting an identity-less credential.
+    token, with nothing stored server-side. Admission reloads the live key by that hash, so the key's
+    current restrictions and revocation gate the request. Fails closed with an OAuth
+    ``invalid_request`` when no active litellm key accompanies the token request rather than minting
+    an unbound credential.
     """
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         build_bridge_token_response,
@@ -708,8 +739,8 @@ async def _mint_bridge_delegate_token_response(
     if not master_key:
         raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
 
-    user_id = await _extract_user_id_from_request(request)
-    if not user_id:
+    key_hash = await _extract_active_key_hash_from_request(request)
+    if not key_hash:
         raise HTTPException(
             status_code=400,
             detail={
@@ -727,7 +758,7 @@ async def _mint_bridge_delegate_token_response(
 
     now = datetime.now(timezone.utc)
     keys = envelope_keys_from_master_key(master_key)
-    identity = EnvelopeIdentity(user_id=user_id, server_id=mcp_server.server_id)
+    identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=key_hash)
     sealed = build_bridge_token_response(identity, grant, keys, now)
     if not isinstance(sealed, SealedEnvelope):
         raise HTTPException(status_code=500, detail="Failed to mint the gateway-bound credential")

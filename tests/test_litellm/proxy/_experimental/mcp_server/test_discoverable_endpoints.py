@@ -4365,7 +4365,7 @@ async def test_register_bridge_relay_never_persists():
 _BRIDGE_MASTER_KEY = "sk-bridge-producer-master-key-0123456789abcdef"
 
 
-async def _exchange_for_bridge_server(server, upstream_body, user_id):
+async def _exchange_for_bridge_server(server, upstream_body, key_hash):
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         exchange_token_with_server,
     )
@@ -4382,8 +4382,8 @@ async def _exchange_for_bridge_server(server, upstream_body, user_id):
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
-            new=AsyncMock(return_value=user_id),
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
+            new=AsyncMock(return_value=key_hash),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
     ):
@@ -4416,7 +4416,7 @@ async def test_oauth_delegate_bridge_token_exchange_mints_envelope_not_raw_token
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
     upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
-    response = await _exchange_for_bridge_server(server, upstream, user_id="user-77")
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
 
     body = json.loads(response.body)
     token = body["access_token"]
@@ -4429,7 +4429,7 @@ async def test_oauth_delegate_bridge_token_exchange_mints_envelope_not_raw_token
     keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
     opened = resolve_bridge_envelope(token, keys, datetime.now(timezone.utc), server.server_id)
     assert isinstance(opened, BridgeEnvelopeAdmitted)
-    assert opened.identity.user_id == "user-77"
+    assert opened.identity.key_hash == "hashed-litellm-key-77"
     assert opened.upstream_authorization.get_secret_value() == "Bearer UPSTREAM-SECRET-TOKEN"
 
 
@@ -4443,7 +4443,7 @@ async def test_oauth_delegate_bridge_token_exchange_fails_closed_without_litellm
     upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
 
     with pytest.raises(HTTPException) as exc:
-        await _exchange_for_bridge_server(server, upstream, user_id=None)
+        await _exchange_for_bridge_server(server, upstream, key_hash=None)
 
     assert exc.value.status_code == 400
     assert exc.value.detail["error"] == "invalid_request"
@@ -4457,7 +4457,7 @@ async def test_true_passthrough_bridge_token_exchange_returns_raw_upstream_token
 
     server = _bridge_server(auth_type=MCPAuth.true_passthrough)
     upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
-    response = await _exchange_for_bridge_server(server, upstream, user_id="user-77")
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
 
     body = json.loads(response.body)
     assert body["access_token"] == "UPSTREAM-SECRET-TOKEN"
@@ -4472,7 +4472,7 @@ async def test_non_bridge_oauth_delegate_token_exchange_returns_raw_upstream_tok
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate, dcr_bridge=None)
     upstream = {"access_token": "UPSTREAM-SECRET-TOKEN", "token_type": "Bearer", "expires_in": 3600}
-    response = await _exchange_for_bridge_server(server, upstream, user_id="user-77")
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
 
     body = json.loads(response.body)
     assert body["access_token"] == "UPSTREAM-SECRET-TOKEN"
@@ -4820,6 +4820,68 @@ async def test_extract_user_id_rejects_expired_key(proxy_globals):
 
     request = _token_request({"x-litellm-api-key": "sk-expired-key"})
     assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_active_key_hash_returns_hash_for_active_key(proxy_globals):
+    """The dcr_bridge mint seals the hash of the authorizing key so admission can reload the live
+    record. For an active key the resolver returns exactly hash_token(key), the same value
+    get_key_object and the whole cache/DB layer key the record by, so the sealed reference resolves
+    back to this key at admission."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_active_key_hash_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-alice-key"
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        hash_token(key),
+        UserAPIKeyAuth(token=hash_token(key), user_id="alice"),
+        model_type=UserAPIKeyAuth,
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
+    assert await _extract_active_key_hash_from_request(request) == hash_token(key)
+
+
+@pytest.mark.asyncio
+async def test_extract_active_key_hash_rejects_blocked_key(proxy_globals):
+    """A blocked key must not yield a hash, so no gateway-bound envelope is minted for a revoked key;
+    the mint fails closed with invalid_request instead."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_active_key_hash_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="blocked-user", blocked=True)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
+    assert await _extract_active_key_hash_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_active_key_hash_none_without_litellm_key(proxy_globals):
+    """No LiteLLM key on the request yields no hash without consulting the resolver."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_active_key_hash_from_request,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"content-type": "application/json"})
+    assert await _extract_active_key_hash_from_request(request) is None
 
 
 @pytest.mark.asyncio
