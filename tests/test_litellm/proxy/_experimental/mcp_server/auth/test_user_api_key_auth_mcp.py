@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import sys
@@ -16,6 +17,8 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    ProxyException,
     SpecialHeaders,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
@@ -4875,10 +4878,12 @@ class TestMCPDcrBridgeDelegateAdmission:
     a single envelope bearer (LIT-4338).
 
     The arm fires only for a single ``is_dcr_bridge`` ``is_oauth_delegate`` target carrying an
-    envelope-shaped Authorization. It opens the litellm-signed envelope, admits under the
-    recovered identity WITHOUT re-validating (the signature is the proof), and injects the inner
-    upstream token under the server's per-server auth-header key so egress forwards it. Everything
-    else must stay on its existing admission path.
+    envelope-shaped Authorization. It opens the litellm-signed envelope, reloads the live key
+    record the sealed ``key_hash`` references so the caller is admitted under the key's current
+    authorization context (team/org/object-permission) and revocation state, and injects the inner
+    upstream token under the server's per-server auth-header key so egress forwards it. A key that
+    is missing, blocked, or expired fails closed with a 401. Everything else must stay on its
+    existing admission path.
     """
 
     _MASTER_KEY = "sk-bridge-master-key-for-envelope-derivation"
@@ -4898,11 +4903,13 @@ class TestMCPDcrBridgeDelegateAdmission:
             dcr_bridge=dcr_bridge,
         )
 
+    _KEY_HASH = "hashed-litellm-key-abc123"
+
     @classmethod
     def _mint_bridge_envelope(
         cls,
         *,
-        user_id="envelope-user-42",
+        key_hash=None,
         server_id="bridge-server-id",
         access_token="inner-upstream-access-token",
         token_type="Bearer",
@@ -4924,7 +4931,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         keys = envelope_keys_from_master_key(master_key or cls._MASTER_KEY)
         now = minted_at or datetime.now(timezone.utc)
         sealed = mint_envelope(
-            identity=EnvelopeIdentity(user_id=user_id, server_id=server_id),
+            identity=EnvelopeIdentity(server_id=server_id, key_hash=key_hash or cls._KEY_HASH),
             grant=UpstreamTokenGrant(
                 access_token=SecretStr(access_token),
                 token_type=token_type,
@@ -4936,18 +4943,51 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert isinstance(sealed, SealedEnvelope), sealed
         return sealed.token.get_secret_value()
 
-    async def test_valid_envelope_admits_identity_and_injects_inner_token(self):
-        """A valid envelope on a single dcr_bridge oauth_delegate server admits under the envelope's
-        identity WITHOUT re-validating (user_api_key_auth is never called) and injects the inner
-        upstream token, keyed by the server name, for egress forwarding."""
-        envelope = self._mint_bridge_envelope(user_id="envelope-user-42")
+    @staticmethod
+    def _reloaded_key(**overrides):
+        """A live key record as ``get_key_object`` would return it: carries real authorization
+        context (key identity, team, org, and an object-permission restricting MCP servers) so a
+        test can prove admission admits under THAT context rather than a blank identity."""
+        defaults = dict(
+            user_id="envelope-user-42",
+            api_key=TestMCPDcrBridgeDelegateAdmission._KEY_HASH,
+            team_id="team-restricted",
+            org_id="org-restricted",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-1", mcp_servers=["only-this-server"]
+            ),
+        )
+        defaults.update(overrides)
+        return UserAPIKeyAuth(**defaults)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _patch_key_reload(*, return_value=None, side_effect=None):
+        """Patch the live-key reload dependencies used by ``_reload_admitted_key``: the
+        ``get_key_object`` lookup plus the ``prisma_client`` / ``user_api_key_cache`` globals it
+        reads. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
+        the reload key."""
+        get_key_object = AsyncMock(return_value=return_value, side_effect=side_effect)
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_key_object", get_key_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            yield get_key_object
+
+    async def test_valid_envelope_reloads_live_key_and_admits_its_authorization_context(self):
+        """A valid envelope admits under the LIVE key record the sealed key_hash references, not a
+        blank identity: the reload is keyed by that exact hash, and the admitted auth carries the
+        key's current team/org/object-permission (the MCP tool/server restrictions the finding was
+        about). The heavyweight ``user_api_key_auth`` pipeline is still never invoked. The inner
+        upstream token is injected under the per-server key for egress."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
         scope = {
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
             "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
         }
-
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
@@ -4955,6 +4995,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             ) as mock_auth,
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key()) as get_key_object,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             (
@@ -4966,13 +5007,100 @@ class TestMCPDcrBridgeDelegateAdmission:
                 _raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
-        # Signature is the proof of prior authentication: identity admitted, no re-validation.
+        # The live key was reloaded by the exact hash the envelope sealed.
+        assert get_key_object.await_args.kwargs["hashed_token"] == self._KEY_HASH
+        # Admission carries the reloaded key's authorization context, not a blank UserAPIKeyAuth.
         assert auth_result.user_id == "envelope-user-42"
+        assert auth_result.team_id == "team-restricted"
+        assert auth_result.org_id == "org-restricted"
+        assert auth_result.object_permission is not None
+        assert auth_result.object_permission.mcp_servers == ["only-this-server"]
+        # The full raw-key auth pipeline is still bypassed for the envelope arm.
         mock_auth.assert_not_called()
         # Inner upstream token injected under the per-server key so egress forwards it.
         assert mcp_server_auth_headers == {
             "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
         }
+
+    async def test_revoked_key_envelope_fails_closed_401(self):
+        """An envelope whose key has since been deleted must fail closed: ``get_key_object`` raises
+        for the missing row, so admission 401s instead of admitting the caller as an unrestricted
+        identity. This is the core regression for the dropped-authorization-context finding."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        revoked = self._patch_key_reload(
+            side_effect=ProxyException(
+                message="Authentication Error, Invalid proxy server token passed.",
+                type="token_not_found_in_db",
+                param="key",
+                code=401,
+            )
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            revoked,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+        mock_auth.assert_not_called()
+
+    async def test_blocked_key_envelope_fails_closed_401(self):
+        """A reloaded key that is blocked must fail closed with a 401, so revoking a key by blocking
+        it takes effect immediately for any envelope still holding its hash."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key(blocked=True)),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+
+    async def test_expired_key_record_fails_closed_401(self):
+        """A reloaded key past its expiry must fail closed with a 401, distinct from an expired
+        envelope: even a still-valid envelope cannot outlive the key it was minted under."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        expired_at = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key(expires=expired_at)),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
 
     async def test_alias_only_server_injects_under_alias_egress_can_resolve(self):
         """When server_name is None, the inner token must be keyed under the alias (which egress
@@ -4985,7 +5113,6 @@ class TestMCPDcrBridgeDelegateAdmission:
             "path": "/mcp/bridge_delegate_server",
             "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
         }
-
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
@@ -4993,6 +5120,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             ),
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key()),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server(
                 server_name=None, alias="bridge_alias"
@@ -5260,11 +5388,14 @@ class TestMCPDcrBridgeDelegateAdmission:
         """Unit: ``_admit_dcr_bridge_delegate`` must return a NEW headers dict that preserves the
         caller's existing per-server entries and adds the injected inner token, never mutating the
         input dict."""
-        envelope = self._mint_bridge_envelope(user_id="unit-user")
+        envelope = self._mint_bridge_envelope()
         existing = {"other_server": {"Authorization": "Bearer someone-elses-token"}}
 
-        with patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY):
-            auth_result, new_headers = MCPRequestHandler._admit_dcr_bridge_delegate(
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key(user_id="unit-user")),
+        ):
+            auth_result, new_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=self._bridge_delegate_server(),
                 authorization_value=f"Bearer {envelope}",
                 mcp_server_auth_headers=existing,
@@ -5286,7 +5417,23 @@ class TestMCPDcrBridgeDelegateAdmission:
         envelope = self._mint_bridge_envelope()
         with patch("litellm.proxy.proxy_server.master_key", None):
             with pytest.raises(HTTPException) as exc_info:
-                MCPRequestHandler._admit_dcr_bridge_delegate(
+                await MCPRequestHandler._admit_dcr_bridge_delegate(
+                    server=self._bridge_delegate_server(),
+                    authorization_value=f"Bearer {envelope}",
+                    mcp_server_auth_headers=None,
+                )
+        assert exc_info.value.status_code == 500
+
+    async def test_admit_helper_raises_500_when_no_db_connection(self):
+        """Unit: with a valid envelope but no database to reload the key from, admission raises a 500
+        rather than admitting on unresolved authorization."""
+        envelope = self._mint_bridge_envelope()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler._admit_dcr_bridge_delegate(
                     server=self._bridge_delegate_server(),
                     authorization_value=f"Bearer {envelope}",
                     mcp_server_auth_headers=None,

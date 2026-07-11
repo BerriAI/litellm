@@ -252,7 +252,7 @@ class MCPRequestHandler:
             # Authorization: open the envelope, admit under its recovered identity, and
             # inject the inner upstream token for egress. A non-envelope bearer on the same
             # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
-            validated_user_api_key_auth, mcp_server_auth_headers = MCPRequestHandler._admit_dcr_bridge_delegate(
+            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=bridge_delegate_target,
                 authorization_value=oauth2_headers["Authorization"],
                 mcp_server_auth_headers=mcp_server_auth_headers,
@@ -492,20 +492,23 @@ class MCPRequestHandler:
         return server
 
     @staticmethod
-    def _admit_dcr_bridge_delegate(
+    async def _admit_dcr_bridge_delegate(
         server: MCPServer,
         authorization_value: str,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
     ) -> Tuple[UserAPIKeyAuth, Optional[Dict[str, Dict[str, str]]]]:
-        """Open the bridge envelope and admit the caller under its recovered identity.
+        """Open the bridge envelope and admit the caller under the live key it references.
 
-        The envelope's signature is itself the proof the user authenticated when it was
-        minted, so the recovered ``user_id`` is admitted without any re-validation. The
-        inner upstream token is injected under the server's per-server auth-header key so
-        egress forwards it via the ``PassthroughConfig`` override; the envelope
-        ``Authorization`` the leak-defense strips never reaches the upstream. A new headers
-        dict is returned rather than mutating the input. Fails closed with a 401 on an
-        invalid or expired envelope.
+        The envelope's signature proves the user authenticated when it was minted, but
+        authorization is resolved fresh here rather than trusted from the envelope: the
+        sealed ``key_hash`` reloads the current ``UserAPIKeyAuth`` record, so the key's
+        present team/org/object-permission restrictions and its revocation state gate the
+        request instead of a snapshot frozen at mint time. The inner upstream token is
+        injected under the server's per-server auth-header key so egress forwards it via the
+        ``PassthroughConfig`` override; the envelope ``Authorization`` the leak-defense
+        strips never reaches the upstream. A new headers dict is returned rather than
+        mutating the input. Fails closed with a 401 on an invalid or expired envelope, or
+        when the referenced key is missing, blocked, or expired.
         """
         from litellm.proxy.proxy_server import master_key
 
@@ -519,13 +522,59 @@ class MCPRequestHandler:
                 header_key = server.server_name or server.alias
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+                admitted = await MCPRequestHandler._reload_admitted_key(result.identity.key_hash)
                 injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
                 new_headers = {**(mcp_server_auth_headers or {}), **injected}
-                return UserAPIKeyAuth(user_id=result.identity.user_id), new_headers
+                return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
                 raise HTTPException(status_code=401, detail="Invalid or expired credential")
             case _:
                 assert_never(result)
+
+    @staticmethod
+    async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:
+        """Reload the live key record an admitted envelope references.
+
+        Resolving the current ``UserAPIKeyAuth`` (cache first, then DB) is what stops the
+        envelope from carrying frozen authority: the key's present team/org/object-permission
+        restrictions ride on the returned object, and a key that has since been deleted,
+        blocked, or expired fails closed with a 401 here rather than being admitted as an
+        unrestricted identity. ``get_key_object`` raises for a hash with no key row; a
+        blocked or expired row is rejected explicitly because ``get_key_object`` resolves a
+        row without applying those checks (the main ``user_api_key_auth`` pipeline enforces
+        them downstream, which this admission path bypasses).
+        """
+        from litellm.proxy.auth.auth_checks import get_key_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
+        try:
+            key_object = await get_key_object(
+                hashed_token=key_hash,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+        except (ProxyException, HTTPException):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        if not MCPRequestHandler._admitted_key_is_active(key_object):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        return key_object
+
+    @staticmethod
+    def _admitted_key_is_active(key_object: UserAPIKeyAuth) -> bool:
+        """False when the referenced key is blocked or past its expiry, so a revoked key
+        cannot be admitted through its still-unexpired envelope. Mirrors the active-key gate
+        the bridge token endpoint applies at mint time."""
+        if key_object.blocked is True:
+            return False
+        expires = key_object.expires
+        if expires is None:
+            return True
+        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        return expiry >= datetime.now(timezone.utc)
 
     @staticmethod
     def _resolve_target_server_names(path: str, mcp_servers_header: Optional[List[str]]) -> List[str]:
