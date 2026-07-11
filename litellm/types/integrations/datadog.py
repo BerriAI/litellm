@@ -6,6 +6,7 @@ from typing_extensions import NotRequired, TypedDict
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
 DD_MAX_BATCH_SIZE = 1000
+DD_MAX_PAYLOAD_SIZE_BYTES = 4_000_000
 
 
 class DataDogStatus(str, Enum):

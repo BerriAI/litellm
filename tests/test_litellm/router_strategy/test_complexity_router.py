@@ -6,10 +6,11 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import os
 import sys
-from typing import Dict, List
-from unittest.mock import MagicMock, patch
+from typing import Dict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -743,7 +744,7 @@ class TestKeywordFalsePositives:
         # Should NOT detect code presence from 'api' in 'capital'
         assert not any(
             "code" in s.lower() for s in signals
-        ), f"False positive: got code signal from 'capital'"
+        ), "False positive: got code signal from 'capital'"
         # Should be SIMPLE (definition question)
         assert tier == ComplexityTier.SIMPLE
 
@@ -754,7 +755,7 @@ class TestKeywordFalsePositives:
         # Should NOT detect code presence from 'git' in 'digital'
         assert not any(
             "code" in s.lower() for s in signals
-        ), f"False positive: got code signal from 'digital'"
+        ), "False positive: got code signal from 'digital'"
 
     def test_try_not_in_entry(self, complexity_router):
         """'try' should not match in 'entry'."""
@@ -770,7 +771,7 @@ class TestKeywordFalsePositives:
         tier, score, signals = complexity_router.classify(prompt)
         assert not any(
             "code" in s.lower() for s in signals
-        ), f"False positive: got code signal from 'terrorism'"
+        ), "False positive: got code signal from 'terrorism'"
 
     def test_class_not_in_classical(self, complexity_router):
         """'class' should not match in 'classical'."""
@@ -778,7 +779,7 @@ class TestKeywordFalsePositives:
         tier, score, signals = complexity_router.classify(prompt)
         assert not any(
             "code" in s.lower() for s in signals
-        ), f"False positive: got code signal from 'classical'"
+        ), "False positive: got code signal from 'classical'"
 
     def test_merge_not_in_emerged(self, complexity_router):
         """'merge' should not match in 'emerged'."""
@@ -786,7 +787,7 @@ class TestKeywordFalsePositives:
         tier, score, signals = complexity_router.classify(prompt)
         assert not any(
             "code" in s.lower() for s in signals
-        ), f"False positive: got code signal from 'emerged'"
+        ), "False positive: got code signal from 'emerged'"
 
     def test_actual_api_keyword_detected(self, complexity_router):
         """Actual 'api' usage should be detected."""
@@ -1131,3 +1132,180 @@ class TestExtractUserMessageAndSystemPrompt:
         )
         assert user_msg is None
         assert sys_prompt is None
+
+
+def _llm_response(content: str):
+    """Build a fake acompletion response with the given message content."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = content
+    return response
+
+
+@pytest.fixture
+def llm_classifier_config() -> Dict:
+    """Config with an LLM-based classifier wired to a 'haiku-classifier' model."""
+    return {
+        "tiers": {
+            "SIMPLE": "gpt-4o-mini",
+            "MEDIUM": "gpt-4o",
+            "COMPLEX": "claude-sonnet-4-20250514",
+            "REASONING": "o1-preview",
+        },
+        "classifier_type": "llm",
+        "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+    }
+
+
+@pytest.fixture
+def llm_complexity_router(mock_router_instance, llm_classifier_config):
+    """ComplexityRouter configured to classify via an LLM call."""
+    return ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=llm_classifier_config,
+    )
+
+
+class TestLLMClassifierConfig:
+    """Test config validation for the LLM classifier option."""
+
+    def test_llm_classifier_type_requires_config(self):
+        """classifier_type='llm' without classifier_llm_config must raise."""
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(classifier_type="llm")
+
+    def test_heuristic_classifier_type_needs_no_llm_config(self):
+        """classifier_type='heuristic' (the default) needs no classifier_llm_config."""
+        config = ComplexityRouterConfig()
+        assert config.classifier_type == "heuristic"
+        assert config.classifier_llm_config is None
+
+
+class TestLLMClassifier:
+    """Test the LLM-based classifier path (aclassify) and its fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_aclassify_heuristic_skips_llm_call(self, complexity_router, mock_router_instance):
+        """When classifier_type is 'heuristic' (default), aclassify must not call the LLM."""
+        mock_router_instance.acompletion = AsyncMock()
+        tier, score, signals = await complexity_router.aclassify("Hello!")
+        mock_router_instance.acompletion.assert_not_called()
+        assert tier == ComplexityTier.SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_aclassify_llm_success_routes_by_llm_verdict(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """A well-formed structured LLM response should decide the tier directly.
+
+        Uses a prompt that heuristic scoring alone would classify as SIMPLE, to prove
+        the LLM verdict -- not the heuristic scorer -- is what decided the tier.
+        """
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "COMPLEX"}')
+        )
+        tier, score, signals = await llm_complexity_router.aclassify("hi")
+        assert tier == ComplexityTier.COMPLEX
+        assert "llm-classifier:COMPLEX" in signals
+        mock_router_instance.acompletion.assert_awaited_once()
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["model"] == "haiku-classifier"
+        assert call_kwargs["timeout"] == 0.4
+
+    @pytest.mark.asyncio
+    async def test_aclassify_forwards_request_metadata_for_spend_tracking(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """The classifier call must carry the original request's metadata.
+
+        Without this, the proxy's cost-tracking gate (_should_track_cost_callback)
+        sees no user_api_key/team_id/user_id and silently drops all spend logging
+        and budget accounting for the classifier call.
+        """
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "SIMPLE"}')
+        )
+        request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
+        await llm_complexity_router.aclassify(
+            "hi", request_kwargs={"litellm_metadata": request_metadata}
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == request_metadata
+
+    @pytest.mark.asyncio
+    async def test_aclassify_strips_budget_reservation_from_classifier_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """The classifier call must not receive the parent request's budget reservation.
+
+        The reservation belongs to the routed completion the classifier is deciding
+        on, not to this internal classifier call. Forwarding it would let the
+        classifier's own cost-tracking reconcile against a reservation it has no
+        business touching, so it must be stripped while the rest of the attribution
+        metadata (key/team) is preserved.
+        """
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "SIMPLE"}')
+        )
+        request_metadata = {
+            "user_api_key": "sk-abc",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_budget_reservation": {"reserved_cost": 1.0},
+            "user_api_key_auth": {"budget_reservation": {"reserved_cost": 1.0}},
+        }
+        await llm_complexity_router.aclassify(
+            "hi", request_kwargs={"litellm_metadata": request_metadata}
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == {
+            "user_api_key": "sk-abc",
+            "user_api_key_team_id": "team-1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_aclassify_falls_back_to_heuristic_on_llm_exception(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """A timeout/error from the classifier model must fall back to heuristic scoring."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        tier, score, signals = await llm_complexity_router.aclassify("Hello!")
+        assert tier == llm_complexity_router.classify("Hello!")[0]
+        assert tier == ComplexityTier.SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_aclassify_falls_back_to_heuristic_on_unparseable_response(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Non-JSON or schema-violating output must fall back to heuristic scoring, not raise."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response("not json"))
+        tier, score, signals = await llm_complexity_router.aclassify("Hello!")
+        assert tier == ComplexityTier.SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_aclassify_falls_back_to_heuristic_on_empty_content(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Empty/None message content (e.g. provider quirk) must fall back, not raise."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(None))
+        tier, score, signals = await llm_complexity_router.aclassify("Hello!")
+        assert tier == ComplexityTier.SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_uses_llm_classifier_end_to_end(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """The full pre-routing hook should route using the LLM classifier's verdict."""
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "REASONING"}')
+        )
+        request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
+        result = await llm_complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"litellm_metadata": request_metadata},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING tier model
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == request_metadata
