@@ -5069,8 +5069,13 @@ def _get_model_info_from_generalization(
     Tries the same name candidates as the exact lookups, in the same order, and
     returns ``(matched_name, model_info)`` for the first candidate matched by at
     least one capability rule, with ``litellm_provider`` backfilled from the
-    provider the caller requested. O(number of rules); only call after the exact
-    lookups have missed.
+    provider the caller requested. Rules lose to exact entries: if ANY candidate is
+    an exact ``litellm.model_cost`` key (necessarily provider-mismatched, or the
+    exact lookups would have returned it), the model is known rather than unmapped,
+    and resolving it from rules would hand an unpriced rule-derived entry to
+    callers whose fallback ladder (e.g. the cost calculator's model-name variants)
+    still had a priced exact name to try. O(number of rules); only call after the
+    exact lookups have missed.
     """
     candidates = (
         potential_model_names["combined_model_name"],
@@ -5079,6 +5084,8 @@ def _get_model_info_from_generalization(
         potential_model_names["combined_stripped_model_name"],
         potential_model_names["stripped_model_name"],
     )
+    if any(_get_model_cost_key(candidate) is not None for candidate in candidates):
+        return None
     for candidate in candidates:
         generalized_info = match_capability_generalizations(candidate)
         if generalized_info is None:
