@@ -9,9 +9,15 @@ interface SidebarProviderProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   sidebarCollapsed: boolean;
+  onToggleCollapsed?: () => void;
 }
 
-const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: SidebarProviderProps) => {
+const SidebarProvider = ({
+  setPage,
+  defaultSelectedKey,
+  sidebarCollapsed,
+  onToggleCollapsed,
+}: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
@@ -72,6 +78,7 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
       setPage={setPage}
       defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
+      onToggleCollapsed={onToggleCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
       enableProjectsUI={enableProjectsUI}
       enableChatUI={enableChatUI}
