@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
+from litellm.proxy.common_utils.json_merge_patch import _MAX_MERGE_DEPTH, apply_json_merge_patch
 
 # RFC 7386 Appendix A — the normative test suite for JSON Merge Patch.
 # https://www.rfc-editor.org/rfc/rfc7386#appendix-A
@@ -69,3 +69,26 @@ def test_scalar_patch_replaces_object_wholesale():
 
 def test_object_patch_over_non_object_target_starts_from_empty():
     assert apply_json_merge_patch("not-an-object", {"a": 1, "b": None}) == {"a": 1}
+
+
+def _nest(levels: int) -> dict:
+    """A patch nested ``levels`` dicts deep with a scalar leaf at the bottom."""
+    value: object = "leaf"
+    for _ in range(levels):
+        value = {"a": value}
+    return value  # type: ignore[return-value]
+
+
+def test_merge_within_max_depth_is_allowed():
+    """A deeply-but-not-pathologically nested patch merges without raising."""
+    result = apply_json_merge_patch({}, _nest(_MAX_MERGE_DEPTH - 1))
+    for _ in range(_MAX_MERGE_DEPTH - 1):
+        result = result["a"]
+    assert result == "leaf"
+
+
+def test_merge_beyond_max_depth_raises():
+    """A patch nested past the cap fails closed (ValueError) rather than
+    overflowing the Python stack — the guard the recursion detector requires."""
+    with pytest.raises(ValueError, match="maximum depth"):
+        apply_json_merge_patch({}, _nest(_MAX_MERGE_DEPTH + 5))
