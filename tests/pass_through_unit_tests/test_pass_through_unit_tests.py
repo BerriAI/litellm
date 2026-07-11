@@ -646,7 +646,7 @@ def test_custom_pricing_used_in_cost_calculation():
 async def test_pass_through_request_url_model_derivation(mock_request, mock_user_api_key_dict):
     """
     Test that when a request body does not contain a 'model' key, the model is derived
-    from the URL and appropriate tags are added for observability.
+    from the URL and surfaced as observability metadata.
     """
     mock_response = AsyncMock()
     mock_response.status_code = 200
@@ -678,14 +678,16 @@ async def test_pass_through_request_url_model_derivation(mock_request, mock_user
         
         assert response.status_code == 200
         
-        # Check that update_environment_variables was called with derived model and tag
+        # Check that update_environment_variables was called with the derived model
         mock_logging_update.assert_called_once()
         _, kwargs = mock_logging_update.call_args
-        
+
         assert kwargs["model"] == "fal-ai/flux/schnell"
-        
+
         litellm_params = kwargs["litellm_params"]
-        tags = litellm_params["metadata"]["tags"]
-        assert "fal_model:fal-ai/flux/schnell" in tags
+        # The URL-derived model is surfaced as metadata only, never as a tag: tags
+        # feed budget enforcement, and a URL-derived tag can't be checked against its
+        # own budget on the same request that first introduces it.
+        assert "tags" not in litellm_params["metadata"]
         assert litellm_params["metadata"]["fal_model"] == "fal-ai/flux/schnell"
 

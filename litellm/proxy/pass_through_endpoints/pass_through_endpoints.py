@@ -895,18 +895,17 @@ async def pass_through_request(
 
         url_identifier = url_path or url_host
 
-        # Inject upstream URL model tag for observability (Langfuse / Spend Logs)
-        # This MUST happen before pre_call_hook so that budget enforcement sees the tag
+        # Surface the URL-derived model as observability metadata (Langfuse / Spend
+        # Logs) only. This intentionally does NOT go into `metadata.tags`: that list
+        # feeds tag spend/budget enforcement, and `user_api_key_auth`/`common_checks`
+        # already ran as FastAPI dependencies before this endpoint body executes, so a
+        # tag added here can never be checked against its own budget on this request.
+        # A caller could keep hitting a passthrough URL past that tag's budget forever.
         if url_identifier:
-            tag = f"{url_provider}_model:{url_identifier}"
             if _parsed_body is None:
                 _parsed_body = {}
             litellm_metadata = _parsed_body.setdefault("litellm_metadata", {})
             if isinstance(litellm_metadata, dict):
-                tags_list = litellm_metadata.setdefault("tags", [])
-                if isinstance(tags_list, list) and tag not in tags_list:
-                    tags_list.append(tag)
-                # also set the provider specific model tag
                 litellm_metadata[f"{url_provider}_model"] = url_identifier
 
         passthrough_model = (
