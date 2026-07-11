@@ -17,6 +17,7 @@ from lifecycle import ResourceManager
 pytestmark = pytest.mark.e2e
 
 
+@pytest.mark.covers("quota_management.budget.soft.alerts_without_blocking")
 def test_soft_budget_does_not_block(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

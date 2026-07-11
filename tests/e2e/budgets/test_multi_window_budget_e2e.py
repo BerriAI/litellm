@@ -29,6 +29,7 @@ def _call(client: BudgetClient, key: str):
     )
 
 
+@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
 def test_short_window_blocks_then_resets(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

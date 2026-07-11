@@ -28,6 +28,7 @@ def _call(client: BudgetClient, key: str, model: str):
     return result
 
 
+@pytest.mark.covers("quota_management.budget.model_max.isolates_per_model")
 def test_model_max_budget_isolates_per_model(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

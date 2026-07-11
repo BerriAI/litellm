@@ -26,6 +26,7 @@ def _call(client: BudgetClient, key: str):
     )
 
 
+@pytest.mark.covers("quota_management.budget.key.resets_after_window")
 def test_key_budget_resets_after_duration(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

@@ -59,6 +59,7 @@ def _require_row(
     return matches[0]
 
 
+@pytest.mark.covers("quota_management.spend_tracking.chat_completions.logs_cost")
 def test_chat_completion_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -93,6 +94,7 @@ def test_chat_completion_writes_nonzero_spend_row(
         ), f"row request_id != client response.id ({chat.id})"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.stream.logs_cost")
 def test_streaming_chat_completion_tracks_spend(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -120,6 +122,7 @@ def test_streaming_chat_completion_tracks_spend(
     assert (row.total_tokens or 0) == prompt + completion
 
 
+@pytest.mark.covers("quota_management.spend_tracking.embeddings.logs_cost")
 def test_embedding_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -142,6 +145,7 @@ def test_embedding_writes_nonzero_spend_row(
     assert "text-embedding-3-small" in (row.model or "")
 
 
+@pytest.mark.covers("quota_management.spend_tracking.cache_hit.zero_cost")
 def test_cache_hit_is_zero_cost_and_suffixed(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -177,6 +181,7 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     ), f"the non-cached call should still be charged: {_summarize(rows)}"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.key_rollup.matches_sum_of_logs")
 def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> None:
     for _ in range(2):
         _ = unwrap(
@@ -203,6 +208,7 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
     ), f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.concurrent_burst.loses_no_spend")
 def test_burst_of_concurrent_calls_loses_no_spend(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -249,6 +255,7 @@ def test_burst_of_concurrent_calls_loses_no_spend(
     )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.pagination.keeps_total")
 def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -301,6 +308,7 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
     )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.tags.attributes_spend")
 def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     tag = f"e2e-spend-{unique_marker()}"
     _ = unwrap(
@@ -317,6 +325,7 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.tags.attributes_spend")
 def test_tag_spend_matches_sum_of_tagged_logs(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -354,6 +363,7 @@ def test_tag_spend_matches_sum_of_tagged_logs(
     )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.end_user.attributes_spend")
 def test_end_user_spend_attributed_on_row(
     client: SpendClient, scoped_key: str, resources: ResourceManager
 ) -> None:
@@ -371,6 +381,7 @@ def test_end_user_spend_attributed_on_row(
     assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.per_model.writes_own_rows")
 def test_each_model_on_a_shared_key_gets_its_own_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -419,6 +430,7 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
 def test_failure_call_writes_failure_status_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -438,6 +450,7 @@ def test_failure_call_writes_failure_status_row(
     assert (failure_rows[0].spend or 0) == 0.0, "failed call must not be charged"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
     cost = client.calculate_spend(
         "gemini-2.5-flash", "estimate the cost of this request"
