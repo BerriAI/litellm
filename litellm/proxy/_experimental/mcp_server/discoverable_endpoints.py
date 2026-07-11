@@ -373,7 +373,7 @@ def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> str | None:
     return key_obj.user_id if _key_is_active(key_obj) else None
 
 
-async def _resolve_active_litellm_key(request: Request) -> Tuple[str, "UserAPIKeyAuth"] | None:
+async def _resolve_active_litellm_key(request: Request) -> tuple[str, "UserAPIKeyAuth"] | None:
     """Resolve the presented litellm key to ``(its hash, the live active key record)``, or ``None``
     when the key is absent, unresolvable, or blocked/expired.
 
@@ -714,19 +714,17 @@ def _coerce_positive_expires_in(value: object) -> int | None:
     usable number. IdPs return it as an int, a float (``3600.0``), or a numeric string (``"3600"``);
     accepting only ``int`` would drop the float/string cases to ``None`` and fall back to the
     envelope's 1h cap, which can outlive a shorter-lived upstream token and forward a stale bearer.
-    ``bool`` is excluded (it is an ``int`` subclass but never a real lifetime)."""
-    if isinstance(value, bool):
+    ``bool`` is excluded (it is an ``int`` subclass but never a real lifetime). Total over hostile
+    input: a non-numeric string, ``NaN``, ``Infinity``, or an over-large value all resolve to
+    ``None`` rather than raising (``int(float(...))`` can raise ``ValueError`` or ``OverflowError``),
+    so a malformed upstream ``expires_in`` never surfaces as a 500 from the token endpoint."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
-    if isinstance(value, (int, float)):
-        seconds = int(value)
-        return seconds if seconds > 0 else None
-    if isinstance(value, str):
-        try:
-            seconds = int(float(value.strip()))
-        except (ValueError, TypeError):
-            return None
-        return seconds if seconds > 0 else None
-    return None
+    try:
+        seconds = int(float(value))
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return seconds if seconds > 0 else None
 
 
 def _bridge_grant_from_token_response(token_response: object) -> Optional["UpstreamTokenGrant"]:
@@ -744,14 +742,35 @@ def _bridge_grant_from_token_response(token_response: object) -> Optional["Upstr
     if not isinstance(access, str) or not access:
         return None
     token_type = token_response.get("token_type")
-    refresh = token_response.get("refresh_token")
     scope = token_response.get("scope")
     return UpstreamTokenGrant(
         access_token=SecretStr(access),
         token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
-        refresh_token=SecretStr(refresh) if isinstance(refresh, str) and refresh else None,
+        # The upstream refresh_token is deliberately NOT sealed: the edge never consumes it (it forwards
+        # only token_type + access_token), so it would be dead weight embedding a long-lived upstream
+        # credential in the client-held bearer, and it enlarges the envelope. Refresh support is a
+        # follow-up (a dedicated refresh-envelope); the client re-runs authorization_code at the cap.
+        refresh_token=None,
         scope=scope if isinstance(scope, str) and scope else None,
         expires_in=_coerce_positive_expires_in(token_response.get("expires_in")),
+    )
+
+
+def _bridge_invalid_request_response() -> JSONResponse:
+    """RFC 6749 §5.2-shaped ``invalid_request`` for a bridge token exchange that carries no resolvable
+    litellm identity. Returned (not raised) so the OAuth error members sit at the top level rather than
+    wrapped in FastAPI's ``detail``, with the no-store token-endpoint headers, matching the BYOK OAuth
+    endpoint and what a strict DCR client parses per RFC 6749 §5.2."""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "invalid_request",
+            "error_description": (
+                "this server issues a gateway-bound credential; send a litellm credential "
+                "(x-litellm-api-key or Authorization) on the token request"
+            ),
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
     )
 
 
@@ -784,16 +803,7 @@ async def _mint_bridge_delegate_token_response(
 
     key_hash = await _extract_active_key_hash_from_request(request)
     if not key_hash:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "error_description": (
-                    "this server issues a gateway-bound credential; send a litellm credential "
-                    "(x-litellm-api-key or Authorization) on the token request"
-                ),
-            },
-        )
+        return _bridge_invalid_request_response()
 
     grant = _bridge_grant_from_token_response(token_response)
     if grant is None:
@@ -804,7 +814,11 @@ async def _mint_bridge_delegate_token_response(
     identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=key_hash)
     sealed = build_bridge_token_response(identity, grant, keys, now)
     if not isinstance(sealed, SealedEnvelope):
-        raise HTTPException(status_code=500, detail="Failed to mint the gateway-bound credential")
+        # build_bridge_token_response returns EnvelopeTooLarge as a value when the upstream token is
+        # too large to seal; that is an upstream-payload condition, so surface a 502, not a 500.
+        raise HTTPException(
+            status_code=502, detail="Upstream token is too large to seal into a gateway-bound credential"
+        )
 
     expires_in = max(1, int((sealed.expires_at - now).total_seconds()))
     body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
@@ -883,6 +897,16 @@ async def exchange_token_with_server(
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
+
+        # For a bridge oauth_delegate mint, resolve the litellm identity BEFORE exchanging the
+        # single-use upstream code. A missing or transiently-unresolvable identity then fails closed
+        # with invalid_request without consuming the code, so the client can retry the same code
+        # instead of being forced back through the full interactive authorize. The mint below
+        # re-resolves authoritatively; get_key_object is cache-first, so that second call is a cache
+        # hit and this adds no extra database round-trip.
+        if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
+            if not await _extract_active_key_hash_from_request(request):
+                return _bridge_invalid_request_response()
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
