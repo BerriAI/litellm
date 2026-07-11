@@ -90,6 +90,38 @@ def _remaining_from_429(body: str) -> int:
     return int(found.group(1))
 
 
+@dataclass(frozen=True, slots=True)
+class _BlockedByReservation:
+    outcome: StreamingResponse
+    content: str
+    spent: int
+
+
+@dataclass(frozen=True, slots=True)
+class _CrossedLimit:
+    spent: int
+
+
+def _spend_until_blocked_or_crossed(client: QuotaClient, key: str, first: _FirstOk) -> _BlockedByReservation | _CrossedLimit:
+    """Drive chat traffic, summing each body's actual usage.total_tokens, until
+    the limiter blocks (which the reservation may do before the actual spend
+    crosses the limit) or the actual spend reaches the limit."""
+    window_deadline = first.sent_at + WINDOW_SECONDS - LAST_CALL_LATENCY_MARGIN_SECONDS
+    spent = _total_tokens(first.response)
+    while spent < TPM_LIMIT:
+        assert time.monotonic() < window_deadline, (
+            f"spent only {spent} of {TPM_LIMIT} tokens before the {WINDOW_SECONDS}s window could roll; "
+            "the exact-crossing assertion needs every call inside one window"
+        )
+        content = f"reply with one word {unique_marker()}"
+        outcome = client.chat(key, MODEL, content, max_tokens=CHAT_MAX_TOKENS)
+        if outcome.status_code == 429:
+            return _BlockedByReservation(outcome=outcome, content=content, spent=spent)
+        require_successful_call(outcome)
+        spent += _total_tokens(outcome)
+    return _CrossedLimit(spent=spent)
+
+
 def _limited_key(
     client: QuotaClient,
     resources: ResourceManager,
@@ -160,17 +192,8 @@ class TestKeyRateLimits:
         assert info.tpm_limit == TPM_LIMIT, f"/key/info reports tpm_limit {info.tpm_limit}, configured {TPM_LIMIT}"
 
         first = _first_ok(client, key)
-        window_deadline = first.sent_at + WINDOW_SECONDS - LAST_CALL_LATENCY_MARGIN_SECONDS
-        spent = _total_tokens(first.response)
-
-        while spent < TPM_LIMIT:
-            assert time.monotonic() < window_deadline, (
-                f"spent only {spent} of {TPM_LIMIT} tokens before the {WINDOW_SECONDS}s window could roll; "
-                "the exact-crossing assertion needs every call inside one window"
-            )
-            content = f"reply with one word {unique_marker()}"
-            outcome = client.chat(key, MODEL, content, max_tokens=CHAT_MAX_TOKENS)
-            if outcome.status_code == 429:
+        match _spend_until_blocked_or_crossed(client, key, first):
+            case _BlockedByReservation(outcome=outcome, content=content, spent=spent):
                 _assert_rate_limited(outcome, "tokens")
                 remaining = _remaining_from_429(outcome.body)
                 reserved = _reserved_tokens(content)
@@ -178,11 +201,8 @@ class TestKeyRateLimits:
                     f"blocked while the call still fit: {remaining} of {TPM_LIMIT} tokens remained but the call "
                     f"reserved only {reserved} ({spent} actual tokens spent so far)"
                 )
-                return
-            require_successful_call(outcome)
-            spent += _total_tokens(outcome)
-
-        _assert_rate_limited(_chat(client, key), "tokens")
+            case _CrossedLimit():
+                _assert_rate_limited(_chat(client, key), "tokens")
 
     @pytest.mark.covers("quota_management.ratelimit.rpm.resets_after_window")
     def test_rpm_limit_resets_after_window(self, client: QuotaClient, resources: ResourceManager) -> None:
