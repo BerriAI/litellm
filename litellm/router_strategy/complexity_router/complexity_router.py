@@ -485,6 +485,7 @@ class ComplexityRouter(CustomLogger):
                 score_threshold=self.config.match_threshold,
             ),
             auto_sync="local",
+            aggregation="max",
         )
         self._semantic_routelayer = routelayer
         return routelayer
