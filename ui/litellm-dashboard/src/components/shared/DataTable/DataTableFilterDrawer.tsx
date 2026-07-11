@@ -4,6 +4,7 @@ import type { ColumnFiltersState, Table } from "@tanstack/react-table";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 export interface FilterDraft {
@@ -100,7 +101,7 @@ export function DataTableFilterDrawer<TData>({
 export function DataTableFilterField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium">{label}</label>
+      <Label>{label}</Label>
       {children}
     </div>
   );
