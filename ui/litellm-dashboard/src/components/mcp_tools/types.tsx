@@ -367,6 +367,7 @@ export interface MCPServer {
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
+  dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
   /** Redacted to null in server responses; present when constructing a server locally. */
   credentials?: Record<string, unknown> | null;
