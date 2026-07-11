@@ -2,7 +2,7 @@
 
 Covers quota_management.ratelimit.*: a key generated with rpm_limit/tpm_limit gets a
 429 once the limit is crossed inside one window (blocks_over_limit), serves
-again once the window rolls (resets_after_window), and successful responses
+again once the window rolls and no sooner (resets_after_window), and successful responses
 report x-ratelimit-* limit/remaining headers so clients can pace
 (headers_report_remaining). Each test asserts both halves of the contract: the
 recorded state (/key/info echoes the configured limit) and the enforced
@@ -19,12 +19,20 @@ budget, and no later than the first call after actual spend reaches the limit).
 All calls of one test must land inside a single window
 (LITELLM_RATE_LIMIT_WINDOW_SIZE, 60s default), which real chat latency
 comfortably allows.
+
+The window opens at the pre-call hook of the first counted call, which happens
+after that call is sent, so the send timestamp of the winning first call is a
+lower bound on the window start. The reset test uses it to reject an early
+reset: recovery must not arrive before the full window has elapsed from that
+send, less a small tolerance for the limiter's integer-second window
+arithmetic.
 """
 
 from __future__ import annotations
 
 import re
 import time
+from dataclasses import dataclass
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -42,6 +50,13 @@ TPM_LIMIT = 60
 CHAT_MAX_TOKENS = 16
 RESERVATION_CHARS_PER_TOKEN = 4
 WINDOW_SECONDS = 60
+RESET_TOLERANCE_SECONDS = 5
+
+
+@dataclass(frozen=True, slots=True)
+class _FirstOk:
+    sent_at: float
+    response: StreamingResponse
 
 
 class _ChatUsage(BaseModel):
@@ -90,17 +105,19 @@ def _chat(client: QuotaClient, key: str) -> StreamingResponse:
     return client.chat(key, MODEL, f"reply with one word {unique_marker()}")
 
 
-def _first_ok(client: QuotaClient, key: str) -> StreamingResponse:
-    """First successful call on a fresh key, which opens the rate-limit window.
-    A fresh key may briefly 401 until the data plane's auth cache picks it up, so
-    retry on 401 to a deadline; a 401 never reaches the rate limiter, so only the
-    successful call consumes budget. Any other failure is behavior under test and
-    fails hard."""
+def _first_ok(client: QuotaClient, key: str) -> _FirstOk:
+    """First successful call on a fresh key, which opens the rate-limit window;
+    `sent_at` is captured just before the winning send, so the window opened no
+    earlier than it. A fresh key may briefly 401 until the data plane's auth
+    cache picks it up, so retry on 401 to a deadline; a 401 never reaches the
+    rate limiter, so only the successful call consumes budget. Any other failure
+    is behavior under test and fails hard."""
     deadline = time.monotonic() + client.gateway.poll_timeout
     while True:
+        sent_at = time.monotonic()
         outcome = _chat(client, key)
         if outcome.ok:
-            return outcome
+            return _FirstOk(sent_at=sent_at, response=outcome)
         if outcome.status_code != 401 or time.monotonic() >= deadline:
             require_successful_call(outcome)
         time.sleep(client.gateway.poll_interval)
@@ -142,8 +159,8 @@ class TestKeyRateLimits:
         assert info.tpm_limit == TPM_LIMIT, f"/key/info reports tpm_limit {info.tpm_limit}, configured {TPM_LIMIT}"
 
         first = _first_ok(client, key)
-        window_deadline = time.monotonic() + WINDOW_SECONDS - 10
-        spent = _total_tokens(first)
+        window_deadline = first.sent_at + WINDOW_SECONDS - 10
+        spent = _total_tokens(first.response)
 
         while spent < TPM_LIMIT:
             assert time.monotonic() < window_deadline, (
@@ -170,13 +187,20 @@ class TestKeyRateLimits:
     def test_rpm_limit_resets_after_window(self, client: QuotaClient, resources: ResourceManager) -> None:
         key = _limited_key(client, resources, rpm_limit=1)
 
-        _ = _first_ok(client, key)
+        first = _first_ok(client, key)
         _assert_rate_limited(_chat(client, key), "requests")
 
         deadline = time.monotonic() + client.gateway.poll_timeout
         while time.monotonic() < deadline:
+            attempt_sent_at = time.monotonic()
             outcome = _chat(client, key)
             if outcome.ok:
+                window_age = attempt_sent_at - first.sent_at
+                assert window_age >= WINDOW_SECONDS - RESET_TOLERANCE_SECONDS, (
+                    f"the key recovered {window_age:.1f}s after the window opened, before the "
+                    f"{WINDOW_SECONDS}s window (less {RESET_TOLERANCE_SECONDS}s tolerance) elapsed; "
+                    "the limiter reset early instead of after the window"
+                )
                 return
             assert outcome.status_code == 429, (
                 f"while the window drains only 429s are acceptable, got {outcome.status_code}: {outcome.body[:300]}"
@@ -188,7 +212,7 @@ class TestKeyRateLimits:
     def test_headers_report_limit_and_remaining(self, client: QuotaClient, resources: ResourceManager) -> None:
         key = _limited_key(client, resources, rpm_limit=5, tpm_limit=100000)
 
-        first = _first_ok(client, key)
+        first = _first_ok(client, key).response
         assert first.headers.get("x-ratelimit-api_key-limit-requests") == "5", (
             f"success response must report the key's request limit, headers: "
             f"{ {k: v for k, v in first.headers.items() if 'ratelimit' in k} }"
