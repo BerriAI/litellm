@@ -3706,13 +3706,6 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
 
 
 class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
-    """Fields to apply to every selected member in a bulk update. Matches the
-    merge-patch semantics of the single-member endpoint: an omitted field is
-    left untouched, while an explicitly-passed ``None`` clears that field for
-    each member. ``require_at_least_one_field`` only enforces that the caller
-    set at least one field, so ``max_budget_in_team=None`` is a valid request
-    that clears the per-member budget."""
-
     max_budget_in_team: float | None = None
     role: Literal["admin", "user"] | None = None
     tpm_limit: int | None = None
