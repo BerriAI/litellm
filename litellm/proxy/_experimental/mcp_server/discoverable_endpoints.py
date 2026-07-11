@@ -865,7 +865,6 @@ async def exchange_token_with_server(
             )
         raise
     token_response = response.json()
-    access_token = token_response["access_token"]
 
     # Validate token response against server-configured rules before any storage.
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
@@ -912,7 +911,7 @@ async def exchange_token_with_server(
         return await _mint_bridge_delegate_token_response(request, mcp_server, token_response)
 
     result = {
-        "access_token": access_token,
+        "access_token": token_response["access_token"],
         "token_type": token_response.get("token_type", "Bearer"),
     }
 
