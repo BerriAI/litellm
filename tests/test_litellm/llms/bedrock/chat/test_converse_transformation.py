@@ -5816,3 +5816,24 @@ def test_adaptive_thinking_passes_through_on_46_plus_converse(model):
     )
 
     assert optional_params.get("thinking") == {"type": "adaptive"}
+
+
+def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
+    """When max_tokens can't fit even the minimum thinking budget, the raw
+    adaptive block must be dropped entirely rather than translated, so the
+    Bedrock Converse request still succeeds."""
+    from litellm.constants import ANTHROPIC_MIN_THINKING_BUDGET_TOKENS
+
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        },
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5",
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params
