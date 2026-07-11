@@ -61,7 +61,7 @@ from litellm._lazy_imports import (
 )
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.fallback_generalizations import (
-    match_fallback_generalization,
+    match_all_fallback_generalizations,
 )
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -5046,9 +5046,10 @@ def _get_model_info_from_generalization(
     """Resolve an unmapped model via a declarative fallback-generalization rule.
 
     Tries the same name candidates as the exact lookups, in the same order, and
-    returns ``(matched_name, model_info)`` for the first candidate whose rule also
-    satisfies the provider constraint. O(number of rules); only call after the
-    exact lookups have missed.
+    returns ``(matched_name, model_info)`` for the first matching rule that also
+    satisfies the provider constraint; a rule scoped to another provider is
+    skipped in favor of later rules rather than discarding the candidate.
+    O(number of rules); only call after the exact lookups have missed.
     """
     candidates = [
         potential_model_names["combined_model_name"],
@@ -5058,11 +5059,9 @@ def _get_model_info_from_generalization(
         potential_model_names["stripped_model_name"],
     ]
     for candidate in candidates:
-        generalized_info = match_fallback_generalization(candidate)
-        if generalized_info is not None and _check_provider_match(
-            model_info=generalized_info, custom_llm_provider=custom_llm_provider
-        ):
-            return candidate, generalized_info
+        for generalized_info in match_all_fallback_generalizations(candidate):
+            if _check_provider_match(model_info=generalized_info, custom_llm_provider=custom_llm_provider):
+                return candidate, generalized_info
     return None
 
 
@@ -5472,6 +5471,7 @@ def _get_model_info_helper(
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
+                supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),

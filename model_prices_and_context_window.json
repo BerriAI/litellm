@@ -1481,6 +1481,7 @@
     "anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1516,6 +1517,7 @@
     "global.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1551,6 +1553,7 @@
     "us.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1586,6 +1589,7 @@
     "eu.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1621,6 +1625,7 @@
     "au.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -44076,6 +44081,17 @@
     },
     "fallback_generalizations": {
         "rules": [
+            {
+                "name": "bedrock-anthropic-claude-mid-conversation-system",
+                "pattern": "anthropic\\.claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "description": "Bedrock Invoke ids for Claude 4.8 or higher: anthropic.claude-<family> with minor 4.8 through 4.99, any 5.x or later major-minor, or a bare 5+ major, which also admits new families such as fable. These models accept mid-conversation role system messages in place (verified live on Opus 4.8, Sonnet 5 and Fable 5), so unmapped future Bedrock Claudes keep the cache-preserving in-place handling instead of the hoist-all default. Listed first so bare-id provider inference, which takes the first pattern hit, resolves these Bedrock ids to bedrock; model-info resolution skips provider-mismatched rules either way.",
+                "extends": "anthropic-claude",
+                "model_info": {
+                    "litellm_provider": "bedrock",
+                    "supports_adaptive_thinking": true,
+                    "supports_mid_conversation_system": true
+                }
+            },
             {
                 "name": "anthropic-claude-adaptive-thinking",
                 "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",

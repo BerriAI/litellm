@@ -8,9 +8,12 @@ The metadata is a partial cost-map entry: ``litellm_provider`` drives provider
 routing, and the remaining fields (``mode``, ``supports_*``, context window,
 pricing, ...) drive ``get_model_info`` / ``supports_*``.
 
-Precedence: rules are evaluated in file order and the first match wins. They are
-consulted only after exact and case-insensitive lookups miss, so an exact entry
-always takes precedence over a rule.
+Precedence: rules are evaluated in file order and the first match wins. Callers
+with extra constraints (model-info resolution checks the provider) use
+``match_all_fallback_generalizations`` to skip inapplicable earlier rules instead
+of discarding the model name. Rules are consulted only after exact and
+case-insensitive lookups miss, so an exact entry always takes precedence over a
+rule.
 
 Patterns are matched case-insensitively with ``re.search`` and are not implicitly
 anchored: a rule must include ``^`` and ``$`` (as the shipped rules do) to bind to
@@ -105,15 +108,15 @@ class _FallbackGeneralizations:
                 )
         return compiled
 
-    def match(self, model: str) -> Optional[dict]:
+    def matches(self, model: str) -> list[dict]:
         if not model:
-            return None
+            return []
         if self._compiled is None:
             self._compiled = self._compile()
-        for pattern, model_info in self._compiled:
-            if pattern.search(model) is not None:
-                return dict(model_info)
-        return None
+        return [dict(model_info) for pattern, model_info in self._compiled if pattern.search(model) is not None]
+
+    def match(self, model: str) -> Optional[dict]:
+        return next(iter(self.matches(model)), None)
 
 
 _registry = _FallbackGeneralizations()
@@ -139,3 +142,12 @@ def match_fallback_generalization(model: str) -> Optional[dict]:
     O(number of rules). Only call this once exact lookups have missed.
     """
     return _registry.match(model)
+
+
+def match_all_fallback_generalizations(model: str) -> list[dict]:
+    """Return the ``model_info`` of every rule whose regex matches ``model``, in rule order.
+
+    Lets a caller with extra constraints (e.g. a provider match) skip an
+    inapplicable earlier rule instead of discarding the whole candidate.
+    """
+    return _registry.matches(model)

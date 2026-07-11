@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
+    match_all_fallback_generalizations,
     match_fallback_generalization,
     set_fallback_generalizations,
 )
@@ -55,6 +56,48 @@ def test_match_returns_model_info_of_first_matching_rule(restore_generalizations
     matched = match_fallback_generalization("acme-pro-1")
     assert matched is not None
     assert matched["tag"] == "first"
+
+
+def test_match_all_returns_every_matching_rule_in_order(restore_generalizations):
+    restore_generalizations(
+        [
+            {
+                "name": "first",
+                "pattern": r"^acme-",
+                "model_info": {"litellm_provider": "openai", "tag": "first"},
+            },
+            {
+                "name": "second",
+                "pattern": r"^acme-pro-",
+                "model_info": {"litellm_provider": "anthropic", "tag": "second"},
+            },
+        ]
+    )
+    assert [m["tag"] for m in match_all_fallback_generalizations("acme-pro-1")] == ["first", "second"]
+    assert match_all_fallback_generalizations("gpt-4o") == []
+
+
+def test_provider_scoped_rule_is_skipped_for_other_providers(restore_generalizations):
+    """Model-info resolution must fall through a provider-mismatched earlier rule to a
+    later applicable one, instead of discarding the model name at the first pattern hit."""
+    restore_generalizations(
+        [
+            {
+                "name": "bedrock-scoped",
+                "pattern": r"^acme-",
+                "model_info": {"litellm_provider": "bedrock", "supports_vision": False},
+            },
+            {
+                "name": "openai-scoped",
+                "pattern": r"^acme-",
+                "model_info": {"litellm_provider": "openai", "mode": "chat", "supports_vision": True},
+            },
+        ]
+    )
+    litellm.get_model_info.cache_clear()
+    info = litellm.get_model_info("acme-fast-1", custom_llm_provider="openai")
+    assert info["litellm_provider"] == "openai"
+    assert info["supports_vision"] is True
 
 
 def test_match_is_case_insensitive(restore_generalizations):
@@ -298,3 +341,47 @@ def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):
     assert non_adaptive not in litellm.model_cost
     assert AnthropicModelInfo._is_adaptive_thinking_model(adaptive) is True
     assert AnthropicModelInfo._is_adaptive_thinking_model(non_adaptive) is False
+
+
+def test_shipped_bedrock_rule_resolves_unmapped_future_claude_for_bedrock(shipped_cost_map):
+    """An unmapped Bedrock Claude >= 4.8 resolves via the bedrock-scoped
+    ``bedrock-anthropic-claude-mid-conversation-system`` rule even when the lookup
+    carries ``custom_llm_provider="bedrock"``, which the provider check uses to drop
+    the anthropic-scoped rules. It inherits base capabilities, gains both
+    version-gated flags, and stays unpriced."""
+    model = "us.anthropic.claude-opus-4-9"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="bedrock")
+    assert info["litellm_provider"] == "bedrock"
+    assert info["supports_mid_conversation_system"] is True
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+
+
+def test_shipped_bedrock_mid_conversation_rule_gates_on_version_and_naming(shipped_cost_map):
+    """The bedrock rule only claims Bedrock-style ids at 4.8+, bare 5+ majors and
+    new families included; pre-4.8 Bedrock ids and native ids never gain the flag,
+    and the rule outranks the anthropic-scoped ones for Bedrock ids because it is
+    listed first."""
+    for flagged in (
+        "us.anthropic.claude-opus-4-8",
+        "jp.anthropic.claude-opus-4-8",
+        "anthropic.claude-sonnet-5",
+        "us.anthropic.claude-fable-5",
+        "anthropic.claude-sonnet-5-20260101-v1:0",
+    ):
+        matched = match_fallback_generalization(flagged)
+        assert matched is not None, flagged
+        assert matched["litellm_provider"] == "bedrock", flagged
+        assert matched["supports_mid_conversation_system"] is True, flagged
+    for unflagged in (
+        "us.anthropic.claude-opus-4-7",
+        "us.anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "claude-opus-4-9",
+        "claude-sonnet-5",
+    ):
+        matched = match_fallback_generalization(unflagged)
+        assert matched is None or not matched.get("supports_mid_conversation_system"), unflagged

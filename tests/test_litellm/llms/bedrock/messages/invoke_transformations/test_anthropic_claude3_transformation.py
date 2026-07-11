@@ -1893,14 +1893,15 @@ def test_bedrock_invoke_transform_merges_list_content_system_role_into_system():
     ]
 
 
-def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place():
+def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
     """Regression test for the Bedrock prompt-cache collapse: hoisting a
     mid-conversation ``role: "system"`` message (e.g. Claude Code's
     ``mid-conversation-system-2026-04-07`` reminders) into the top-level
     ``system`` field mutates the cache prefix and invalidates the cached message
-    history, so such entries must be forwarded in place. Invoke only rejects a
-    system entry at ``messages.0``. Billing-header blocks must still be stripped
-    from the top-level ``system`` field even when nothing is hoisted."""
+    history, so on models flagged ``supports_mid_conversation_system`` (the Opus
+    4.8 family, which Invoke accepts the role on) such entries must be forwarded
+    in place. Billing-header blocks must still be stripped from the top-level
+    ``system`` field even when nothing is hoisted."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -1932,10 +1933,11 @@ def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place():
     ]
 
 
-def test_bedrock_invoke_transform_hoists_only_leading_system_run():
-    """Only the leading run of ``role: "system"`` messages is hoisted into the
-    top-level ``system`` field; a later system entry keeps its position in
-    ``messages`` so the serialized prefix stays stable across turns."""
+def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cost_map):
+    """On models flagged ``supports_mid_conversation_system``, only the leading
+    run of ``role: "system"`` messages is hoisted into the top-level ``system``
+    field; a later system entry keeps its position in ``messages`` so the
+    serialized prefix stays stable across turns."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -1964,6 +1966,103 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run():
         {"type": "text", "text": "You are terse."},
         {"type": "text", "text": "Cite sources."},
     ]
+
+
+def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claude(local_model_cost_map):
+    """Regression test for Claude Code 400s on pre-Opus-4.8 Bedrock models:
+    Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet 4.6,
+    Haiku 4.5, etc. ("role 'system' is not supported on this model"), so on
+    models without ``supports_mid_conversation_system`` every system entry must
+    be hoisted into the top-level ``system`` field, mid-conversation ones
+    included."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": [{"type": "text", "text": "Base."}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "user", "content": "continue"},
+    ]
+    assert result["system"] == [
+        {"type": "text", "text": "Base."},
+        {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+    ]
+
+
+def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_model_cost_map):
+    """A model with no cost-map entry and no fallback-generalization rule gets
+    the hoist-everything behavior: the safe default is a mutated cache prefix,
+    never a provider 400 from forwarding a role the model may not accept."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "mid-conversation reminder"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-3-9",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "continue"},
+    ]
+    assert result["system"] == [{"type": "text", "text": "mid-conversation reminder"}]
+
+
+def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
+    """An unmapped Bedrock Claude at 4.8 or higher resolves through the
+    ``bedrock-anthropic-claude-mid-conversation-system`` fallback rule, so a
+    future model that has not landed in the cost map yet keeps the
+    cache-preserving in-place behavior instead of falling back to hoist-all."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "mid-conversation reminder"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-9",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == messages
+    assert "system" not in result
 
 
 def test_as_system_content_blocks_handles_each_shape():
