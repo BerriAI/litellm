@@ -330,17 +330,18 @@ sequenceDiagram
     Browser->>Proxy: POST /sso/cli/complete/login_id
     
     CLI->>Proxy: Poll /sso/cli/poll/login_id with poll_secret header
-    Proxy->>CLI: Return {"status": "ready", "key": "sk-..."}
+    Proxy->>CLI: Return {"status": "ready", "key": "jwt"}
     CLI->>CLI: Save key to ~/.litellm/token.json
 ```
 
 ### Authentication Commands
 
-The CLI provides three authentication commands:
+The CLI provides these authentication commands:
 
 - **`lite login`** - Start SSO authentication flow
 - **`lite logout`** - Clear stored authentication token
 - **`lite whoami`** - Show current authentication status
+- **`lite auth print-token`** - Print the cached token (used as Claude Code's `apiKeyHelper`); fails once the token has expired
 
 ### Authentication Flow Steps
 
@@ -350,7 +351,7 @@ The CLI provides three authentication commands:
 4. **User Authentication**: User completes SSO authentication in browser
 5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
 6. **User Code Verification**: Browser confirms the verification code shown in the CLI
-7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the key is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
+7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
 8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
 
 ### Benefits of This Approach
@@ -376,7 +377,7 @@ Authentication tokens are stored in `~/.litellm/token.json` with restricted file
 }
 ```
 
-The stored credential is a real virtual key, scoped to the user and team you logged in as and inheriting their models and budgets; spend is tracked against the shared team and user budgets rather than a separate per-session cap, so multiple logins or several concurrent agents all draw down the same allowance. It has a bounded duration (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`). Because it's a real virtual key, it shows up in the Admin UI's Keys page and an admin can revoke or regenerate it at any time; `lite logout` also revokes it directly. There is no silent renewal; once it expires, `lite auth print-token` fails and you re-run `lite login` to get a fresh key and pick up your latest team and user settings. It is accepted on a default deployment without `EXPERIMENTAL_UI_LOGIN`.
+The stored credential is a short-lived, per-session agent token, not a managed virtual key. It is scoped to the user and team you logged in as and inherits their models and budgets; spend is tracked against the shared team and user budgets rather than a separate per-session cap, so multiple logins or several concurrent agents all draw down the same allowance. It is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); re-run `lite login` to refresh it and pick up your latest team and user settings. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while fresh and fails once it expires -- there is no silent renewal. It is accepted on a default deployment without `EXPERIMENTAL_UI_LOGIN`, does not appear in the Keys UI, and cannot be rotated or revoked mid-session. For a long-lived, rotatable, Keys-UI-visible credential, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY`.
 
 ### Usage
 

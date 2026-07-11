@@ -9993,7 +9993,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \
-         *     --header 'Authorization: ***' \
+         *     --header 'Authorization: Bearer sk-1234' \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_ids": ["project-123", "project-456"]
@@ -10023,7 +10023,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \
-         *     --header 'Authorization: ***'
+         *     --header 'Authorization: Bearer sk-1234'
          *     ```
          */
         get: operations["project_info_project_info_get"];
@@ -10049,7 +10049,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/list' \
-         *     --header 'Authorization: ***'
+         *     --header 'Authorization: Bearer sk-1234'
          *     ```
          */
         get: operations["list_projects_project_list_get"];
@@ -10102,7 +10102,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: ***' \
+         *     --header 'Authorization: Bearer sk-1234' \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "flight-search-assistant",
@@ -10129,7 +10129,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: ***' \
+         *     --header 'Authorization: Bearer sk-1234' \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "hotel-recommendations",
@@ -10183,7 +10183,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/update' \
-         *     --header 'Authorization: ***' \
+         *     --header 'Authorization: Bearer sk-1234' \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_id": "project-123",
@@ -12594,27 +12594,6 @@ export interface paths {
         put?: never;
         /** Cli Sso Complete */
         post: operations["cli_sso_complete_sso_cli_complete__login_id__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/sso/cli/logout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cli Logout
-         * @description Revoke a CLI refresh token server-side. Called by ``lite logout`` so a
-         *     copied-then-deleted local token file can't still be used to refresh.
-         */
-        post: operations["cli_logout_sso_cli_logout_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -48951,26 +48930,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cli_logout_sso_cli_logout_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };

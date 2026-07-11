@@ -2071,7 +2071,11 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+    from litellm.proxy.auth.auth_checks import (
+        ExperimentalUIJWTToken,
+        get_team_object,
+        get_user_object,
+    )
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
@@ -2129,6 +2133,13 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
+            team_alias = None
+            if team_id and isinstance(user_team_details, list):
+                team_alias = next(
+                    (team.get("team_alias") for team in user_team_details if team.get("team_id") == team_id),
+                    None,
+                )
+
             user_info = LiteLLM_UserTable(
                 user_id=user_id,
                 user_role=session_data["user_role"],
@@ -2167,20 +2178,20 @@ async def cli_poll_key(
                 else None
             )
 
-            session_key = await _mint_cli_session_key(
-                user_id=user_id,
+            jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+                user_info=user_info,
                 team_id=team_id,
-                models=user_info.models,
+                team_alias=team_alias,
                 max_budget=session_max_budget,
             )
 
             # Delete cache entry (single-use)
             user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
-            verbose_proxy_logger.info(f"CLI session key generated for user: {user_id}, team: {team_id}")
+            verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
             poll_response = {
                 "status": "ready",
-                "key": session_key,
+                "key": jwt_token,
                 "user_id": user_id,
                 "team_id": team_id,
                 "teams": user_teams,
@@ -2200,70 +2211,6 @@ async def cli_poll_key(
     except Exception as e:
         verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
         raise HTTPException(status_code=500, detail=f"Error checking session status: {str(e)}")
-
-
-async def _mint_cli_session_key(
-    user_id: str,
-    team_id: Optional[str],
-    models: List[str],
-    max_budget: Optional[float],
-) -> str:
-    """Mint the CLI's working credential: a real virtual key used directly
-    as the bearer token for LLM calls. Unlike a stateless JWT it's visible
-    and revocable server-side (Admin UI Keys page, ``lite logout``), but has
-    no silent-refresh path -- once its duration elapses, `lite login` again."""
-    from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        GenerateKeyResponse,
-        generate_key_helper_fn,
-    )
-
-    response = await generate_key_helper_fn(
-        request_type="key",
-        models=models,
-        user_id=user_id,
-        team_id=team_id,
-        key_max_budget=max_budget,
-        duration=f"{CLI_JWT_EXPIRATION_HOURS}h",
-        key_alias=f"cli-{user_id}",
-        metadata={"cli_session": True},
-        table_name="key",
-    )
-    return GenerateKeyResponse(**response).key
-
-
-def _require_cli_session_key(user_api_key_dict: UserAPIKeyAuth) -> str:
-    """Validate the authenticated key is a CLI session key and return its
-    hashed value (the DB primary key), or raise 401."""
-    metadata = user_api_key_dict.metadata or {}
-    if metadata.get("cli_session") is not True:
-        raise HTTPException(status_code=401, detail="Not a CLI session key")
-    if not user_api_key_dict.token:
-        raise HTTPException(status_code=401, detail="Invalid CLI session key")
-    return user_api_key_dict.token
-
-
-@router.post("/sso/cli/logout", tags=["experimental"], include_in_schema=False)
-async def cli_logout(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """Revoke a CLI session key server-side. Called by ``lite logout`` so a
-    copied-then-deleted local token file can't still be used."""
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-    from litellm.repositories.verification_token_repository import (
-        VerificationTokenRepository,
-    )
-
-    presented_token = _require_cli_session_key(user_api_key_dict)
-
-    if prisma_client is not None:
-        await VerificationTokenRepository(prisma_client).table.update(
-            where={"token": presented_token},
-            data={"blocked": True},
-        )
-        user_api_key_cache.delete_cache(key=presented_token)
-
-    return {"status": "revoked"}
 
 
 async def insert_sso_user(

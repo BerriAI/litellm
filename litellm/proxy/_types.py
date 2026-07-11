@@ -719,10 +719,6 @@ class LiteLLMRoutes(enum.Enum):
             # Create/update/delete and test_connection stay admin-only.
             "/search_tools/list",
             "/search_tools/ui/available_providers",
-            # CLI session-key self-service: revoke the caller's own
-            # cli_session key (`lite logout`). Scoped to the presented key
-            # itself by cli_logout in ui_sso.py, not by this outer allowlist.
-            "/sso/cli/logout",
         ]
         + spend_tracking_routes
         + key_management_routes

@@ -588,29 +588,8 @@ def login(ctx: click.Context):
 
 
 @click.command(name="logout")
-@click.pass_context
-def logout(ctx: click.Context):
+def logout():
     """Logout and clear stored authentication"""
-    token_data = load_token()
-    session_key = token_data.get("key") if token_data else None
-    if session_key:
-        # Revoke against the server the token was actually issued for,
-        # unless the caller explicitly overrode --base-url -- otherwise this
-        # silently targets the CLI's localhost:4000 default for anyone not
-        # running against a local proxy, and revocation does nothing.
-        base_url = ctx.obj["base_url"]
-        if not ctx.obj.get("base_url_explicit") and token_data:
-            base_url = token_data.get("base_url") or base_url
-        try:
-            requests.post(
-                f"{base_url}/sso/cli/logout",
-                headers={"Authorization": f"Bearer {session_key}"},
-                timeout=5,
-            )
-        except requests.RequestException:
-            # Best-effort: still clear the local file even if the proxy is
-            # unreachable, so `lite logout` always leaves the machine clean.
-            pass
     clear_token()
     click.echo("✅ Logged out successfully. Authentication token cleared.")
 

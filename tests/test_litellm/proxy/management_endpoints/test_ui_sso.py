@@ -2899,8 +2899,8 @@ class TestCLIKeyRegenerationFlow:
             assert "https://test.litellm.ai/sso/callback" == redirect_url
 
     @pytest.mark.asyncio
-    async def test_cli_poll_key_generates_session_key_with_team(self):
-        """Test CLI poll endpoint mints a CLI session key when team_id is provided"""
+    async def test_cli_poll_key_generates_jwt_with_team(self):
+        """Test CLI poll endpoint generates JWT when team_id is provided"""
         from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import (
             _hash_cli_sso_secret,
@@ -2940,9 +2940,15 @@ class TestCLIKeyRegenerationFlow:
             "session_data": session_data,
         }
 
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token"
+
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.prisma_client"),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value=mock_jwt_token,
+            ) as mock_get_jwt,
             patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=mock_user_info),
@@ -2951,10 +2957,6 @@ class TestCLIKeyRegenerationFlow:
                 "litellm.proxy.auth.auth_checks.get_team_object",
                 new=AsyncMock(side_effect=Exception("no team")),
             ),
-            patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_session_key",
-                new=AsyncMock(return_value="sk-cli-session-key"),
-            ) as mock_mint,
         ):
             # Act - Second poll with team_id
             result = await cli_poll_key(
@@ -2963,25 +2965,22 @@ class TestCLIKeyRegenerationFlow:
                 x_litellm_cli_poll_secret="poll-secret",
             )
 
-            # Assert - should return the session key
+            # Assert - should return JWT
             assert result["status"] == "ready"
-            assert result["key"] == "sk-cli-session-key"
+            assert result["key"] == mock_jwt_token
             assert result["user_id"] == "test-user-789"
             assert result["team_id"] == selected_team
             assert result["teams"] == ["team-a", "team-b", "team-c"]
-            assert "refresh_token" not in result
 
-            # Verify the session key was minted with the correct team and no
-            # budget cap (team lookup failed, but team_id is set, so the
-            # fallback cap must not apply)
-            mock_mint.assert_called_once()
-            mint_call_kwargs = mock_mint.call_args.kwargs
-            assert mint_call_kwargs["user_id"] == "test-user-789"
-            assert mint_call_kwargs["team_id"] == selected_team
-            assert mint_call_kwargs["models"] == ["gpt-4"]
-            assert mint_call_kwargs["max_budget"] is None
+            # Verify JWT was generated with correct team and no budget cap
+            # (team lookup failed, but team_id is set, so fallback cap must not apply)
+            mock_get_jwt.assert_called_once()
+            jwt_call_args = mock_get_jwt.call_args
+            assert jwt_call_args.kwargs["team_id"] == selected_team
+            assert jwt_call_args.kwargs["team_alias"] == "Team B"
+            assert jwt_call_args.kwargs["max_budget"] is None
 
-            # Verify session was deleted after the key was minted
+            # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
 
     @pytest.mark.asyncio
@@ -3015,9 +3014,15 @@ class TestCLIKeyRegenerationFlow:
             "user_code_verified": True,
             "session_data": session_data,
         }
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiJ9.budgeted.token"
+
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.prisma_client"),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value=mock_jwt_token,
+            ) as mock_get_jwt,
             patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=mock_user_info),
@@ -3028,10 +3033,6 @@ class TestCLIKeyRegenerationFlow:
                     side_effect=AssertionError("team lookup must be skipped")
                 ),
             ),
-            patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_session_key",
-                new=AsyncMock(return_value="sk-cli-session-key"),
-            ) as mock_mint,
         ):
             result = await cli_poll_key(
                 key_id="cli-session-budgeted",
@@ -3040,9 +3041,8 @@ class TestCLIKeyRegenerationFlow:
             )
 
         assert result["status"] == "ready"
-        assert "refresh_token" not in result
-        mock_mint.assert_called_once()
-        assert mock_mint.call_args.kwargs["max_budget"] is None
+        mock_get_jwt.assert_called_once()
+        assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_caps_session_when_user_and_team_have_no_budget(self):
@@ -3076,9 +3076,15 @@ class TestCLIKeyRegenerationFlow:
             "user_code_verified": True,
             "session_data": session_data,
         }
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiJ9.unbudgeted.token"
+
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.prisma_client"),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value=mock_jwt_token,
+            ) as mock_get_jwt,
             patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=mock_user_info),
@@ -3087,10 +3093,6 @@ class TestCLIKeyRegenerationFlow:
                 "litellm.proxy.auth.auth_checks.get_team_object",
                 new=AsyncMock(return_value=mock_team),
             ),
-            patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_session_key",
-                new=AsyncMock(return_value="sk-cli-session-key"),
-            ) as mock_mint,
         ):
             result = await cli_poll_key(
                 key_id="cli-session-unbudgeted",
@@ -3099,10 +3101,9 @@ class TestCLIKeyRegenerationFlow:
             )
 
         assert result["status"] == "ready"
-        assert "refresh_token" not in result
-        mock_mint.assert_called_once()
+        mock_get_jwt.assert_called_once()
         assert (
-            mock_mint.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
+            mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
         )
 
 
@@ -7232,16 +7233,18 @@ async def test_cli_poll_key_tolerates_missing_user_row():
         "session_data": session_data,
     }
 
+    mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.missing.user"
+
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
         patch("litellm.proxy.proxy_server.prisma_client"),
         patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
-            new=AsyncMock(side_effect=ValueError("User doesn't exist in db. 'user_id'=just-created-user")),
+            "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+            return_value=mock_jwt_token,
         ),
         patch(
-            "litellm.proxy.management_endpoints.ui_sso._mint_cli_session_key",
-            new=AsyncMock(return_value="sk-cli-session-key"),
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            new=AsyncMock(side_effect=ValueError("User doesn't exist in db. 'user_id'=just-created-user")),
         ),
     ):
         result = await cli_poll_key(
@@ -7251,9 +7254,8 @@ async def test_cli_poll_key_tolerates_missing_user_row():
         )
 
     assert result["status"] == "ready"
-    assert result["key"] == "sk-cli-session-key"
+    assert result["key"] == mock_jwt_token
     assert result["user_id"] == "just-created-user"
-    assert "refresh_token" not in result
 
 
 def _make_sso_callback_request(query_params: dict) -> MagicMock:
@@ -7312,53 +7314,3 @@ async def test_auth_callback_without_oauth_error_proceeds_to_normal_flow():
 
     assert exc_info.value.status_code == 500
     assert "DB not connected" in str(exc_info.value.detail)
-
-
-
-
-class TestCLILogoutFlow:
-    """Tests for `/sso/cli/logout`, which revokes the CLI session key
-    (a single, real DB-backed virtual key, metadata.cli_session=True) used
-    directly as the bearer token for LLM calls. There is no separate
-    refresh endpoint -- the key is not silently rotated; once it expires,
-    `lite login` mints a new one."""
-
-    @pytest.mark.asyncio
-    async def test_cli_logout_rejects_non_session_key(self):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_logout
-
-        normal_key = UserAPIKeyAuth(token="hashed-normal-key", metadata={})
-
-        with pytest.raises(HTTPException) as exc_info:
-            await cli_logout(user_api_key_dict=normal_key)
-
-        assert exc_info.value.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_cli_logout_blocks_session_key(self):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_logout
-
-        session_key = UserAPIKeyAuth(
-            token="hashed-session", metadata={"cli_session": True}
-        )
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update = AsyncMock()
-        mock_cache = MagicMock()
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-            patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
-            ),
-        ):
-            result = await cli_logout(user_api_key_dict=session_key)
-
-        assert result == {"status": "revoked"}
-        mock_repo_instance.table.update.assert_called_once_with(
-            where={"token": "hashed-session"}, data={"blocked": True}
-        )
-        mock_cache.delete_cache.assert_called_once_with(key="hashed-session")

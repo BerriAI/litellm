@@ -429,81 +429,12 @@ class TestLogoutCommand:
         self.runner = CliRunner()
 
     def test_logout_success(self):
-        """Test successful logout with no stored key (nothing to revoke server-side)"""
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
-            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
-            patch("requests.post") as mock_post,
-        ):
-            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
+        """Test successful logout"""
+        with patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear:
+            result = self.runner.invoke(logout)
 
             assert result.exit_code == 0
             assert "✅ Logged out successfully" in result.output
-            mock_clear.assert_called_once()
-            mock_post.assert_not_called()
-
-    def test_logout_revokes_key_server_side(self):
-        """logout must revoke the stored key, not just delete the local file --
-        otherwise a copied-then-deleted token.json could still be used to make requests."""
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
-            patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={"base_url": "http://localhost:4000", "key": "sk-session-key"},
-            ),
-            patch("requests.post") as mock_post,
-        ):
-            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
-
-            assert result.exit_code == 0
-            mock_post.assert_called_once_with(
-                "http://localhost:4000/sso/cli/logout",
-                headers={"Authorization": "Bearer sk-session-key"},
-                timeout=5,
-            )
-            mock_clear.assert_called_once()
-
-    def test_logout_revokes_against_stored_origin_not_cli_default(self):
-        """Bare `lite logout` (no --base-url) must revoke against the server
-        the token was actually issued for, not the CLI's localhost:4000
-        default -- otherwise revocation silently no-ops for every real
-        (non-localhost) deployment."""
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
-            patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={
-                    "base_url": "https://litellm-proxy.corp.com",
-                    "key": "sk-session-key",
-                },
-            ),
-            patch("requests.post") as mock_post,
-        ):
-            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
-
-            assert result.exit_code == 0
-            mock_post.assert_called_once_with(
-                "https://litellm-proxy.corp.com/sso/cli/logout",
-                headers={"Authorization": "Bearer sk-session-key"},
-                timeout=5,
-            )
-            mock_clear.assert_called_once()
-
-    def test_logout_clears_local_token_even_if_revoke_fails(self):
-        """The proxy being unreachable must not block clearing the local token."""
-        import requests
-
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear,
-            patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={"base_url": "http://localhost:4000", "key": "sk-session-key"},
-            ),
-            patch("requests.post", side_effect=requests.RequestException("connection refused")),
-        ):
-            result = self.runner.invoke(logout, obj={"base_url": "http://localhost:4000"})
-
-            assert result.exit_code == 0
             mock_clear.assert_called_once()
 
 
