@@ -2398,3 +2398,257 @@ class TestTracingFieldsE2E:
         # No detections, so these should be None
         assert slg.get("detection_method") is None
         assert slg.get("match_details") is None
+
+
+class TestContentFilterMCPPreCall:
+    """Test pre_mcp_call support: MCP tool call argument scanning in apply_guardrail"""
+
+    def test_pre_mcp_call_is_supported_event_hook(self):
+        """
+        Constructing the guardrail with mode pre_mcp_call must succeed (LIT-4226)
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-mode",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        assert GuardrailEventHooks.pre_mcp_call in guardrail.supported_event_hooks
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocks_mcp_tool_arguments(self):
+        """
+        Blocked word inside MCP tool call arguments raises HTTPException
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-block",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"body": "this is confidential data"},
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "confidential" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_mcp_tool_arguments(self):
+        """
+        MASK pattern match inside MCP arguments writes masked args to modified_arguments
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-mask",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"contact": "reach me at test@example.com"},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        modified = request_data["modified_arguments"]
+        assert "[EMAIL_REDACTED]" in modified["contact"]
+        assert "test@example.com" not in modified["contact"]
+        assert request_data["mcp_arguments"] == modified
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_arguments_clean_pass(self):
+        """
+        Clean MCP arguments pass through without modification
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-clean",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        request_data = {
+            "mcp_tool_name": "get_weather",
+            "mcp_arguments": {"city": "Paris"},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert "modified_arguments" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_mask_breaking_json_blocks(self):
+        """
+        Masking that corrupts the JSON structure of arguments blocks instead of corrupting the call
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="regex",
+                pattern="secret..",
+                name="json_breaker",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-broken-mask",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        request_data = {
+            "mcp_tool_name": "save_note",
+            "mcp_arguments": {"note": "secret"},
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "invalid JSON" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_non_mcp_name_arguments_not_scanned(self):
+        """
+        A raw body with top-level name + arguments (e.g. pass-through) is not treated as an MCP call;
+        only the canonical mcp_tool_name + mcp_arguments keys trigger the scan
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-non-mcp-shape",
+            event_hook=GuardrailEventHooks.pre_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"name": "send_email", "arguments": {"body": "confidential data"}},
+            input_type="request",
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_response_side_not_scanned(self):
+        """
+        input_type response does not run the MCP argument scan
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-response-side",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["clean response"]},
+            request_data={
+                "mcp_tool_name": "send_email",
+                "mcp_arguments": {"body": "this is confidential data"},
+            },
+            input_type="response",
+        )
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocks_non_ascii_mcp_arguments(self):
+        """
+        Non-ASCII blocked words in MCP arguments must be detected (json.dumps must not escape them)
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-non-ascii",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="\u673a\u5bc6", action=ContentFilterAction.BLOCK)],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={
+                    "mcp_tool_name": "send_email",
+                    "mcp_arguments": {"body": "this is \u673a\u5bc6 data"},
+                },
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_mask_survives_chained_guardrails(self):
+        """
+        A second masking guardrail must scan the already-masked arguments, not resurrect the originals
+        """
+        email_guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-chain-email",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="email", action=ContentFilterAction.MASK)
+            ],
+        )
+        phone_guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-chain-phone",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_phone", action=ContentFilterAction.MASK)
+            ],
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"contact": "email test@example.com phone 555-123-4567"},
+        }
+
+        await email_guardrail.apply_guardrail(inputs={}, request_data=request_data, input_type="request")
+        await phone_guardrail.apply_guardrail(inputs={}, request_data=request_data, input_type="request")
+
+        final = request_data["modified_arguments"]
+        assert "test@example.com" not in final["contact"]
+        assert "555-123-4567" not in final["contact"]
+        assert "[EMAIL_REDACTED]" in final["contact"]
+        assert "[US_PHONE_REDACTED]" in final["contact"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_pre_call_mode_ignores_forged_mcp_keys(self):
+        """
+        A pre_call mode guardrail must not run the MCP scan even when a caller plants MCP keys in the body
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-forged-mcp-keys",
+            event_hook=GuardrailEventHooks.pre_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"body": "this is confidential data"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert "modified_arguments" not in request_data
+        assert request_data["mcp_arguments"] == {"body": "this is confidential data"}

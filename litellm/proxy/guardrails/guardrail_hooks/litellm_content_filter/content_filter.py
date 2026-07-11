@@ -1683,6 +1683,46 @@ class ContentFilterGuardrail(CustomGuardrail):
             tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
         )
 
+    @staticmethod
+    def _get_mcp_tool_name(request_data: dict) -> Optional[str]:
+        raw_name: object = request_data.get("mcp_tool_name")
+        if isinstance(raw_name, str) and raw_name:
+            return raw_name
+        return None
+
+    @staticmethod
+    def _parse_masked_mcp_arguments(masked_arguments: str, tool_name: str) -> Dict[str, object]:
+        try:
+            parsed: object = json.loads(masked_arguments)
+        except json.JSONDecodeError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Content blocked: masking MCP tool call arguments produced invalid JSON",
+                    "mcp_tool_name": tool_name,
+                },
+            )
+        return parsed
+
+    def _scan_mcp_tool_call_arguments(self, request_data: dict, detections: List[ContentFilterDetection]) -> None:
+        if not self._event_hook_is_event_type(GuardrailEventHooks.pre_mcp_call):
+            return
+        tool_name = self._get_mcp_tool_name(request_data)
+        if tool_name is None:
+            return
+        raw_arguments: object = request_data.get("mcp_arguments")
+        if not isinstance(raw_arguments, dict) or not raw_arguments:
+            return
+        serialized_arguments = json.dumps(raw_arguments, ensure_ascii=False)
+        filtered_arguments = self._filter_single_text(serialized_arguments, detections=detections)
+        if filtered_arguments == serialized_arguments:
+            return
+        masked_arguments = self._parse_masked_mcp_arguments(filtered_arguments, tool_name)
+        request_data["mcp_arguments"] = masked_arguments
+        request_data["modified_arguments"] = masked_arguments
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -1736,6 +1776,9 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
             inputs["texts"] = processed_texts
+
+            if input_type == "request":
+                self._scan_mcp_tool_call_arguments(request_data=request_data, detections=detections)
 
             # Count masked entities by type
             self._count_masked_entities(detections, masked_entity_count)
@@ -1903,4 +1946,5 @@ class ContentFilterGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_mcp_call,
         ]
