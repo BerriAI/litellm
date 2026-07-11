@@ -18,6 +18,7 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     SpanError,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 from litellm.integrations.otel.model.spans import (
@@ -77,9 +78,11 @@ class SpanEmitter:
         tracer: Tracer,
         config: OpenTelemetryV2Config,
         mappers: Sequence[AttributeMapper] | None = None,
+        event_recorder: GenAIEventRecorder | None = None,
     ) -> None:
         self._tracer = tracer
         self._config = config
+        self._event_recorder = event_recorder
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
@@ -223,6 +226,14 @@ class SpanEmitter:
                 ExceptionEvent.NAME,
                 {ExceptionEvent.TYPE: error_type, ExceptionEvent.MESSAGE: message},
             )
+            if self._event_recorder is not None and role is SpanRole.LLM_CALL:
+                self._event_recorder.record_operation_exception(
+                    span_context=span.get_span_context(),
+                    error_type=error_type,
+                    message=message,
+                    stack_trace=error.stack_trace,
+                    timestamp_ns=end_time_ns,
+                )
         # On success leave the status UNSET (the semconv default) rather than
         # forcing OK — that matches the FastAPI server span and avoids implying a
         # span-level health signal litellm doesn't actually evaluate. Only a

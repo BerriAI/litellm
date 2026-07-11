@@ -52,6 +52,7 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
         "token_url",
         "registration_url",
         "oauth2_flow",
+        "dcr_bridge",
         "token_exchange_endpoint",
         "audience",
         "subject_token_type",
@@ -74,6 +75,34 @@ _TOKEN_EXCHANGE_COLUMN_FIELDS: frozenset = frozenset(
         "token_exchange_profile",
     }
 )
+
+# The client-forwarded token modes share one stored-credential shape: the admin-declared upstream
+# OAuth app (client_id/client_secret) plus the same authorize relay, and neither mints anything the
+# gateway keeps. So a switch WITHIN this class must preserve the stored app, unlike a cross-class
+# switch (e.g. an oauth2 row whose client may be DCR-minted and is not reusable elsewhere).
+_CLIENT_FORWARDED_AUTH_TYPES: frozenset = frozenset({"true_passthrough", "oauth_delegate"})
+
+# Minted token material that must never survive a client rotation on a persisted row.
+_MINTED_TOKEN_CREDENTIAL_FIELDS: frozenset = frozenset({"access_token", "refresh_token", "expires_in"})
+
+
+def _credential_auth_class(auth_type: Optional[str]) -> Optional[str]:
+    """Collapse the client-forwarded modes to one credential class; every other auth_type is its own
+    class. Used so credential handling keys off whether the stored-credential shape actually changed,
+    not off a raw auth_type inequality that treats true_passthrough<->oauth_delegate as a full reset."""
+    if auth_type in _CLIENT_FORWARDED_AUTH_TYPES:
+        return "client_forwarded"
+    return auth_type
+
+
+def _drop_stale_minted_on_client_rotation(merged: Dict[str, Any], new_creds: Dict[str, Any]) -> Dict[str, Any]:
+    """When the update rotates the client, drop stale minted token keys it did not itself set, so an old
+    app's access/refresh token never rides forward under the new client. A no-op when no client key changed."""
+    if "client_id" not in new_creds and "client_secret" not in new_creds:
+        return merged
+    return {
+        key: value for key, value in merged.items() if key not in _MINTED_TOKEN_CREDENTIAL_FIELDS or key in new_creds
+    }
 
 
 def _is_global_env_var_scope(scope: Any) -> bool:
@@ -678,7 +707,9 @@ async def update_mcp_server(
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
     auth_type_changed = bool(
-        data.auth_type and existing and existing.auth_type is not None and existing.auth_type != data.auth_type
+        data.auth_type
+        and existing
+        and _credential_auth_class(existing.auth_type) != _credential_auth_class(data.auth_type)
     )
 
     # Clear stale credentials when auth_type changes but no new credentials provided
@@ -711,11 +742,12 @@ async def update_mcp_server(
     # would wipe encrypted secrets that the UI cannot display back.
     if "credentials" in data_dict and data_dict["credentials"] is not None:
         if existing and existing.credentials:
-            # Only merge when auth_type is unchanged. Switching auth types
-            # (e.g. oauth2 → api_key) should replace credentials entirely
-            # to avoid stale secrets from the previous auth type lingering.
-            auth_type_unchanged = data.auth_type is None or data.auth_type == existing.auth_type
-            if auth_type_unchanged:
+            # Only merge when the credential CLASS is unchanged. A cross-class switch
+            # (e.g. oauth2 → api_key, or oauth2 → true_passthrough) replaces credentials
+            # entirely to avoid stale secrets from the previous class lingering; a switch
+            # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
+            # the same declared app and so must merge, not replace.
+            if not auth_type_changed:
                 existing_creds = (
                     json.loads(existing.credentials)
                     if isinstance(existing.credentials, str)
@@ -726,8 +758,9 @@ async def update_mcp_server(
                     if isinstance(data_dict["credentials"], str)
                     else dict(data_dict["credentials"])
                 )
-                # New values override existing; existing keys not in update are preserved
-                merged = {**existing_creds, **new_creds}
+                # New values override existing; existing keys not in update are preserved. A client
+                # rotation additionally drops the previous app's stale minted token keys.
+                merged = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
                 # Migrate-on-write for legacy rows: token-exchange settings the
                 # old blob shape carried move to their dedicated columns (unless
                 # the caller set the column this update, or the row already has
@@ -745,6 +778,14 @@ async def update_mcp_server(
 
     # Add audit fields
     data_dict["updated_by"] = touched_by
+
+    # prisma-python rejects a raw ``None`` for a ``Json?`` field ("value is required but not set"); the
+    # clear paths above use ``None`` as the merge-skip sentinel, so translate it here to ``Json(None)``,
+    # which writes SQL null and reads back as ``None``. Done at the edge so the merge guards stay simple.
+    if "credentials" in data_dict and data_dict["credentials"] is None:
+        from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+        data_dict["credentials"] = Json(None)
 
     updated_mcp_server = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": data.server_id},
