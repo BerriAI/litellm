@@ -148,7 +148,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             self.log_queue.append(payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error logging success event - {str(e)}")
 
@@ -160,7 +160,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             self.log_queue.append(payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {str(e)}")
 
@@ -186,6 +186,14 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             undelivered = await self._send_with_413_split(batch_to_send)
             if undelivered:
                 self.log_queue = undelivered + self.log_queue
+                overflow = len(self.log_queue) - self.max_queue_size
+                if overflow > 0:
+                    del self.log_queue[:overflow]
+                    verbose_logger.warning(
+                        "DataDogLLMObs: log queue exceeded max_queue_size=%s; dropped %s oldest spans",
+                        self.max_queue_size,
+                        overflow,
+                    )
 
             if self.is_mock_mode:
                 verbose_logger.debug(f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked")
@@ -253,7 +261,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 pending.append(chunk[:mid])
                 continue
 
-            if response.status_code != 202:
+            if response.status_code >= 300:
                 verbose_logger.error(
                     "DataDogLLMObs: unexpected response status_code=%s, text=%s",
                     response.status_code,
