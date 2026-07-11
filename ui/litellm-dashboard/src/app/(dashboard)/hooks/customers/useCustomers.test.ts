@@ -16,7 +16,10 @@ const authorized = { accessToken: "test-access-token", userRole: "Admin" };
 
 type QueryOptions = { enabled: boolean; select: (data: EndUser[] | undefined) => EndUser[] };
 
-const lastCallOptions = (): QueryOptions => useQueryMock.mock.calls[0][3] as QueryOptions;
+const lastCallOptions = (): QueryOptions => {
+  const calls = useQueryMock.mock.calls;
+  return calls[calls.length - 1][3] as QueryOptions;
+};
 
 describe("useCustomers", () => {
   beforeEach(() => {
