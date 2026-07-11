@@ -227,6 +227,10 @@ DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
     "Sonnet 4.6+, and Mythos Preview."
 )
 
+DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING = (
+    "Dropping adaptive `thinking` for model=%s: max_tokens is too small to fit the minimum thinking budget."
+)
+
 DROP_UNSUPPORTED_SPEED_WARNING = (
     "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
 )
@@ -1220,6 +1224,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 llm_provider=llm_provider,
             )
 
+    @staticmethod
+    def _cap_thinking_budget_to_max_tokens(
+        thinking: AnthropicThinkingParam, max_tokens: Optional[int]
+    ) -> Optional[AnthropicThinkingParam]:
+        """Cap a legacy ``thinking.budget_tokens`` below ``max_tokens`` (Anthropic
+        requires ``max_tokens > budget_tokens``). Returns the (possibly capped)
+        thinking dict, or ``None`` when ``max_tokens`` is too small to fit even the
+        minimum thinking budget and thinking should be dropped."""
+        budget = thinking.get("budget_tokens")
+        if max_tokens is None or not isinstance(budget, int):
+            return thinking
+        if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS:
+            return None
+        if budget < max_tokens:
+            return thinking
+        return AnthropicThinkingParam(type=thinking.get("type", "enabled"), budget_tokens=max_tokens - 1)
+
     def _extract_json_schema_from_response_format(self, value: Optional[dict]) -> Optional[dict]:
         if value is None:
             return None
@@ -1463,7 +1484,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 optional_params["metadata"] = {"user_id": value}
             elif param == "thinking":
-                optional_params["thinking"] = value
+                if (
+                    isinstance(value, dict)
+                    and value.get("type") == "adaptive"
+                    and not AnthropicConfig._is_adaptive_thinking_model(model)
+                ):
+                    # Callers (e.g. Claude Code) send adaptive thinking
+                    # unconditionally; translate it down to the legacy
+                    # `thinking={type: enabled, budget_tokens}` interface a
+                    # pre-4.6 model actually supports instead of forwarding a
+                    # shape the model will reject.
+                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    legacy_thinking = AnthropicConfig._map_reasoning_effort(
+                        reasoning_effort="medium",
+                        model=model,
+                        llm_provider=self.custom_llm_provider or "anthropic",
+                    )
+                    capped_thinking = (
+                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        if legacy_thinking is not None
+                        else None
+                    )
+                    if capped_thinking is not None:
+                        optional_params["thinking"] = capped_thinking
+                    else:
+                        litellm.verbose_logger.warning(
+                            DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
+                            model,
+                        )
+                        optional_params.pop("thinking", None)
+                else:
+                    optional_params["thinking"] = value
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",
                 # "summary": "concise"}). The Responses->Chat parser keeps the
