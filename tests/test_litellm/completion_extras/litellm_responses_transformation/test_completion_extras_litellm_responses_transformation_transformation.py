@@ -336,6 +336,35 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert choice.finish_reason is None
 
 
+def test_chunk_parser_reuses_id_across_response_events():
+    """Regression: all chunks in a stream must share the same ID.
+
+    Without this, openai-go's ChatCompletionAccumulator silently drops
+    chunks when IDs don't match. See https://github.com/BerriAI/litellm/issues/32854
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    events = [
+        {"type": "response.created"},
+        {"type": "response.output_text.delta", "delta": "hello"},
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '{"city":"Paris"}',
+        },
+    ]
+
+    ids = {iterator.chunk_parser(event).id for event in events}
+
+    assert len(ids) == 1, f"all chunks must share one ID, got {ids}"
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock
