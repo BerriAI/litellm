@@ -7452,7 +7452,8 @@ class TestCLIRefreshTokenFlow:
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rotates_and_blocks_old_token(self):
-        """Happy path: mints a fresh JWT + refresh token and blocks the presented one.
+        """Happy path: mints a fresh JWT and rotates the refresh key's secret
+        via regenerate_key_fn (the same primitive /key/regenerate uses).
 
         The requested team_id is honored because the user IS a current member
         (per fresh DB state, not the presented token's own metadata); alias
@@ -7472,15 +7473,11 @@ class TestCLIRefreshTokenFlow:
             teams=["team-1"],
         )
         mock_team = MagicMock(team_alias="Team One", max_budget=100.0)
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update_many = AsyncMock(
-            return_value=MagicMock(count=1)
-        )
-        mock_cache = MagicMock()
+        mock_regenerated = MagicMock(key="sk-new-refresh")
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
             patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=mock_user),
@@ -7494,13 +7491,9 @@ class TestCLIRefreshTokenFlow:
                 return_value="new-jwt-token",
             ) as mock_get_jwt,
             patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
-                new=AsyncMock(return_value="sk-new-refresh"),
-            ) as mock_mint,
-            patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
-            ),
+                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
+                new=AsyncMock(return_value=mock_regenerated),
+            ) as mock_regenerate,
         ):
             result = await cli_refresh_token(user_api_key_dict=refresh_key)
 
@@ -7509,7 +7502,7 @@ class TestCLIRefreshTokenFlow:
         mock_get_team.assert_called_once_with(
             team_id="team-1",
             prisma_client=ANY,
-            user_api_key_cache=mock_cache,
+            user_api_key_cache=ANY,
         )
 
         mock_get_jwt.assert_called_once()
@@ -7518,22 +7511,15 @@ class TestCLIRefreshTokenFlow:
         # user has no personal budget and the team has one -> not capped.
         assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
-        # _mint_cli_refresh_token only ever receives the team_id hint --
-        # never team_alias or max_budget, which must be re-derived fresh on
-        # every future refresh rather than trusted from storage.
-        mock_mint.assert_called_once_with(user_id="user-1", team_id="team-1")
-
-        # The presented (now-consumed) refresh token must be blocked
-        # atomically via update_many (not a plain update) -- this is what
-        # makes it single-use and race-safe.
-        mock_repo_instance.table.update_many.assert_called_once_with(
-            where={
-                "token": "hashed-old-refresh",
-                "OR": [{"blocked": False}, {"blocked": None}],
-            },
-            data={"blocked": True},
+        # Rotation is delegated to regenerate_key_fn -- a single atomic
+        # DB update on the presented token's row (same key_alias/metadata/
+        # allowed_routes, just a new secret), keyed by the old token hash.
+        mock_regenerate.assert_called_once_with(
+            key="hashed-old-refresh",
+            data=None,
+            user_api_key_dict=refresh_key,
+            litellm_changed_by=None,
         )
-        mock_cache.delete_cache.assert_called_once_with(key="hashed-old-refresh")
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_ignores_team_id_for_removed_member(self):
@@ -7558,10 +7544,7 @@ class TestCLIRefreshTokenFlow:
             models=["gpt-4"],
             teams=["team-1"],  # does NOT include "victim-team"
         )
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update_many = AsyncMock(
-            return_value=MagicMock(count=1)
-        )
+        mock_regenerated = MagicMock(key="sk-new-refresh")
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -7581,12 +7564,8 @@ class TestCLIRefreshTokenFlow:
                 return_value="new-jwt-token",
             ) as mock_get_jwt,
             patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
-                new=AsyncMock(return_value="sk-new-refresh"),
-            ) as mock_mint,
-            patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
+                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
+                new=AsyncMock(return_value=mock_regenerated),
             ),
         ):
             result = await cli_refresh_token(user_api_key_dict=refresh_key)
@@ -7595,7 +7574,6 @@ class TestCLIRefreshTokenFlow:
         # The forged/stale team_id must be dropped, not honored.
         assert mock_get_jwt.call_args.kwargs["team_id"] is None
         assert mock_get_jwt.call_args.kwargs["team_alias"] is None
-        mock_mint.assert_called_once_with(user_id="user-1", team_id=None)
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_ignores_forged_max_budget_in_metadata(self):
@@ -7615,10 +7593,7 @@ class TestCLIRefreshTokenFlow:
         mock_user = LiteLLM_UserTable(
             user_id="user-1", user_role="internal_user", models=["gpt-4"], teams=[]
         )
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update_many = AsyncMock(
-            return_value=MagicMock(count=1)
-        )
+        mock_regenerated = MagicMock(key="sk-new-refresh")
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -7632,12 +7607,8 @@ class TestCLIRefreshTokenFlow:
                 return_value="new-jwt-token",
             ) as mock_get_jwt,
             patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
-                new=AsyncMock(return_value="sk-new-refresh"),
-            ),
-            patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
+                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
+                new=AsyncMock(return_value=mock_regenerated),
             ),
         ):
             await cli_refresh_token(user_api_key_dict=refresh_key)
@@ -7646,41 +7617,6 @@ class TestCLIRefreshTokenFlow:
         # fallback cap applies, never the forged 999999999.0 from metadata.
         assert mock_get_jwt.call_args.kwargs["max_budget"] != 999999999.0
         assert mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
-
-    @pytest.mark.asyncio
-    async def test_cli_refresh_token_rejects_replay_of_consumed_token(self):
-        """Concurrent replay: a refresh token already consumed by another
-        request (update_many affects 0 rows) must be rejected outright, not
-        silently mint a second credential pair from the same token."""
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
-
-        refresh_key = UserAPIKeyAuth(
-            token="hashed-already-consumed",
-            user_id="user-1",
-            metadata={"cli_refresh": True},
-        )
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update_many = AsyncMock(
-            return_value=MagicMock(count=0)
-        )
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-            patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
-            ),
-            patch(
-                "litellm.proxy.auth.auth_checks.get_user_object",
-                new=AsyncMock(side_effect=AssertionError("must not mint after losing the race")),
-            ),
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await cli_refresh_token(user_api_key_dict=refresh_key)
-
-        assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_fails_closed_when_db_unavailable(self):
@@ -7704,12 +7640,11 @@ class TestCLIRefreshTokenFlow:
 
     @pytest.mark.asyncio
     async def test_cli_refresh_token_rejects_deleted_user(self):
-        """A refresh token for a user who no longer exists must not mint a
-        new JWT, AND the consumed token must stay permanently blocked --
-        NOT be un-blocked by the compensating-rollback path. A deleted user
-        is an intentional, permanent rejection, not a transient failure; if
-        it were un-blocked and this user_id is ever reused/re-registered,
-        the stale token would immediately become valid for the new account."""
+        """A refresh token for a user who no longer exists must not rotate or
+        mint a new JWT -- the presented token is left completely untouched
+        (nothing mutates the DB before the user-existence check), so this is
+        naturally retryable/inspectable rather than requiring a compensating
+        rollback."""
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
 
@@ -7718,41 +7653,31 @@ class TestCLIRefreshTokenFlow:
             user_id="deleted-user",
             metadata={"cli_refresh": True},
         )
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update_many = AsyncMock(
-            return_value=MagicMock(count=1)
-        )
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
             patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
-            ),
-            patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=None),
             ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
+                new=AsyncMock(side_effect=AssertionError("must not rotate a deleted user's token")),
+            ) as mock_regenerate,
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await cli_refresh_token(user_api_key_dict=refresh_key)
 
         assert exc_info.value.status_code == 401
-        # Only the initial consume -- no compensating un-consume call.
-        mock_repo_instance.table.update_many.assert_called_once()
-        assert mock_repo_instance.table.update_many.call_args.kwargs["data"] == {
-            "blocked": True
-        }
+        mock_regenerate.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cli_refresh_token_un_consumes_on_mint_failure(self):
-        """Reliability regression: if minting fails AFTER the presented token
-        was already atomically consumed (e.g. a transient DB error), the
-        token must be un-blocked so a retry can succeed -- otherwise a single
-        transient failure permanently strands the user, since this endpoint
-        exists specifically for fully unattended apiKeyHelper operation and
-        has no other recovery path short of a full browser re-login."""
+    async def test_cli_refresh_token_never_rotates_on_mint_failure(self):
+        """Reliability: if JWT minting fails, the presented refresh token's
+        secret must never be rotated -- regenerate_key_fn is the last, only
+        mutating step, so a failure upstream of it leaves the old token
+        valid and simply retryable, with no compensating rollback needed."""
         from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.ui_sso import cli_refresh_token
 
@@ -7764,46 +7689,27 @@ class TestCLIRefreshTokenFlow:
         mock_user = LiteLLM_UserTable(
             user_id="user-1", user_role="internal_user", models=["gpt-4"], teams=[]
         )
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.table.update_many = AsyncMock(
-            return_value=MagicMock(count=1)
-        )
-        mock_cache = MagicMock()
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-            patch(
-                "litellm.repositories.verification_token_repository.VerificationTokenRepository",
-                return_value=mock_repo_instance,
-            ),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
             patch(
                 "litellm.proxy.auth.auth_checks.get_user_object",
                 new=AsyncMock(return_value=mock_user),
             ),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
-                return_value="new-jwt-token",
+                side_effect=RuntimeError("transient signing error"),
             ),
             patch(
-                "litellm.proxy.management_endpoints.ui_sso._mint_cli_refresh_token",
-                new=AsyncMock(side_effect=RuntimeError("transient DB error")),
-            ),
+                "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn",
+                new=AsyncMock(side_effect=AssertionError("must not rotate before minting succeeds")),
+            ) as mock_regenerate,
         ):
             with pytest.raises(RuntimeError):
                 await cli_refresh_token(user_api_key_dict=refresh_key)
 
-        # Consume (blocked=True) then compensating un-consume (blocked=False).
-        assert mock_repo_instance.table.update_many.call_count == 2
-        consume_call, revert_call = mock_repo_instance.table.update_many.call_args_list
-        assert consume_call.kwargs["data"] == {"blocked": True}
-        assert revert_call.kwargs == {
-            "where": {"token": "hashed-refresh", "blocked": True},
-            "data": {"blocked": False},
-        }
-        # Cache invalidated both times so a subsequent auth check re-reads
-        # the reverted (now-usable-again) DB state.
-        assert mock_cache.delete_cache.call_count == 2
+        mock_regenerate.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_logout_rejects_non_refresh_key(self):
