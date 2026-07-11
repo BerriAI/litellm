@@ -1502,27 +1502,27 @@
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageBarChart.tsx": {
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageBarChart.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageLineChart.tsx": {
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageLineChart.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageTable.tsx": {
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageTable.tsx": {
     "no-nested-ternary": {
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EntityUsage/EntityUsage.tsx": {
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EntityUsage/SpendByProvider.tsx": {
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/SpendByProvider.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1532,7 +1532,7 @@
       "count": 1
     }
   },
-  "src/components/UsagePage/components/EntityUsage/TopModelView.tsx": {
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/TopModelView.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1542,7 +1542,7 @@
       "count": 1
     }
   },
-  "src/components/UsagePage/components/UsageAIChatPanel.tsx": {
+  "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -1550,7 +1550,7 @@
       "count": 1
     }
   },
-  "src/components/UsagePage/components/UsagePageView.tsx": {
+  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
     "no-nested-ternary": {
       "count": 1
     },
@@ -1564,7 +1564,7 @@
       "count": 3
     }
   },
-  "src/components/UsagePage/hooks/usePaginatedDailyActivity.ts": {
+  "src/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity.ts": {
     "react-hooks/refs": {
       "count": 1
     },

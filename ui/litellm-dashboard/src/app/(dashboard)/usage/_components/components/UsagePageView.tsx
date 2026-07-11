@@ -31,24 +31,29 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles, internalUserRoles } from "../../../utils/roles";
-import { ActivityMetrics, processActivityData } from "../../activity_metrics";
-import CloudZeroExportModal from "../../cloudzero_export_modal";
-import EntityUsageExportModal from "../../EntityUsageExport";
-import { Team } from "../../key_team_helpers/key_list";
-import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
-import AdvancedDatePicker from "../../shared/advanced_date_picker";
-import { ChartLoader } from "../../shared/chart_loader";
-import { Tag } from "../../tag_management/types";
-import UserAgentActivity from "../../user_agent_activity";
-import ViewUserSpend from "../../view_user_spend";
+import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
+import CloudZeroExportModal from "@/components/cloudzero_export_modal";
+import EntityUsageExportModal from "@/components/EntityUsageExport";
+import { Team } from "@/components/key_team_helpers/key_list";
+import {
+  Organization,
+  tagListCall,
+  userDailyActivityAggregatedCall,
+  userDailyActivityCall,
+} from "@/components/networking";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { ChartLoader } from "@/components/shared/chart_loader";
+import { Tag } from "@/components/tag_management/types";
+import UserAgentActivity from "@/components/user_agent_activity";
+import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
-import { valueFormatterSpend } from "../utils/value_formatters";
+import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
+import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
-import TopKeyView from "./EntityUsage/TopKeyView";
+import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 

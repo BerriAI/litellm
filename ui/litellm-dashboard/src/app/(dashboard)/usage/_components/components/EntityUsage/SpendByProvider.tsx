@@ -17,8 +17,8 @@ import {
 } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
-import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
-import { ChartLoader } from "../../../shared/chart_loader";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { ChartLoader } from "@/components/shared/chart_loader";
 
 interface ProviderSpendData {
   provider: string;
