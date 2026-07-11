@@ -4866,6 +4866,35 @@ async def test_extract_active_key_hash_returns_hash_for_active_key(proxy_globals
 
 
 @pytest.mark.asyncio
+async def test_extract_active_key_hash_returns_hash_for_active_key_without_user_id(proxy_globals):
+    """A valid team-scoped or service-account key has no user_id but is a legitimate credential, so it
+    must still resolve to a hash and be able to mint a bridge envelope. Gating the resolver on user_id
+    presence wrongly rejected these keys with invalid_request; the active-state gate now checks only
+    blocked and expiry, and the key hash (not the user) is what the mint seals. The per-user token
+    store still gets no user for such a key, since there is none to key a stored credential by."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_active_key_hash_from_request,
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-team-scoped-key"
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        hash_token(key),
+        UserAPIKeyAuth(token=hash_token(key), user_id=None, team_id="team-x"),
+        model_type=UserAPIKeyAuth,
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
+    assert await _extract_active_key_hash_from_request(request) == hash_token(key)
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
 async def test_extract_active_key_hash_rejects_blocked_key(proxy_globals):
     """A blocked key must not yield a hash, so no gateway-bound envelope is minted for a revoked key;
     the mint fails closed with invalid_request instead."""
