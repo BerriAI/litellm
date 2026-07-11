@@ -2,7 +2,7 @@
 
 import { Menu } from "@base-ui/react/menu";
 import type { Table } from "@tanstack/react-table";
-import { Check, SlidersHorizontal } from "lucide-react";
+import { Check, Columns3 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -24,7 +24,7 @@ export function DataTableViewOptions<TData>({ table, label = "View", className }
       <Menu.Trigger
         render={
           <Button variant="outline" size="sm" className={className} data-testid="view-options-trigger">
-            <SlidersHorizontal />
+            <Columns3 />
             {label}
           </Button>
         }
@@ -44,7 +44,8 @@ export function DataTableViewOptions<TData>({ table, label = "View", className }
                 <Menu.CheckboxItemIndicator className="absolute left-2 flex size-4 items-center justify-center">
                   <Check className="size-3.5" />
                 </Menu.CheckboxItemIndicator>
-                {column.columnDef.meta?.title ?? column.id}
+                {column.columnDef.meta?.title ??
+                  (typeof column.columnDef.header === "string" ? column.columnDef.header : column.id)}
               </Menu.CheckboxItem>
             ))}
           </Menu.Popup>

@@ -8,6 +8,8 @@ import {
   getOAuthAuthorizationIdentity,
   CLEARED_ON_INVALIDATION,
   isHeldOAuthTokenStale,
+  preservedDeclaredAppCredentials,
+  withoutMintedTokenCredentials,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
   MCP_OAUTH2_FLOW_INTERACTIVE,
@@ -56,6 +58,8 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
   AUTH_TYPE.AWS_SIGV4,
+  AUTH_TYPE.TRUE_PASSTHROUGH,
+  AUTH_TYPE.OAUTH_DELEGATE,
 ];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
@@ -74,6 +78,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
+  const [removeStoredApp, setRemoveStoredApp] = useState(false);
+  // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
+  // section warns that the saved app may not match the new upstream (the app is kept, not wiped).
+  const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
@@ -179,7 +187,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         url,
         transport,
         auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
-        credentials: values.credentials,
+        credentials: isClientForwardedTokenMode(values.auth_type)
+          ? preservedDeclaredAppCredentials(values.credentials)
+          : values.credentials,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
         command: values.command,
@@ -202,19 +212,23 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         };
         setToken(mcpServer.server_id, browserHeldToken, userID);
         NotificationsManager.success(
-          "Token held for this browser session. Tools can now be loaded and configured; nothing was saved to LiteLLM.",
+          "Token held for this browser session. Tools can now be loaded and configured; the token is not saved to LiteLLM.",
         );
         return;
       }
 
-      const credentials = {
+      const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
+      const nextCredentials = {
+        ...(preservedDeclaredAppCredentials(current) ?? {}),
+        ...(current.scopes !== undefined && { scopes: current.scopes }),
         access_token: token.access_token,
         ...(token.refresh_token && { refresh_token: token.refresh_token }),
         ...(token.expires_in && { expires_in: token.expires_in }),
         ...(token.scope && { scope: token.scope }),
       };
-
-      form.setFieldsValue({ credentials });
+      // Path-replace (not deep-merge) so a re-authorize with fewer token fields does not leave stale
+      // siblings behind; the admin-typed client keys and scopes are carried explicitly above.
+      form.setFieldValue("credentials", nextCredentials);
       // Re-capture after writing credentials so the token is not invalidated by its own credential write.
       authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
 
@@ -276,6 +290,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
+      dcr_bridge: Boolean(mcpServer.dcr_bridge),
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -295,6 +310,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     syncedServerIdRef.current = mcpServer.server_id;
     form.setFieldsValue(initialValues);
+    // Reset per-server OAuth UI state so it never carries across a server switch without an unmount: a
+    // stale removeStoredApp would send an explicit-null credential write that deletes the new server's
+    // stored app, and a stale warning would show on a server whose upstream did not change.
+    setAppMayNotMatchUpstream(false);
+    setRemoveStoredApp(false);
   }, [mcpServer.server_id, initialValues, form]);
 
   // Initialize cost config from existing server data
@@ -332,8 +352,24 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
       if (parsed.formValues) {
-        setPendingRestoredValues({ ...mcpServer, ...parsed.formValues });
+        // Rebuild credentials from the declared app in EITHER the loaded server or the saved snapshot,
+        // then strip minted token material. Merging the two (server under snapshot) before stripping is
+        // what guarantees a token-only snapshot never clears a stored client_id/client_secret: the
+        // server's declared app survives and only the token keys drop. Assigning the cleaned result (not
+        // spreading the raw snapshot) also ensures a stale token can never rehydrate into the form.
+        const restoredCredentials = withoutMintedTokenCredentials({
+          ...(mcpServer.credentials ?? {}),
+          ...((parsed.formValues.credentials as Record<string, unknown> | undefined) ?? {}),
+        });
+        const restoredValues = {
+          ...mcpServer,
+          ...parsed.formValues,
+          credentials: restoredCredentials,
+        };
+        setPendingRestoredValues(restoredValues);
       }
+      // The ref is re-armed by onTokenReceived when the redirect completes the code exchange, so there
+      // is no separate restore-side re-arm here (writing a ref inside an effect is disallowed).
       if (parsed.costConfig) {
         setCostConfig(parsed.costConfig);
       }
@@ -407,7 +443,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     setTools([]);
     resetOAuthFlow();
+    // The admin-typed app is upstream-scoped config, not minted material, so it survives every
+    // invalidation; only the held token is discarded. Token-shaped keys are excluded by the filter.
+    const keptAppCredentials = preservedDeclaredAppCredentials(form.getFieldValue("credentials"));
     form.resetFields([...CLEARED_ON_INVALIDATION]);
+    if (keptAppCredentials) {
+      form.setFieldsValue({ credentials: keptAppCredentials });
+    }
     const preserved = Object.fromEntries(
       CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
     );
@@ -417,6 +459,21 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   };
 
   const handleFormValuesChange = (changedValues: Record<string, unknown>) => {
+    // Editing the client fields dismisses the "may not match upstream" warning; otherwise a url/endpoint
+    // change while a declared app is present keeps the app but flags that it may not match the new
+    // upstream (the "keep + warn" behavior). Mirrors the create form; independent of the held-token
+    // stale check so it fires even without an authorize this session (the stored app is for the old url).
+    if ("credentials" in changedValues) {
+      setAppMayNotMatchUpstream(false);
+    } else {
+      const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
+        (key) => key in changedValues,
+      );
+      const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
+      if (upstreamChanged && hasDeclaredApp) {
+        setAppMayNotMatchUpstream(true);
+      }
+    }
     if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentityRef.current)) {
       clearHeldOAuthToken(changedValues);
     }
@@ -627,6 +684,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         oauth_passthrough: oauthPassthroughRaw,
+        dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -837,6 +895,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
             : false;
         })(),
+        // ``dcr_bridge`` is only meaningful for the client-forwarded token
+        // modes (true_passthrough / oauth_delegate). The Form.Item is
+        // conditionally rendered so the value drops out of the form on
+        // auth_type change; force false for any other configuration to avoid
+        // persisting a stale ``true`` that would silently re-activate if the
+        // mode is later switched back.
+        dcr_bridge: isClientForwardedTokenMode(restValues.auth_type)
+          ? Boolean(dcrBridgeRaw ?? mcpServer.dcr_bridge)
+          : false,
         ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && restValues.oauth_flow_type
           ? {
               oauth2_flow:
@@ -850,8 +917,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
-      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
-        payload.credentials = credentialsPayload;
+      // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
+      // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
+      const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
+        ? preservedDeclaredAppCredentials(credentialsPayload)
+        : credentialsPayload;
+
+      if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
+        payload.credentials = submitCredentials;
+      }
+
+      // Explicit removal of a saved app for the client-forwarded modes, applied AFTER the filter so it
+      // always wins. Blank fields are the keep-existing convention (the backend merges partial
+      // credential updates), so removal must be an explicit-null write: encrypt skips nulls and the
+      // merge overrides the stored keys, returning the server to dynamic client registration.
+      if (removeStoredApp && isClientForwardedTokenMode(restValues.auth_type)) {
+        payload.credentials = { client_id: null, client_secret: null };
       }
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -895,6 +976,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       NotificationsManager.success("MCP Server updated successfully");
+      setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
       NotificationsManager.fromBackend("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
@@ -1040,6 +1122,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     error: oauthError,
                     tokenResponse: oauthTokenResponse,
                   }}
+                  isEditing
+                  savedAuthType={mcpServer.auth_type}
+                  removeStoredApp={removeStoredApp}
+                  onRemoveStoredAppChange={setRemoveStoredApp}
+                  appMayNotMatchUpstream={appMayNotMatchUpstream}
                 />
               </>
             )}
