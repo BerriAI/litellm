@@ -102,6 +102,7 @@ export interface MarketplaceSource {
   sync_error?: string;
   last_synced_at?: string;
   plugin_count: number;
+  skipped_count: number;
   created_at: string;
   updated_at: string;
 }
