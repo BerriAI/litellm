@@ -2,6 +2,8 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, Collapse, Divider, InputNumber, Radio, Space, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
+import SemanticKeywordMatching from "./SemanticKeywordMatching";
 
 const { Text } = Typography;
 
@@ -33,6 +35,16 @@ interface ComplexityRouterConfigProps {
   onChange: (value: ComplexityRouterConfigValue) => void;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
+  // Optional: the edit-auto-router modal doesn't yet support editing keyword tier
+  // rules or semantic matching, so it renders this component without them.
+  keywordTierRules?: KeywordTierRule[];
+  onKeywordTierRulesChange?: (rules: KeywordTierRule[]) => void;
+  semanticMatchingEnabled?: boolean;
+  onSemanticMatchingEnabledChange?: (enabled: boolean) => void;
+  embeddingModel?: string;
+  onEmbeddingModelChange?: (model: string) => void;
+  matchThreshold?: number;
+  onMatchThresholdChange?: (threshold: number) => void;
 }
 
 const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; description: string; examples: string }> = {
@@ -64,6 +76,14 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onChange,
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
+  keywordTierRules = [],
+  onKeywordTierRulesChange,
+  semanticMatchingEnabled = false,
+  onSemanticMatchingEnabledChange,
+  embeddingModel,
+  onEmbeddingModelChange = () => {},
+  matchThreshold = 0.5,
+  onMatchThresholdChange = () => {},
 }) => {
   // Prepare model options for dropdowns
   const modelOptions = modelInfo.map((model) => ({
@@ -239,7 +259,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           </Tooltip>
         </div>
         <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
-          Optional: add terms the built-in list misses (e.g., udp, kafka, terraform)
+          Optional: Add terms to the built-in list to improve classification accuracy on the technical dimension. (e.g.,
+          udp, kafka, terraform).
         </Text>
         <AntdSelect
           mode="tags"
@@ -280,6 +301,31 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           </li>
         </ul>
       </Card>
+
+      {/* Keyword-tier and semantic sections only render when their change handlers are
+          wired (the add-router flow). The edit-auto-router modal doesn't pass them yet, so
+          they stay hidden there rather than rendering interactive-but-dead controls. */}
+      {onKeywordTierRulesChange && (
+        <>
+          <Divider />
+          <KeywordTierRules rules={keywordTierRules} onChange={onKeywordTierRulesChange} />
+        </>
+      )}
+
+      {onSemanticMatchingEnabledChange && (
+        <>
+          <Divider />
+          <SemanticKeywordMatching
+            enabled={semanticMatchingEnabled}
+            onEnabledChange={onSemanticMatchingEnabledChange}
+            embeddingModel={embeddingModel}
+            onEmbeddingModelChange={onEmbeddingModelChange}
+            matchThreshold={matchThreshold}
+            onMatchThresholdChange={onMatchThresholdChange}
+            modelInfo={modelInfo}
+          />
+        </>
+      )}
     </div>
   );
 };
