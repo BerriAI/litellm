@@ -704,15 +704,14 @@ class CustomGuardrail(CustomLogger):
     def _resolve_logged_guardrail_mode(
         self,
         event_type: Optional[GuardrailEventHooks],
-    ) -> Union[GuardrailEventHooks, "GuardrailMode", str]:
+    ) -> Union[GuardrailEventHooks, "GuardrailMode", List[GuardrailEventHooks]]:
         """
         Resolve the value logged as `guardrail_mode`.
 
         Use the resolved event_type (the concrete hook that actually fired
         for *this* invocation) when available. Fall back to self.event_hook
-        only as a last resort — and normalise its various shapes so
-        downstream loggers always receive a JSON-serialisable scalar or
-        dict, never a raw List[str] that looks like a broken value.
+        as a last resort, preserving its configured shape verbatim so the
+        logged value stays backward compatible with pre-existing consumers.
         """
         from litellm.types.utils import GuardrailMode
 
@@ -720,12 +719,6 @@ class CustomGuardrail(CustomLogger):
             return event_type
         if isinstance(self.event_hook, Mode):
             return GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
-        if isinstance(self.event_hook, list):
-            # Config lists like ["pre_call", "post_call"] are the *configured*
-            # modes, not the one that fired.  Join into a comma-separated
-            # string so the logged value is unambiguously "raw config" rather
-            # than something that looks like a single resolved hook.
-            return ",".join(str(h) for h in self.event_hook)
         return self.event_hook  # type: ignore[return-value]
 
     def add_standard_logging_guardrail_information_to_request_data(

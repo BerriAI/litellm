@@ -2698,7 +2698,7 @@ GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_t
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
-    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode, str]]
+    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]]
     guardrail_request: Optional[Union[str, dict]]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: GuardrailStatus
