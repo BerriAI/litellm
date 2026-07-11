@@ -1,22 +1,21 @@
-"""Live e2e: Langfuse logs_spend for registry cells in logging.yaml P0.
+"""Live e2e: Langfuse OTEL logs_spend for registry cells in logging.yaml P0.
 
 Registry cells:
 - logging.langfuse.success.logs_spend  (exercised_on chat_completions, messages, embeddings)
 - logging.langfuse.failure.logs_spend  (exercised_on chat_completions, messages)
 - logging.langfuse.stream.logs_spend   (exercised_on chat_completions, messages)
 
-StandardLoggingPayload.response_cost is the source of truth for cost. The proxy
-exposes it as x-litellm-response-cost; Langfuse stores it as calculatedTotalCost
-(and usage.total_cost). SpendLogs.request_id is the completion body id, not
-x-litellm-call-id.
+Integration under test is ``langfuse_otel`` (OTLP to Langfuse), not the classic
+``langfuse`` SDK callback. StandardLoggingPayload.response_cost is the spend
+source of truth. Generations are named ``litellm_request``; correlate by unique
+prompt marker and user_api_key_alias in metadata.
 
-Dynamic Langfuse credentials by product surface:
-- team: POST /team/{id}/callback
-- user/key: key metadata.logging on /key/generate
+Dynamic credentials by product surface:
+- team: POST /team/{id}/callback with callback_name=langfuse_otel
+- user/key: key metadata.logging with callback_name=langfuse_otel
 - org: organization + team under it + team callback (no org-level callback API)
 
-Extra success paths assert tool calls and applied guardrails land on the trace,
-which is what operators need when inspecting Langfuse for a request.
+Extra success paths assert tool calls and applied guardrails land on the trace.
 """
 
 from __future__ import annotations
@@ -316,8 +315,9 @@ class TestLangfuseTeamLogging:
             (
                 o
                 for o in observations
-                if o.name == f"litellm:{key_alias}"
-                or (prompt_marker in _json_blob(o.input))
+                if prompt_marker in _json_blob(o.input)
+                or key_alias in _json_blob(o.metadata)
+                or o.name in (f"litellm:{key_alias}", "litellm_request")
             ),
             observations[0],
         )

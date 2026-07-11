@@ -1,13 +1,14 @@
-"""Client for the logging e2e suite: team/key/org-scoped Langfuse callbacks,
+"""Client for the logging e2e suite: team/key/org-scoped Langfuse OTEL callbacks,
 chat (including tools), Prometheus scrape, and Langfuse observation read-back.
 
 Holds the shared Gateway so the ``resources`` fixture cleans up keys, teams,
 users, orgs, and models it creates. External Langfuse reads go through
 ``e2e_http`` (the only module allowed to call ``requests.*``).
 
-Team Langfuse logging does not set the Langfuse trace id to
-``x-litellm-call-id``. Correlation is by generation name (``litellm:{key_alias}``)
-and the unique prompt marker. Spend is on ``calculatedTotalCost``.
+Uses the ``langfuse_otel`` callback (OTLP to ``{host}/api/public/otel``), not
+the classic ``langfuse`` SDK callback. OTEL generations land as name
+``litellm_request``; correlate by unique prompt marker and ``user_api_key_alias``
+in metadata. Spend is on ``calculatedTotalCost`` (StandardLogging response_cost).
 """
 
 from __future__ import annotations
@@ -75,7 +76,7 @@ WEATHER_TOOL = ChatTool(
 
 
 class TeamCallbackBody(BaseModel):
-    callback_name: Literal["langfuse", "langsmith", "gcs"]
+    callback_name: Literal["langfuse_otel", "langfuse", "langsmith", "gcs"]
     callback_type: Literal["success", "failure", "success_and_failure"]
     callback_vars: dict[str, str]
 
@@ -165,7 +166,7 @@ class LangfuseCreds:
         return KeyMetadata(
             logging=[
                 KeyLoggingCallback(
-                    callback_name="langfuse",
+                    callback_name="langfuse_otel",
                     callback_type="success_and_failure",
                     callback_vars=KeyLoggingCallbackVars(
                         langfuse_public_key=self.public_key,
@@ -214,9 +215,18 @@ def completion_response_id(body: str) -> str | None:
 
 
 def _matches_run(obs: LangfuseObservation, *, key_alias: str, prompt_marker: str) -> bool:
-    if obs.name == f"litellm:{key_alias}":
-        return True
+    """Match a Langfuse generation for this run.
+
+    langfuse_otel names generations ``litellm_request`` (not ``litellm:{alias}``).
+    Prefer the unique prompt marker in input; fall back to key alias in metadata
+    (user_api_key_alias) or the classic SDK generation name.
+    """
     if prompt_marker and prompt_marker in json.dumps(obs.input, default=str):
+        return True
+    meta_blob = json.dumps(obs.metadata, default=str) if obs.metadata is not None else ""
+    if key_alias and key_alias in meta_blob:
+        return True
+    if obs.name == f"litellm:{key_alias}":
         return True
     return False
 
@@ -346,7 +356,7 @@ class LoggingClient:
                 f"/team/{team_id}/callback",
                 headers=self.gateway.transport.master,
                 json=TeamCallbackBody(
-                    callback_name="langfuse",
+                    callback_name="langfuse_otel",
                     callback_type=callback_type,
                     callback_vars=creds.callback_vars(),
                 ),
@@ -508,12 +518,12 @@ class LoggingClient:
         key_alias: str,
         prompt_marker: str,
     ) -> LangfuseObservation | None:
-        generation_name = f"litellm:{key_alias}"
-        # Prefer name-filtered lookup (stream + success land as litellm:{key_alias}).
-        named = self.list_langfuse_observations(creds, name=generation_name)
-        for obs in named:
-            if _matches_run(obs, key_alias=key_alias, prompt_marker=prompt_marker):
-                return obs
+        # langfuse_otel generations are named litellm_request; classic SDK used
+        # litellm:{key_alias}. Search both, then a recent unfiltered page.
+        for name in ("litellm_request", f"litellm:{key_alias}"):
+            for obs in self.list_langfuse_observations(creds, name=name):
+                if _matches_run(obs, key_alias=key_alias, prompt_marker=prompt_marker):
+                    return obs
         for obs in self.list_langfuse_observations(creds):
             if _matches_run(obs, key_alias=key_alias, prompt_marker=prompt_marker):
                 return obs
