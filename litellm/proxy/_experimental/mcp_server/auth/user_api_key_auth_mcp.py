@@ -1,11 +1,12 @@
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set, Tuple, assert_never, cast
+from typing import Dict, List, Optional, Set, Tuple, cast
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
