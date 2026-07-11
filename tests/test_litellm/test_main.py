@@ -2081,3 +2081,52 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.prompt_tokens > 0
     assert response.usage.completion_tokens > 0
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+def test_stream_chunk_builder_skips_raw_bytes_chunks():
+    """Regression for https://github.com/BerriAI/litellm/issues/32951
+
+    A raw SSE ``bytes`` chunk (as produced by the anthropic_messages passthrough
+    logging path) must not crash stream_chunk_builder with
+    ``TypeError: byte indices must be integers or slices, not str``.
+    """
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    def _text_chunk(content: str, finish_reason=None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-32951",
+            created=1,
+            model="claude-sonnet-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                )
+            ],
+        )
+
+    chunks = [
+        _text_chunk("Hello"),
+        b"event: content_block_delta\ndata: {}\n\n",
+        _text_chunk(" world", finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+
+
+def test_stream_chunk_builder_all_raw_bytes_chunks_returns_none():
+    """All-bytes chunk lists have nothing to assemble, so return None instead of crashing."""
+    from litellm import stream_chunk_builder
+
+    chunks = [
+        b"event: message_start\ndata: {}\n\n",
+        b"event: message_stop\ndata: {}\n\n",
+    ]
+
+    assert stream_chunk_builder(chunks=chunks) is None
