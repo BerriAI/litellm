@@ -3,6 +3,7 @@ import pytest
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -114,6 +115,21 @@ def test_opus_4_5_preserves_native_effort_without_adaptive_thinking():
 
     assert result["output_config"] == {"effort": "high"}
     assert "thinking" not in result
+
+
+def test_opus_4_5_unsupported_effort_level_translated_to_legacy_thinking():
+    """Opus 4.5 accepts output_config.effort but only levels low/medium/high;
+    Claude Code defaults to xhigh on newer models, and forwarding that level raw
+    would be rejected with "effort='xhigh' is not supported by this model". An
+    unsupported level must fall through to the legacy translation (budget-based
+    thinking, effort stripped) instead of being preserved."""
+    result = _transform("claude-opus-4-5", _claude_code_payload(effort="xhigh", max_tokens=64000))
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    }
+    assert "output_config" not in result
 
 
 def test_budget_capped_below_max_tokens():
