@@ -122,6 +122,8 @@ def test_azure_gpt_5_6_regional_model_info(model):
     assert info is not None, f"{model} not found in model_prices_and_context_window.json"
 
     assert info["litellm_provider"] == "azure"
+    assert info["mode"] == "chat"
+
     input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
 
     assert info["input_cost_per_token"] == pytest.approx(input_cost * 1.1)
@@ -131,6 +133,13 @@ def test_azure_gpt_5_6_regional_model_info(model):
     assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.65)
     assert info["input_cost_per_token_priority"] == pytest.approx(input_cost * 2.75)
     assert info["output_cost_per_token_priority"] == pytest.approx(output_cost * 2.75)
+
+    assert info["max_input_tokens"] == 1050000
+    assert info["max_output_tokens"] == 128000
+    assert info["supports_reasoning"] is True
+
+    _, provider, _, _ = get_llm_provider(model=model)
+    assert provider == "azure"
 
 
 def test_gpt_5_6_backup_matches_main():
