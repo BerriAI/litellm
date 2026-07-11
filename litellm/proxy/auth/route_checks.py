@@ -714,6 +714,17 @@ class RouteChecks:
             return True
         return False
 
+    @staticmethod
+    def is_claude_code_marketplace_route(route: str) -> bool:
+        """
+        Returns True if this is the Claude Code plugin marketplace discovery route.
+
+        The Claude Code CLI fetches this route without custom headers, so it
+        allows passing key=api_key in the query params (mirrors the Google
+        generateContent carve-out above).
+        """
+        return route == "/claude-code/marketplace.json"
+
     # HTTP methods that are intrinsically read-only and therefore safe to
     # default-allow for PROXY_ADMIN_VIEW_ONLY. Anything else (POST/PUT/PATCH/
     # DELETE) is treated as a write attempt and goes through the explicit

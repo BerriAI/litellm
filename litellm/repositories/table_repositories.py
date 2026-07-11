@@ -61,6 +61,10 @@ class ClaudeCodePluginRepository(PrismaTableRepository):
     table_name = "litellm_claudecodeplugintable"
 
 
+class SkillMarketplaceRepository(PrismaTableRepository):
+    table_name = "litellm_skillmarketplacetable"
+
+
 class TeamMembershipRepository(PrismaTableRepository):
     table_name = "litellm_teammembership"
 

@@ -69,14 +69,22 @@ def mock_prisma_client():
         plugin_name = where.get("name")
         return plugins_store.get(plugin_name)
 
+    def _matches_clause(plugin, clause):
+        """Support the small subset of Prisma where-clause shapes get_marketplace
+        actually issues: {"enabled": bool} and {"name": {"in": [...]}}."""
+        if "enabled" in clause:
+            return plugin.enabled == clause["enabled"]
+        if "name" in clause:
+            return plugin.name in clause["name"].get("in", [])
+        return False
+
     async def find_many(where=None):
         """Mock find_many - returns list of plugins matching where clause."""
         if where is None or where == {}:
             return list(plugins_store.values())
-        enabled = where.get("enabled")
-        if enabled is not None:
-            return [p for p in plugins_store.values() if p.enabled == enabled]
-        return list(plugins_store.values())
+        if "OR" in where:
+            return [p for p in plugins_store.values() if any(_matches_clause(p, c) for c in where["OR"])]
+        return [p for p in plugins_store.values() if _matches_clause(p, where)]
 
     async def create(data):
         """Mock create - creates a new plugin."""
@@ -239,6 +247,121 @@ async def test_get_marketplace(mock_prisma_client):
     # Cleanup
     await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
         where={"name": plugin_name}
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_no_key_unaffected_by_imported_disabled_skills(
+    mock_prisma_client,
+):
+    """Backward-compat regression test: an unauthenticated request to
+    marketplace.json must be byte-for-byte the same as before the
+    marketplace-import feature existed - it only ever sees enabled=True rows,
+    even once a marketplace sync has imported (and left disabled) new skills.
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    public_plugin_name = f"public-plugin-{int(time.time())}"
+    imported_disabled_name = f"imported-private-skill-{int(time.time())}"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+    await register_plugin(
+        request=RegisterPluginRequest(
+            name=public_plugin_name,
+            source={"source": "github", "repo": "test-org/public-plugin"},
+            version="1.0.0",
+            description="Always-public plugin",
+        ),
+        user_api_key_dict=user_api_key_dict,
+    )
+    # Simulate a marketplace sync having imported a skill, left disabled
+    # pending admin opt-in (mirrors resolve_and_sync's upsert semantics).
+    await mock_prisma_client.db.litellm_claudecodeplugintable.create(
+        data={
+            "name": imported_disabled_name,
+            "version": "1.0.0",
+            "description": "Imported but not yet enabled",
+            "manifest_json": json.dumps(
+                {"source": {"source": "github", "repo": "org/private-skill"}}
+            ),
+            "enabled": False,
+        }
+    )
+
+    response_before_key_check = await get_marketplace(user_api_key_dict=None)
+    body_before = json.loads(response_before_key_check.body.decode())
+
+    response_no_key = await get_marketplace(user_api_key_dict=None)
+    body_no_key = json.loads(response_no_key.body.decode())
+
+    # No-key responses must be deterministic/identical across calls, and must
+    # never include the imported-but-disabled skill.
+    assert body_no_key == body_before
+    names = {p["name"] for p in body_no_key["plugins"]}
+    assert public_plugin_name in names
+    assert imported_disabled_name not in names
+
+    # Cleanup
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
+        where={"name": public_plugin_name}
+    )
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
+        where={"name": imported_disabled_name}
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_with_key_unlocks_allowed_imported_skill(
+    mock_prisma_client,
+):
+    """A key whose object_permission.allowed_skills grants an imported
+    (still disabled) skill sees that skill in marketplace.json alongside the
+    always-public entries - without a key, that same skill stays hidden."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    imported_disabled_name = f"imported-scoped-skill-{int(time.time())}"
+    await mock_prisma_client.db.litellm_claudecodeplugintable.create(
+        data={
+            "name": imported_disabled_name,
+            "version": "1.0.0",
+            "description": "Imported, granted to one key only",
+            "manifest_json": json.dumps(
+                {"source": {"source": "github", "repo": "org/scoped-skill"}}
+            ),
+            "enabled": False,
+        }
+    )
+
+    response_no_key = await get_marketplace(user_api_key_dict=None)
+    body_no_key = json.loads(response_no_key.body.decode())
+    assert imported_disabled_name not in {p["name"] for p in body_no_key["plugins"]}
+
+    scoped_key = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-scoped",
+        user_id="scoped-user",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-1", allowed_skills=[imported_disabled_name]
+        ),
+    )
+    response_with_key = await get_marketplace(user_api_key_dict=scoped_key)
+    body_with_key = json.loads(response_with_key.body.decode())
+    names_with_key = {p["name"] for p in body_with_key["plugins"]}
+    assert imported_disabled_name in names_with_key
+
+    # Cleanup
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
+        where={"name": imported_disabled_name}
     )
 
 

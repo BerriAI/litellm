@@ -95,6 +95,7 @@ export interface KeyResponse {
     vector_stores: string[];
     agents?: string[];
     agent_access_groups?: string[];
+    allowed_skills?: string[];
   };
   access_group_ids?: string[];
   budget_fallbacks?: Record<string, string[]>;

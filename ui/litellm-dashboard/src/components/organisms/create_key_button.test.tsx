@@ -286,6 +286,7 @@ vi.mock("../common_components/team_dropdown", () => ({
   ),
 }));
 vi.mock("../CreateUserButton", () => ({ CreateUserButton: () => null }));
+vi.mock("../claude_code_plugins/SkillPermissionsPicker", () => ({ default: () => null }));
 vi.mock("../mcp_server_management/MCPServerSelector", () => ({ default: () => null }));
 vi.mock("../mcp_server_management/MCPToolPermissions", () => ({ default: () => null }));
 vi.mock("../shared/numerical_input", () => ({ default: () => null }));

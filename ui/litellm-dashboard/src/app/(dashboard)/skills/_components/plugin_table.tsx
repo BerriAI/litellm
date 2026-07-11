@@ -107,7 +107,13 @@ const PluginTable: React.FC<PluginTableProps> = ({
       accessorKey: "enabled",
       cell: ({ row }) => {
         const plugin = row.original;
-        return <StatusBadge tone={plugin.enabled ? "success" : "neutral"} label={plugin.enabled ? "Yes" : "No"} />;
+        return (
+          <StatusBadge
+            tone={plugin.enabled ? "success" : "neutral"}
+            label={plugin.enabled ? "Yes" : "No"}
+            tooltip={plugin.enabled ? "Visible without a key" : "Requires an assigned grant"}
+          />
+        );
       },
     },
     {

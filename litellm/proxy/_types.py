@@ -1008,6 +1008,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = None
     search_tools: Optional[List[str]] = None
     mcp_tool_search_enabled: Optional[bool] = None
+    allowed_skills: Optional[List[str]] = None
 
 
 from litellm.types.object_permission import (  # noqa: E402

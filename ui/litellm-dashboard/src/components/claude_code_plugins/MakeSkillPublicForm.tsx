@@ -118,7 +118,8 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
       </div>
 
       <Text className="text-sm text-gray-600">
-        Selected skills will be visible to all users in the Skill Hub. Deselected skills will be unpublished.
+        Selected skills are visible without a key. Deselected skills require an assigned grant (
+        <code>allowed_skills</code>) on the org, team, or key.
       </Text>
 
       <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
