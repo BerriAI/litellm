@@ -29,6 +29,16 @@ const nameCellColumns: ColumnDef<Person, unknown>[] = [
   },
 ];
 
+const filterableColumns: ColumnDef<Person, unknown>[] = [
+  {
+    accessorKey: "name",
+    header: "Name",
+    meta: { title: "Name" },
+    filterFn: (row, columnId, value) => row.getValue<string>(columnId) === value,
+    cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
+  },
+];
+
 const headerCycleColumns: ColumnDef<Person, unknown>[] = [
   {
     accessorKey: "name",
@@ -195,10 +205,110 @@ describe("DataTable pagination", () => {
   });
 });
 
+describe("DataTable filtering", () => {
+  it("client mode filters rows by columnFilters", () => {
+    const { rerender } = render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={filterableColumns}
+        filterMode="client"
+        columnFilters={[]}
+        onColumnFiltersChange={vi.fn()}
+      />,
+    );
+    expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
+
+    rerender(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={filterableColumns}
+        filterMode="client"
+        columnFilters={[{ id: "name", value: "Alice" }]}
+        onColumnFiltersChange={vi.fn()}
+      />,
+    );
+    expect(names()).toEqual(["Alice"]);
+  });
+
+  it("client global filter matches substrings across columns", () => {
+    const { rerender } = render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        filterMode="client"
+        globalFilter=""
+        onGlobalFilterChange={vi.fn()}
+      />,
+    );
+    expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
+
+    rerender(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        filterMode="client"
+        globalFilter="ali"
+        onGlobalFilterChange={vi.fn()}
+      />,
+    );
+    expect(names()).toEqual(["Alice"]);
+  });
+
+  it("server mode never filters locally even when columnFilters is set", () => {
+    render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={filterableColumns}
+        filterMode="server"
+        columnFilters={[{ id: "name", value: "Alice" }]}
+        onColumnFiltersChange={vi.fn()}
+      />,
+    );
+    expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
+  });
+
+  it("throws when server filtering is missing required props", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => render(<DataTable data={[]} columns={filterableColumns} filterMode="server" />)).toThrow(
+      /filterMode='server'/,
+    );
+    spy.mockRestore();
+  });
+});
+
+describe("DataTable loading", () => {
+  it("renders skeleton rows while loading and real rows once loaded", () => {
+    const { rerender } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("name-cell")).toBeNull();
+
+    rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} />);
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+    expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
+  });
+
+  it("varies skeleton shape and width per column instead of one fixed bar", () => {
+    const columns: ColumnDef<Person, unknown>[] = [
+      { accessorKey: "name", header: "Name", meta: { skeleton: "twoLine" }, cell: () => null },
+      { accessorKey: "email", header: "Email", cell: () => null },
+    ];
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={columns} isLoading />);
+
+    const firstRow = screen.getAllByTestId("skeleton-row").at(0);
+    expect(firstRow).toBeDefined();
+    const bars = Array.from(firstRow?.querySelectorAll('[data-slot="skeleton"]') ?? []);
+
+    // twoLine column contributes a main + sub bar (2); the text column contributes 1
+    expect(bars).toHaveLength(3);
+    // per-column widths differ instead of every cell sharing one fixed width
+    expect(new Set(bars.map((bar) => bar.className)).size).toBeGreaterThan(1);
+  });
+});
+
 describe("DataTable column visibility", () => {
   it("hides a column when toggled off in the view-options menu", async () => {
     const user = userEvent.setup();
-    render(
+    const { container } = render(
       <DataTable
         data={CHARLIE_ALICE_BOB}
         columns={nameEmailColumns}
@@ -206,13 +316,13 @@ describe("DataTable column visibility", () => {
       />,
     );
 
-    expect(screen.getByText("Email")).toBeInTheDocument();
+    expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull();
     await user.click(screen.getByTestId("view-options-trigger"));
     await user.click(await screen.findByTestId("view-option-email"));
-    await waitFor(() => expect(screen.queryByText("Email")).not.toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('th[data-header-id="email"]')).toBeNull());
 
     await user.click(screen.getByTestId("view-option-email"));
-    await waitFor(() => expect(screen.getByText("Email")).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull());
   });
 
   it("omits columns that opt out of hiding from the menu", async () => {
