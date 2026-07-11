@@ -2652,3 +2652,29 @@ class TestContentFilterMCPPreCall:
 
         assert "modified_arguments" not in request_data
         assert request_data["mcp_arguments"] == {"body": "this is confidential data"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            {"name": "send_email", "arguments": {"body": "confidential data"}},
+            {"name": "send_email", "mcp_arguments": {"body": "confidential data"}},
+        ],
+    )
+    async def test_apply_guardrail_pre_mcp_mode_requires_canonical_keys(self, request_data):
+        """
+        Even in pre_mcp_call mode, only the canonical mcp_tool_name key identifies an MCP call;
+        a bare name key must not, regardless of which arguments key accompanies it
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-canonical-keys",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert "modified_arguments" not in request_data
