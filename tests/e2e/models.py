@@ -155,6 +155,10 @@ class AnthropicMessagesBody(BaseModel):
     max_tokens: int
 
 
+class AnthropicMessagesResponse(BaseModel):
+    model: str | None = None
+
+
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
