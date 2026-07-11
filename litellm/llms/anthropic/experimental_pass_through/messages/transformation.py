@@ -274,21 +274,30 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         unsupported ``output_config`` for older models (bedrock invoke, issue
         #22797): the goal is to keep the request working, not to fail it.
 
-        - 4.6+ (adaptive / ``supports_output_config``): left untouched (early return).
-        - Thinking-capable but non-adaptive (``supports_reasoning``): effort is
-          mapped to legacy ``thinking={type: enabled, budget_tokens}`` via
-          ``AnthropicConfig._map_reasoning_effort``, preserving the caller's intent.
-          Adaptive thinking carries no budget, so the mapped budget is capped below
-          ``max_tokens`` (Anthropic requires ``max_tokens > budget_tokens``); when
-          ``max_tokens`` can't fit even the minimum budget, thinking is dropped.
+        ``thinking.type=adaptive`` and ``output_config.effort`` are independent
+        capabilities. Adaptive thinking needs ``supports_adaptive_thinking`` (4.6+);
+        ``output_config.effort`` needs ``supports_output_config``, which some
+        non-adaptive models (e.g. Claude Opus 4.5) advertise on its own. So the two
+        are handled separately:
+
+        - Adaptive-thinking models (4.6+): both are native, left untouched.
+        - ``supports_output_config`` but non-adaptive (Opus 4.5): keep
+          ``output_config.effort`` (native), only drop the unsupported adaptive
+          ``thinking`` block.
+        - Thinking-capable but neither (``supports_reasoning``, e.g. Haiku/Sonnet
+          4.5): map effort to legacy ``thinking={type: enabled, budget_tokens}`` via
+          ``AnthropicConfig._map_reasoning_effort``, capped below ``max_tokens``
+          (Anthropic requires ``max_tokens > budget_tokens``) and dropped when
+          ``max_tokens`` can't fit even the minimum budget.
         - No reasoning support: ``thinking`` is dropped.
 
-        Only the consumed ``effort`` key is removed from ``output_config``; any
-        residual (e.g. ``format``) is left for provider subclasses to handle.
+        For the last two, only the consumed ``effort`` key is removed from
+        ``output_config``; any residual (e.g. ``format``) is left for provider
+        subclasses to handle.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        if AnthropicConfig._is_adaptive_thinking_model(model) or AnthropicConfig._model_supports_effort_param(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model):
             return
 
         output_config = optional_params.get("output_config")
@@ -296,6 +305,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         effort = output_config.get("effort") if isinstance(output_config, dict) else None
         adaptive_thinking = isinstance(thinking, dict) and thinking.get("type") == "adaptive"
         if effort is None and not adaptive_thinking:
+            return
+
+        if AnthropicConfig._model_supports_effort_param(model):
+            if adaptive_thinking:
+                optional_params.pop("thinking", None)
             return
 
         supports_thinking = AnthropicModelInfo._supports_model_capability(model, "supports_reasoning")

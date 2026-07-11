@@ -84,6 +84,35 @@ def test_residual_output_config_preserved_after_effort_translation():
     assert result["output_config"] == {"format": {"type": "json_schema"}}
 
 
+def test_opus_4_5_keeps_effort_but_drops_adaptive_thinking():
+    """Regression: Opus 4.5 advertises supports_output_config (accepts
+    output_config.effort) but is NOT adaptive, so thinking:{type:adaptive} is
+    rejected by Anthropic. The effort must be kept and only the adaptive thinking
+    block dropped, rather than early-returning and forwarding adaptive thinking raw."""
+    result = _transform("claude-opus-4-5", _claude_code_payload(effort="medium"))
+
+    assert result["output_config"] == {"effort": "medium"}
+    assert "thinking" not in result
+
+
+def test_opus_4_5_preserves_native_effort_without_adaptive_thinking():
+    """A caller sending output_config.effort alone (no adaptive thinking) to Opus 4.5
+    must pass through untouched, since the model supports it natively."""
+    result = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 8192,
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"] == {"effort": "high"}
+    assert "thinking" not in result
+
+
 def test_budget_capped_below_max_tokens():
     """Adaptive thinking carries no budget, so the translated legacy budget must be
     capped below max_tokens (Anthropic requires max_tokens > budget_tokens). A
