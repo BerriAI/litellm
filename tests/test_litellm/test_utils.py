@@ -855,6 +855,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
@@ -1091,8 +1092,8 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
     """A regional profile with no dedicated cost-map entry must still resolve to its
     region-stripped base entry."""
-    assert "jp.anthropic.claude-opus-4-8" not in litellm.model_cost
-    info = litellm.get_model_info(model="bedrock/jp.anthropic.claude-opus-4-8")
+    assert "apac.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
     assert info["key"] == "anthropic.claude-opus-4-8"
 
 

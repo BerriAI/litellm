@@ -4,16 +4,21 @@ Complexity-based Auto Router
 A rule-based routing strategy that uses weighted scoring across multiple dimensions
 to classify requests by complexity and route them to appropriate models.
 
-No external API calls - all scoring is local and <1ms.
+By default, scoring is local (regex/keyword-based) with no external API calls and <1ms
+latency. Optionally, classifier_type="llm" routes classification through a configured
+model instead, trading that latency/cost guarantee for potentially better accuracy.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+
+from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import ModelResponse
 
 from .config import (
     DEFAULT_CODE_KEYWORDS,
@@ -32,12 +37,44 @@ else:
     PreRoutingHookResponse = Any
 
 
+class TierClassification(BaseModel):
+    """Structured response schema for the LLM-based complexity classifier."""
+
+    tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
+
+
+_CLASSIFICATION_PROMPT_TEMPLATE = """Classify the complexity of the following user request into exactly one tier.
+
+Tiers:
+- SIMPLE: factual lookups, greetings, short direct questions with no reasoning or code involved.
+- MEDIUM: everyday requests needing some explanation or minor code/technical content.
+- COMPLEX: requests involving non-trivial code, architecture, or multi-step technical work.
+- REASONING: requests explicitly requiring step-by-step reasoning, analysis, or weighing tradeoffs.
+
+{system_context}Request:
+{prompt}"""
+
+
 def _append_custom_keywords(base_keywords: list[str], custom_keywords: Optional[list[str]]) -> list[str]:
     if not custom_keywords:
         return base_keywords
     base_lowered = frozenset(keyword.lower() for keyword in base_keywords)
     deduped_custom = {keyword.lower(): keyword for keyword in custom_keywords if keyword.lower() not in base_lowered}
     return [*base_keywords, *deduped_custom.values()]
+
+
+# Metadata keys that carry the parent request's budget reservation. These must not
+# reach the classifier's internal acompletion call: the reservation belongs to the
+# routed completion that the classifier is deciding on, not to the classifier call
+# itself, and forwarding it would let the classifier's cost-tracking reconcile
+# against a reservation it isn't responsible for.
+_BUDGET_RESERVATION_METADATA_KEYS = frozenset({"user_api_key_budget_reservation", "user_api_key_auth"})
+
+
+def _classifier_call_metadata(metadata: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not metadata:
+        return metadata
+    return {k: v for k, v in metadata.items() if k not in _BUDGET_RESERVATION_METADATA_KEYS}
 
 
 class DimensionScore:
@@ -53,10 +90,10 @@ class DimensionScore:
 
 class ComplexityRouter(CustomLogger):
     """
-    Rule-based complexity router that classifies requests and routes to appropriate models.
+    Complexity router that classifies requests and routes to appropriate models.
 
-    Handles requests in <1ms with zero external API calls by using weighted scoring
-    across multiple dimensions:
+    By default, handles requests in <1ms with zero external API calls, using weighted
+    scoring across multiple dimensions:
     - Token count (short=simple, long=complex)
     - Code presence (code keywords → complex)
     - Reasoning markers ("step by step", "think through" → reasoning tier)
@@ -297,6 +334,63 @@ class ComplexityRouter(CustomLogger):
 
         return tier, weighted_score, signals
 
+    async def aclassify(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        request_kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[ComplexityTier, float, list[str]]:
+        """
+        Classify a prompt by complexity, using the LLM classifier when configured.
+
+        Falls back to the local heuristic scorer if classifier_type is "heuristic",
+        or if the LLM call fails, times out, or returns an unparseable response.
+        """
+        if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
+            return self.classify(prompt, system_prompt)
+
+        try:
+            tier = await self._classify_with_llm(prompt, system_prompt, request_kwargs)
+            return tier, 1.0, [f"llm-classifier:{tier.value}"]
+        except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the heuristic scorer
+            verbose_router_logger.warning(
+                f"ComplexityRouter: LLM classifier failed ({e}), falling back to heuristic scoring"
+            )
+            return self.classify(prompt, system_prompt)
+
+    async def _classify_with_llm(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        request_kwargs: Optional[dict[str, Any]] = None,
+    ) -> ComplexityTier:
+        """Call the configured classifier model and parse its structured tier response."""
+        llm_config = self.config.classifier_llm_config
+        if llm_config is None:
+            raise ValueError("classifier_llm_config is not set")
+
+        system_context = f"Context: {system_prompt}\n\n" if system_prompt else ""
+        classification_prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(system_context=system_context, prompt=prompt)
+
+        # Forward the original request's metadata so the classifier call's spend is
+        # attributed to the calling key/team instead of being dropped. Excludes the
+        # parent request's budget reservation, which the routed completion (not this
+        # internal classifier call) is responsible for reconciling.
+        metadata = _classifier_call_metadata((request_kwargs or {}).get("litellm_metadata"))
+
+        response: ModelResponse = await self.litellm_router_instance.acompletion(
+            model=llm_config.model,
+            messages=[{"role": "user", "content": classification_prompt}],
+            response_format=TierClassification,
+            timeout=llm_config.timeout_ms / 1000,
+            metadata=metadata,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("LLM classifier returned empty content")
+        result = TierClassification.model_validate_json(content)
+        return ComplexityTier[result.tier]
+
     def get_model_for_tier(self, tier: ComplexityTier) -> str:
         """
         Get the model name for a given complexity tier.
@@ -445,7 +539,7 @@ class ComplexityRouter(CustomLogger):
                 messages=messages if has_original_messages else None,
             )
 
-        tier, score, signals = self.classify(user_message, system_prompt)
+        tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(
