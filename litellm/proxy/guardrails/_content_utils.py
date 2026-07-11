@@ -32,12 +32,23 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
-TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
+TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text", "summary_text"})
+
+# Responses-API item types whose ``output`` field carries user/tool text
+# that guardrails should inspect.  ``function_call_output`` is the
+# built-in shape; ``custom_tool_call_output`` is the custom-tool
+# counterpart (see ``ChatCompletionCustomToolCallOutput``).
+_OUTPUT_ITEM_TYPES: FrozenSet[str] = frozenset({"function_call_output", "custom_tool_call_output"})
 
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
-    multimodal list). Non-text parts (images, audio, …) are skipped."""
+    multimodal list). Non-text parts (images, audio, …) are skipped.
+
+    Also descends into ``reasoning`` items whose ``summary`` list may
+    contain ``summary_text`` parts carrying chain-of-thought text that
+    guardrails need to inspect/redact.
+    """
     if isinstance(content, str):
         if content:
             yield content
@@ -55,6 +66,12 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 text = part.get("text")
                 if isinstance(text, str) and text:
                     yield text
+            elif part.get("type") == "reasoning":
+                # Reasoning items carry a ``summary`` list of
+                # ``{"type": "summary_text", "text": "..."}`` parts.
+                summary = part.get("summary")
+                if isinstance(summary, list):
+                    yield from _iter_text_parts_in_content(summary)
 
 
 def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
@@ -72,8 +89,15 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
             elif "content" in item:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
-            elif item.get("type") == "function_call_output" and "output" in item:
+            elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                 messages.append({"role": item.get("role") or "tool", "content": item["output"]})
+            elif item.get("type") == "reasoning":
+                # Reasoning items carry chain-of-thought text in their
+                # ``summary`` list.  Synthesise a message so guardrails
+                # can inspect/redact that text.
+                summary = item.get("summary")
+                if isinstance(summary, list):
+                    messages.append({"role": "assistant", "content": summary})
     return messages
 
 
@@ -157,8 +181,12 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                         input_value[idx] = {**item, "text": visit(item["text"])}
                 elif "content" in item:
                     item["content"] = _rewrite_content(item["content"])
-                elif item.get("type") == "function_call_output" and "output" in item:
+                elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                     item["output"] = _rewrite_content(item["output"])
+                elif item.get("type") == "reasoning":
+                    summary = item.get("summary")
+                    if isinstance(summary, list):
+                        item["summary"] = _rewrite_content(summary)
         return visited
 
     return visited
