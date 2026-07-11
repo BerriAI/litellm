@@ -725,12 +725,22 @@ class CustomGuardrail(CustomLogger):
             guardrail_json_response = str(guardrail_json_response)
         from litellm.types.utils import GuardrailMode
 
-        # Use event_type if provided, otherwise fall back to self.event_hook
-        guardrail_mode: Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]]
+        # Use the resolved event_type (the concrete hook that actually fired
+        # for *this* invocation) when available.  Fall back to self.event_hook
+        # only as a last resort — and normalise its various shapes so
+        # downstream loggers always receive a JSON-serialisable scalar or
+        # dict, never a raw List[str] that looks like a broken value.
+        guardrail_mode: Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks], str]
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
             guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
+        elif isinstance(self.event_hook, list):
+            # Config lists like ["pre_call", "post_call"] are the *configured*
+            # modes, not the one that fired.  Join into a comma-separated
+            # string so the logged value is unambiguously "raw config" rather
+            # than something that looks like a single resolved hook.
+            guardrail_mode = ",".join(str(h) for h in self.event_hook)  # type: ignore[assignment]
         else:
             guardrail_mode = self.event_hook  # type: ignore[assignment]
 
@@ -1089,8 +1099,17 @@ def log_guardrail_information(func):
 
     def _infer_event_type_from_function_name(
         func_name: str,
+        kwargs: Optional[dict] = None,
     ) -> Optional[GuardrailEventHooks]:
-        """Infer the actual event type from the function name"""
+        """Infer the actual event type from the function name.
+
+        For ``apply_guardrail`` the concrete hook is derived from the
+        ``input_type`` kwarg: ``"request"`` → ``pre_call``,
+        ``"response"`` → ``post_call``. This avoids logging the raw
+        ``self.event_hook`` config (which may be a ``List`` or ``Mode``
+        dict) instead of the concrete hook that was resolved for this
+        invocation.
+        """
         if func_name == "async_pre_call_hook":
             return GuardrailEventHooks.pre_call
         elif func_name == "async_moderation_hook":
@@ -1100,6 +1119,13 @@ def log_guardrail_information(func):
             "async_post_call_streaming_hook",
         ):
             return GuardrailEventHooks.post_call
+        elif func_name == "apply_guardrail" and kwargs:
+            input_type = kwargs.get("input_type")
+            if input_type == "request":
+                return GuardrailEventHooks.pre_call
+            elif input_type == "response":
+                return GuardrailEventHooks.post_call
+            return GuardrailEventHooks.during_call
         return None
 
     def _count_recorded_guardrail_entries(request_data: dict) -> int:
@@ -1117,7 +1143,7 @@ def log_guardrail_information(func):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
-        event_type = _infer_event_type_from_function_name(func.__name__)
+        event_type = _infer_event_type_from_function_name(func.__name__, kwargs)
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
@@ -1158,7 +1184,7 @@ def log_guardrail_information(func):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
-        event_type = _infer_event_type_from_function_name(func.__name__)
+        event_type = _infer_event_type_from_function_name(func.__name__, kwargs)
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None

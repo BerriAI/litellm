@@ -1423,6 +1423,96 @@ class TestEventTypeLogging:
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
 
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_infers_pre_call_from_input_type_request(self):
+        """apply_guardrail with input_type='request' should resolve to pre_call."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_resolve",
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                return inputs
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_infers_post_call_from_input_type_response(self):
+        """apply_guardrail with input_type='response' should resolve to post_call."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_resolve",
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                return inputs
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=request_data,
+            input_type="response",
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
+
+    def test_list_event_hook_fallback_serialises_as_csv_string(self):
+        """When event_type is None and event_hook is a list, the logged
+        guardrail_mode should be a comma-separated string, not a raw list."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = CustomGuardrail(
+            guardrail_name="test_csv",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+        )
+
+        request_data = {"metadata": {}}
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            event_type=None,
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        mode = logged_info[0]["guardrail_mode"]
+        assert isinstance(mode, str), f"Expected string, got {type(mode)}"
+        assert "pre_call" in mode
+        assert "post_call" in mode
+
 
 class TestTracingFieldsPopulation:
     """Verify add_standard_logging_guardrail_information_to_request_data passes tracing_detail fields."""
