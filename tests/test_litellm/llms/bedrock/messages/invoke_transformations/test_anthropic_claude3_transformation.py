@@ -2130,9 +2130,9 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
 
 def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
     """An unmapped Bedrock Claude at 4.8 or higher resolves through the
-    ``bedrock-anthropic-claude-mid-conversation-system`` fallback rule, so a
-    future model that has not landed in the cost map yet keeps the
-    cache-preserving in-place behavior instead of falling back to hoist-all."""
+    ``claude-mid-conversation-system`` capability rule, so a future model that
+    has not landed in the cost map yet keeps the cache-preserving in-place
+    behavior instead of falling back to hoist-all."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2159,9 +2159,9 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
     """Exact cost-map hits resolve before fallback-generalization rules, so a
     mapped Bedrock Claude 4.8+ entry without ``supports_mid_conversation_system``
     silently loses the cache-preserving in-place handling that the
-    ``bedrock-anthropic-claude-mid-conversation-system`` rule grants unmapped
-    ids. Every mapped entry the rule's own pattern matches must carry the flag
-    explicitly."""
+    ``claude-mid-conversation-system`` capability rule grants unmapped ids.
+    Every mapped bedrock entry the rule's own pattern matches must carry the
+    flag explicitly."""
     import re
 
     import litellm
@@ -2171,7 +2171,7 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]
     pattern = re.compile(
-        next(r["pattern"] for r in rules if r["name"] == "bedrock-anthropic-claude-mid-conversation-system"),
+        next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
         re.IGNORECASE,
     )
     missing = [
