@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 
 # Token storage utilities
@@ -379,26 +380,26 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
             return None
 
         # User has multiple teams - let them select
-        team_selection_result = _handle_team_selection_during_polling(
+        jwt_with_team = _handle_team_selection_during_polling(
             base_url=base_url,
             key_id=key_id,
             poll_secret=poll_secret,
             teams=normalized_teams,
         )
 
-        # Use the team-specific key if selection succeeded
-        if team_selection_result:
+        # Use the team-specific JWT if selection succeeded
+        if jwt_with_team:
             return {
-                "api_key": team_selection_result,
+                "api_key": jwt_with_team,
                 "user_id": user_id,
                 "teams": teams,
-                "team_id": None,  # Set by server in the key
+                "team_id": None,  # Set by server in JWT
             }
 
-        click.echo("❌ Team selection cancelled or key generation failed.")
+        click.echo("❌ Team selection cancelled or JWT generation failed.")
         return None
 
-    # Key is ready (single team or team already selected)
+    # JWT is ready (single team or team already selected)
     api_key = data.get("key")
     user_id = data.get("user_id")
     teams = data.get("teams", [])
@@ -429,8 +430,7 @@ def _handle_team_selection_during_polling(
         teams: List of team IDs (strings)
 
     Returns:
-        The session key for the selected team, or None if selection was
-        skipped
+        The JWT token with the selected team, or None if selection was skipped
     """
     if not teams:
         click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
@@ -445,7 +445,7 @@ def _handle_team_selection_during_polling(
         click.echo("ℹ️ No team selected.")
         return None
 
-    click.echo(f"\n🔄 Generating key for team: {team_id}")
+    click.echo(f"\n🔄 Generating JWT for team: {team_id}")
 
     poll_url = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
     data = _poll_for_ready_data(
@@ -457,10 +457,10 @@ def _handle_team_selection_during_polling(
     )
     if not data:
         return None
-    session_key = data.get("key")
-    if session_key:
-        click.echo(f"✅ Successfully generated key for team: {team_id}")
-        return session_key
+    jwt_token = data.get("key")
+    if jwt_token:
+        click.echo(f"✅ Successfully generated JWT for team: {team_id}")
+        return jwt_token
 
     return None
 
@@ -568,7 +568,7 @@ def login(ctx: click.Context):
             )
 
             click.echo("\n✅ Login successful!")
-            click.echo(f"Token: {api_key[:20]}...")
+            click.echo(f"JWT Token: {api_key[:20]}...")
             click.echo("You can now use the CLI without specifying --api-key")
 
             # Show available commands after successful login
@@ -592,17 +592,6 @@ def logout():
     """Logout and clear stored authentication"""
     clear_token()
     click.echo("✅ Logged out successfully. Authentication token cleared.")
-
-
-def _cached_key_still_fresh(token_data: Dict[str, Any], buffer_hours: float = 0.1) -> bool:
-    """Best-effort local expiry check so print-token can fail fast, without a
-    network round trip, once the cached key is past its server-side
-    duration. Mirrors the age heuristic already used by `whoami`."""
-    timestamp = token_data.get("timestamp")
-    if not isinstance(timestamp, (int, float)):
-        return False
-    age_hours = (time.time() - timestamp) / 3600
-    return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)
 
 
 @click.command(name="print-token")
@@ -631,7 +620,7 @@ def print_token(ctx: click.Context):
             click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
             sys.exit(1)
 
-    if not _cached_key_still_fresh(token_data):
+    if not is_cli_token_fresh(token_data):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
