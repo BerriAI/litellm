@@ -589,6 +589,7 @@ class LiteLLMRoutes(enum.Enum):
             # team
             "/team/new",
             "/team/update",
+            "/team/{team_id}",
             "/team/delete",
             "/team/list",
             "/v2/team/list",

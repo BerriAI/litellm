@@ -2,6 +2,7 @@
 Auth Checks for Organizations
 """
 
+import re
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from fastapi import status
@@ -173,12 +174,14 @@ def _user_is_org_admin(
 
 
 TEAM_ORG_CONTEXT_ROUTES = frozenset({"/team/update"})
+_TEAM_ID_PATH_ROUTE = re.compile(r"^/team/[^/]+$")
 
 
 async def add_team_org_context_to_request_body(
     route: str,
     request_body: dict,
     fetch_team_org_id: Callable[[str], Awaitable[Optional[str]]],
+    path_team_id: Optional[str] = None,
 ) -> dict:
     """
     Return a copy of request_body with organization_id resolved from the target
@@ -188,12 +191,20 @@ async def add_team_org_context_to_request_body(
     the client having to send it. Returns request_body unchanged when it does
     not apply, so callers that already pass organization_id and non-team routes
     are untouched.
+
+    The team_id is taken from the body for TEAM_ORG_CONTEXT_ROUTES, or from the
+    path (``path_team_id``) for the bare ``/team/{team_id}`` route.
     """
-    if route not in TEAM_ORG_CONTEXT_ROUTES:
-        return request_body
     if request_body.get("organization_id"):
         return request_body
-    team_id = request_body.get("team_id")
+
+    if route in TEAM_ORG_CONTEXT_ROUTES:
+        team_id: Optional[str] = request_body.get("team_id")
+    elif path_team_id and _TEAM_ID_PATH_ROUTE.match(route):
+        team_id = path_team_id
+    else:
+        return request_body
+
     if not isinstance(team_id, str) or not team_id:
         return request_body
     org_id = await fetch_team_org_id(team_id)
