@@ -1,7 +1,10 @@
+import pytest
+
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -100,6 +103,43 @@ def test_thinking_dropped_when_max_tokens_too_small_for_min_budget():
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+
+def test_adaptive_thinking_translated_for_opus_4_5():
+    """Opus 4.5 accepts output_config.effort natively but NOT thinking.type=adaptive
+    (that arrived with 4.6). An adaptive payload routed to Opus 4.5 must have the
+    thinking translated to legacy extended thinking instead of being forwarded raw,
+    which Anthropic rejects just like on Haiku/Sonnet 4.5."""
+    result = _transform("claude-opus-4-5", _claude_code_payload(effort="medium"))
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "output_config" not in result
+
+
+def test_effort_only_passes_through_for_opus_4_5():
+    """Opus 4.5 supports output_config.effort natively, so an effort-only request
+    (no adaptive thinking to translate) must be forwarded untouched; translating it
+    would enable extended thinking the caller never asked for."""
+    result = _transform(
+        "claude-opus-4-5",
+        {"max_tokens": 8192, "output_config": {"effort": "medium"}},
+    )
+
+    assert result["output_config"] == {"effort": "medium"}
+    assert "thinking" not in result
+
+
+def test_unrecognized_effort_raises_clean_400():
+    """An unrecognized effort value (e.g. a future Anthropic tier) must surface as a
+    clean AnthropicError 400, matching _translate_reasoning_effort_to_anthropic,
+    rather than leaking litellm's internal BadRequestError."""
+    with pytest.raises(AnthropicError) as exc_info:
+        _transform("claude-haiku-4-5", _claude_code_payload(effort="turbo"))
+
+    assert exc_info.value.status_code == 400
 
 
 def test_non_adaptive_request_without_effort_is_untouched():

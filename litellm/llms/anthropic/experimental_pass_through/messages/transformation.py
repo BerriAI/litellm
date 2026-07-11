@@ -274,7 +274,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         unsupported ``output_config`` for older models (bedrock invoke, issue
         #22797): the goal is to keep the request working, not to fail it.
 
-        - 4.6+ (adaptive / ``supports_output_config``): left untouched (early return).
+        - 4.6+ adaptive models: left untouched (early return).
+        - Effort-only requests (no adaptive ``thinking``) on models that natively
+          accept ``output_config.effort`` (e.g. Claude Opus 4.5): left untouched.
+          Adaptive ``thinking`` on those models is still translated, since only
+          4.6+ models accept ``thinking.type=adaptive``.
         - Thinking-capable but non-adaptive (``supports_reasoning``): effort is
           mapped to legacy ``thinking={type: enabled, budget_tokens}`` via
           ``AnthropicConfig._map_reasoning_effort``, preserving the caller's intent.
@@ -286,9 +290,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         Only the consumed ``effort`` key is removed from ``output_config``; any
         residual (e.g. ``format``) is left for provider subclasses to handle.
         """
+        from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        if AnthropicConfig._is_adaptive_thinking_model(model) or AnthropicConfig._model_supports_effort_param(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model):
             return
 
         output_config = optional_params.get("output_config")
@@ -297,13 +302,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         adaptive_thinking = isinstance(thinking, dict) and thinking.get("type") == "adaptive"
         if effort is None and not adaptive_thinking:
             return
+        if not adaptive_thinking and AnthropicConfig._model_supports_effort_param(model):
+            return
 
         supports_thinking = AnthropicModelInfo._supports_model_capability(model, "supports_reasoning")
-        legacy_thinking = (
-            AnthropicConfig._map_reasoning_effort(reasoning_effort=effort or "medium", model=model)
-            if supports_thinking
-            else None
-        )
+        try:
+            legacy_thinking = (
+                AnthropicConfig._map_reasoning_effort(reasoning_effort=effort or "medium", model=model)
+                if supports_thinking
+                else None
+            )
+        except _BadRequestError as e:
+            raise AnthropicError(message=str(e.message), status_code=400)
         capped_thinking = (
             AnthropicMessagesConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
             if legacy_thinking is not None
