@@ -10053,8 +10053,8 @@ class Router:
             if len(team_ids) > 1:
                 raise litellm.BadRequestError(
                     message=(
-                        f"Team-scoped model name '{model}' is configured for multiple teams. "
-                        "Pass a team context or deployment ID to select one."
+                        f"Model name '{model}' matches deployments from multiple teams. "
+                        "Specify the deployment ID directly to disambiguate."
                     ),
                     model=model,
                     llm_provider="",

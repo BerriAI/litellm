@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Union
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
+from litellm.exceptions import BadRequestError
 from litellm.types.router import CredentialLiteLLMParams
 from litellm._logging import verbose_logger
 
@@ -78,6 +79,25 @@ def filter_team_based_models(
         candidate_model_info = tuple(
             model_info for deployment in healthy_deployments for model_info in [deployment.get("model_info") or {}]
         )
+        team_ids = frozenset(
+            team_id
+            for model_info in candidate_model_info
+            for team_id in [model_info.get("team_id")]
+            if team_id is not None
+        )
+        if (
+            isinstance(requested_model, str)
+            and len(team_ids) > 1
+            and all(model_info.get("team_public_model_name") == requested_model for model_info in candidate_model_info)
+        ):
+            raise BadRequestError(
+                message=(
+                    f"Model name '{requested_model}' matches deployments from multiple teams. "
+                    "Specify the deployment ID directly to disambiguate."
+                ),
+                model=requested_model,
+                llm_provider="",
+            )
         if (
             isinstance(requested_model, str)
             and candidate_model_info
