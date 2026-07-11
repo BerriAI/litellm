@@ -1040,6 +1040,22 @@ class ModelManagementAuthChecks:
         return True
 
 
+def _deployment_name_and_model(deployment: Optional[Union[Deployment, Dict[str, object]]]) -> Tuple[Optional[str], str]:
+    """Return (model_name, litellm_params.model) for a deployment.
+
+    delete_deployment is annotated to return a Deployment but hands back the raw
+    model_list dict at runtime, so both shapes are handled; the model defaults to "".
+    """
+    if deployment is None:
+        return None, ""
+    if isinstance(deployment, dict):
+        name = deployment.get("model_name")
+        params = deployment.get("litellm_params")
+        model = params.get("model") if isinstance(params, dict) else None
+        return (name if isinstance(name, str) else None), (model if isinstance(model, str) else "")
+    return deployment.model_name, str(getattr(deployment.litellm_params, "model", "") or "")
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -1114,11 +1130,12 @@ async def delete_model(
                 deleted_deployment = llm_router.delete_deployment(id=model_info.id)
                 # delete_deployment only drops the deployment from model_list; the auto/
                 # complexity router registries are keyed by model_name and would otherwise
-                # retain a stale (now unbacked) entry, so evict it here too.
-                deleted_name = getattr(deleted_deployment, "model_name", None)
-                if deleted_name is None and isinstance(deleted_deployment, dict):
-                    deleted_name = deleted_deployment.get("model_name")
-                if deleted_name is not None:
+                # retain a stale (now unbacked) entry, so evict it here too. Guard on the
+                # auto_router/ prefix (as clear_cache does): a regular DB model that merely
+                # shares a model_name with a config-defined router must not evict that router,
+                # since add_deployment never restores config-defined routers.
+                deleted_name, deleted_model = _deployment_name_and_model(deleted_deployment)
+                if deleted_name is not None and deleted_model.startswith("auto_router/"):
                     llm_router.auto_routers.pop(deleted_name, None)
                     llm_router.complexity_routers.pop(deleted_name, None)
 

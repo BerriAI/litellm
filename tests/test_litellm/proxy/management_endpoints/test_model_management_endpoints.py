@@ -620,7 +620,11 @@ class TestDeleteModelClearsRouterRegistry:
 
         mock_router = MagicMock()
         mock_router.delete_deployment = MagicMock(
-            return_value={"model_name": "smart-router", "model_info": {"id": model_id}}
+            return_value={
+                "model_name": "smart-router",
+                "litellm_params": {"model": "auto_router/complexity_router"},
+                "model_info": {"id": model_id},
+            }
         )
         mock_router.auto_routers = {"smart-router": MagicMock()}
         mock_router.complexity_routers = {"smart-router": MagicMock()}
@@ -643,6 +647,66 @@ class TestDeleteModelClearsRouterRegistry:
         mock_router.delete_deployment.assert_called_once_with(id=model_id)
         assert "smart-router" not in mock_router.auto_routers
         assert "smart-router" not in mock_router.complexity_routers
+
+    @pytest.mark.asyncio
+    async def test_delete_regular_model_preserves_config_router_sharing_name(self):
+        """Deleting a regular (non-router) DB model must not evict a config-defined router
+        that merely shares its model_name. delete_deployment pops the DB model, but the
+        auto/complexity registries hold a config router under the same name that
+        add_deployment never restores, so an unguarded pop would make it permanently
+        unroutable (the same cross-tenant DoS clear_cache was hardened against).
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
+
+        model_id = "regular-del-1"
+        admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="shared-name",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": model_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+
+        mock_router = MagicMock()
+        mock_router.delete_deployment = MagicMock(
+            return_value={
+                "model_name": "shared-name",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": model_id},
+            }
+        )
+        config_router = MagicMock()
+        mock_router.auto_routers = {}
+        mock_router.complexity_routers = {"shared-name": config_router}
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        mock_router.delete_deployment.assert_called_once_with(id=model_id)
+        assert mock_router.complexity_routers.get("shared-name") is config_router
 
 
 class TestUpdateModel:
