@@ -21,7 +21,7 @@ interface PluginTableProps {
 
 const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDeleteClick, isAdmin, onPluginClick }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 });
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -160,6 +160,7 @@ const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDel
       paginationMode="client"
       pagination={pagination}
       onPaginationChange={setPagination}
+      pageSizeOptions={[10, 25, 50]}
       onRowClick={(plugin) => onPluginClick(plugin.id)}
       isLoading={isLoading}
       loadingMessage="Loading skills..."
