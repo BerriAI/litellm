@@ -5,9 +5,9 @@ import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../../tests/test-utils";
-import type { Organization } from "../../networking";
-import * as networking from "../../networking";
+import { renderWithProviders } from "@/../tests/test-utils";
+import type { Organization } from "@/components/networking";
+import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
 
 // Polyfill ResizeObserver for test environment
@@ -22,23 +22,23 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("../../networking", () => ({
+vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
-vi.mock("../../activity_metrics", () => ({
+vi.mock("@/components/activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("../../view_user_spend", () => ({
+vi.mock("@/components/view_user_spend", () => ({
   default: () => <div>View User Spend</div>,
 }));
 
-vi.mock("./EntityUsage/TopKeyView", () => ({
+vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
@@ -80,7 +80,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
   return { UsageViewSelect };
 });
 
-vi.mock("../../shared/advanced_date_picker", async () => {
+vi.mock("@/components/shared/advanced_date_picker", async () => {
   const React = await import("react");
   const AdvancedDatePicker = () => {
     return React.createElement("div", { "data-testid": "advanced-date-picker" }, "Date Picker");
@@ -89,15 +89,15 @@ vi.mock("../../shared/advanced_date_picker", async () => {
   return { default: AdvancedDatePicker };
 });
 
-vi.mock("../../user_agent_activity", () => ({
+vi.mock("@/components/user_agent_activity", () => ({
   default: () => <div>User Agent Activity</div>,
 }));
 
-vi.mock("../../cloudzero_export_modal", () => ({
+vi.mock("@/components/cloudzero_export_modal", () => ({
   default: () => <div>CloudZero Export Modal</div>,
 }));
 
-vi.mock("../../EntityUsageExport", () => ({
+vi.mock("@/components/EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 

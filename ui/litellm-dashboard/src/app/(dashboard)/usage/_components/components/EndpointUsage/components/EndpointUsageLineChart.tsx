@@ -1,6 +1,6 @@
 import { Card, LineChart, Title } from "@tremor/react";
 import { useMemo } from "react";
-import { DailyData } from "../../../types";
+import { DailyData } from "@/components/UsagePage/types";
 
 interface EndpointUsageLineChartProps {
   dailyData?: { results: DailyData[] };

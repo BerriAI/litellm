@@ -2,8 +2,8 @@ import { BarChart } from "@/components/shared/charts";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Segmented } from "antd";
 import { useState } from "react";
-import { formatNumberWithCommas } from "../../../../utils/dataUtils";
-import { DataTable } from "../../../view_logs/table";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DataTable } from "@/components/view_logs/table";
 
 type TopModel = {
   key: string;

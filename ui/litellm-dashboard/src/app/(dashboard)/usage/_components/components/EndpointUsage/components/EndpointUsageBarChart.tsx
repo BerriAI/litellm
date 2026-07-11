@@ -1,7 +1,7 @@
 import React from "react";
 import { BarChart, Card, Title } from "@tremor/react";
 import { CustomLegend, CustomTooltip } from "@/components/common_components/chartUtils";
-import { MetricWithMetadata } from "../../../types";
+import { MetricWithMetadata } from "@/components/UsagePage/types";
 
 interface EndpointUsageBarChartProps {
   endpointData?: Record<string, MetricWithMetadata>;
