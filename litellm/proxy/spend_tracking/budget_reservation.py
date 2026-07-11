@@ -10,7 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import calculate_tiered_cost
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -925,9 +925,25 @@ def _estimate_request_input_cost_for_model(
     model: str,
     llm_router: Router | None,
 ) -> float | None:
-    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
-    if model_info is None:
-        return None
+    estimates = [
+        _input_cost_for_cost_info(
+            request_body=request_body,
+            route=route,
+            model=model,
+            model_info=model_info,
+        )
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+    ]
+    valid_estimates = [estimate for estimate in estimates if estimate is not None]
+    return max(valid_estimates) if valid_estimates else None
+
+
+def _input_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
     input_tokens = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -938,11 +954,9 @@ def _estimate_request_input_cost_for_model(
         return None
     tiered_pricing = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        return calculate_tiered_cost(
-            tokens=input_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="input_cost_per_token",
-        )
+        tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        if tier is not None:
+            return input_tokens * tier_rate(tier, "input_cost_per_token")
     input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
     if input_cost_per_token is None:
         return None
@@ -955,10 +969,25 @@ def _estimate_request_max_cost_for_model(
     model: str,
     llm_router: Optional[Router],
 ) -> Optional[float]:
-    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
-    if model_info is None:
-        return None
+    estimates = [
+        _max_cost_for_cost_info(
+            request_body=request_body,
+            route=route,
+            model=model,
+            model_info=model_info,
+        )
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+    ]
+    valid_estimates = [estimate for estimate in estimates if estimate is not None]
+    return max(valid_estimates) if valid_estimates else None
 
+
+def _max_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
     image_cost = _estimate_image_generation_cost(
         request_body=request_body,
         model_info=model_info,
@@ -966,8 +995,6 @@ def _estimate_request_max_cost_for_model(
     if image_cost is not None:
         return image_cost
 
-    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
-    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
     input_tokens = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -985,16 +1012,14 @@ def _estimate_request_max_cost_for_model(
     output_multiplier = _get_output_multiplier(request_body=request_body)
     tiered_pricing = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        return calculate_tiered_cost(
-            tokens=input_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="input_cost_per_token",
-        ) + calculate_tiered_cost(
-            tokens=output_tokens * output_multiplier,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_token",
-        )
+        tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        if tier is not None:
+            return (input_tokens * tier_rate(tier, "input_cost_per_token")) + (
+                output_tokens * output_multiplier * tier_rate(tier, "output_cost_per_token")
+            )
 
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
     cost = 0.0
     if input_cost_per_token is not None:
         cost += input_tokens * input_cost_per_token
@@ -1052,46 +1077,69 @@ def _get_model_cost_info(
     llm_router: Optional[Router],
 ) -> Optional[Dict[str, Any]]:
     if llm_router is not None:
-        try:
-            model_group_info = llm_router.get_model_group_info(model_group=model)
-            if model_group_info is not None:
-                model_group_cost_info = model_group_info.model_dump()
-                # Reservation runs before routing, so the concrete deployment is
-                # unknown here. We assume deployments in a group share pricing and
-                # use the first tiered table we find as the estimate. This is a
-                # best-effort admission gate; post-request billing is exact against
-                # the deployment that actually served the request. Mixing tiered and
-                # flat deployments in one group can therefore over- or under-estimate
-                # at reservation time only.
-                deployments = llm_router.get_model_list(model_name=model) or []
-                for deployment in deployments:
-                    model_id = deployment.get("model_info", {}).get("id")
-                    backend_model = deployment.get("litellm_params", {}).get("model")
-                    if not isinstance(model_id, str) or not isinstance(backend_model, str):
-                        continue
-                    deployment_model_info = llm_router.get_deployment_model_info(
-                        model_id=model_id,
-                        model_name=backend_model,
-                    )
-                    if deployment_model_info is None:
-                        continue
-                    tiered_pricing = deployment_model_info.get("tiered_pricing")
-                    if isinstance(tiered_pricing, list) and tiered_pricing:
-                        return {
-                            **model_group_cost_info,
-                            "tiered_pricing": tiered_pricing,
-                        }
-                return model_group_cost_info
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to load router model group info for budget reservation",
-                exc_info=True,
-            )
+        model_group_info = llm_router.get_model_group_info(model_group=model)
+        if model_group_info is not None:
+            return model_group_info.model_dump()
+    return dict(litellm.get_model_info(model=model))
 
+
+def _get_model_cost_infos(
+    model: str,
+    llm_router: Optional[Router],
+) -> List[Dict[str, Any]]:
+    """Cost-info candidates to estimate a request against for one model group.
+
+    Reservation runs before routing, so the deployment that will serve the request
+    is unknown. Rather than guess, we estimate the cost against every eligible
+    pricing shape in the group (the group's flat rates plus each deployment's
+    tiered table) and let the caller reserve the maximum, so a cheaper sibling
+    deployment can never leave the request under-reserved.
+    """
     try:
-        return dict(litellm.get_model_info(model=model))
+        base = _get_model_cost_info(model=model, llm_router=llm_router)
+        if base is None:
+            return []
+        tiered_tables = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
     except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to load model cost info for budget reservation",
+            exc_info=True,
+        )
+        return []
+    if not tiered_tables:
+        return [base]
+    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+
+
+def _deployment_tiered_pricing_table(
+    deployment: Dict[str, Any],
+    llm_router: Router,
+) -> Optional[List[dict]]:
+    model_id = deployment.get("model_info", {}).get("id")
+    backend_model = deployment.get("litellm_params", {}).get("model")
+    if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
+    deployment_model_info = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
+    if deployment_model_info is None:
+        return None
+    tiered_pricing = deployment_model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        return tiered_pricing
+    return None
+
+
+def _get_deployment_tiered_pricing_tables(
+    model: str,
+    llm_router: Optional[Router],
+) -> List[List[dict]]:
+    if llm_router is None:
+        return []
+    deployments = llm_router.get_model_list(model_name=model) or []
+    return [
+        table
+        for deployment in deployments
+        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
+    ]
 
 
 def _estimate_input_tokens(
