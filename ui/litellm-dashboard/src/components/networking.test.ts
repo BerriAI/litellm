@@ -420,6 +420,36 @@ describe("individualModelHealthCheckCall", () => {
   });
 });
 
+describe("uiSpendLogDetailsCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should percent-encode a logId containing a hash so the fragment isn't dropped from the request", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({}),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    const logId = "chatcmpl-abc123#0";
+    await Networking.uiSpendLogDetailsCall("token", logId, "2025-01-01");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+
+    expect(urlStr).toContain(encodeURIComponent(logId));
+    expect(urlStr).not.toContain(logId);
+  });
+});
+
 describe("teamInfoCall", () => {
   const originalFetch = global.fetch;
 
