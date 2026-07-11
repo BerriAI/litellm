@@ -372,6 +372,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
                 model=model,
+                custom_llm_provider="databricks",
                 llm_provider="databricks",
             )
             if mapped_thinking is None:
@@ -379,7 +380,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model):
+                if AnthropicConfig._is_adaptive_thinking_model(model, "databricks"):
                     mapped_effort: Optional[str] = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)
