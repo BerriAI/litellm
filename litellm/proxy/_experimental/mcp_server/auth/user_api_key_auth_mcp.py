@@ -581,10 +581,27 @@ class MCPRequestHandler:
             )
         except (ProxyException, HTTPException):
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        except Exception as e:  # noqa: BLE001  # a DB outage during reload is a retryable 503, not an opaque 500
+            MCPRequestHandler._raise_503_if_db_unavailable(e)
+            raise
         if not MCPRequestHandler._admitted_key_is_active(key_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         await MCPRequestHandler._reject_if_admitted_owner_scim_deactivated(key_object)
         return key_object
+
+    @staticmethod
+    def _raise_503_if_db_unavailable(e: Exception) -> None:
+        """Raise a retryable 503 when ``e`` means the auth database is unreachable, else return so the
+        caller applies its own fail-closed mapping. A DB outage must not masquerade as an auth failure
+        (401) or surface as an opaque 500; the caller retries. Mirrors ``UserAPIKeyAuthExceptionHandler``,
+        which renders a service-unavailable database error as 503 on the standard pipeline."""
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            raise HTTPException(
+                status_code=503,
+                detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+            ) from None
 
     @staticmethod
     async def _reject_if_admitted_owner_scim_deactivated(key_object: UserAPIKeyAuth) -> None:
@@ -636,8 +653,6 @@ class MCPRequestHandler:
         it told an over-budget but validly-authenticated caller their credential was invalid,
         which on a DCR client reads as broken auth and can trigger a pointless re-authorize
         loop that cannot fix a budget problem, and it masked a DB outage as an auth error."""
-        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-
         try:
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
@@ -650,11 +665,7 @@ class MCPRequestHandler:
         except litellm.BudgetExceededError as e:
             raise HTTPException(status_code=getattr(e, "status_code", 429), detail=str(e)) from None
         except Exception as e:  # noqa: BLE001  # untyped gate failure: retryable 503 for a DB outage, else fail closed 401
-            if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
-                raise HTTPException(
-                    status_code=503,
-                    detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
-                ) from None
+            MCPRequestHandler._raise_503_if_db_unavailable(e)
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
 
     @staticmethod

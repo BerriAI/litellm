@@ -5275,6 +5275,28 @@ class TestMCPDcrBridgeDelegateAdmission:
         mapped = await self._enforce_with_gate_error(ConnectionError("could not reach database server"))
         assert mapped.status_code == 503
 
+    async def test_db_outage_during_key_reload_surfaces_503_not_500(self):
+        """A DB outage while reloading the admitted key surfaces a retryable 503, not the opaque 500 a
+        raw get_key_object transport error would otherwise propagate as, and not a 401 that masks the
+        outage as an auth failure. Regression for the reload-path exception gap."""
+        envelope = self._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(side_effect=ConnectionError("could not reach database server")),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 503
+
     async def test_blocked_state_bare_exception_stays_401(self):
         """A blocked team/project raises a bare Exception (no status) in common_checks, which the
         standard pipeline renders as 401; the arm keeps failing those closed as 401, never a 500."""
