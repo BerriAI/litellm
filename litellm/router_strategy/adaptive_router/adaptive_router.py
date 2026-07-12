@@ -3,17 +3,12 @@ Main adaptive router strategy. See README.md for design overview.
 
 One AdaptiveRouter instance per router_name. Holds in-memory caches:
 - _cells:           Beta(alpha, beta) bandit posteriors per (request_type, model)
-- _owner_cache:     session_key -> (owner_model, expires_at) — the first model
-                    picked for a conversation owns its bandit-update slot
 - _session_states:  (session_key, model) -> SessionState for incremental signal updates
 
 Owns the AdaptiveRouterUpdateQueue used by the proxy's flusher to persist
 state and session snapshots back to Postgres.
 
-Routing is stateless per-turn (Thompson sample fresh on every call). The
-owner cache is consulted only at post-call time to decide whether a turn's
-signals should fire a bandit update — turns served by a different model than
-the conversation's owner are skipped to avoid cross-model misattribution.
+Routing is stateless per-turn (Thompson sample fresh on every call).
 """
 
 from __future__ import annotations
@@ -59,8 +54,6 @@ from litellm.router_strategy.adaptive_router.update_queue import (
 # Sweep session-state cache when it exceeds this many live entries. Expired
 # entries are dropped in bulk; amortizes to O(1) per insert.
 _SESSION_STATE_SWEEP_THRESHOLD: int = 1024
-# Same pattern for the owner cache.
-_OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
 _FEEDBACK_CONTEXT_MAX_ENTRIES: int = 1024
 from litellm.repositories.table_repositories import AdaptiveRouterStateRepository
 from litellm.types.llms.openai import AllMessageValues
@@ -105,13 +98,9 @@ class AdaptiveRouter:
         self.queue = AdaptiveRouterUpdateQueue()
 
         self._cells: dict[tuple[RequestType, str], BanditCell] = {}
-        self._owner_cache: dict[str, tuple[str, float]] = {}
         self._session_states: dict[tuple[str, str], SessionState] = {}
         self._feedback_contexts: OrderedDict[str, _FeedbackContext] = OrderedDict()
-        # Parallel expiry map for _session_states, same TTL as _owner_cache.
-        # Evicted opportunistically in `get_or_create_session_state`.
         self._session_states_expiry: dict[tuple[str, str], float] = {}
-        self._skipped_updates_total: int = 0
         self._feedback_attributed_total: int = 0
         self._feedback_without_context_total: int = 0
         self._cross_model_feedback_total: int = 0
@@ -182,9 +171,7 @@ class AdaptiveRouter:
         post-call hook can surface it as a response header.
 
         Routing is stateless per-turn: every call Thompson-samples fresh,
-        regardless of any prior pick for the same session. Cross-turn
-        attribution is enforced post-call via the owner cache (see
-        `claim_or_check_owner`).
+        regardless of any prior pick for the same session.
         """
         user_text = get_last_user_message(cast(list[AllMessageValues], messages or [])) or ""
 
@@ -229,43 +216,6 @@ class AdaptiveRouter:
             cost_weight=self.config.weights.cost,
         )
 
-    def claim_or_check_owner(self, session_key: str, current_model: str) -> bool:
-        """Resolve attribution for a turn under stateless routing.
-
-        Returns True iff this turn should fire a bandit/state update. The
-        first call for a `session_key` claims ownership for `current_model`
-        and returns True. Subsequent calls return True only if the owner is
-        still live AND matches `current_model`. Mismatches (a different
-        model handled this turn) and expired owners both increment
-        `_skipped_updates_total` and return False — no attribution.
-        """
-        now = time.time()
-        existing = self._owner_cache.get(session_key)
-        if existing is not None and existing[1] > now:
-            owner_model, _ = existing
-            if owner_model == current_model:
-                return True
-            self._skipped_updates_total += 1
-            return False
-
-        # Opportunistic bulk sweep — sessions that never come back would
-        # otherwise pile up here forever. Same threshold pattern as the
-        # session-state cache.
-        if len(self._owner_cache) >= _OWNER_CACHE_SWEEP_THRESHOLD:
-            self._evict_expired_owner_cache(now)
-
-        # No live owner -> claim for current_model.
-        self._owner_cache[session_key] = (
-            current_model,
-            now + OWNER_CACHE_TTL_SECONDS,
-        )
-        return True
-
-    def _evict_expired_owner_cache(self, now: float) -> None:
-        expired = [k for k, (_, exp) in self._owner_cache.items() if exp <= now]
-        for k in expired:
-            self._owner_cache.pop(k, None)
-
     async def get_state_snapshot(self) -> dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
         cells = []
@@ -287,7 +237,6 @@ class AdaptiveRouter:
             )
         queue = await self.queue.queue_size()
         now = time.time()
-        owner_cache_live = sum(1 for _, exp in self._owner_cache.values() if exp > now)
         feedback_contexts_live = sum(1 for context in self._feedback_contexts.values() if context.expires_at > now)
         return {
             "router_name": self.router_name,
@@ -298,8 +247,6 @@ class AdaptiveRouter:
             },
             "model_costs": dict(self.model_to_cost),
             "cells": cells,
-            "owner_cache_live": owner_cache_live,
-            "skipped_updates_total": self._skipped_updates_total,
             "feedback_contexts_live": feedback_contexts_live,
             "feedback_attributed_total": self._feedback_attributed_total,
             "feedback_without_context_total": self._feedback_without_context_total,

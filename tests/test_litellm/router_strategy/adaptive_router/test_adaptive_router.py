@@ -7,9 +7,6 @@ from litellm.router_strategy.adaptive_router import adaptive_router as ar_module
 import pytest
 
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
-from litellm.router_strategy.adaptive_router.config import (
-    OWNER_CACHE_TTL_SECONDS,
-)
 from litellm.router_strategy.adaptive_router.signals import Turn
 from litellm.types.router import (
     AdaptiveRouterConfig,
@@ -54,81 +51,6 @@ async def test_pick_model_min_quality_tier_filter_raises_when_no_eligible():
     r = _make_router()
     with pytest.raises(ValueError, match="min_quality_tier=4"):
         await r.pick_model(RequestType.GENERAL, min_quality_tier=4)
-
-
-@pytest.mark.asyncio
-async def test_pick_model_is_stateless_no_owner_cache_writes():
-    """pick_model must not touch the owner cache — that's gated post-call."""
-    r = _make_router()
-    for _ in range(5):
-        await r.pick_model(RequestType.GENERAL)
-    assert r._owner_cache == {}
-
-
-# ---- claim_or_check_owner -----------------------------------------------
-
-
-def test_claim_or_check_owner_first_call_claims_and_returns_true(monkeypatch):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-
-    assert r.claim_or_check_owner("sess-A", "fast") is True
-    assert r._owner_cache["sess-A"] == ("fast", 1_000.0 + OWNER_CACHE_TTL_SECONDS)
-    assert r._skipped_updates_total == 0
-
-
-def test_claim_or_check_owner_same_model_returns_true_without_extending_ttl(
-    monkeypatch,
-):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    r.claim_or_check_owner("sess-A", "fast")
-    original_expiry = r._owner_cache["sess-A"][1]
-
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_500.0)
-    assert r.claim_or_check_owner("sess-A", "fast") is True
-    # No extension on hit — owner cache snapshots the first claim.
-    assert r._owner_cache["sess-A"][1] == original_expiry
-
-
-def test_claim_or_check_owner_mismatch_skips_and_increments_counter(monkeypatch):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    r.claim_or_check_owner("sess-A", "fast")
-
-    assert r.claim_or_check_owner("sess-A", "smart") is False
-    assert r._skipped_updates_total == 1
-    # Owner unchanged.
-    assert r._owner_cache["sess-A"][0] == "fast"
-
-
-def test_claim_or_check_owner_expired_owner_reclaims_for_new_model(monkeypatch):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    r.claim_or_check_owner("sess-A", "fast")
-
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1)
-    assert r.claim_or_check_owner("sess-A", "smart") is True
-    assert r._owner_cache["sess-A"][0] == "smart"
-    # Reclaim isn't a skip.
-    assert r._skipped_updates_total == 0
-
-
-def test_owner_cache_evicts_expired_entries_when_threshold_crossed(monkeypatch):
-    """Past _OWNER_CACHE_SWEEP_THRESHOLD live entries, new claims sweep stale."""
-    r = _make_router()
-    monkeypatch.setattr(ar_module, "_OWNER_CACHE_SWEEP_THRESHOLD", 5)
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    for i in range(5):
-        r.claim_or_check_owner(f"old-{i}", "fast")
-    assert len(r._owner_cache) == 5
-
-    # Jump past TTL so all "old-*" entries are now expired.
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1)
-    r.claim_or_check_owner("new-1", "fast")
-    # Sweep ran -> only the new entry remains.
-    assert "new-1" in r._owner_cache
-    assert all(k.startswith("new-") for k in r._owner_cache)
 
 
 # ---- record_turn --------------------------------------------------------

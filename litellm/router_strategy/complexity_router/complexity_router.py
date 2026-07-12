@@ -13,6 +13,8 @@ evaluated before either classification strategy and force a tier outright when m
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
+from __future__ import annotations
+
 import asyncio
 import random
 import re
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
+    from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
@@ -134,7 +137,7 @@ class ComplexityRouter(CustomLogger):
     def __init__(
         self,
         model_name: str,
-        litellm_router_instance: "Router",
+        litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
     ):
@@ -185,7 +188,7 @@ class ComplexityRouter(CustomLogger):
             re.compile(r"[a-z]\)\s", re.IGNORECASE),
         ]
 
-        self.adaptive_router: Any | None = None
+        self.adaptive_router: AdaptiveRouter | None = None
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
 
@@ -650,7 +653,7 @@ class ComplexityRouter(CustomLogger):
             return None
         return max(matched_tiers, key=TIER_SEVERITY_ORDER.index)
 
-    def _get_or_create_semantic_routelayer(self) -> "SemanticRouter":
+    def _get_or_create_semantic_routelayer(self) -> SemanticRouter:
         """Build (once) a SemanticRouter with one route per tier, utterances = that tier's keywords."""
         if self._semantic_routelayer is not None:
             return self._semantic_routelayer
@@ -689,7 +692,7 @@ class ComplexityRouter(CustomLogger):
         self._semantic_routelayer = routelayer
         return routelayer
 
-    async def _ensure_semantic_routelayer(self) -> "SemanticRouter":
+    async def _ensure_semantic_routelayer(self) -> SemanticRouter:
         """Return the cached route layer, building it once under a lock if needed.
 
         The build embeds the static route utterances via the encoder's synchronous path,
@@ -846,7 +849,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: Union[str, list] | None = None,
         specific_deployment: bool | None = False,
-    ) -> Optional["PreRoutingHookResponse"]:
+    ) -> Optional[PreRoutingHookResponse]:
         """
         Pre-routing hook called before the routing decision.
 
