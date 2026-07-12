@@ -2472,3 +2472,46 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     )
     assert out_converse == []
 
+
+
+def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
+    local_model_cost_map, monkeypatch
+):
+    """The outbound thinking payload must follow the exact Bedrock cost-map entry.
+    Before threading the caller's provider through the capability probes, the probe
+    was pinned to ``"anthropic"``: the exact ``global.anthropic.claude-opus-4-8``
+    entry was rejected by the provider match and the anthropic-scoped fallback rule
+    forced ``thinking.type='adaptive'`` even with ``supports_adaptive_thinking``
+    explicitly set to ``false`` on the entry."""
+    import litellm
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    model = "global.anthropic.claude-opus-4-8"
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    def transform():
+        return cfg.transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "reasoning_effort": "medium",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result = transform()
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "medium"}
+
+    monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)
+    litellm.get_model_info.cache_clear()
+
+    flipped = transform()
+    thinking = flipped.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert "output_config" not in flipped

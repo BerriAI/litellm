@@ -2315,6 +2315,46 @@ export const testConnectionRequest = async (
   }
 };
 
+export type ModelGroupConnectionResult = { status: "success" } | { status: "error"; error: string };
+
+/**
+ * Test an existing model group by routing a minimal request through the proxy
+ * exactly as production would (by public model_group name). Unlike
+ * /health/test_connection, this needs no litellm_params resolution: the router
+ * resolves the group, credentials, and provider. Used by the auto-router Test
+ * Connection to probe each tier's model group and the embedding model.
+ */
+/**
+ * Build the minimal request that probes a model group by public name. No
+ * max_tokens: reasoning models (o1/o3/...) reject a tiny cap with "max_tokens
+ * reached" because reasoning tokens count against it, which would show a false
+ * failure for a reachable tier.
+ */
+export const buildModelGroupTestRequest = (
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): { path: string; body: Record<string, unknown> } =>
+  mode === "embedding"
+    ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
+    : {
+        path: "/v1/chat/completions",
+        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+      };
+
+export const testModelGroupConnection = async (
+  accessToken: string,
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): Promise<ModelGroupConnectionResult> => {
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
+  try {
+    await apiClient.post(path, { accessToken, body });
+    return { status: "success" };
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error.message : String(error) };
+  }
+};
+
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {

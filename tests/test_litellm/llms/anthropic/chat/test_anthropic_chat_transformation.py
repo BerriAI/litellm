@@ -1661,7 +1661,7 @@ def test_effort_beta_header_injection():
     # Test with effort parameter
     optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, custom_llm_provider="anthropic")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1877,7 +1877,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is True
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
 
 
 @pytest.mark.parametrize(
@@ -1890,7 +1890,7 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is False
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
 
 
 @pytest.mark.parametrize(
@@ -2217,7 +2217,7 @@ def test_get_config_does_not_leak_module_constants():
 )
 def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
     """``_supports_effort_level`` resolves bedrock/vertex/azure-prefixed model ids."""
-    assert AnthropicConfig._supports_effort_level(model, level) is expected
+    assert AnthropicConfig._supports_effort_level(model, level, "anthropic") is expected
 
 
 @pytest.mark.parametrize(
@@ -2239,7 +2239,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
 def test_validate_effort_for_model_centralises_per_model_gating(
     model, effort, expect_error
 ):
-    err = AnthropicConfig._validate_effort_for_model(model, effort)
+    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2490,7 +2490,7 @@ def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
     fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
     non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
     are covered without a code change."""
-    assert AnthropicConfig._is_adaptive_thinking_model(model) is expected
+    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
@@ -2836,6 +2836,7 @@ def test_effort_beta_header_not_injected_for_46_models():
         result = model_info.is_effort_used(
             optional_params={"output_config": {"effort": "high"}},
             model=model,
+            custom_llm_provider="anthropic",
         )
         assert result is False, f"is_effort_used should return False for {model}"
 
@@ -2947,6 +2948,7 @@ def test_effort_beta_header_still_injected_for_older_models():
     result = model_info.is_effort_used(
         optional_params={"output_config": {"effort": "low"}},
         model="claude-opus-4-5-20251101",
+        custom_llm_provider="anthropic",
     )
     assert result is True
 
