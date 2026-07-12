@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
@@ -2441,6 +2442,78 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
                 "output_config" in result
             ), f"output_config missing for {model} with effort={effort}"
             assert result["output_config"]["effort"] == effort_map[effort]
+
+
+def test_raw_adaptive_thinking_translates_to_legacy_for_pre_46_model():
+    """Clients like Claude Code send ``thinking={"type": "adaptive"}`` directly
+    (not via ``reasoning_effort``) on every request, regardless of which model
+    the request routes to. For a pre-4.6 model that doesn't understand
+    adaptive thinking, this must be translated to the legacy
+    ``thinking={type: enabled, budget_tokens}`` interface instead of being
+    forwarded raw, which Anthropic would reject."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+
+
+def test_raw_adaptive_thinking_budget_capped_below_max_tokens():
+    """Anthropic requires ``max_tokens > thinking.budget_tokens``. When the
+    default medium budget wouldn't fit, it must be capped below max_tokens
+    rather than forwarded as an invalid combination."""
+    config = AnthropicConfig()
+
+    max_tokens = DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 100
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": max_tokens},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == max_tokens - 1
+
+
+def test_raw_adaptive_thinking_dropped_when_max_tokens_too_small():
+    """When max_tokens can't fit even the minimum thinking budget, thinking
+    must be dropped entirely so the request still succeeds, matching how the
+    native /v1/messages passthrough already handles this."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        },
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert "thinking" not in result
+
+
+def test_raw_adaptive_thinking_untouched_for_46_plus_model():
+    """Adaptive-thinking models understand ``thinking={"type": "adaptive"}``
+    natively, so it must pass through unmodified."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
 
 
 @pytest.fixture
